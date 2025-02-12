@@ -1,2 +1,8 @@
-/.venv/.gitignore
+# Ignoriere Konfigurationsdateien
 config.ini
+
+# Ignoriere PyCharm-Projektdateien
+.idea/
+
+# Ignoriere virtuelle Environments
+.venv/

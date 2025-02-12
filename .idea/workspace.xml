@@ -4,9 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="initiales uploaden auf Github">
-      <change beforePath="$PROJECT_DIR$/config.ini" beforeDir="false" afterPath="$PROJECT_DIR$/config.ini" afterDir="false" />
-    </list>
+    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="gitignore testen" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -33,6 +31,7 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "ASKED_MARK_IGNORED_FILES_AS_EXCLUDED": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "git-widget-placeholder": "master",
     "last_opened_file_path": "C:/Users/Patrik/PycharmProjects/WPSteuerungGit"
@@ -99,7 +98,23 @@
       <option name="project" value="LOCAL" />
       <updated>1739358460523</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="gitignore testen">
+      <option name="closed" value="true" />
+      <created>1739358675652</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1739358675652</updated>
+    </task>
+    <task id="LOCAL-00004" summary="gitignore testen">
+      <option name="closed" value="true" />
+      <created>1739358712501</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1739358712501</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -115,7 +130,8 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="initiales uploaden auf Github" />
-    <option name="LAST_COMMIT_MESSAGE" value="initiales uploaden auf Github" />
+    <MESSAGE value="gitignore testen" />
+    <option name="LAST_COMMIT_MESSAGE" value="gitignore testen" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
