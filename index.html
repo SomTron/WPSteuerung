@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Heizungssteuerung Konfiguration</title>
+</head>
+<body>
+    <h1>Heizungssteuerung Konfiguration</h1>
+    <form method="POST">
+        <label for="AUSSCHALTPUNKT">Ausschalttemperatur:</label>
+        <input type="number" name="AUSSCHALTPUNKT" value="{{ config.AUSSCHALTPUNKT }}"><br><br>
+
+        <label for="AUSSCHALTPUNKT_ERHOEHT">Ausschalttemperatur (erhöht):</label>
+        <input type="number" name="AUSSCHALTPUNKT_ERHOEHT" value="{{ config.AUSSCHALTPUNKT_ERHOEHT }}"><br><br>
+
+        <label for="EINSCHALTPUNKT">Einschalttemperatur:</label>
+        <input type="number" name="EINSCHALTPUNKT" value="{{ config.EINSCHALTPUNKT }}"><br><br>
+
+        <label for="MIN_LAUFZEIT">Minimale Laufzeit (Minuten):</label>
+        <input type="number" name="MIN_LAUFZEIT" value="{{ config.MIN_LAUFZEIT }}"><br><br>
+
+        <label for="MIN_PAUSE">Minimale Pause (Minuten):</label>
+        <input type="number" name="MIN_PAUSE" value="{{ config.MIN_PAUSE }}"><br><br>
+
+        <label for="NACHTABSENKUNG_START">Nachtabsenkung Startzeit:</label>
+        <input type="time" name="NACHTABSENKUNG_START" value="{{ config.NACHTABSENKUNG_START }}"><br><br>
+
+        <label for="NACHTABSENKUNG_END">Nachtabsenkung Endzeit:</label>
+        <input type="time" name="NACHTABSENKUNG_END" value="{{ config.NACHTABSENKUNG_END }}"><br><br>
+
+        <label for="NACHTABSENKUNG">Nachtabsenkung (Grad):</label>
+        <input type="number" name="NACHTABSENKUNG" value="{{ config.NACHTABSENKUNG }}"><br><br>
+
+        <input type="submit" value="Speichern">
+    </form>
+</body>
+</html>
