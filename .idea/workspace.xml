@@ -4,18 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/WPSteuerungGit.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/config.ini" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/index.html" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/webserver.py" afterDir="false" />
+    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="initiales uploaden auf Github">
+      <change beforePath="$PROJECT_DIR$/config.ini" beforeDir="false" afterPath="$PROJECT_DIR$/config.ini" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -93,7 +83,39 @@
       <option name="presentableId" value="Default" />
       <updated>1739357034715</updated>
     </task>
+    <task id="LOCAL-00001" summary="initiales uploaden auf Github">
+      <option name="closed" value="true" />
+      <created>1739358175107</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1739358175107</updated>
+    </task>
+    <task id="LOCAL-00002" summary="initiales uploaden auf Github">
+      <option name="closed" value="true" />
+      <created>1739358460523</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1739358460523</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="initiales uploaden auf Github" />
+    <option name="LAST_COMMIT_MESSAGE" value="initiales uploaden auf Github" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
