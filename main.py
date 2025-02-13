@@ -33,6 +33,8 @@ MIN_PAUSE = int(config["Heizungssteuerung"]["MIN_PAUSE"])
 # SolaxCloud-Daten aus der Konfiguration lesen
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
+
+
 # Logging-Konfiguration
 log_file = "heizungssteuerung.log"  # Name der Logdatei
 log_level = logging.DEBUG  # Detaillierteste Protokollierungsstufe
@@ -61,8 +63,10 @@ last_day = datetime.now().date()
 aktueller_ausschaltpunkt = AUSSCHALTPUNKT
 
 # Globale Variablen für Logging
-last_log_time = None
+last_log_time = datetime.now() - timedelta(minutes=1)  # Simuliert, dass die letzte Log-Zeit vor einer Minute war
 last_kompressor_status = None
+
+test_counter = 1  # Zähler für die Testeinträge
 
 def limit_temperature(temp):
     """Begrenzt die Temperatur auf maximal 70 Grad."""
@@ -271,6 +275,7 @@ try:
 
         # SolaxCloud-Daten abrufen
         solax_data = get_solax_data()
+        logging.debug(f"Solax-Daten: {solax_data}")
 
         # Ausschaltpunkt anpassen
         adjust_ausschaltpunkt(solax_data, config)
@@ -281,6 +286,7 @@ try:
             temp = read_temperature(sensor_id)
             if temp is not None:
                 temperatures[i] = limit_temperature(temp)  # Temperatur begrenzen
+            logging.debug(f"Sensor {i + 1}: {temperatures[i]:.2f} °C")
 
         if temperatures[0] != "Fehler" and temperatures[1] != "Fehler":
             t_boiler = (temperatures[0] + temperatures[1]) / 2
@@ -288,9 +294,10 @@ try:
             t_boiler = "Fehler"
 
         t_verd = temperatures[2] if temperatures[2] != "Fehler" else None
+        logging.debug(f"T-Verd: {t_verd:.2f} °C")
 
         # Fehlerprüfung und Kompressorsteuerung
-        fehler, is_overtemp = check_boiler_sensors(temperatures[0], temperatures[1], config)  # Übergabe der Konfiguration
+        fehler, is_overtemp = check_boiler_sensors(temperatures[0], temperatures[1], config)
         if fehler:
             lcd.clear()
             lcd.write_string(f"FEHLER: {fehler}")
@@ -299,14 +306,15 @@ try:
             continue
 
         # Kompressorsteuerung basierend auf Temperaturen
-        einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])  # Einschaltpunkt aus der config.ini laden
+        einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
         if t_verd is not None and t_verd < 25:
             if kompressor_ein:
                 set_kompressor_status(False)
                 logging.info("T-Verd unter 25 Grad. Kompressor wurde ausgeschaltet.")
             logging.info("T-Verd unter 25 Grad. Kompressor bleibt ausgeschaltet.")
         elif t_boiler != "Fehler":
-            logging.debug(f"T-Boiler: {t_boiler:.2f}, EINSCHALTPUNKT: {EINSCHALTPUNKT}, aktueller_ausschaltpunkt: {aktueller_ausschaltpunkt}")
+            logging.debug(
+                f"T-Boiler: {t_boiler:.2f}, EINSCHALTPUNKT: {EINSCHALTPUNKT}, aktueller_ausschaltpunkt: {aktueller_ausschaltpunkt}")
             if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
                 set_kompressor_status(True)
                 logging.info(f"T-Boiler Temperatur unter {EINSCHALTPUNKT} Grad. Kompressor eingeschaltet.")
@@ -417,33 +425,26 @@ try:
 
         time.sleep(5)
 
-        # Daten für CSV-Datei sammeln
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        t_vorne = temperatures[0] if temperatures[0] != "Fehler" else "N/A"
-        t_hinten = temperatures[1] if temperatures[1] != "Fehler" else "N/A"
-        t_boiler_wert = t_boiler if t_boiler != "Fehler" else "N/A"
-        t_verd = temperatures[2] if temperatures[2] != "Fehler" else "N/A"
-        kompressor_status = "EIN" if kompressor_ein else "AUS"
-        soll_temperatur = aktueller_ausschaltpunkt
-        ist_temperatur = t_boiler_wert
-        aktuelle_laufzeit = str(current_runtime).split('.')[0] if kompressor_ein else "N/A"
-        letzte_laufzeit = str(last_runtime).split('.')[0] if not kompressor_ein and last_runtime else "N/A"
-        gesamtlaufzeit = str(total_runtime_today).split('.')[0]
-        solar = powerdc1 + powerdc2 if solax_data else "N/A"
-        netz = feedinpower if solax_data else "N/A"
-        verbrauch = consumeenergy if solax_data else "N/A"
-        batterie = batPower if solax_data else "N/A"
-        soc = soc_wert if solax_data else "N/A"
-
         # Logging-Bedingungen prüfen
         now = datetime.now()
         time_diff = None
         if last_log_time:
             time_diff = now - last_log_time
+
+        # Debug-Meldungen für die Logging-Bedingung
+        logging.debug(f"last_log_time: {last_log_time}")
+        logging.debug(f"time_diff: {time_diff}")
+        logging.debug(f"kompressor_ein: {kompressor_ein}")
+        logging.debug(f"last_kompressor_status: {last_kompressor_status}")
+
+        # Sofortiges Logging bei Kompressorstatusänderung ODER minütliches Logging
         if (last_log_time is None or time_diff >= timedelta(minutes=1) or
                 kompressor_ein != last_kompressor_status):
+
+            logging.debug("CSV-Schreibbedingung erfüllt")
+
             # Daten für CSV-Datei sammeln
-            now_str = now.strftime("%Y-%m-%d %H:%M:%S")  # Zeitstempel im Format YYYY-MM-DD HH:MM:SS
+            now_str = now.strftime("%Y-%m-%d %H:%M:%S")
             t_vorne = temperatures[0] if temperatures[0] != "Fehler" else "N/A"
             t_hinten = temperatures[1] if temperatures[1] != "Fehler" else "N/A"
             t_boiler_wert = t_boiler if t_boiler != "Fehler" else "N/A"
@@ -463,28 +464,32 @@ try:
             soc = solax_data.get("soc", "N/A") if solax_data else "N/A"
 
             # Daten in CSV-Datei schreiben
-            with open(csv_file, 'a', newline='') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writerow({'Zeitstempel': now_str, 'T-Vorne': t_vorne,
-                                 'T-Hinten': t_hinten, 'T-Boiler': t_boiler_wert,
-                                 'T-Verd': t_verd, 'Kompressorstatus': kompressor_status,
-                                 'Soll-Temperatur': soll_temperatur, 'Ist-Temperatur': ist_temperatur,
-                                 'Aktuelle Laufzeit': aktuelle_laufzeit,
-                                 'Letzte Laufzeit': letzte_laufzeit,
-                                 'Gesamtlaufzeit': gesamtlaufzeit,
-                                 'Solarleistung': solar, 'Netzbezug/Einspeisung': netz,
-                                 'Hausverbrauch': verbrauch, 'Batterieleistung': batterie,
-                                 'SOC': soc})
+            try:
+                with open(csv_file, 'a', newline='') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writerow({'Zeitstempel': now_str, 'T-Vorne': t_vorne,
+                                     'T-Hinten': t_hinten, 'T-Boiler': t_boiler_wert,
+                                     'T-Verd': t_verd, 'Kompressorstatus': kompressor_status,
+                                     'Soll-Temperatur': soll_temperatur, 'Ist-Temperatur': ist_temperatur,
+                                     'Aktuelle Laufzeit': aktuelle_laufzeit,
+                                     'Letzte Laufzeit': letzte_laufzeit,
+                                     'Gesamtlaufzeit': gesamtlaufzeit,
+                                     'Solarleistung': solar, 'Netzbezug/Einspeisung': netz,
+                                     'Hausverbrauch': verbrauch, 'Batterieleistung': batterie,
+                                     'SOC': soc})
+                logging.info(f"Daten in CSV-Datei geschrieben: {now_str}")
+            except Exception as e:
+                logging.error(f"Fehler beim Schreiben in die CSV-Datei: {e}")
 
             # Logging-Zeit und Kompressorstatus aktualisieren
             last_log_time = now
             last_kompressor_status = kompressor_ein
 
+        time.sleep(10)  # Kurze Pause, um die CPU-Last zu reduzieren
 
 except KeyboardInterrupt:
     logging.info("Programm beendet.")
 finally:
-    GPIO.output(GIO21_PIN, GPIO.LOW)
     GPIO.cleanup()
     lcd.close()
     logging.info("Heizungssteuerung beendet.")
