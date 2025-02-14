@@ -26,6 +26,7 @@ config.read("config.ini")
 AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
 AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
 EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
+VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
 
 # MIN_LAUFZEIT und MIN_PAUSE in Minuten aus der Config lesen
 MIN_LAUFZEIT_MINUTEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])  # Minuten
@@ -117,7 +118,7 @@ def reload_config():
     """
     Lädt die Konfigurationsdatei neu und aktualisiert die globalen Variablen.
     """
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR
 
     try:
         config.read("config.ini")
@@ -128,6 +129,7 @@ def reload_config():
         EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
         MIN_LAUFZEIT_MINUTEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])
         MIN_PAUSE_MINUTEN = int(config["Heizungssteuerung"]["MIN_PAUSE"])
+        VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])  # Verdampfertemperatur einlesen
 
         # Beide Werte in timedelta-Objekte umwandeln
         MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
@@ -146,6 +148,7 @@ def reload_config():
         logging.error(f"Ungültiger Wert in der Konfigurationsdatei: {e}")
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
+
 
 def is_night_time(config):
     now = datetime.now()
@@ -381,11 +384,11 @@ try:
 
         # Kompressorsteuerung basierend auf Temperaturen
         einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
-        if t_verd is not None and t_verd < 25:
+        if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
             if kompressor_ein:
                 set_kompressor_status(False)
-                logging.info("T-Verd unter 25 Grad. Kompressor wurde ausgeschaltet.")
-            logging.info("T-Verd unter 25 Grad. Kompressor bleibt ausgeschaltet.")
+                logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor wurde ausgeschaltet.")
+            logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor bleibt ausgeschaltet.")
         elif t_boiler != "Fehler":
             logging.debug(
                 f"T-Boiler: {t_boiler:.2f}, EINSCHALTPUNKT: {EINSCHALTPUNKT}, aktueller_ausschaltpunkt: {aktueller_ausschaltpunkt}")
