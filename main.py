@@ -55,8 +55,13 @@ logging.basicConfig(filename=log_file, level=log_level,
 logging.info("Heizungssteuerung gestartet.")
 
 lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(GIO21_PIN, GPIO.OUT)
+try:
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(GIO21_PIN, GPIO.OUT)
+except Exception as e:
+    logging.error(f"Fehler bei der GPIO-Initialisierung: {e}")
+    exit(1)
+
 GPIO.output(GIO21_PIN, GPIO.LOW)  # Stelle sicher, dass der Kompressor aus ist
 
 # Globale Variablen
@@ -107,6 +112,40 @@ def load_config():
         print(f"Fehler beim Lesen von config.ini: {e}")
         exit()  # Oder eine andere Fehlerbehandlung
     return config
+
+def reload_config():
+    """
+    Lädt die Konfigurationsdatei neu und aktualisiert die globalen Variablen.
+    """
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN
+
+    try:
+        config.read("config.ini")
+
+        # Werte aus der Konfigurationsdatei holen
+        AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
+        AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
+        EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
+        MIN_LAUFZEIT_MINUTEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])
+        MIN_PAUSE_MINUTEN = int(config["Heizungssteuerung"]["MIN_PAUSE"])
+
+        # Beide Werte in timedelta-Objekte umwandeln
+        MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
+        MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
+
+        # SolaxCloud-Daten aus der Konfiguration lesen
+        TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
+        SN = config["SolaxCloud"]["SN"]
+
+        logging.info("Konfiguration erfolgreich neu geladen.")
+    except FileNotFoundError:
+        logging.error("Konfigurationsdatei config.ini nicht gefunden.")
+    except KeyError as e:
+        logging.error(f"Fehlender Schlüssel in der Konfigurationsdatei: {e}")
+    except ValueError as e:
+        logging.error(f"Ungültiger Wert in der Konfigurationsdatei: {e}")
+    except Exception as e:
+        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
 
 def is_night_time(config):
     now = datetime.now()
@@ -350,6 +389,7 @@ try:
         elif t_boiler != "Fehler":
             logging.debug(
                 f"T-Boiler: {t_boiler:.2f}, EINSCHALTPUNKT: {EINSCHALTPUNKT}, aktueller_ausschaltpunkt: {aktueller_ausschaltpunkt}")
+            reload_config()  # Konfiguration neu laden
             if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
                 set_kompressor_status(True)
                 logging.info(f"T-Boiler Temperatur unter {EINSCHALTPUNKT} Grad. Kompressor eingeschaltet.")
@@ -399,6 +439,7 @@ try:
 
         # Seite 3: SolaxCloud-Daten anzeigen
         lcd.clear()
+        reload_config()
         if solax_data:
             acpower = solax_data.get("acpower", "N/A")  # AC-Leistung (Solar)
             feedinpower = solax_data.get("feedinpower", "N/A")  # Einspeisung/Bezug
