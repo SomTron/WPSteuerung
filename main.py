@@ -9,6 +9,7 @@ import RPi.GPIO as GPIO
 import logging
 import configparser
 import csv
+from datetime import timedelta
 
 # Konfiguration (in eine separate Datei auslagern)
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -16,8 +17,6 @@ I2C_ADDR = 0x27
 I2C_BUS = 1
 API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
 GIO21_PIN = 21  # GPIO-Pin für GIO21
-
-
 
 # Config einlesen
 config = configparser.ConfigParser()
@@ -27,13 +26,18 @@ config.read("config.ini")
 AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
 AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
 EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
-MIN_LAUFZEIT = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])
-MIN_PAUSE = int(config["Heizungssteuerung"]["MIN_PAUSE"])
+
+
+MIN_LAUFZEIT_SEKUNDEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]) # Sekundenzahl aus der Config
+MIN_LAUFZEIT = timedelta(seconds=MIN_LAUFZEIT_SEKUNDEN)
+
+MIN_PAUSE_MINUTEN = int(config["Heizungssteuerung"]["MIN_PAUSE"]) # Minutenzahl aus der Config
+MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
+
 
 # SolaxCloud-Daten aus der Konfiguration lesen
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
-
 
 # Logging-Konfiguration
 log_file = "heizungssteuerung.log"  # Name der Logdatei
@@ -61,6 +65,7 @@ current_runtime = timedelta()
 total_runtime_today = timedelta()
 last_day = datetime.now().date()
 aktueller_ausschaltpunkt = AUSSCHALTPUNKT
+last_shutdown_time = datetime.now()  # Initialisiere last_shutdown_time mit der aktuellen Zeit
 
 # Globale Variablen für Logging
 last_log_time = datetime.now() - timedelta(minutes=1)  # Simuliert, dass die letzte Log-Zeit vor einer Minute war
@@ -98,7 +103,6 @@ def load_config():
         exit()  # Oder eine andere Fehlerbehandlung
     return config
 
-
 def is_night_time(config):
     now = datetime.now()
     print(config.sections())  # Zeigt alle vorhandenen Abschnitte an
@@ -117,39 +121,26 @@ def is_night_time(config):
 
     return start_time <= now <= end_time
 
-# Funktion zur Überprüfung der Bedingungen und Anpassung des Ausschalt- und Einschaltpunkts
-def adjust_ausschaltpunkt(solax_data, config):  # Übergabe der Konfiguration
-    global aktueller_ausschaltpunkt, aktueller_einschaltpunkt
-
-    is_night = is_night_time(config)  # Übergabe der Konfiguration
-    nachtabsenkung = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0  # Aus config.ini lesen
-
-    if solax_data:
-        batPower = solax_data.get("batPower", 0)
-        soc = solax_data.get("soc", 0)  # SOC (State of Charge) in Prozent
-        feedinpower = solax_data.get("feedinpower", 0)
-
-        # Überprüfe die Bedingungen für PV-Überschuss
-        if batPower > 600 or (soc > 95 and feedinpower > 600):
-            # Erhöhe sowohl Ausschalt- als auch Einschaltpunkt
-            aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nachtabsenkung
-            aktueller_einschaltpunkt = aktueller_ausschaltpunkt  # Einschaltpunkt = erhöhter Ausschaltpunkt
-            logging.info(f"Ausschaltpunkt auf {aktueller_ausschaltpunkt} und Einschaltpunkt auf {aktueller_einschaltpunkt} erhöht aufgrund von PV-Überschuss.")
-        else:
-            # Setze sowohl Ausschalt- als auch Einschaltpunkt auf Standardwerte zurück
-            aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nachtabsenkung
-            aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nachtabsenkung
-            logging.info(f"Ausschaltpunkt auf {aktueller_ausschaltpunkt} und Einschaltpunkt auf {aktueller_einschaltpunkt} zurückgesetzt.")
+def calculate_ausschaltpunkt(config, is_night, solax_data):
+    nachtabsenkung = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
+    if solax_data and (solax_data.get("batPower", 0) > 600 or (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600)):
+        return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nachtabsenkung
     else:
-        # Fallback auf Standardwerte bei API-Fehler
-        aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nachtabsenkung
-        aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nachtabsenkung
-        logging.warning("Keine gültigen Solax-Daten erhalten. Verwende Standard-Ausschalt- und Einschaltpunkt.")
+        return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nachtabsenkung
+
+def adjust_ausschaltpunkt(solax_data, config):
+    global aktueller_ausschaltpunkt, aktueller_einschaltpunkt
+    is_night = is_night_time(config)
+    aktueller_ausschaltpunkt = calculate_ausschaltpunkt(config, is_night, solax_data)
+
+    if solax_data and (solax_data.get("batPower", 0) > 600 or (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600)):
+        aktueller_einschaltpunkt = aktueller_ausschaltpunkt # Wenn Solarüberschuss, dann gleich dem Ausschalpunkt
+    else:
+        aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - (int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0) # Ansonsten normaler Einschaltpunkt mit Nachtabsenkung
+
+    logging.info(f"Ausschaltpunkt: {aktueller_ausschaltpunkt}, Einschaltpunkt: {aktueller_einschaltpunkt}")
 
 
-
-
-# Funktion zum Auslesen der Temperatur eines Sensors
 def read_temperature(sensor_id):
     device_file = os.path.join(BASE_DIR, sensor_id, "w1_slave")
     try:
@@ -165,9 +156,8 @@ def read_temperature(sensor_id):
         print(f"Fehler beim Lesen des Sensors {sensor_id}: {e}")
         return None
 
-
-def check_boiler_sensors(t_vorne, t_hinten, config):  # Übergabe der Konfiguration
-    ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) # Ausschaltpunkt aus der config.ini laden
+def check_boiler_sensors(t_vorne, t_hinten, config):
+    ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
     fehler = None
     is_overtemp = False
 
@@ -175,59 +165,67 @@ def check_boiler_sensors(t_vorne, t_hinten, config):  # Übergabe der Konfigurat
         fehler = "Fühlerfehler!"
     elif t_vorne >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10):
         fehler = "Übertemperatur!"
-        is_overtemp = True  # Markiere Übertemperatur
+        is_overtemp = True
     elif abs(t_vorne - t_hinten) > 10:
         fehler = "Fühlerdifferenz!"
 
-    return fehler, is_overtemp  # Gibt beides zurück
-
+    return fehler, is_overtemp
 
 def set_kompressor_status(ein, force_off=False):
-    global kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime
+    global kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time
 
     now = datetime.now()
     logging.debug(f"set_kompressor_status aufgerufen: ein={ein}, force_off={force_off}")
 
     if ein:
-        if not kompressor_ein:  # Falls der Kompressor vorher aus war
-            if last_runtime and last_runtime < MIN_PAUSE:
-                logging.info(f"Kompressor bleibt aus (zu kurze Pause: {last_runtime}).")
-                return  # Mindestpause nicht erfüllt → nicht einschalten
+        if not kompressor_ein:
+            # Berechne die vergangene Pausenzeit seit dem letzten Ausschalten
+            pause_time = now - last_shutdown_time
+
+            # Überprüfe, ob die Mindestpause eingehalten wurde
+            if pause_time < MIN_PAUSE:
+                logging.info(f"Kompressor bleibt aus (zu kurze Pause: {pause_time}, benötigt: {MIN_PAUSE}).")
+                return  # Wichtig: Hier aufhören, wenn die Pause zu kurz ist
+
+            # Kompressor einschalten
             kompressor_ein = True
             start_time = now
             current_runtime = timedelta()
-            logging.info("Kompressor EIN. Startzeit gesetzt.")
+            logging.info("Kompressor EIN. Startzeit gesetzt.") # Korrekte Stelle für die
         else:
+            # Kompressor läuft bereits
             elapsed_time = now - start_time
             current_runtime = elapsed_time
             logging.info(f"Kompressor läuft ({current_runtime}).")
-    else:
-        if kompressor_ein:  # Falls der Kompressor vorher an war
+    else:  # Ausschalten
+        if kompressor_ein:
             elapsed_time = now - start_time
             if elapsed_time < MIN_LAUFZEIT and not force_off:
-                logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}).")
-                return  # Mindestlaufzeit nicht erfüllt → nicht ausschalten
+                logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {MIN_LAUFZEIT}).")
+                return  # Hier aufhören, wenn die Laufzeit zu kurz ist
+
+            # Kompressor tatsächlich ausschalten
             kompressor_ein = False
             current_runtime = elapsed_time
             total_runtime_today += current_runtime
-            last_runtime = current_runtime  # Speichere die letzte Laufzeit
-            logging.info(f"Kompressor AUS. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")
+            last_runtime = current_runtime
+            last_shutdown_time = now
+            logging.info(f"Kompressor AUS. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")  # Korrekte Stelle für die Logmeldung
+
             start_time = None
+
         else:
             logging.info("Kompressor ist bereits aus.")
 
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
 
-
-# Funktion zum Abrufen der SolaxCloud-Daten
 def get_solax_data():
     global last_api_call, last_api_data, last_api_timestamp
     try:
-        # Prüfe, ob die letzte API-Abfrage vor weniger als 5 Minuten war
         if last_api_call and (datetime.now() - last_api_call) < timedelta(minutes=5):
+            logging.debug("Verwende zwischengespeicherte API-Daten.")
             return last_api_data
 
-        # Führe eine neue API-Abfrage durch
         params = {
             "tokenId": TOKEN_ID,
             "sn": SN
@@ -235,32 +233,43 @@ def get_solax_data():
         response = requests.get(API_URL, params=params)
         if response.status_code == 200:
             data = response.json()
-            if data["success"]:
-                # Speichere die Daten und den Zeitstempel
-                last_api_data = data["result"]
+            logging.debug(f"API-Antwort: {data}")
+            if data.get("success", False):
+                last_api_data = data.get("result", None)
                 last_api_timestamp = datetime.now()
                 last_api_call = last_api_timestamp
                 return last_api_data
             else:
-                print("API-Fehler:", data["exception"])
+                error_message = data.get("exception", "Unbekannter Fehler")
+                logging.error(f"API-Fehler: {error_message}")
+                if "exceed the maximum call threshold limit" in error_message or "Request calls within the current minute > threshold" in error_message:
+                    last_api_data = {
+                        "acpower": 0,
+                        "feedinpower": 0,
+                        "consumeenergy": 0,
+                        "batPower": 0,
+                        "soc": 0,
+                        "powerdc1": 0,
+                        "powerdc2": 0,
+                        "api_fehler": True
+                    }
+                    last_api_timestamp = datetime.now()
+                    last_api_call = last_api_timestamp
+                    return last_api_data
                 return None
         else:
-            print("Fehler bei der API-Anfrage:", response.status_code)
+            logging.error(f"Fehler bei der API-Anfrage: {response.status_code}")
             return None
     except Exception as e:
-        print("Fehler beim Abrufen der API-Daten:", e)
+        logging.error(f"Fehler beim Abrufen der API-Daten: {e}")
         return None
 
-
-# Funktion zur Überprüfung, ob die Daten älter als 15 Minuten sind
 def is_data_old(timestamp):
     if timestamp and (datetime.now() - timestamp) > timedelta(minutes=15):
         return True
     return False
 
-
 try:
-    # Überprüfen, ob 3 Sensoren gefunden wurden
     sensor_ids = glob.glob(BASE_DIR + "28*")
     sensor_ids = [os.path.basename(sensor_id) for sensor_id in sensor_ids]
 
@@ -268,24 +277,31 @@ try:
         print("Es wurden weniger als 3 DS18B20-Sensoren gefunden!")
         exit(1)
 
-    sensor_ids = sensor_ids[:3]  # Nur die ersten 3 Sensoren verwenden
+    sensor_ids = sensor_ids[:3]
 
     while True:
-        config = load_config()  # Konfiguration neu laden
-
-        # SolaxCloud-Daten abrufen
+        config = load_config()
         solax_data = get_solax_data()
-        logging.debug(f"Solax-Daten: {solax_data}")
+        if solax_data is None:
+            logging.warning("Keine gültigen Solax-Daten erhalten. Verwende Standardwerte.")
+            solax_data = {
+                "acpower": 0,
+                "feedinpower": 0,
+                "consumeenergy": 0,
+                "batPower": 0,
+                "soc": 0,
+                "powerdc1": 0,
+                "powerdc2": 0,
+                "api_fehler": True
+            }
 
-        # Ausschaltpunkt anpassen
         adjust_ausschaltpunkt(solax_data, config)
 
-        # Temperaturen auslesen und begrenzen
         temperatures = ["Fehler"] * 3
         for i, sensor_id in enumerate(sensor_ids):
             temp = read_temperature(sensor_id)
             if temp is not None:
-                temperatures[i] = limit_temperature(temp)  # Temperatur begrenzen
+                temperatures[i] = limit_temperature(temp)
             logging.debug(f"Sensor {i + 1}: {temperatures[i]:.2f} °C")
 
         if temperatures[0] != "Fehler" and temperatures[1] != "Fehler":
@@ -319,6 +335,7 @@ try:
                 set_kompressor_status(True)
                 logging.info(f"T-Boiler Temperatur unter {EINSCHALTPUNKT} Grad. Kompressor eingeschaltet.")
             elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
+                # Hier wird der Kompressor ausgeschaltet, wenn die Temperatur den Ausschaltpunkt erreicht
                 set_kompressor_status(False)
                 logging.info(f"T-Boiler Temperatur {aktueller_ausschaltpunkt} Grad erreicht. Kompressor ausgeschaltet.")
 
