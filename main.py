@@ -36,6 +36,10 @@ MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
 MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
 
 
+# Initialisiere die Unterschreitungsvariablen mit Standardwerten
+laufzeit_unterschreitung = "N/A"
+pausenzeit_unterschreitung = "N/A"
+
 # SolaxCloud-Daten aus der Konfiguration lesen
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
@@ -84,7 +88,7 @@ fieldnames = ['Zeitstempel', 'T-Vorne', 'T-Hinten', 'T-Boiler', 'T-Verd',
               'Kompressorstatus', 'Soll-Temperatur', 'Ist-Temperatur',
               'Aktuelle Laufzeit', 'Letzte Laufzeit', 'Gesamtlaufzeit',
               'Solarleistung', 'Netzbezug/Einspeisung', 'Hausverbrauch',
-              'Batterieleistung', 'SOC']
+              'Batterieleistung', 'SOC', 'Laufzeitunterschreitung', 'Pausenzeitunterschreitung']
 
 with open(csv_file, 'a', newline='') as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -173,7 +177,7 @@ def check_boiler_sensors(t_vorne, t_hinten, config):
     return fehler, is_overtemp
 
 def set_kompressor_status(ein, force_off=False):
-    global kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time
+    global kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, laufzeit_unterschreitung, pausenzeit_unterschreitung
 
     now = datetime.now()
     logging.debug(f"set_kompressor_status aufgerufen: ein={ein}, force_off={force_off}")
@@ -185,25 +189,33 @@ def set_kompressor_status(ein, force_off=False):
 
             # Überprüfe, ob die Mindestpause eingehalten wurde
             if pause_time < MIN_PAUSE:
+                pausenzeit_unterschreitung = str(MIN_PAUSE - pause_time)  # Berechne die fehlende Pausenzeit
+                laufzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Laufzeitunterschreitung
                 logging.info(f"Kompressor bleibt aus (zu kurze Pause: {pause_time}, benötigt: {MIN_PAUSE}).")
-                return  # Wichtig: Hier aufhören, wenn die Pause zu kurz ist
+                return False, laufzeit_unterschreitung, pausenzeit_unterschreitung  # Rückgabe der Pausenzeitunterschreitung und Laufzeitunterschreitung (N/A)
 
             # Kompressor einschalten
             kompressor_ein = True
             start_time = now
             current_runtime = timedelta()
-            logging.info("Kompressor EIN. Startzeit gesetzt.") # Korrekte Stelle für die
+            laufzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Unterschreitung
+            pausenzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Unterschreitung
+            logging.info("Kompressor EIN. Startzeit gesetzt.")
         else:
             # Kompressor läuft bereits
             elapsed_time = now - start_time
             current_runtime = elapsed_time
+            laufzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Unterschreitung
+            pausenzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Unterschreitung
             logging.info(f"Kompressor läuft ({current_runtime}).")
     else:  # Ausschalten
         if kompressor_ein:
             elapsed_time = now - start_time
             if elapsed_time < MIN_LAUFZEIT and not force_off:
+                laufzeit_unterschreitung = str(MIN_LAUFZEIT - elapsed_time)  # Berechne die fehlende Laufzeit
+                pausenzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Pausenunterschreitung
                 logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {MIN_LAUFZEIT}).")
-                return  # Hier aufhören, wenn die Laufzeit zu kurz ist
+                return True, laufzeit_unterschreitung, pausenzeit_unterschreitung  # Rückgabe der Laufzeitunterschreitung und Pausenzeitunterschreitung (N/A)
 
             # Kompressor tatsächlich ausschalten
             kompressor_ein = False
@@ -211,14 +223,20 @@ def set_kompressor_status(ein, force_off=False):
             total_runtime_today += current_runtime
             last_runtime = current_runtime
             last_shutdown_time = now
-            logging.info(f"Kompressor AUS. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")  # Korrekte Stelle für die Logmeldung
+            pausenzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Pausenunterschreitung
+            laufzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Laufzeitunterschreitung
+            logging.info(f"Kompressor AUS. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")
 
             start_time = None
 
         else:
+            laufzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Laufzeitunterschreitung
+            pausenzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Pausenunterschreitung
             logging.info("Kompressor ist bereits aus.")
 
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
+    return None, laufzeit_unterschreitung, pausenzeit_unterschreitung  # Keine Unterschreitung, aber die Werte werden immer zurückgegeben
+
 
 def get_solax_data():
     global last_api_call, last_api_data, last_api_timestamp
@@ -337,7 +355,7 @@ try:
                 logging.info(f"T-Boiler Temperatur unter {EINSCHALTPUNKT} Grad. Kompressor eingeschaltet.")
             elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
                 # Hier wird der Kompressor ausgeschaltet, wenn die Temperatur den Ausschaltpunkt erreicht
-                set_kompressor_status(False)
+                _, laufzeit_unterschreitung, pausenzeit_unterschreitung = set_kompressor_status(False)
                 logging.info(f"T-Boiler Temperatur {aktueller_ausschaltpunkt} Grad erreicht. Kompressor ausgeschaltet.")
 
         # Aktuelle Laufzeit aktualisieren
@@ -481,20 +499,34 @@ try:
             batterie = solax_data.get("batPower", "N/A") if solax_data else "N/A"
             soc = solax_data.get("soc", "N/A") if solax_data else "N/A"
 
+            # Neue Daten: Laufzeit- und Pausenzeitunterschreitung
+            laufzeit_unterschreitung = laufzeit_unterschreitung if 'laufzeit_unterschreitung' in globals() else "N/A"
+            pausenzeit_unterschreitung = pausenzeit_unterschreitung if 'pausenzeit_unterschreitung' in globals() else "N/A"
+
             # Daten in CSV-Datei schreiben
             try:
                 with open(csv_file, 'a', newline='') as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                    writer.writerow({'Zeitstempel': now_str, 'T-Vorne': t_vorne,
-                                     'T-Hinten': t_hinten, 'T-Boiler': t_boiler_wert,
-                                     'T-Verd': t_verd, 'Kompressorstatus': kompressor_status,
-                                     'Soll-Temperatur': soll_temperatur, 'Ist-Temperatur': ist_temperatur,
-                                     'Aktuelle Laufzeit': aktuelle_laufzeit,
-                                     'Letzte Laufzeit': letzte_laufzeit,
-                                     'Gesamtlaufzeit': gesamtlaufzeit,
-                                     'Solarleistung': solar, 'Netzbezug/Einspeisung': netz,
-                                     'Hausverbrauch': verbrauch, 'Batterieleistung': batterie,
-                                     'SOC': soc})
+                    writer.writerow({
+                        'Zeitstempel': now_str,
+                        'T-Vorne': t_vorne,
+                        'T-Hinten': t_hinten,
+                        'T-Boiler': t_boiler_wert,
+                        'T-Verd': t_verd,
+                        'Kompressorstatus': kompressor_status,
+                        'Soll-Temperatur': soll_temperatur,
+                        'Ist-Temperatur': ist_temperatur,
+                        'Aktuelle Laufzeit': aktuelle_laufzeit,
+                        'Letzte Laufzeit': letzte_laufzeit,
+                        'Gesamtlaufzeit': gesamtlaufzeit,
+                        'Solarleistung': solar,
+                        'Netzbezug/Einspeisung': netz,
+                        'Hausverbrauch': verbrauch,
+                        'Batterieleistung': batterie,
+                        'SOC': soc,
+                        'Laufzeitunterschreitung': laufzeit_unterschreitung,  # Neue Spalte
+                        'Pausenzeitunterschreitung': pausenzeit_unterschreitung  # Neue Spalte
+                    })
                 logging.info(f"Daten in CSV-Datei geschrieben: {now_str}")
             except Exception as e:
                 logging.error(f"Fehler beim Schreiben in die CSV-Datei: {e}")
