@@ -27,11 +27,12 @@ AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
 AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
 EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
 
+# MIN_LAUFZEIT und MIN_PAUSE in Minuten aus der Config lesen
+MIN_LAUFZEIT_MINUTEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])  # Minuten
+MIN_PAUSE_MINUTEN = int(config["Heizungssteuerung"]["MIN_PAUSE"])         # Minuten
 
-MIN_LAUFZEIT_SEKUNDEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]) # Sekundenzahl aus der Config
-MIN_LAUFZEIT = timedelta(seconds=MIN_LAUFZEIT_SEKUNDEN)
-
-MIN_PAUSE_MINUTEN = int(config["Heizungssteuerung"]["MIN_PAUSE"]) # Minutenzahl aus der Config
+# Beide Werte in timedelta-Objekte umwandeln
+MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
 MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
 
 
