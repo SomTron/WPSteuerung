@@ -150,6 +150,112 @@ def reload_config():
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
 
 
+def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None, min_difference=None):
+    """
+    Überprüft, ob ein Wert innerhalb der Grenzwerte liegt und logisch konsistent ist.
+    :param value: Der zu überprüfende Wert.
+    :param min_value: Der Minimalwert.
+    :param max_value: Der Maximalwert.
+    :param default_value: Der Standardwert, falls der Wert ungültig ist.
+    :param parameter_name: Der Name des Parameters (für Fehlermeldungen).
+    :param other_value: Ein anderer Wert, mit dem verglichen wird (optional).
+    :param comparison: Der Vergleichsoperator (z. B. "<", ">=", optional).
+    :param min_difference: Der minimale Unterschied zwischen den Werten (optional).
+    :return: Der gültige Wert (entweder der ursprüngliche Wert oder der Standardwert).
+    """
+    # Überprüfe Grenzwerte
+    if not (min_value <= value <= max_value):
+        logging.error(f"Ungültiger Wert für {parameter_name}: {value}. Muss zwischen {min_value} und {max_value} liegen. Verwende Standardwert: {default_value}.")
+        value = default_value  # Verwende den Standardwert
+
+    # Überprüfe logische Konsistenz des ursprünglichen oder Standardwerts
+    if other_value is not None and comparison is not None:
+        if comparison == "<" and not (value < other_value):
+            logging.error(f"{parameter_name} ({value}) darf nicht größer oder gleich {other_value} sein. Verwende Standardwert: {default_value}.")
+            value = default_value  # Verwende den Standardwert
+        elif comparison == ">=" and not (value >= other_value):
+            logging.error(f"{parameter_name} ({value}) darf nicht kleiner sein als {other_value}. Verwende Standardwert: {default_value}.")
+            value = default_value  # Verwende den Standardwert
+
+    # Überprüfe Mindestunterschied
+    if other_value is not None and min_difference is not None:
+        if abs(value - other_value) < min_difference:
+            logging.error(f"Der Unterschied zwischen {parameter_name} ({value}) und {other_value} muss mindestens {min_difference} Grad betragen. Verwende Standardwert: {default_value}.")
+            value = default_value  # Verwende den Standardwert
+
+    # Überprüfe, ob der Standardwert selbst logisch konsistent ist
+    if other_value is not None and comparison is not None:
+        if comparison == "<" and not (value < other_value):
+            logging.error(f"Standardwert für {parameter_name} ({value}) ist ungültig. Verwende sicheren Rückfallwert.")
+            value = other_value - min_difference if min_difference is not None else other_value - 2  # Sichere Differenz
+        elif comparison == ">=" and not (value >= other_value):
+            logging.error(f"Standardwert für {parameter_name} ({value}) ist ungültig. Verwende sicheren Rückfallwert.")
+            value = other_value + min_difference if min_difference is not None else other_value + 2  # Sichere Differenz
+
+    return value
+
+def reload_config():
+    """
+    Lädt die Konfigurationsdatei neu und aktualisiert die globalen Variablen.
+    """
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR
+
+    try:
+        config.read("config.ini")
+
+        # Werte aus der Konfigurationsdatei holen und überprüfen
+        AUSSCHALTPUNKT = check_value(
+            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
+            min_value=30, max_value=80, default_value=50,
+            parameter_name="AUSSCHALTPUNKT"
+        )
+        AUSSCHALTPUNKT_ERHOEHT = check_value(
+            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
+            min_value=35, max_value=85, default_value=55,
+            parameter_name="AUSSCHALTPUNKT_ERHOEHT",
+            other_value=AUSSCHALTPUNKT, comparison=">="  # AUSSCHALTPUNKT_ERHOEHT >= AUSSCHALTPUNKT
+        )
+        EINSCHALTPUNKT = check_value(
+            int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]),
+            min_value=20, max_value=70, default_value=45,
+            parameter_name="EINSCHALTPUNKT",
+            other_value=AUSSCHALTPUNKT, comparison="<",  # EINSCHALTPUNKT < AUSSCHALTPUNKT
+            min_difference=2  # Mindestunterschied von 2 Grad
+        )
+        MIN_LAUFZEIT_MINUTEN = check_value(
+            int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
+            min_value=1, max_value=60, default_value=10,
+            parameter_name="MIN_LAUFZEIT"
+        )
+        MIN_PAUSE_MINUTEN = check_value(
+            int(config["Heizungssteuerung"]["MIN_PAUSE"]),
+            min_value=1, max_value=60, default_value=10,
+            parameter_name="MIN_PAUSE"
+        )
+        VERDAMPFERTEMPERATUR = check_value(
+            int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
+            min_value=4, max_value=30, default_value=7,
+            parameter_name="VERDAMPFERTEMPERATUR"
+        )
+
+        # Beide Werte in timedelta-Objekte umwandeln
+        MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
+        MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
+
+        # SolaxCloud-Daten aus der Konfiguration lesen
+        TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
+        SN = config["SolaxCloud"]["SN"]
+
+        logging.info("Konfiguration erfolgreich neu geladen.")
+    except FileNotFoundError:
+        logging.error("Konfigurationsdatei config.ini nicht gefunden.")
+    except KeyError as e:
+        logging.error(f"Fehlender Schlüssel in der Konfigurationsdatei: {e}")
+    except ValueError as e:
+        logging.error(f"Ungültiger Wert in der Konfigurationsdatei: {e}")
+    except Exception as e:
+        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
+
 def is_night_time(config):
     now = datetime.now()
     print(config.sections())  # Zeigt alle vorhandenen Abschnitte an
