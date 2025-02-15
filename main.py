@@ -2,7 +2,6 @@ import os
 import glob
 import time
 import smbus2
-import requests
 from datetime import datetime, timedelta
 from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
@@ -10,6 +9,8 @@ import logging
 import configparser
 import csv
 from datetime import timedelta
+import requests
+import hashlib
 
 # Konfiguration (in eine separate Datei auslagern)
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -77,12 +78,46 @@ total_runtime_today = timedelta()
 last_day = datetime.now().date()
 aktueller_ausschaltpunkt = AUSSCHALTPUNKT
 last_shutdown_time = datetime.now()  # Initialisiere last_shutdown_time mit der aktuellen Zeit
+last_config_hash = None
 
 # Globale Variablen für Logging
 last_log_time = datetime.now() - timedelta(minutes=1)  # Simuliert, dass die letzte Log-Zeit vor einer Minute war
 last_kompressor_status = None
 
 test_counter = 1  # Zähler für die Testeinträge
+
+def calculate_file_hash(file_path):
+    """
+    Berechnet den SHA-256-Hash-Wert einer Datei.
+    :param file_path: Der Pfad zur Datei.
+    :return: Der Hash-Wert als Hex-String.
+    """
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        logging.error(f"Fehler beim Berechnen des Hash-Werts der Datei {file_path}: {e}")
+        return None
+
+def send_telegram_message(message):
+    """
+    Sendet eine Nachricht über Telegram.
+    :param message: Die Nachricht, die gesendet werden soll.
+    """
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": CHAT_ID,
+            "text": message
+        }
+        response = requests.post(url, data=data)
+        response.raise_for_status()
+        logging.info("Telegram-Nachricht erfolgreich gesendet.")
+    except Exception as e:
+        logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
 
 def limit_temperature(temp):
     """Begrenzt die Temperatur auf maximal 70 Grad."""
@@ -118,18 +153,59 @@ def reload_config():
     """
     Lädt die Konfigurationsdatei neu und aktualisiert die globalen Variablen.
     """
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash
+
+    config_file = "config.ini"
+
+    # Hash-Wert der Konfigurationsdatei vor dem Neuladen berechnen
+    current_hash = calculate_file_hash(config_file)
+
+    # Überprüfen, ob sich die Konfigurationsdatei geändert hat
+    if last_config_hash is not None and current_hash != last_config_hash:
+        logging.info("Konfigurationsdatei wurde geändert.")
+        send_telegram_message("🔧 Konfigurationsdatei wurde geändert.")
 
     try:
-        config.read("config.ini")
+        config.read(config_file)
 
-        # Werte aus der Konfigurationsdatei holen
-        AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-        AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
-        EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
-        MIN_LAUFZEIT_MINUTEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])
-        MIN_PAUSE_MINUTEN = int(config["Heizungssteuerung"]["MIN_PAUSE"])
-        VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])  # Verdampfertemperatur einlesen
+        # Werte aus der Konfigurationsdatei holen und überprüfen
+        AUSSCHALTPUNKT = check_value(
+            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
+            min_value=30, max_value=80, default_value=50,
+            parameter_name="AUSSCHALTPUNKT"
+        )
+        AUSSCHALTPUNKT_ERHOEHT = check_value(
+            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
+            min_value=35, max_value=85, default_value=55,
+            parameter_name="AUSSCHALTPUNKT_ERHOEHT",
+            other_value=AUSSCHALTPUNKT, comparison=">="  # AUSSCHALTPUNKT_ERHOEHT >= AUSSCHALTPUNKT
+        )
+        EINSCHALTPUNKT = check_value(
+            int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]),
+            min_value=20, max_value=70, default_value=40,
+            parameter_name="EINSCHALTPUNKT",
+            other_value=AUSSCHALTPUNKT, comparison="<",  # EINSCHALTPUNKT < AUSSCHALTPUNKT
+            min_difference=2  # Mindestunterschied von 2 Grad
+        )
+        MIN_LAUFZEIT_MINUTEN = check_value(
+            int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
+            min_value=1, max_value=60, default_value=10,
+            parameter_name="MIN_LAUFZEIT"
+        )
+        MIN_PAUSE_MINUTEN = check_value(
+            int(config["Heizungssteuerung"]["MIN_PAUSE"]),
+            min_value=1, max_value=60, default_value=20,
+            parameter_name="MIN_PAUSE"
+        )
+        VERDAMPFERTEMPERATUR = check_value(
+            int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
+            min_value=10, max_value=40, default_value=25,
+            parameter_name="VERDAMPFERTEMPERATUR"
+        )
+
+        # Telegram-Daten aus der Konfiguration lesen
+        BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
+        CHAT_ID = config["Telegram"]["CHAT_ID"]
 
         # Beide Werte in timedelta-Objekte umwandeln
         MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
@@ -148,6 +224,9 @@ def reload_config():
         logging.error(f"Ungültiger Wert in der Konfigurationsdatei: {e}")
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
+
+    # Hash-Wert nach dem Neuladen speichern
+    last_config_hash = current_hash
 
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None, min_difference=None):
@@ -198,10 +277,23 @@ def reload_config():
     """
     Lädt die Konfigurationsdatei neu und aktualisiert die globalen Variablen.
     """
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash
+
+    config_file = "config.ini"
+
+    # Hash-Wert der Konfigurationsdatei vor dem Neuladen berechnen
+    current_hash = calculate_file_hash(config_file)
+
+    # Hash-Wert ins Log schreiben
+    logging.info(f"Hash-Wert der Konfigurationsdatei: {current_hash}")
+
+    # Überprüfen, ob sich die Konfigurationsdatei geändert hat
+    if last_config_hash is not None and current_hash != last_config_hash:
+        logging.info("Konfigurationsdatei wurde geändert.")
+        send_telegram_message("🔧 Konfigurationsdatei wurde geändert.")
 
     try:
-        config.read("config.ini")
+        config.read(config_file)
 
         # Werte aus der Konfigurationsdatei holen und überprüfen
         AUSSCHALTPUNKT = check_value(
@@ -217,7 +309,7 @@ def reload_config():
         )
         EINSCHALTPUNKT = check_value(
             int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]),
-            min_value=20, max_value=70, default_value=45,
+            min_value=20, max_value=70, default_value=40,
             parameter_name="EINSCHALTPUNKT",
             other_value=AUSSCHALTPUNKT, comparison="<",  # EINSCHALTPUNKT < AUSSCHALTPUNKT
             min_difference=2  # Mindestunterschied von 2 Grad
@@ -229,14 +321,18 @@ def reload_config():
         )
         MIN_PAUSE_MINUTEN = check_value(
             int(config["Heizungssteuerung"]["MIN_PAUSE"]),
-            min_value=1, max_value=60, default_value=10,
+            min_value=1, max_value=60, default_value=20,
             parameter_name="MIN_PAUSE"
         )
         VERDAMPFERTEMPERATUR = check_value(
             int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
-            min_value=4, max_value=30, default_value=7,
+            min_value=10, max_value=40, default_value=25,
             parameter_name="VERDAMPFERTEMPERATUR"
         )
+
+        # Telegram-Daten aus der Konfiguration lesen
+        BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
+        CHAT_ID = config["Telegram"]["CHAT_ID"]
 
         # Beide Werte in timedelta-Objekte umwandeln
         MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
@@ -256,6 +352,8 @@ def reload_config():
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
 
+    # Hash-Wert nach dem Neuladen speichern
+    last_config_hash = current_hash
 def is_night_time(config):
     now = datetime.now()
     print(config.sections())  # Zeigt alle vorhandenen Abschnitte an
@@ -464,12 +562,19 @@ try:
 
         adjust_ausschaltpunkt(solax_data, config)
 
-        temperatures = ["Fehler"] * 3
-        for i, sensor_id in enumerate(sensor_ids):
-            temp = read_temperature(sensor_id)
-            if temp is not None:
-                temperatures[i] = limit_temperature(temp)
-            logging.debug(f"Sensor {i + 1}: {temperatures[i]:.2f} °C")
+        # Temperaturen lesen
+        try:
+            temperatures = ["Fehler"] * 3
+            for i, sensor_id in enumerate(sensor_ids):
+                temp = read_temperature(sensor_id)
+                if temp is not None:
+                    temperatures[i] = temp
+                logging.debug(f"Sensor {i + 1}: {temperatures[i]:.2f} °C")
+        except Exception as e:
+            error_message = f"Fehler bei der Temperaturmessung: {e}"
+            logging.error(error_message)
+            send_telegram_message(error_message)
+            continue
 
         if temperatures[0] != "Fehler" and temperatures[1] != "Fehler":
             t_boiler = (temperatures[0] + temperatures[1]) / 2
