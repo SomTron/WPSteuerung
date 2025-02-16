@@ -415,17 +415,52 @@ def calculate_shutdown_point(config, is_night, solax_data):
             logging.error(f"Fehler beim Verwenden des Standardwerts: {e}")
             return 50  # Ultimativer Standardwert
 
-def adjust_ausschaltpunkt(solax_data, config):
+def adjust_shutdown_and_start_points(solax_data, config):
+    """Passt den Ausschalt- und Einschaltpunkt basierend auf Solax-Daten und der Nachtzeit an.
+
+    Args:
+        solax_data (dict): Die Daten von SolaxCloud.
+        config (configparser.ConfigParser): Die Konfiguration.
+
+    Global:
+        aktueller_ausschaltpunkt (int): Der aktuelle Ausschaltpunkt.
+        aktueller_einschaltpunkt (int): Der aktuelle Einschaltpunkt.
+    """
     global aktueller_ausschaltpunkt, aktueller_einschaltpunkt
-    is_night = is_night_time(config)
-    aktueller_ausschaltpunkt = calculate_ausschaltpunkt(config, is_night, solax_data)
 
-    if solax_data and (solax_data.get("batPower", 0) > 600 or (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600)):
-        aktueller_einschaltpunkt = aktueller_ausschaltpunkt # Wenn Solarüberschuss, dann gleich dem Ausschalpunkt
-    else:
-        aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - (int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0) # Ansonsten normaler Einschaltpunkt mit Nachtabsenkung
+    is_night = is_nighttime(config)  # Verwendung der verbesserten Funktion
 
-    logging.info(f"Ausschaltpunkt: {aktueller_ausschaltpunkt}, Einschaltpunkt: {aktueller_einschaltpunkt}")
+    aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data) # Verwendung der verbesserten Funktion
+
+
+    try:
+        # Überprüfen auf Solarüberschuss (wie zuvor vereinfacht)
+        solar_ueberschuss = (
+            solax_data and
+            (solax_data.get("batPower", 0) > 600 or
+             (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
+        )
+
+        if solar_ueberschuss:
+            aktueller_einschaltpunkt = aktueller_ausschaltpunkt  # Bei Solarüberschuss gleich dem Ausschaltpunkt
+        else:
+            nacht_reduction = int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY]) if is_night else 0
+            aktueller_einschaltpunkt = int(config["Heizungssteuerung"][EINSCHALTPUNKT_KEY]) - nacht_reduction
+
+        logging.info(f"Ausschaltpunkt: {aktueller_ausschaltpunkt}, Einschaltpunkt: {aktueller_einschaltpunkt}")
+
+    except (KeyError, ValueError) as e:
+        logging.error(f"Fehler beim Anpassen der Punkte: {e}")
+
+        # Fehlerbehandlung: Standardwerte oder andere Logik implementieren
+        try:
+           nacht_reduction = int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY]) if is_night else 0
+           aktueller_einschaltpunkt = int(config["Heizungssteuerung"][EINSCHALTPUNKT_KEY]) - nacht_reduction
+           aktueller_ausschaltpunkt = int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY]) - nacht_reduction
+        except (KeyError, ValueError) as e:
+           logging.error(f"Fehler beim Verwenden der Standardwerte: {e}")
+           aktueller_einschaltpunkt = 40  # Standardwert
+           aktueller_ausschaltpunkt = 50  # Standardwert
 
 
 def read_temperature(sensor_id):
