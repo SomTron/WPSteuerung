@@ -86,21 +86,18 @@ def calculate_file_hash(file_path):
         return None
 
 def send_telegram_message(message):
-    """
-    Sendet eine Nachricht über Telegram.
-    :param message: Die Nachricht, die gesendet werden soll.
-    """
+    """ Sendet eine Nachricht über Telegram.
+    :param message: Die Nachricht, die gesendet werden soll. """
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {
-            "chat_id": CHAT_ID,
-            "text": message
-        }
+        data = {"chat_id": CHAT_ID, "text": message}
         response = requests.post(url, data=data)
-        response.raise_for_status()
-        logging.info("Telegram-Nachricht erfolgreich gesendet.")
-    except Exception as e:
+        response.raise_for_status()  # Löst eine Ausnahme für ungültige Statuscodes aus (4xx oder 5xx)
+        logging.info("Telegram-Nachricht gesendet.")
+        return True
+    except requests.exceptions.RequestException as e:
         logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
+        return False
 
 def limit_temperature(temp):
     """Begrenzt die Temperatur auf maximal 70 Grad."""
