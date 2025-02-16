@@ -104,6 +104,17 @@ def limit_temperature(temp):
     return min(temp, 70)
 
 # CSV-Datei initialisieren
+def initialize_csv(csv_file, fieldnames):
+    """Initialisiert die CSV-Datei mit dem Header, falls sie nicht existiert."""
+    try:
+        with open(csv_file, 'a', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            if not os.path.exists(csv_file):
+                writer.writeheader()
+    except Exception as e:
+        logging.error(f"Fehler bei der CSV-Initialisierung: {e}")
+        # Weitere Fehlerbehandlung
+
 csv_file = "heizungsdaten.csv"
 fieldnames = ['Zeitstempel', 'T-Vorne', 'T-Hinten', 'T-Boiler', 'T-Verd',
               'Kompressorstatus', 'Soll-Temperatur', 'Ist-Temperatur',
@@ -111,11 +122,8 @@ fieldnames = ['Zeitstempel', 'T-Vorne', 'T-Hinten', 'T-Boiler', 'T-Verd',
               'Solarleistung', 'Netzbezug/Einspeisung', 'Hausverbrauch',
               'Batterieleistung', 'SOC', 'Laufzeitunterschreitung', 'Pausenzeitunterschreitung']
 
-with open(csv_file, 'a', newline='') as csvfile:
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    # Header nur schreiben, wenn die Datei neu erstellt wird
-    if os.stat(csv_file).st_size == 0:
-        writer.writeheader()
+
+initialize_csv(csv_file, fieldnames)  # Funktion aufrufen
 
 def load_config():
     config = configparser.ConfigParser()
