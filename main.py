@@ -29,6 +29,9 @@ EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
 VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
 MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))  # Mindestlaufzeit
 MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))  # Mindestpause
+AUSSCHALTPUNKT_KEY = "AUSSCHALTPUNKT"
+AUSSCHALTPUNKT_ERHOEHT_KEY = "AUSSCHALTPUNKT_ERHOEHT"  # Hier wird die Konstante definiert
+NACHTABSENKUNG_KEY = "NACHTABSENKUNG"
 
 # SolaxCloud-Daten aus der Konfiguration lesen
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
@@ -68,6 +71,8 @@ last_config_hash = None  # Hash-Wert der letzten Konfigurationsdatei
 last_log_time = datetime.now() - timedelta(minutes=1)  # Zeitpunkt des letzten Log-Eintrags
 last_kompressor_status = None  # Letzter Status des Kompressors
 test_counter = 1  # Zähler für Testeinträge
+
+print("Variablen erstellt, Programm läuft")
 
 def calculate_file_hash(file_path):
     """
@@ -347,7 +352,7 @@ def is_nighttime(config):
     Args:        config (configparser.ConfigParser): Die Konfiguration.
     Returns:        bool: True, wenn es Nacht ist, False sonst.
     """
-    now = datetime.datetime.now()
+    now = datetime.now()
 
     try:
         start_time_str = config["Heizungssteuerung"][NACHTABSENKUNG_START]
@@ -494,21 +499,21 @@ def check_boiler_sensors(t_vorne, t_hinten, config):
     try:
         ausschaltpunkt = int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY])
     except (KeyError, ValueError) as e:
-        logging.error(f"Fehler beim Lesen des Ausschaltszeitpunkts aus der Konfiguration: {e}")
-        ausschaltpunkt = 50  # Standardwert, falls der Wert nicht gelesen werden kann
+        logging.error(f"Fehler beim Lesen des Ausschaltszeitpunkts: {e}")
+        ausschaltpunkt = 50  # Standardwert
+
+    fehler = None  # Initialisiere fehler mit None
+    is_overtemp = False  # Initialisiere is_overtemp mit False
 
     if t_vorne is None or t_hinten is None:
         fehler = "Fühlerfehler!"
-        is_overtemp = False  # Übertemperatur ist auch falsch, wenn die Fühler defekt sind
-    elif not isinstance(t_vorne, (int, float)) or not isinstance(t_hinten, (int, float)): # Überprüfung auf numerischen Typ
+    elif not isinstance(t_vorne, (int, float)) or not isinstance(t_hinten, (int, float)):
         fehler = "Fühlerfehler! (Ungültiger Datentyp)"
-        is_overtemp = False
     elif t_vorne >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10):
         fehler = "Übertemperatur!"
         is_overtemp = True
     elif abs(t_vorne - t_hinten) > 10:
         fehler = "Fühlerdifferenz!"
-        is_overtemp = False  # Eine Fühlerdifferenz ist keine Übertemperatur
 
     return fehler, is_overtemp
 
@@ -661,7 +666,7 @@ try:
                 "api_fehler": True
             }
 
-        adjust_ausschaltpunkt(solax_data, config)
+        adjust_shutdown_and_start_points(solax_data, config)
 
         # Temperaturen lesen
         try:
@@ -892,6 +897,7 @@ try:
             last_kompressor_status = kompressor_ein
 
         time.sleep(10)  # Kurze Pause, um die CPU-Last zu reduzieren
+        print("Druchgang durchlaufen")
 
 except KeyboardInterrupt:
     logging.info("Programm beendet.")
