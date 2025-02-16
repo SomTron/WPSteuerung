@@ -479,17 +479,36 @@ def read_temperature(sensor_id):
         return None
 
 def check_boiler_sensors(t_vorne, t_hinten, config):
-    ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-    fehler = None
-    is_overtemp = False
+    """Überprüft die Boiler-Sensoren auf Fehler (Fühlerfehler, Übertemperatur, Fühlerdifferenz).
+
+    Args:
+        t_vorne (float/int): Temperatur vorne.
+        t_hinten (float/int): Temperatur hinten.
+        config (configparser.ConfigParser): Die Konfiguration.
+
+    Returns:
+        tuple: Ein Tupel mit zwei Werten:
+            - fehler (str or None): Eine Fehlermeldung oder None, wenn kein Fehler vorliegt.
+            - is_overtemp (bool): True, wenn eine Übertemperatur vorliegt, False sonst.
+    """
+    try:
+        ausschaltpunkt = int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY])
+    except (KeyError, ValueError) as e:
+        logging.error(f"Fehler beim Lesen des Ausschaltszeitpunkts aus der Konfiguration: {e}")
+        ausschaltpunkt = 50  # Standardwert, falls der Wert nicht gelesen werden kann
 
     if t_vorne is None or t_hinten is None:
         fehler = "Fühlerfehler!"
+        is_overtemp = False  # Übertemperatur ist auch falsch, wenn die Fühler defekt sind
+    elif not isinstance(t_vorne, (int, float)) or not isinstance(t_hinten, (int, float)): # Überprüfung auf numerischen Typ
+        fehler = "Fühlerfehler! (Ungültiger Datentyp)"
+        is_overtemp = False
     elif t_vorne >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10):
         fehler = "Übertemperatur!"
         is_overtemp = True
     elif abs(t_vorne - t_hinten) > 10:
         fehler = "Fühlerdifferenz!"
+        is_overtemp = False  # Eine Fühlerdifferenz ist keine Übertemperatur
 
     return fehler, is_overtemp
 
