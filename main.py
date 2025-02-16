@@ -342,23 +342,37 @@ def reload_config():
 
     # Hash-Wert nach dem Neuladen speichern
     last_config_hash = current_hash
-def is_night_time(config):
-    now = datetime.now()
-    print(config.sections())  # Zeigt alle vorhandenen Abschnitte an
-    print(config["Heizungssteuerung"])  # Zeigt alle Keys in Heizungssteuerung
-    start_time_str = config["Heizungssteuerung"]["NACHTABSENKUNG_START"]  # Aus config.ini lesen
-    end_time_str = config["Heizungssteuerung"]["NACHTABSENKUNG_END"]    # Aus config.ini lesen
+def is_nighttime(config):
+    """Prüft, ob es Nacht ist, basierend auf den Zeiten in der Konfiguration.
+    Args:        config (configparser.ConfigParser): Die Konfiguration.
+    Returns:        bool: True, wenn es Nacht ist, False sonst.
+    """
+    now = datetime.datetime.now()
 
-    start_hour, start_minute = map(int, start_time_str.split(':'))
-    end_hour, end_minute = map(int, end_time_str.split(':'))
+    try:
+        start_time_str = config["Heizungssteuerung"][NACHTABSENKUNG_START]
+        end_time_str = config["Heizungssteuerung"][NACHTABSENKUNG_END]
 
-    start_time = now.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
-    end_time = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+        start_hour, start_minute = map(int, start_time_str.split(':'))
+        end_hour, end_minute = map(int, end_time_str.split(':'))
 
-    if start_time > end_time:  # Fall, dass die Nacht über Mitternacht geht
-        end_time = end_time.replace(day=now.day + 1)
+        start_time = datetime.datetime.combine(now.date(), datetime.time(start_hour, start_minute))
+        end_time = datetime.datetime.combine(now.date(), datetime.time(end_hour, end_minute))
 
-    return start_time <= now <= end_time
+        if start_time > end_time:  # Fall, dass die Nacht über Mitternacht geht
+            end_time = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(end_hour, end_minute))
+
+        return start_time <= now <= end_time
+
+    except KeyError as e:
+        logging.error(f"Fehlender Schlüssel in der Konfiguration: {e}")
+        return False
+    except ValueError as e:
+        logging.error(f"Ungültiges Zeitformat in der Konfiguration: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"Unerwarteter Fehler in is_nighttime: {e}")
+        return False
 
 def calculate_ausschaltpunkt(config, is_night, solax_data):
     nachtabsenkung = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
