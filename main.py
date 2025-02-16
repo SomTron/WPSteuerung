@@ -8,83 +8,66 @@ import RPi.GPIO as GPIO
 import logging
 import configparser
 import csv
-from datetime import timedelta
 import requests
 import hashlib
 
-# Konfiguration (in eine separate Datei auslagern)
-BASE_DIR = "/sys/bus/w1/devices/"
-I2C_ADDR = 0x27
-I2C_BUS = 1
-API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
-GIO21_PIN = 21  # GPIO-Pin für GIO21
+# Konfiguration
+BASE_DIR = "/sys/bus/w1/devices/"  # Basisverzeichnis für Temperatursensoren
+I2C_ADDR = 0x27  # I2C-Adresse des LCD-Displays
+I2C_BUS = 1  # I2C-Busnummer
+API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"  # Solax-API-URL
+GIO21_PIN = 21  # GPIO-Pin für den Kompressor
 
-# Config einlesen
+# Konfigurationsdatei einlesen
 config = configparser.ConfigParser()
 config.read("config.ini")
 
-# Werte aus der Konfigurationsdatei holen
+# Werte aus der Konfigurationsdatei laden
 AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
 AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
 EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
 VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
-
-# MIN_LAUFZEIT und MIN_PAUSE in Minuten aus der Config lesen
-MIN_LAUFZEIT_MINUTEN = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])  # Minuten
-MIN_PAUSE_MINUTEN = int(config["Heizungssteuerung"]["MIN_PAUSE"])         # Minuten
-
-# Beide Werte in timedelta-Objekte umwandeln
-MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
-MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
-
-
-# Initialisiere die Unterschreitungsvariablen mit Standardwerten
-laufzeit_unterschreitung = "N/A"
-pausenzeit_unterschreitung = "N/A"
+MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))  # Mindestlaufzeit
+MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))  # Mindestpause
 
 # SolaxCloud-Daten aus der Konfiguration lesen
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
 
 # Logging-Konfiguration
-log_file = "heizungssteuerung.log"  # Name der Logdatei
-log_level = logging.DEBUG  # Detaillierteste Protokollierungsstufe
-
-logging.basicConfig(filename=log_file, level=log_level,
-                    format="%(asctime)s - %(levelname)s - %(message)s")
-
-# Initialisierung
+logging.basicConfig(
+    filename="heizungssteuerung.log",  # Logdatei
+    level=logging.DEBUG,  # Detaillierteste Protokollierungsstufe
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logging.info("Heizungssteuerung gestartet.")
 
+# LCD und GPIO initialisieren
 lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
 try:
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(GIO21_PIN, GPIO.OUT)
+    GPIO.output(GIO21_PIN, GPIO.LOW)  # Kompressor ausschalten
 except Exception as e:
     logging.error(f"Fehler bei der GPIO-Initialisierung: {e}")
     exit(1)
 
-GPIO.output(GIO21_PIN, GPIO.LOW)  # Stelle sicher, dass der Kompressor aus ist
-
 # Globale Variablen
-last_api_call = None
-last_api_data = None
-last_api_timestamp = None
-kompressor_ein = False
-start_time = None
-last_runtime = timedelta()
-current_runtime = timedelta()
-total_runtime_today = timedelta()
-last_day = datetime.now().date()
-aktueller_ausschaltpunkt = AUSSCHALTPUNKT
-last_shutdown_time = datetime.now()  # Initialisiere last_shutdown_time mit der aktuellen Zeit
-last_config_hash = None
-
-# Globale Variablen für Logging
-last_log_time = datetime.now() - timedelta(minutes=1)  # Simuliert, dass die letzte Log-Zeit vor einer Minute war
-last_kompressor_status = None
-
-test_counter = 1  # Zähler für die Testeinträge
+last_api_call = None  # Zeitpunkt des letzten API-Aufrufs
+last_api_data = None  # Zuletzt empfangene API-Daten
+last_api_timestamp = None  # Zeitstempel der letzten API-Daten
+kompressor_ein = False  # Status des Kompressors
+start_time = None  # Startzeit des Kompressors
+last_runtime = timedelta()  # Letzte Laufzeit des Kompressors
+current_runtime = timedelta()  # Aktuelle Laufzeit des Kompressors
+total_runtime_today = timedelta()  # Gesamtlaufzeit des Kompressors heute
+last_day = datetime.now().date()  # Letzter Tag, an dem die Laufzeit berechnet wurde
+aktueller_ausschaltpunkt = AUSSCHALTPUNKT  # Aktueller Ausschaltpunkt
+last_shutdown_time = datetime.now()  # Zeitpunkt des letzten Ausschaltens
+last_config_hash = None  # Hash-Wert der letzten Konfigurationsdatei
+last_log_time = datetime.now() - timedelta(minutes=1)  # Zeitpunkt des letzten Log-Eintrags
+last_kompressor_status = None  # Letzter Status des Kompressors
+test_counter = 1  # Zähler für Testeinträge
 
 def calculate_file_hash(file_path):
     """
