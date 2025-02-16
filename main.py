@@ -104,6 +104,14 @@ def send_telegram_message(message):
         logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
         return False
 
+# Senden der Telegram-Nachricht beim Start (so früh wie möglich)
+now = datetime.now()
+message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
+if send_telegram_message(message):
+    logging.info("Telegram-Nachricht erfolgreich gesendet.")
+else:
+    logging.error("Fehler beim Senden der Telegram-Nachricht.")
+
 def limit_temperature(temp):
     """Begrenzt die Temperatur auf maximal 70 Grad."""
     return min(temp, 70)
