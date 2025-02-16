@@ -374,12 +374,46 @@ def is_nighttime(config):
         logging.error(f"Unerwarteter Fehler in is_nighttime: {e}")
         return False
 
-def calculate_ausschaltpunkt(config, is_night, solax_data):
-    nachtabsenkung = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
-    if solax_data and (solax_data.get("batPower", 0) > 600 or (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600)):
-        return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nachtabsenkung
-    else:
-        return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nachtabsenkung
+def calculate_shutdown_point(config, is_night, solax_data):
+    """Berechnet den Ausschalttemperaturpunkt unter Berücksichtigung der Nachtabsenkung und des Solarüberschusses.
+
+    Args:
+        config (configparser.ConfigParser): Die Konfiguration.
+        is_night (bool): True, wenn es Nacht ist, False sonst.
+        solax_data (dict): Die Daten von SolaxCloud.
+
+    Returns:
+        int: Der berechnete Ausschalttemperaturpunkt.
+    """
+    try:
+        nacht_reduction = int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY]) if is_night else 0
+
+        # Überprüfen auf Solarüberschuss (vereinfacht und lesbarer)
+        solar_ueberschuss = (
+            solax_data and
+            (solax_data.get("batPower", 0) > 600 or
+             (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
+        )
+
+        if solar_ueberschuss:
+            ausschaltpunkt = int(config["Heizungssteuerung"][AUSSCHALTPUNKT_ERHOEHT_KEY]) - nacht_reduction
+        else:
+            ausschaltpunkt = int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY]) - nacht_reduction
+
+        return ausschaltpunkt
+
+    except (KeyError, ValueError) as e:  # Beide Fehler gleichzeitig behandeln
+        logging.error(f"Fehler beim Lesen der Konfiguration: {e}")
+        # Hier könntest du einen Standardwert zurückgeben oder eine andere Fehlerbehandlung implementieren.
+        # Es ist wichtig, dass das Programm nicht abstürzt, wenn ein Wert fehlt!
+        try:
+            if is_night:
+                return int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY]) - int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY])
+            else:
+                return int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY])
+        except (KeyError, ValueError) as e:
+            logging.error(f"Fehler beim Verwenden des Standardwerts: {e}")
+            return 50  # Ultimativer Standardwert
 
 def adjust_ausschaltpunkt(solax_data, config):
     global aktueller_ausschaltpunkt, aktueller_einschaltpunkt
