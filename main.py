@@ -575,48 +575,59 @@ def set_kompressor_status(ein, force_off=False):
 
 
 def get_solax_data():
-    global last_api_call, last_api_data, last_api_timestamp
-    try:
-        if last_api_call and (datetime.now() - last_api_call) < timedelta(minutes=5):
-            logging.debug("Verwende zwischengespeicherte API-Daten.")
-            return last_api_data
+    """Ruft Daten von der Solax-API ab und speichert sie im Cache.
 
-        params = {
-            "tokenId": TOKEN_ID,
-            "sn": SN
-        }
-        response = requests.get(API_URL, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            logging.debug(f"API-Antwort: {data}")
-            if data.get("success", False):
-                last_api_data = data.get("result", None)
-                last_api_timestamp = datetime.now()
-                last_api_call = last_api_timestamp
-                return last_api_data
-            else:
-                error_message = data.get("exception", "Unbekannter Fehler")
-                logging.error(f"API-Fehler: {error_message}")
-                if "exceed the maximum call threshold limit" in error_message or "Request calls within the current minute > threshold" in error_message:
-                    last_api_data = {
-                        "acpower": 0,
-                        "feedinpower": 0,
-                        "consumeenergy": 0,
-                        "batPower": 0,
-                        "soc": 0,
-                        "powerdc1": 0,
-                        "powerdc2": 0,
-                        "api_fehler": True
-                    }
-                    last_api_timestamp = datetime.now()
-                    last_api_call = last_api_timestamp
-                    return last_api_data
-                return None
+    Returns:
+        dict: Die API-Daten oder None bei einem Fehler.
+    """
+    global last_api_call, last_api_data, last_api_timestamp
+
+    now = datetime.now()
+
+    # Cache-Prüfung (verbessert)
+    if last_api_call and now - last_api_call < timedelta(minutes=5):
+        logging.debug("Verwende zwischengespeicherte API-Daten.")
+        return last_api_data
+
+    try:
+        params = {"tokenId": TOKEN_ID, "sn": SN}  # TOKEN_ID und SN sollten global oder als Argumente verfügbar sein
+        response = requests.get(API_URL, params=params, timeout=10) # Timeout hinzufügen
+
+        response.raise_for_status()  # HTTP-Fehler überprüfen (4xx oder 5xx)
+
+        data = response.json()
+        logging.debug(f"API-Antwort: {data}")
+
+        if data.get("success"):  # Einfachere Prüfung auf Erfolg
+            last_api_data = data.get("result")
+            last_api_timestamp = now
+            last_api_call = now
+            return last_api_data
         else:
-            logging.error(f"Fehler bei der API-Anfrage: {response.status_code}")
-            return None
-    except Exception as e:
-        logging.error(f"Fehler beim Abrufen der API-Daten: {e}")
+            error_message = data.get("exception", "Unbekannter Fehler")
+            logging.error(f"API-Fehler: {error_message}")
+
+            # Behandlung von Rate-Limiting (verbessert)
+            if "exceed the maximum call threshold limit" in error_message or "Request calls within the current minute > threshold" in error_message:
+                # Hier wird ein leeres Dictionary mit api_fehler = True zurückgegeben, um anzuzeigen, dass ein API-Fehler vorliegt, aber das Programm nicht abstürzen soll.
+                last_api_data = {
+                    "acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                    "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                    "api_fehler": True
+                }
+                last_api_timestamp = now
+                last_api_call = now
+                return last_api_data
+            return None  # Kein Erfolg, aber auch kein Rate-Limit-Fehler
+
+    except requests.exceptions.RequestException as e:  # Spezifischere Exception
+        logging.error(f"Fehler bei der API-Anfrage: {e}")
+        return None
+    except (ValueError, KeyError) as e: # Fehler beim Parsen der JSON-Antwort
+        logging.error(f"Fehler beim Verarbeiten der API-Antwort: {e}")
+        return None
+    except Exception as e: # Alle anderen Fehler
+        logging.error(f"Unerwarteter Fehler beim Abrufen der API-Daten: {e}")
         return None
 
 def is_data_old(timestamp):
