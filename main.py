@@ -139,22 +139,31 @@ def get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
         params = {"offset": offset} if offset else {}
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        updates = response.json()['result']
-        logging.debug(f"API Response: {updates}")
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()  # Löst eine Ausnahme für HTTP-Fehler aus
+        updates = response.json().get('result', [])
+        logging.debug(f"API-Antwort: {updates}")
         return updates
     except requests.exceptions.RequestException as e:
-        logging.error(f"Fehler beim Abrufen der Telegram-Updates: {e}")
+        logging.error(f"Fehler bei der Telegram-API-Abfrage: {e}")
         return None
 
-def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates):
+
+def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id):
     if updates:
-        logging.debug(f"Telegram Updates: {updates}")
         for update in updates:
             message_text = update.get('message', {}).get('text')
-            if message_text.strip().lower() == "temperaturen":
-                send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
+            if message_text and message_text.strip().lower() == "temperaturen":
+                if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
+                    send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
+                else:
+                    send_telegram_message("Fehler beim Abrufen der Temperaturen.")
+
+            # Aktualisiere last_update_id auf die letzte verarbeitete Nachricht + 1
+            last_update_id = update['update_id'] + 1
+            logging.debug(f"Aktualisierte last_update_id: {last_update_id}")
+
+    return last_update_id
 
 
 
@@ -175,11 +184,10 @@ def initialize_csv(csv_file, fieldnames):
         # Weitere Fehlerbehandlung
 
 csv_file = "heizungsdaten.csv"
-fieldnames = ['Zeitstempel', 'T-Vorne', 'T-Hinten', 'T-Boiler', 'T-Verd',
-              'Kompressorstatus', 'Soll-Temperatur', 'Ist-Temperatur',
-              'Aktuelle Laufzeit', 'Letzte Laufzeit', 'Gesamtlaufzeit',
-              'Solarleistung', 'Netzbezug/Einspeisung', 'Hausverbrauch',
-              'Batterieleistung', 'SOC', 'Laufzeitunterschreitung', 'Pausenzeitunterschreitung']
+fieldnames = ['Zeitstempel', 'T-Vorne', 'T-Hinten', 'T-Boiler', 'T-Verd', 'Kompressorstatus', 'Soll-Temperatur',
+              'Ist-Temperatur', 'Aktuelle Laufzeit', 'Letzte Laufzeit', 'Gesamtlaufzeit', 'Solarleistung',
+              'Netzbezug/Einspeisung', 'Hausverbrauch', 'Batterieleistung', 'SOC', 'Laufzeitunterschreitung',
+              'Pausenzeitunterschreitung']
 
 
 initialize_csv(csv_file, fieldnames)  # Funktion aufrufen
@@ -748,14 +756,14 @@ try:
         t_boiler_hinten = read_temperature("28-445bd44686f4")  # Beispiel, ersetze mit deiner Funktion
         t_verd = read_temperature("28-213bd4460d65")  # Beispiel, ersetze mit deiner Funktion
 
+        # Telegram-Updates abrufen
         updates = get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, last_update_id)
         if updates:
-            if len(updates) > previous_updates_len:  # Überprüfe, ob es neue Nachrichten gibt
-                process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates)
-
-            last_update_id = updates[-1]['update_id'] + 1 if updates else last_update_id  # letzte ID +1
+            last_update_id = process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id)
             logging.debug(f"Updates: {updates}")
             logging.debug(f"Last Update ID: {last_update_id}")
+            logging.debug(f"Empfangene Updates: {updates}")
+            logging.debug(f"Aktualisierte last_update_id: {last_update_id}")
             previous_updates_len = len(updates)  # Aktualisiere die vorherige Länge der Updates
 
 
@@ -966,7 +974,7 @@ try:
             last_log_time = now
             last_kompressor_status = kompressor_ein
 
-        time.sleep(10)  # Kurze Pause, um die CPU-Last zu reduzieren
+        time.sleep(1)  # Kurze Pause, um die CPU-Last zu reduzieren
         print("Druchgang durchlaufen")
 
 except KeyboardInterrupt:
