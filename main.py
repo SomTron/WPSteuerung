@@ -78,6 +78,8 @@ last_config_hash = None  # Hash-Wert der letzten Konfigurationsdatei
 last_log_time = datetime.now() - timedelta(minutes=1)  # Zeitpunkt des letzten Log-Eintrags
 last_kompressor_status = None  # Letzter Status des Kompressors
 test_counter = 1  # Zähler für Testeinträge
+last_update_id = None  # Initialisiere die Variable für die letzte Update-ID
+previous_updates_len = 0  # Initialisiere die Variable für die vorherige Länge der Updates
 
 print("Variablen erstellt, Programm läuft")
 
@@ -119,9 +121,9 @@ if send_telegram_message(message):
 else:
     logging.error("Fehler beim Senden der Telegram-Nachricht.")
 
-def send_temperature_telegram(t_boiler, t_verd):
+def send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd):
     try:
-        message = f"🌡️ Aktuelle Temperaturen:\nKessel: {t_boiler:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
+        message = f"🌡️ Aktuelle Temperaturen:\nKessel vorne: {t_boiler_vorne:.2f} °C\nKessel hinten: {t_boiler_hinten:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {"chat_id": CHAT_ID, "text": message}
         response = requests.post(url, data=data)
@@ -132,20 +134,28 @@ def send_temperature_telegram(t_boiler, t_verd):
         logging.error(f"Fehler beim Senden der Telegram-Nachricht mit Temperaturen: {e}")
         return False
 
-def get_telegram_updates(offset=None):
+
+def get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
         params = {"offset": offset} if offset else {}
         response = requests.get(url, params=params)
         response.raise_for_status()
         updates = response.json()['result']
+        logging.debug(f"API Response: {updates}")
         return updates
     except requests.exceptions.RequestException as e:
         logging.error(f"Fehler beim Abrufen der Telegram-Updates: {e}")
         return None
 
-# Offset-Variable, um den letzten verarbeiteten Update zu speichern
-last_update_id = None
+def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates):
+    if updates:
+        logging.debug(f"Telegram Updates: {updates}")
+        for update in updates:
+            message_text = update.get('message', {}).get('text')
+            if message_text.strip().lower() == "temperaturen":
+                send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
+
 
 
 def limit_temperature(temp):
@@ -734,17 +744,19 @@ try:
         t_verd = temperatures[2] if temperatures[2] != "Fehler" else None
         logging.debug(f"T-Verd: {t_verd:.2f} °C")
 
-        # In der Schleife, nach dem Abrufen der Temperaturen
-        updates = get_telegram_updates(last_update_id)
+        t_boiler_vorne = read_temperature("28-0bd6d4461d84")  # Beispiel, ersetze mit deiner Funktion
+        t_boiler_hinten = read_temperature("28-445bd44686f4")  # Beispiel, ersetze mit deiner Funktion
+        t_verd = read_temperature("28-213bd4460d65")  # Beispiel, ersetze mit deiner Funktion
+
+        updates = get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, last_update_id)
         if updates:
-            for update in updates:
-                last_update_id = update['update_id'] + 1  # Aktualisiere den Offset
-                message_text = update.get('message', {}).get('text')
-                if message_text == 'Temperaturen':
-                    if t_boiler != "Fehler" and t_verd != "Fehler":
-                        send_temperature_telegram(t_boiler, t_verd)
-                    else:
-                        send_telegram_message("Fehler beim Abrufen der Temperaturen.")
+            if len(updates) > previous_updates_len:  # Überprüfe, ob es neue Nachrichten gibt
+                process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates)
+
+            last_update_id = updates[-1]['update_id'] + 1 if updates else last_update_id  # letzte ID +1
+            logging.debug(f"Updates: {updates}")
+            logging.debug(f"Last Update ID: {last_update_id}")
+            previous_updates_len = len(updates)  # Aktualisiere die vorherige Länge der Updates
 
 
 
