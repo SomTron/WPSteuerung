@@ -113,13 +113,38 @@ def send_telegram_message(message):
         logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
         return False
 
-# Senden der Telegram-Nachricht beim Start (so früh wie möglich)
+def send_help_message():
+    """
+    Sendet eine Nachricht mit den verfügbaren Befehlen und deren Beschreibungen.
+    """
+    try:
+        message = (
+            "🤖 Verfügbare Befehle:\n\n"
+            "🌡️ *Temperaturen* – Sendet die aktuellen Temperaturen.\n"
+            "📊 *Status* – Sendet den aktuellen Status (Temperaturen, Kompressorstatus, Laufzeiten, Sollwerte).\n"
+            "🆘 *Hilfe* – Zeigt diese Nachricht an."
+        )
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}  # Markdown für Formatierung
+        response = requests.post(url, data=data)
+        response.raise_for_status()
+        logging.info("Hilfe-Nachricht gesendet.")
+        return True
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Fehler beim Senden der Hilfe-Nachricht: {e}")
+        return False
+
+# Senden der Hilfe-Nachricht beim Start
 now = datetime.now()
 message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
 if send_telegram_message(message):
     logging.info("Telegram-Nachricht erfolgreich gesendet.")
 else:
     logging.error("Fehler beim Senden der Telegram-Nachricht.")
+
+# Senden der Hilfe-Nachricht mit den verfügbaren Befehlen
+send_help_message()
+
 
 def send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd):
     try:
@@ -134,19 +159,22 @@ def send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd):
         logging.error(f"Fehler beim Senden der Telegram-Nachricht mit Temperaturen: {e}")
         return False
 
-def send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+def send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """
-    Sendet den aktuellen Status (Temperaturen, Kompressorstatus, Laufzeiten) als Telegram-Nachricht.
+    Sendet den aktuellen Status (Temperaturen, Kompressorstatus, Laufzeiten, Sollwerte) als Telegram-Nachricht.
     """
     try:
         message = (
             f"🌡️ Aktuelle Temperaturen:\n"
-            f"Kessel vorne: {t_boiler_vorne:.2f} °C\n"
-            f"Kessel hinten: {t_boiler_hinten:.2f} °C\n"
+            f"Boiler vorne: {t_boiler_vorne:.2f} °C\n"
+            f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
             f"Verdampfer: {t_verd:.2f} °C\n\n"
             f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
             f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
-            f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}"
+            f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
+            f"🎯 Sollwerte:\n"
+            f"Einschaltpunkt: {einschaltpunkt} °C\n"
+            f"Ausschaltpunkt: {ausschaltpunkt} °C"
         )
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {"chat_id": CHAT_ID, "text": message}
@@ -172,9 +200,9 @@ def get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
         return None
 
 
-def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """
-    Verarbeitet Telegram-Nachrichten und reagiert auf die Befehle "Temperaturen" und "Status".
+    Verarbeitet Telegram-Nachrichten und reagiert auf die Befehle "Temperaturen", "Status" und unbekannte Befehle.
     """
     if updates:
         for update in updates:
@@ -192,9 +220,20 @@ def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, 
                 # Reagiere auf den Befehl "Status"
                 elif message_text == "status":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
-                        send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit)
+                        send_status_telegram(
+                            t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status,
+                            aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt
+                        )
                     else:
                         send_telegram_message("Fehler beim Abrufen des Status.")
+
+                # Reagiere auf den Befehl "Hilfe"
+                elif message_text == "hilfe":
+                    send_help_message()
+
+                # Reagiere auf unbekannte Befehle
+                else:
+                    send_help_message()
 
             # Aktualisiere last_update_id auf die letzte verarbeitete Nachricht + 1
             last_update_id = update['update_id'] + 1
@@ -798,7 +837,8 @@ try:
         if updates:
             last_update_id = process_telegram_messages(
                 t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
-                kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0]
+                kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0],
+                EINSCHALTPUNKT, aktueller_ausschaltpunkt  # Sollwerte übergeben
             )
 
 
