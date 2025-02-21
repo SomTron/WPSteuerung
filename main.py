@@ -10,6 +10,7 @@ import configparser
 import csv
 import requests
 import hashlib
+from telegram import ReplyKeyboardMarkup
 
 # Konfiguration
 BASE_DIR = "/sys/bus/w1/devices/"  # Basisverzeichnis für Temperatursensoren
@@ -99,6 +100,62 @@ def calculate_file_hash(file_path):
         logging.error(f"Fehler beim Berechnen des Hash-Werts der Datei {file_path}: {e}")
         return None
 
+def get_custom_keyboard():
+    """
+    Erstellt eine benutzerdefinierte Tastatur mit den verfügbaren Befehlen.
+    """
+    keyboard = [
+        ["🌡️ Temperaturen"],  # Erste Zeile mit einer Schaltfläche
+        ["📊 Status"],        # Zweite Zeile mit einer Schaltfläche
+        ["🆘 Hilfe"]          # Dritte Zeile mit einer Schaltfläche
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
+def send_welcome_message(chat_id):
+    """
+    Sendet eine Willkommensnachricht mit der benutzerdefinierten Tastatur.
+    """
+    try:
+        message = (
+            "🤖 Willkommen beim Heizungssteuerungs-Bot!\n\n"
+            "Verwende die Tastatur, um Befehle auszuwählen."
+        )
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": chat_id,
+            "text": message,
+            "reply_markup": get_custom_keyboard().to_json()  # Tastatur als JSON senden
+        }
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        logging.info("Willkommensnachricht mit Tastatur gesendet.")
+        return True
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Fehler beim Senden der Willkommensnachricht: {e}")
+        return False
+
+def send_unknown_command_message(chat_id):
+    """
+    Sendet eine Nachricht für unbekannte Befehle und zeigt die Tastatur erneut an.
+    """
+    try:
+        message = (
+            "❌ Unbekannter Befehl.\n\n"
+            "Verwende die Tastatur, um einen gültigen Befehl auszuwählen."
+        )
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": chat_id,
+            "text": message,
+            "reply_markup": get_custom_keyboard().to_json()  # Tastatur als JSON senden
+        }
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        logging.info("Nachricht für unbekannten Befehl gesendet.")
+        return True
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Fehler beim Senden der Nachricht für unbekannten Befehl: {e}")
+        return False
 def send_telegram_message(message):
     """ Sendet eine Nachricht über Telegram.
     :param message: Die Nachricht, die gesendet werden soll. """
@@ -134,7 +191,7 @@ def send_help_message():
         logging.error(f"Fehler beim Senden der Hilfe-Nachricht: {e}")
         return False
 
-# Senden der Hilfe-Nachricht beim Start
+# Senden der Willkommensnachricht mit Tastatur beim Start
 now = datetime.now()
 message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
 if send_telegram_message(message):
@@ -142,8 +199,8 @@ if send_telegram_message(message):
 else:
     logging.error("Fehler beim Senden der Telegram-Nachricht.")
 
-# Senden der Hilfe-Nachricht mit den verfügbaren Befehlen
-send_help_message()
+# Senden der Willkommensnachricht mit Tastatur
+send_welcome_message(CHAT_ID)
 
 
 def send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd):
@@ -207,18 +264,19 @@ def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, 
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
-            if message_text:
+            chat_id = update.get('message', {}).get('chat', {}).get('id')  # Chat-ID extrahieren
+            if message_text and chat_id:
                 message_text = message_text.strip().lower()  # Normalisiere die Nachricht
 
                 # Reagiere auf den Befehl "Temperaturen"
-                if message_text == "temperaturen":
+                if message_text == "🌡️ temperaturen":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
                         send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
                     else:
                         send_telegram_message("Fehler beim Abrufen der Temperaturen.")
 
                 # Reagiere auf den Befehl "Status"
-                elif message_text == "status":
+                elif message_text == "📊 status":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
                         send_status_telegram(
                             t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status,
@@ -228,12 +286,12 @@ def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, 
                         send_telegram_message("Fehler beim Abrufen des Status.")
 
                 # Reagiere auf den Befehl "Hilfe"
-                elif message_text == "hilfe":
+                elif message_text == "🆘 hilfe":
                     send_help_message()
 
                 # Reagiere auf unbekannte Befehle
                 else:
-                    send_help_message()
+                    send_unknown_command_message(chat_id)  # Tastatur erneut anzeigen
 
             # Aktualisiere last_update_id auf die letzte verarbeitete Nachricht + 1
             last_update_id = update['update_id'] + 1
