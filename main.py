@@ -20,22 +20,29 @@ GIO21_PIN = 21  # GPIO-Pin für den Kompressor
 
 # Konfigurationsdatei einlesen
 config = configparser.ConfigParser()
-config.read("config.ini")
 
 # Werte aus der Konfigurationsdatei laden
-AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
-EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
-VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
-MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))  # Mindestlaufzeit
-MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))  # Mindestpause
-AUSSCHALTPUNKT_KEY = "AUSSCHALTPUNKT"
-AUSSCHALTPUNKT_ERHOEHT_KEY = "AUSSCHALTPUNKT_ERHOEHT"  # Hier wird die Konstante definiert
-NACHTABSENKUNG_KEY = "NACHTABSENKUNG"
+try:
+    config.read("config.ini")
+    BOT_TOKEN = config.get("Telegram", "BOT_TOKEN")
+    CHAT_ID = config.get("Telegram", "CHAT_ID")
+    AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
+    AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
+    EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
+    VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
+    MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))  # Mindestlaufzeit
+    MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))  # Mindestpause
+    AUSSCHALTPUNKT_KEY = "AUSSCHALTPUNKT"
+    AUSSCHALTPUNKT_ERHOEHT_KEY = "AUSSCHALTPUNKT_ERHOEHT"  # Hier wird die Konstante definiert
+    NACHTABSENKUNG_KEY = "NACHTABSENKUNG"
+    # SolaxCloud-Daten aus der Konfiguration lesen
+    TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
+    SN = config["SolaxCloud"]["SN"]
+except Exception as e:
+    logging.error(f"Fehler beim Lesen der Konfiguration: {e}")
+    exit() # Programm beenden, da keine gültige Konfiguration vorhanden ist
 
-# SolaxCloud-Daten aus der Konfiguration lesen
-TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
-SN = config["SolaxCloud"]["SN"]
+
 
 # Logging-Konfiguration
 logging.basicConfig(
@@ -111,6 +118,35 @@ if send_telegram_message(message):
     logging.info("Telegram-Nachricht erfolgreich gesendet.")
 else:
     logging.error("Fehler beim Senden der Telegram-Nachricht.")
+
+def send_temperature_telegram(t_boiler, t_verd):
+    try:
+        message = f"🌡️ Aktuelle Temperaturen:\nKessel: {t_boiler:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {"chat_id": CHAT_ID, "text": message}
+        response = requests.post(url, data=data)
+        response.raise_for_status()  # Löst eine Ausnahme für ungültige Statuscodes aus
+        logging.info("Telegram-Nachricht mit Temperaturen gesendet.")
+        return True
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Fehler beim Senden der Telegram-Nachricht mit Temperaturen: {e}")
+        return False
+
+def get_telegram_updates(offset=None):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+        params = {"offset": offset} if offset else {}
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        updates = response.json()['result']
+        return updates
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Fehler beim Abrufen der Telegram-Updates: {e}")
+        return None
+
+# Offset-Variable, um den letzten verarbeiteten Update zu speichern
+last_update_id = None
+
 
 def limit_temperature(temp):
     """Begrenzt die Temperatur auf maximal 70 Grad."""
@@ -697,6 +733,20 @@ try:
 
         t_verd = temperatures[2] if temperatures[2] != "Fehler" else None
         logging.debug(f"T-Verd: {t_verd:.2f} °C")
+
+        # In der Schleife, nach dem Abrufen der Temperaturen
+        updates = get_telegram_updates(last_update_id)
+        if updates:
+            for update in updates:
+                last_update_id = update['update_id'] + 1  # Aktualisiere den Offset
+                message_text = update.get('message', {}).get('text')
+                if message_text == 'Temperaturen':
+                    if t_boiler != "Fehler" and t_verd != "Fehler":
+                        send_temperature_telegram(t_boiler, t_verd)
+                    else:
+                        send_telegram_message("Fehler beim Abrufen der Temperaturen.")
+
+
 
         # Fehlerprüfung und Kompressorsteuerung
         fehler, is_overtemp = check_boiler_sensors(temperatures[0], temperatures[1], config)
