@@ -134,6 +134,29 @@ def send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd):
         logging.error(f"Fehler beim Senden der Telegram-Nachricht mit Temperaturen: {e}")
         return False
 
+def send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+    """
+    Sendet den aktuellen Status (Temperaturen, Kompressorstatus, Laufzeiten) als Telegram-Nachricht.
+    """
+    try:
+        message = (
+            f"🌡️ Aktuelle Temperaturen:\n"
+            f"Kessel vorne: {t_boiler_vorne:.2f} °C\n"
+            f"Kessel hinten: {t_boiler_hinten:.2f} °C\n"
+            f"Verdampfer: {t_verd:.2f} °C\n\n"
+            f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
+            f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
+            f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}"
+        )
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {"chat_id": CHAT_ID, "text": message}
+        response = requests.post(url, data=data)
+        response.raise_for_status()
+        logging.info("Telegram-Nachricht mit Status gesendet.")
+        return True
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Fehler beim Senden der Telegram-Nachricht mit Status: {e}")
+        return False
 
 def get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
     try:
@@ -149,15 +172,29 @@ def get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
         return None
 
 
-def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id):
+def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+    """
+    Verarbeitet Telegram-Nachrichten und reagiert auf die Befehle "Temperaturen" und "Status".
+    """
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
-            if message_text and message_text.strip().lower() == "temperaturen":
-                if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
-                    send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
-                else:
-                    send_telegram_message("Fehler beim Abrufen der Temperaturen.")
+            if message_text:
+                message_text = message_text.strip().lower()  # Normalisiere die Nachricht
+
+                # Reagiere auf den Befehl "Temperaturen"
+                if message_text == "temperaturen":
+                    if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
+                        send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
+                    else:
+                        send_telegram_message("Fehler beim Abrufen der Temperaturen.")
+
+                # Reagiere auf den Befehl "Status"
+                elif message_text == "status":
+                    if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
+                        send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit)
+                    else:
+                        send_telegram_message("Fehler beim Abrufen des Status.")
 
             # Aktualisiere last_update_id auf die letzte verarbeitete Nachricht + 1
             last_update_id = update['update_id'] + 1
@@ -759,12 +796,10 @@ try:
         # Telegram-Updates abrufen
         updates = get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, last_update_id)
         if updates:
-            last_update_id = process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id)
-            logging.debug(f"Updates: {updates}")
-            logging.debug(f"Last Update ID: {last_update_id}")
-            logging.debug(f"Empfangene Updates: {updates}")
-            logging.debug(f"Aktualisierte last_update_id: {last_update_id}")
-            previous_updates_len = len(updates)  # Aktualisiere die vorherige Länge der Updates
+            last_update_id = process_telegram_messages(
+                t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
+                kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0]
+            )
 
 
 
