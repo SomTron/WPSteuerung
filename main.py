@@ -579,6 +579,23 @@ async def display_task():
             logging.warning("Keine Solax-Daten für Display verfügbar")
         await asyncio.sleep(5)
 
+async def initialize_gpio():
+    """Initialisiert GPIO-Pins mit Wiederholungslogik asynchron."""
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(GIO21_PIN, GPIO.OUT)
+            GPIO.output(GIO21_PIN, GPIO.LOW)
+            GPIO.setup(PRESSURE_SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+            logging.info("GPIO erfolgreich initialisiert: Kompressor=GPIO21, Druckschalter=GPIO17")
+            return True
+        except Exception as e:
+            logging.error(f"GPIO-Initialisierung fehlgeschlagen (Versuch {attempt + 1}/{max_attempts}): {e}")
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(1)  # Asynchrone Pause vor erneutem Versuch
+    logging.critical("GPIO-Initialisierung nach mehreren Versuchen fehlgeschlagen. Programm wird beendet.")
+    return False
 
 # Asynchrone Hauptschleife
 async def main_loop():
@@ -586,14 +603,7 @@ async def main_loop():
     global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
 
     # GPIO initialisieren
-    try:
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(GIO21_PIN, GPIO.OUT)
-        GPIO.output(GIO21_PIN, GPIO.LOW)
-        GPIO.setup(PRESSURE_SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)  # Druckschalter mit Pull-Down
-        logging.info("GPIO erfolgreich initialisiert: Kompressor=GPIO21, Druckschalter=GPIO17")
-    except Exception as e:
-        logging.error(f"Fehler bei der GPIO-Initialisierung: {e}")
+    if not await initialize_gpio():
         exit(1)
 
     # Asynchrone HTTP-Sitzung starten
