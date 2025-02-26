@@ -310,6 +310,10 @@ def set_kompressor_status(ein, force_off=False):
             logging.info(f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}")
 
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
+    # Prüfen, ob der GPIO-Status korrekt gesetzt wurde
+    actual_state = GPIO.input(GIO21_PIN)  # Annahme: Pin kann auch als Eingang gelesen werden
+    if actual_state != (GPIO.HIGH if ein else GPIO.LOW):
+        logging.error(f"GPIO-Fehler: Kompressor-Status sollte {'EIN' if ein else 'AUS'} sein, ist aber {actual_state}")
     return None
 
 
