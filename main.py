@@ -65,12 +65,12 @@ last_kompressor_status = None
 last_update_id = None
 urlaubsmodus_aktiv = False
 pressure_error_sent = False
-# Initiale Sollwerte
 aktueller_ausschaltpunkt = AUSSCHALTPUNKT
 aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Einschaltpunkt basiert auf Offset
 original_ausschaltpunkt = AUSSCHALTPUNKT
 original_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Konsistenz im Urlaubsmodus
-
+ausschluss_grund = None  # Grund, warum der Kompressor nicht läuft (z.B. "Zu kurze Pause")
+t_boiler = None
 
 
 
@@ -183,6 +183,7 @@ async def send_temperature_telegram(session, t_boiler_vorne, t_boiler_hinten, t_
 
 async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """Sendet den aktuellen Status über Telegram."""
+    global ausschluss_grund, t_boiler  # Zugriff auf den aktuellen Boiler-Wert und Ausschlussgrund
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
         f"Boiler vorne: {t_boiler_vorne:.2f} °C\n"
@@ -192,11 +193,15 @@ async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd,
         f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
         f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
         f"🎯 Sollwerte:\n"
-        f"Einschaltpunkt: {einschaltpunkt} °C\n"  # Hier wird aktueller_einschaltpunkt übergeben
+        f"Einschaltpunkt: {einschaltpunkt} °C\n"
         f"Ausschaltpunkt: {ausschaltpunkt} °C"
     )
+    # Debug: Überprüfe den aktuellen Wert von ausschluss_grund
+    logging.debug(f"Statusabfrage - Kompressor aus: {not kompressor_status}, ausschluss_grund: {ausschluss_grund}")
+    # Zeige den Ausschlussgrund, wenn der Kompressor aus ist und ein Grund vorliegt
+    if not kompressor_status and ausschluss_grund:
+        message += f"\n\n⚠️ Kompressor ausgeschaltet wegen: {ausschluss_grund}"
     return await send_telegram_message(session, CHAT_ID, message)
-
 
 async def send_welcome_message(session, chat_id):
     """Sendet eine Willkommensnachricht mit Tastatur."""
@@ -282,26 +287,37 @@ def check_boiler_sensors(t_vorne, t_hinten, config):
 
 
 def set_kompressor_status(ein, force_off=False):
-    global kompressor_ein, start_time, current_runtime, total_runtime_today, last_runtime, last_shutdown_time
+    """Setzt den Status des Kompressors (EIN/AUS) und überprüft den GPIO-Pin.
+
+    Args:
+        ein (bool): True zum Einschalten, False zum Ausschalten.
+        force_off (bool): Erzwingt das Ausschalten unabhängig von Mindestlaufzeit.
+
+    Returns:
+        bool or None: False, wenn Einschalten fehlschlägt; True, wenn Ausschalten verweigert wird; None bei Erfolg.
+    """
+    global kompressor_ein, start_time, current_runtime, total_runtime_today, last_runtime, last_shutdown_time, ausschluss_grund
     now = datetime.datetime.now()
     if ein:
         if not kompressor_ein:
             pause_time = now - last_shutdown_time
             if pause_time < MIN_PAUSE and not force_off:
-                logging.warning(f"Kompressor-Einschaltung verweigert: Zu kurze Pause ({pause_time} < {MIN_PAUSE})")
+                logging.info(f"Kompressor bleibt aus (zu kurze Pause: {pause_time}, benötigt: {MIN_PAUSE})")
+                ausschluss_grund = f"Zu kurze Pause ({pause_time.total_seconds():.1f}s < {MIN_PAUSE.total_seconds():.1f}s)"
                 return False
             kompressor_ein = True
             start_time = now
             current_runtime = datetime.timedelta()
+            ausschluss_grund = None  # Kein Ausschlussgrund, wenn Kompressor läuft
             logging.info(f"Kompressor EIN geschaltet. Startzeit: {start_time}")
         else:
             current_runtime = now - start_time
+            logging.debug(f"Kompressor läuft bereits, aktuelle Laufzeit: {current_runtime}")
     else:
         if kompressor_ein:
             elapsed_time = now - start_time
             if elapsed_time < MIN_LAUFZEIT and not force_off:
-                logging.warning(
-                    f"Kompressor-Ausschaltung verweigert: Zu kurze Laufzeit ({elapsed_time} < {MIN_LAUFZEIT})")
+                logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {MIN_LAUFZEIT})")
                 return True
             kompressor_ein = False
             current_runtime = elapsed_time
@@ -309,13 +325,17 @@ def set_kompressor_status(ein, force_off=False):
             last_runtime = current_runtime
             last_shutdown_time = now
             start_time = None
-            logging.info(f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}")
+            logging.info(f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")
+        else:
+            logging.debug("Kompressor bereits ausgeschaltet")
 
+    # GPIO-Status setzen und prüfen
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
-    # Prüfen, ob der GPIO-Status korrekt gesetzt wurde
-    actual_state = GPIO.input(GIO21_PIN)  # Annahme: Pin kann auch als Eingang gelesen werden
+    actual_state = GPIO.input(GIO21_PIN)  # Annahme: Pin kann als Eingang gelesen werden
     if actual_state != (GPIO.HIGH if ein else GPIO.LOW):
         logging.error(f"GPIO-Fehler: Kompressor-Status sollte {'EIN' if ein else 'AUS'} sein, ist aber {actual_state}")
+        # Optional: Hier könnte man weitere Maßnahmen treffen (z.B. Programmabbruch oder erneuter Versuch)
+
     return None
 
 
@@ -720,7 +740,7 @@ async def main_loop():
     Raises:
         asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
     """
-    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
+    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler
 
     # GPIO-Pins initialisieren (Kompressor und Druckschalter)
     if not await initialize_gpio():
@@ -754,28 +774,32 @@ async def main_loop():
                     await reload_config(session)
                     last_config_hash = current_hash
 
-                # Solax-Daten abrufen, mit Fallback bei Fehler
+                # Solax-Daten abrufen
                 solax_data = await get_solax_data(session)
                 if solax_data is None:
-                    solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0, "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0, "api_fehler": True}
+                    solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0, "batPower": 0, "soc": 0,
+                                  "powerdc1": 0, "powerdc2": 0, "api_fehler": True}
 
-                # Sollwerte basierend auf Solax-Daten anpassen
+                # Sollwerte anpassen
                 await asyncio.to_thread(adjust_shutdown_and_start_points, solax_data, config)
 
-                # Temperaturen von den drei Sensoren auslesen
+                # Temperaturen auslesen
                 t_boiler_vorne = await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"])
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
-                t_boiler = (t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+                t_boiler = (
+                                       t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
 
                 # Druckschalter prüfen
                 pressure_ok = await asyncio.to_thread(check_pressure)
                 if not pressure_ok:
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     if not pressure_error_sent:
-                        await send_telegram_message(session, CHAT_ID, "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
+                        await send_telegram_message(session, CHAT_ID,
+                                                    "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
                         pressure_error_sent = True
-                        logging.error(f"Druck zu niedrig erkannt: Kompressor ausgeschaltet, Temperaturen: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, verd={t_verd}")
+                        logging.error(
+                            f"Druck zu niedrig erkannt: Kompressor ausgeschaltet, Temperaturen: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, verd={t_verd}")
                     continue
                 else:
                     if pressure_error_sent:
@@ -793,11 +817,19 @@ async def main_loop():
                 if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
+                    ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
+                    logging.debug(f"Ausschlussgrund gesetzt: {ausschluss_grund}")
                 elif t_boiler != "Fehler":
                     if t_boiler < aktueller_einschaltpunkt and not kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, True)
+                        if not kompressor_ein:  # Wenn Einschalten fehlschlägt, wurde ausschluss_grund bereits gesetzt
+                            logging.info(
+                                f"Kompressor nicht eingeschaltet trotz t_boiler < aktueller_einschaltpunkt: {ausschluss_grund}")
+                        else:
+                            ausschluss_grund = None  # Nur zurücksetzen, wenn Kompressor erfolgreich eingeschaltet wurde
                     elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
+                        ausschluss_grund = None  # Kein Ausschlussgrund, wenn ausgeschaltet
 
                 if kompressor_ein and start_time:
                     current_runtime = datetime.datetime.now() - start_time
