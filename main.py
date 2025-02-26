@@ -103,6 +103,22 @@ def calculate_file_hash(file_path):
         logging.error(f"Fehler beim Berechnen des Hash-Werts der Datei {file_path}: {e}")
         return None
 
+def send_telegram_message(chat_id, message, reply_markup=None, parse_mode=None):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {"chat_id": chat_id, "text": message}
+        if reply_markup:
+            data["reply_markup"] = reply_markup.to_json()
+        if parse_mode:
+            data["parse_mode"] = parse_mode
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        logging.info("Telegram-Nachricht gesendet.")
+        return True
+    except requests.RequestException as e:
+        logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
+        return False
+
 def get_custom_keyboard():
     """
     Erstellt eine benutzerdefinierte Tastatur mit den verfügbaren Befehlen.
@@ -117,89 +133,32 @@ def get_custom_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 def send_welcome_message(chat_id):
-    """
-    Sendet eine Willkommensnachricht mit der benutzerdefinierten Tastatur.
-    """
-    try:
-        message = (
-            "🤖 Willkommen beim Heizungssteuerungs-Bot!\n\n"
-            "Verwende die Tastatur, um Befehle auszuwählen."
-        )
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {
-            "chat_id": chat_id,
-            "text": message,
-            "reply_markup": get_custom_keyboard().to_json()  # Tastatur als JSON senden
-        }
-        response = requests.post(url, json=data)
-        response.raise_for_status()
-        logging.info("Willkommensnachricht mit Tastatur gesendet.")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Fehler beim Senden der Willkommensnachricht: {e}")
-        return False
+    message = (
+        "🤖 Willkommen beim Heizungssteuerungs-Bot!\n\n"
+        "Verwende die Tastatur, um Befehle auszuwählen."
+    )
+    return send_telegram_message(chat_id, message, reply_markup=get_custom_keyboard())
 
 def send_unknown_command_message(chat_id):
-    """
-    Sendet eine Nachricht für unbekannte Befehle und zeigt die Tastatur erneut an.
-    """
-    try:
-        message = (
-            "❌ Unbekannter Befehl.\n\n"
-            "Verwende die Tastatur, um einen gültigen Befehl auszuwählen."
-        )
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {
-            "chat_id": chat_id,
-            "text": message,
-            "reply_markup": get_custom_keyboard().to_json()  # Tastatur als JSON senden
-        }
-        response = requests.post(url, json=data)
-        response.raise_for_status()
-        logging.info("Nachricht für unbekannten Befehl gesendet.")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Fehler beim Senden der Nachricht für unbekannten Befehl: {e}")
-        return False
-def send_telegram_message(message):
-    """ Sendet eine Nachricht über Telegram.
-    :param message: Die Nachricht, die gesendet werden soll. """
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": message}
-        response = requests.post(url, data=data)
-        response.raise_for_status()  # Löst eine Ausnahme für ungültige Statuscodes aus (4xx oder 5xx)
-        logging.info("Telegram-Nachricht gesendet.")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
-        return False
+    message = (
+        "❌ Unbekannter Befehl.\n\n"
+        "Verwende die Tastatur, um einen gültigen Befehl auszuwählen."
+    )
+    return send_telegram_message(chat_id, message, reply_markup=get_custom_keyboard())
 
 def send_help_message():
-    """
-    Sendet eine Nachricht mit den verfügbaren Befehlen und deren Beschreibungen.
-    """
-    try:
-        message = (
-            "🤖 Verfügbare Befehle:\n\n"
-            "🌡️ *Temperaturen* – Sendet die aktuellen Temperaturen.\n"
-            "📊 *Status* – Sendet den aktuellen Status (Temperaturen, Kompressorstatus, Laufzeiten, Sollwerte).\n"
-            "🆘 *Hilfe* – Zeigt diese Nachricht an."
-        )
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}  # Markdown für Formatierung
-        response = requests.post(url, data=data)
-        response.raise_for_status()
-        logging.info("Hilfe-Nachricht gesendet.")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Fehler beim Senden der Hilfe-Nachricht: {e}")
-        return False
+    message = (
+        "🤖 Verfügbare Befehle:\n\n"
+        "🌡️ *Temperaturen* – Sendet die aktuellen Temperaturen.\n"
+        "📊 *Status* – Sendet den aktuellen Status.\n"
+        "🆘 *Hilfe* – Zeigt diese Nachricht an."
+    )
+    return send_telegram_message(CHAT_ID, message, parse_mode="Markdown")
 
 # Senden der Willkommensnachricht mit Tastatur beim Start
 now = datetime.datetime.now()
 message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
-if send_telegram_message(message):
+if send_telegram_message(CHAT_ID, message):
     logging.info("Telegram-Nachricht erfolgreich gesendet.")
 else:
     logging.error("Fehler beim Senden der Telegram-Nachricht.")
@@ -209,64 +168,40 @@ send_welcome_message(CHAT_ID)
 
 
 def send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd):
-    try:
-        message = f"🌡️ Aktuelle Temperaturen:\nKessel vorne: {t_boiler_vorne:.2f} °C\nKessel hinten: {t_boiler_hinten:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": message}
-        response = requests.post(url, data=data)
-        response.raise_for_status()  # Löst eine Ausnahme für ungültige Statuscodes aus
-        logging.info("Telegram-Nachricht mit Temperaturen gesendet.")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Fehler beim Senden der Telegram-Nachricht mit Temperaturen: {e}")
-        return False
+    message = f"🌡️ Aktuelle Temperaturen:\nKessel vorne: {t_boiler_vorne:.2f} °C\nKessel hinten: {t_boiler_hinten:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
+    return send_telegram_message(CHAT_ID, message)
 
 def send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    """
-    Sendet den aktuellen Status (Temperaturen, Kompressorstatus, Laufzeiten, Sollwerte) als Telegram-Nachricht.
-    """
-    try:
-        # Debugging: Aktuelle Werte in der Statusnachricht
-        logging.debug(f"Statusnachricht: Einschaltpunkt={einschaltpunkt}, Ausschaltpunkt={ausschaltpunkt}")
-
-        message = (
-            f"🌡️ Aktuelle Temperaturen:\n"
-            f"Boiler vorne: {t_boiler_vorne:.2f} °C\n"
-            f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
-            f"Verdampfer: {t_verd:.2f} °C\n\n"
-            f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
-            f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
-            f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
-            f"🎯 Sollwerte:\n"
-            f"Einschaltpunkt: {einschaltpunkt} °C\n"  # Verwende übergebene Parameter
-            f"Ausschaltpunkt: {ausschaltpunkt} °C"  # Verwende übergebene Parameter
-        )
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": message}
-        response = requests.post(url, data=data)
-        response.raise_for_status()
-        logging.info("Telegram-Nachricht mit Status gesendet.")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Fehler beim Senden der Telegram-Nachricht mit Status: {e}")
-        return False
+    message = (
+        f"🌡️ Aktuelle Temperaturen:\n"
+        f"Boiler vorne: {t_boiler_vorne:.2f} °C\n"
+        f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
+        f"Verdampfer: {t_verd:.2f} °C\n\n"
+        f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
+        f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
+        f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
+        f"🎯 Sollwerte:\n"
+        f"Einschaltpunkt: {einschaltpunkt} °C\n"
+        f"Ausschaltpunkt: {ausschaltpunkt} °C"
+    )
+    return send_telegram_message(CHAT_ID, message)
 
 def get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
         params = {"offset": offset} if offset else {}
         response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()  # Löst eine Ausnahme für HTTP-Fehler aus
+        response.raise_for_status()
         updates = response.json().get('result', [])
         logging.debug(f"API-Antwort: {updates}")
         return updates
-    except requests.exceptions.RequestException as e:
+    except requests.RequestException as e:
         logging.error(f"Fehler bei der Telegram-API-Abfrage: {e}")
         return None
 
 
 def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
-    global EINSCHALTPUNKT, AUSSCHALTPUNKT  # Zugriff auf globale Sollwerte
+    global EINSCHALTPUNKT, AUSSCHALTPUNKT
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
@@ -277,15 +212,12 @@ def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, 
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
                         send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
                     else:
-                        send_telegram_message("Fehler beim Abrufen der Temperaturen.")
+                        send_telegram_message(CHAT_ID, "Fehler beim Abrufen der Temperaturen.")
                 elif message_text == "📊 status" or message_text == "status":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
-                        send_status_telegram(
-                            t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status,
-                            aktuelle_laufzeit, gesamtlaufzeit, EINSCHALTPUNKT, AUSSCHALTPUNKT  # Änderung hier
-                        )
+                        send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, EINSCHALTPUNKT, AUSSCHALTPUNKT)
                     else:
-                        send_telegram_message("Fehler beim Abrufen des Status.")
+                        send_telegram_message(CHAT_ID, "Fehler beim Abrufen des Status.")
                 elif message_text == "🆘 hilfe" or message_text == "hilfe":
                     send_help_message()
                 elif message_text == "🌴 urlaub" or message_text == "urlaub":
@@ -322,16 +254,16 @@ def aktivere_urlaubsmodus():
             logging.debug(f"Nach Urlaubsmodus: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
 
             logging.info(f"Urlaubsmodus aktiviert. Neue Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
-            send_telegram_message(f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
+            send_telegram_message(CHAT_ID,f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
     except KeyError as e:
         logging.error(f"Fehler beim Aktivieren des Urlaubsmodus: Abschnitt oder Schlüssel fehlt in der Konfiguration. {e}")
-        send_telegram_message("❌ Fehler: Konfiguration für den Urlaubsmodus fehlt oder ist ungültig.")
+        send_telegram_message(CHAT_ID,"❌ Fehler: Konfiguration für den Urlaubsmodus fehlt oder ist ungültig.")
     except ValueError as e:
         logging.error(f"Fehler beim Aktivieren des Urlaubsmodus: Ungültiger Wert in der Konfiguration. {e}")
-        send_telegram_message("❌ Fehler: Ungültiger Wert für die Urlaubsabsenkung in der Konfiguration.")
+        send_telegram_message(CHAT_ID,"❌ Fehler: Ungültiger Wert für die Urlaubsabsenkung in der Konfiguration.")
     except Exception as e:
         logging.error(f"Unerwarteter Fehler beim Aktivieren des Urlaubsmodus: {e}")
-        send_telegram_message("❌ Unerwarteter Fehler beim Aktivieren des Urlaubsmodus.")
+        send_telegram_message(CHAT_ID,"❌ Unerwarteter Fehler beim Aktivieren des Urlaubsmodus.")
 
 def deaktivere_urlaubsmodus():
     """
@@ -352,10 +284,10 @@ def deaktivere_urlaubsmodus():
             logging.debug(f"Nach Deaktivierung: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
 
             logging.info(f"Urlaubsmodus deaktiviert. Ursprüngliche Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
-            send_telegram_message(f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
+            send_telegram_message(CHAT_ID, f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
     except Exception as e:
         logging.error(f"Unerwarteter Fehler beim Deaktivieren des Urlaubsmodus: {e}")
-        send_telegram_message("❌ Unerwarteter Fehler beim Deaktivieren des Urlaubsmodus.")
+        send_telegram_message(CHAT_ID, "❌ Unerwarteter Fehler beim Deaktivieren des Urlaubsmodus.")
 
 def limit_temperature(temp):
     """Begrenzt die Temperatur auf maximal 70 Grad."""
@@ -387,10 +319,10 @@ def load_config():
     try:
         config.read("config.ini")
     except FileNotFoundError:
-        print("Fehler: config.ini nicht gefunden!")
+        logging.error("Fehler: config.ini nicht gefunden!")
         exit()  # Oder eine andere Fehlerbehandlung
     except configparser.Error as e:
-        print(f"Fehler beim Lesen von config.ini: {e}")
+        logging.error(f"Fehler beim Lesen von config.ini: {e}")
         exit()  # Oder eine andere Fehlerbehandlung
     return config
 
@@ -402,7 +334,7 @@ def reload_config():
 
     if last_config_hash is not None and current_hash != last_config_hash:
         logging.info("Konfigurationsdatei wurde geändert.")
-        send_telegram_message("🔧 Konfigurationsdatei wurde geändert.")
+        send_telegram_message(CHAT_ID, "🔧 Konfigurationsdatei wurde geändert.")
 
     try:
         config.read(config_file)
@@ -653,7 +585,7 @@ def read_temperature(sensor_id):
             else:
                 return None
     except Exception as e:
-        print(f"Fehler beim Lesen des Sensors {sensor_id}: {e}")
+        logging.error(f"Fehler beim Lesen des Sensors {sensor_id}: {e}")
         return None
 
 def check_boiler_sensors(t_vorne, t_hinten, config):
@@ -806,6 +738,7 @@ try:
 
     if len(sensor_ids) < 3:
         print("Es wurden weniger als 3 DS18B20-Sensoren gefunden!")
+        logging.error("Es wurden weniger als 3 DS18B20-Sensoren gefunden!")
         exit(1)
 
     sensor_ids = sensor_ids[:3]
@@ -844,6 +777,16 @@ try:
         temperatures = [t_boiler_vorne if t_boiler_vorne is not None else "Fehler",
                         t_boiler_hinten if t_boiler_hinten is not None else "Fehler",
                         t_verd if t_verd is not None else "Fehler"]
+
+        # Telegramnachrichten abfragen
+        updates = get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, last_update_id)
+        logging.info(f"Updates: {updates}")
+        if updates:
+            last_update_id = process_telegram_messages(
+                t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
+                kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0]
+            )
+            logging.info(f"Neuer last_update_id: {last_update_id}")
 
         # Fehlerprüfung und Kompressorsteuerung
         fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
