@@ -236,6 +236,10 @@ def read_temperature(sensor_id):
             if lines[0].strip()[-3:] == "YES":
                 temp_data = lines[1].split("=")[-1]
                 temp = float(temp_data) / 1000.0
+                # Plausibilitätsprüfung: Temperaturen außerhalb -20°C bis 100°C sind unwahrscheinlich
+                if temp < -20 or temp > 100:
+                    logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C. Sensor als fehlerhaft betrachtet.")
+                    return None
                 logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
                 return temp
             logging.warning(f"Ungültige Daten von Sensor {sensor_id}")
@@ -276,14 +280,13 @@ def check_boiler_sensors(t_vorne, t_hinten, config):
 
 
 def set_kompressor_status(ein, force_off=False):
-    """Setzt den Status des Kompressors (EIN/AUS)."""
     global kompressor_ein, start_time, current_runtime, total_runtime_today, last_runtime, last_shutdown_time
     now = datetime.datetime.now()
     if ein:
         if not kompressor_ein:
             pause_time = now - last_shutdown_time
-            if pause_time < MIN_PAUSE:
-                logging.info(f"Kompressor bleibt aus (zu kurze Pause: {pause_time}, benötigt: {MIN_PAUSE})")
+            if pause_time < MIN_PAUSE and not force_off:
+                logging.warning(f"Kompressor-Einschaltung verweigert: Zu kurze Pause ({pause_time} < {MIN_PAUSE})")
                 return False
             kompressor_ein = True
             start_time = now
@@ -291,12 +294,12 @@ def set_kompressor_status(ein, force_off=False):
             logging.info(f"Kompressor EIN geschaltet. Startzeit: {start_time}")
         else:
             current_runtime = now - start_time
-            logging.debug(f"Kompressor läuft bereits, aktuelle Laufzeit: {current_runtime}")
     else:
         if kompressor_ein:
             elapsed_time = now - start_time
             if elapsed_time < MIN_LAUFZEIT and not force_off:
-                logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {MIN_LAUFZEIT})")
+                logging.warning(
+                    f"Kompressor-Ausschaltung verweigert: Zu kurze Laufzeit ({elapsed_time} < {MIN_LAUFZEIT})")
                 return True
             kompressor_ein = False
             current_runtime = elapsed_time
@@ -304,10 +307,8 @@ def set_kompressor_status(ein, force_off=False):
             last_runtime = current_runtime
             last_shutdown_time = now
             start_time = None
-            logging.info(
-                f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")
-        else:
-            logging.debug("Kompressor bereits ausgeschaltet")
+            logging.info(f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}")
+
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
     return None
 
@@ -745,6 +746,22 @@ async def main_loop():
                 # Durchschnittstemperatur des Boilers berechnen, falls beide Sensoren gültig
                 t_boiler = (t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
 
+
+                #Sicherheit Max Temp Boiler:
+                MAX_SAFE_TEMP = 80  # Maximale sichere Temperatur in °C
+
+                if t_boiler_vorne is not None and t_boiler_vorne > MAX_SAFE_TEMP or \
+                        t_boiler_hinten is not None and t_boiler_hinten > MAX_SAFE_TEMP:
+                    await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                    if not pressure_error_sent:  # Wiederverwendung der Variable für allgemeine Fehler
+                        await send_telegram_message(session, CHAT_ID,
+                                                    "❌ Fehler: Übertemperatur erkannt! Kompressor ausgeschaltet.")
+                        pressure_error_sent = True  # Verhindert Mehrfachmeldungen
+                    logging.error(
+                        f"Übertemperatur erkannt: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, Kompressor ausgeschaltet")
+                    continue
+
+
                 # Druckschalter prüfen (GPIO 17): LOW = Druck zu niedrig, HIGH = Druck OK
                 pressure_ok = await asyncio.to_thread(check_pressure)
                 if not pressure_ok:
@@ -894,10 +911,12 @@ async def deaktivere_urlaubsmodus(session):
 # Programmstart
 if __name__ == "__main__":
     try:
-        asyncio.run(main_loop())  # Startet die asynchrone Hauptschleife
+        asyncio.run(main_loop())
     except KeyboardInterrupt:
         logging.info("Programm durch Benutzer beendet.")
     finally:
-        GPIO.cleanup()  # Bereinigt GPIO-Pins
-        lcd.close()  # Schließt das LCD
-        logging.info("Heizungssteuerung beendet.")
+        # Sicherstellen, dass der Kompressor aus ist, bevor GPIO bereinigt wird
+        GPIO.output(GIO21_PIN, GPIO.LOW)  # Kompressor ausschalten
+        GPIO.cleanup()  # GPIO-Pins bereinigen
+        lcd.close()  # LCD schließen
+        logging.info("Heizungssteuerung sicher beendet, Hardware in sicherem Zustand.")
