@@ -74,7 +74,7 @@ pressure_error_sent = False
 # Logging einrichten
 logging.basicConfig(
     filename="heizungssteuerung.log",
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -403,34 +403,31 @@ def adjust_shutdown_and_start_points(solax_data, config):
     if urlaubsmodus_aktiv:
         aktueller_ausschaltpunkt = AUSSCHALTPUNKT
         aktueller_einschaltpunkt = EINSCHALTPUNKT
-        logging.info(
-            f"Urlaubsmodus aktiv: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}")
+        logging.info(f"Urlaubsmodus aktiv: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}")
         return
 
     aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
 
     try:
         solar_ueberschuss = (
-                solax_data is not None and
-                (solax_data.get("batPower", 0) > 600 or
-                 (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
+            solax_data is not None and
+            (solax_data.get("batPower", 0) > 600 or
+             (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
         )
 
         if solar_ueberschuss:
             aktueller_einschaltpunkt = aktueller_ausschaltpunkt
         else:
-            nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG_KEY"]) if is_night else 0
+            nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0  # Angepasst
             aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
 
-        logging.info(
-            f"Sollwerte angepasst: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}, Solarüberschuss={solar_ueberschuss}, Nachtzeit={is_night}")
+        logging.info(f"Sollwerte angepasst: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}, Solarüberschuss={solar_ueberschuss}, Nachtzeit={is_night}")
         logging.debug(f"Solax-Daten für Anpassung: {solax_data}")
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler beim Anpassen der Punkte: {e}, Solax-Daten={solax_data}")
-        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG_KEY"]) if is_night else 0
+        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0  # Angepasst
         aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
         aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
-
 
 # Weitere Hilfsfunktionen
 def calculate_file_hash(file_path):
@@ -466,7 +463,7 @@ def validate_config(config):
             "VERDAMPFERTEMPERATUR": "25",
             "MIN_LAUFZEIT": "10",
             "MIN_PAUSE": "20",
-            "NACHTABSENKUNG_KEY": "0"
+            "NACHTABSENKUNG": "0"  # Angepasst von NACHTABSENKUNG_KEY
         },
         "Telegram": {"BOT_TOKEN": "", "CHAT_ID": ""},
         "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
@@ -483,8 +480,7 @@ def validate_config(config):
                         min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT", "EINSCHALTPUNKT"] else 20
                         max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
                         if not (min_val <= value <= max_val):
-                            logging.warning(
-                                f"Ungültiger Wert für {key} in {section}: {value}. Verwende Standardwert: {default}")
+                            logging.warning(f"Ungültiger Wert für {key} in {section}: {value}. Verwende Standardwert: {default}")
                             config[section][key] = default
                         else:
                             config[section][key] = str(value)
@@ -524,18 +520,17 @@ def is_nighttime(config):
 def calculate_shutdown_point(config, is_night, solax_data):
     """Berechnet den Ausschaltpunkt basierend auf Nachtzeit und Solax-Daten."""
     try:
-        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG_KEY"]) if is_night else 0
+        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0  # Angepasst
         solar_ueberschuss = (
-                solax_data and
-                (solax_data.get("batPower", 0) > 600 or
-                 (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
+            solax_data and
+            (solax_data.get("batPower", 0) > 600 or
+             (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
         )
         if solar_ueberschuss:
             shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
         else:
             shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
-        logging.debug(
-            f"Ausschaltpunkt berechnet: Solarüberschuss={solar_ueberschuss}, Nachtreduktion={nacht_reduction}, Ergebnis={shutdown_point}")
+        logging.debug(f"Ausschaltpunkt berechnet: Solarüberschuss={solar_ueberschuss}, Nachtreduktion={nacht_reduction}, Ergebnis={shutdown_point}")
         return shutdown_point
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler beim Berechnen des Ausschaltpunkts: {e}, Solax-Daten={solax_data}")
@@ -696,122 +691,92 @@ async def main_loop():
     Raises:
         asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
     """
-    # Zugriff auf globale Variablen für Zustandsverwaltung
     global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
 
     # GPIO-Pins initialisieren (Kompressor und Druckschalter)
-    # Beendet das Programm bei wiederholtem Fehlschlag
     if not await initialize_gpio():
         logging.critical("Programm wird aufgrund fehlender GPIO-Initialisierung beendet.")
         exit(1)
 
-    # Asynchrone HTTP-Sitzung für Telegram- und Solax-API-Anfragen starten
     async with aiohttp.ClientSession() as session:
         # Startnachricht mit aktuellem Zeitstempel an Telegram senden
         now = datetime.datetime.now()
         message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
         await send_telegram_message(session, CHAT_ID, message)
-        # Willkommensnachricht mit Tastatur an Telegram senden
         await send_welcome_message(session, CHAT_ID)
 
         # Asynchrone Tasks starten: Telegram-Updates und Display-Anzeige
-        telegram_task_handle = asyncio.create_task(telegram_task(session))  # Verarbeitet Telegram-Nachrichten
-        display_task_handle = asyncio.create_task(display_task())  # Aktualisiert das LCD-Display
+        telegram_task_handle = asyncio.create_task(telegram_task(session))
+        display_task_handle = asyncio.create_task(display_task())
+
+        # Zeitpunkt des letzten erfolgreichen Zyklus für Watchdog
+        last_cycle_time = datetime.datetime.now()
+        watchdog_warning_count = 0  # Zähler für Watchdog-Warnungen
+        WATCHDOG_MAX_WARNINGS = 3  # Maximale Warnungen vor Abschaltung
 
         try:
-            # Endlosschleife für die Hauptsteuerung
             while True:
-                # Konfiguration laden und validieren, um sicherzustellen, dass Werte gültig sind
+                # Konfiguration laden und validieren
                 config = validate_config(load_config())
 
                 # Prüfen, ob sich die Konfigurationsdatei geändert hat
                 current_hash = calculate_file_hash("config.ini")
                 if last_config_hash != current_hash:
-                    await reload_config(session)  # Konfiguration neu laden, falls geändert
+                    await reload_config(session)
                     last_config_hash = current_hash
 
-                # Solax-Daten von der API abrufen, mit Fallback bei Fehler
+                # Solax-Daten abrufen, mit Fallback bei Fehler
                 solax_data = await get_solax_data(session)
                 if solax_data is None:
-                    # Fallback-Daten verwenden, falls API-Abfrage fehlschlägt
-                    solax_data = {
-                        "acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                        "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                        "api_fehler": True
-                    }
+                    solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0, "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0, "api_fehler": True}
 
-                # Sollwerte (Ein-/Ausschaltpunkte) basierend auf Solax-Daten und Nachtzeit anpassen
+                # Sollwerte basierend auf Solax-Daten anpassen
                 await asyncio.to_thread(adjust_shutdown_and_start_points, solax_data, config)
 
-                # Temperaturen von den drei Sensoren (vorne, hinten, Verdampfer) auslesen
+                # Temperaturen von den drei Sensoren auslesen
                 t_boiler_vorne = await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"])
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
-                # Durchschnittstemperatur des Boilers berechnen, falls beide Sensoren gültig
                 t_boiler = (t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
 
-
-                #Sicherheit Max Temp Boiler:
-                MAX_SAFE_TEMP = 80  # Maximale sichere Temperatur in °C
-
-                if t_boiler_vorne is not None and t_boiler_vorne > MAX_SAFE_TEMP or \
-                        t_boiler_hinten is not None and t_boiler_hinten > MAX_SAFE_TEMP:
-                    await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                    if not pressure_error_sent:  # Wiederverwendung der Variable für allgemeine Fehler
-                        await send_telegram_message(session, CHAT_ID,
-                                                    "❌ Fehler: Übertemperatur erkannt! Kompressor ausgeschaltet.")
-                        pressure_error_sent = True  # Verhindert Mehrfachmeldungen
-                    logging.error(
-                        f"Übertemperatur erkannt: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, Kompressor ausgeschaltet")
-                    continue
-
-
-                # Druckschalter prüfen (GPIO 17): LOW = Druck zu niedrig, HIGH = Druck OK
+                # Druckschalter prüfen
                 pressure_ok = await asyncio.to_thread(check_pressure)
                 if not pressure_ok:
-                    # Bei zu niedrigem Druck: Kompressor ausschalten und einmalig melden
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     if not pressure_error_sent:
                         await send_telegram_message(session, CHAT_ID, "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
                         pressure_error_sent = True
                         logging.error(f"Druck zu niedrig erkannt: Kompressor ausgeschaltet, Temperaturen: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, verd={t_verd}")
-                    continue  # Überspringe den Rest der Schleife, bis Druck wieder OK
+                    continue
                 else:
-                    # Druck wieder normal: Fehlermeldungsstatus zurücksetzen
                     if pressure_error_sent:
                         logging.info("Druck wieder normal, Fehlermeldungsstatus zurückgesetzt")
                         pressure_error_sent = False
 
-                # Boiler-Sensoren auf Fehler (Ausfall, Übertemperatur, Differenz) prüfen
+                # Boiler-Sensoren auf Fehler prüfen
                 fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
                 if fehler:
-                    # Bei Fehler: Kompressor ausschalten und Schleife fortsetzen
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     logging.info(f"Kompressor wegen Fehler ausgeschaltet: {fehler}")
                     continue
 
                 # Kompressorsteuerung basierend auf Temperaturen
                 if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
-                    # Verdampfertemperatur zu niedrig: Kompressor ausschalten
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
                 elif t_boiler != "Fehler":
-                    # Boiler-Temperatur unter Einschaltpunkt: Kompressor einschalten
                     if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, True)
-                    # Boiler-Temperatur über Ausschaltpunkt: Kompressor ausschalten
                     elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
 
-                # Aktuelle Laufzeit berechnen, wenn Kompressor aktiv
                 if kompressor_ein and start_time:
                     current_runtime = datetime.datetime.now() - start_time
 
-                # Datenlogging in CSV-Datei, bei Statusänderung oder alle Minute
+                # Datenlogging in CSV-Datei
                 now = datetime.datetime.now()
                 if last_log_time is None or (now - last_log_time) >= datetime.timedelta(minutes=1) or kompressor_ein != last_kompressor_status:
                     async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                        # CSV-Zeile mit Zeitstempel und aktuellen Werten erstellen
                         csv_line = (
                             f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                             f"{t_boiler_vorne if t_boiler_vorne is not None else 'N/A'},"
@@ -826,15 +791,23 @@ async def main_loop():
                     last_log_time = now
                     last_kompressor_status = kompressor_ein
 
-                # Pause von 0,5 Sekunden, um CPU-Last zu reduzieren
-                await asyncio.sleep(0.5)
+                # Watchdog: Prüfen, ob der Zyklus zu lange dauert
+                cycle_duration = (datetime.datetime.now() - last_cycle_time).total_seconds()
+                if cycle_duration > 10:  # Erhöhtes Timeout auf 10 Sekunden
+                    watchdog_warning_count += 1
+                    logging.error(f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
+                    if watchdog_warning_count >= WATCHDOG_MAX_WARNINGS:
+                        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                        logging.critical("Maximale Watchdog-Warnungen erreicht, Hardware wird sicher heruntergefahren.")
+                        break  # Schleife beenden
+
+                last_cycle_time = datetime.datetime.now()  # Zykluszeit aktualisieren
+                await asyncio.sleep(2)  # Erhöhte Pause auf 2 Sekunden
 
         except asyncio.CancelledError:
-            # Bei Programmabbruch (z.B. Ctrl+C): Tasks sauber beenden
             logging.info("Hauptschleife abgebrochen, Tasks werden beendet.")
             telegram_task_handle.cancel()
             display_task_handle.cancel()
-            # Warten, bis alle Tasks abgebrochen sind, Fehler ignorieren
             await asyncio.gather(telegram_task_handle, display_task_handle, return_exceptions=True)
             raise
 
