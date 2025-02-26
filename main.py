@@ -20,8 +20,9 @@ I2C_ADDR = 0x27
 I2C_BUS = 1
 # API-URL für SolaxCloud
 API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
-# GPIO-Pin für den Kompressor
-GIO21_PIN = 21
+# GPIO-Pins
+GIO21_PIN = 21  # Ausgang für Kompressor
+PRESSURE_SENSOR_PIN = 17  # Eingang für Druckschalter
 
 # Konfigurationsdatei einlesen
 config = configparser.ConfigParser()
@@ -65,6 +66,7 @@ last_update_id = None
 urlaubsmodus_aktiv = False
 original_einschaltpunkt = EINSCHALTPUNKT
 original_ausschaltpunkt = AUSSCHALTPUNKT
+pressure_error_sent = False  # Neue Variable, um zu verfolgen, ob die Fehlermeldung gesendet wurde
 
 # LCD global initialisieren
 lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
@@ -130,7 +132,7 @@ async def get_solax_data(session):
                 logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
                 return None
     except aiohttp.ClientError as e:
-        logging.error(f"Fehler bei der Solax-API-Anfrage: {e}")
+        logging.error(f"Fehler bei der API-Anfrage: {e}")
         return None
 
 
@@ -218,6 +220,13 @@ def read_temperature(sensor_id):
     except Exception as e:
         logging.error(f"Fehler beim Lesen des Sensors {sensor_id}: {e}")
         return None
+
+
+def check_pressure():
+    """Prüft den Druckschalter (GPIO 17)."""
+    pressure_ok = GPIO.input(PRESSURE_SENSOR_PIN)  # HIGH = Druck OK, LOW = Druck zu niedrig
+    logging.debug(f"Druckschalter-Status: {pressure_ok} (HIGH=OK, LOW=zu niedrig)")
+    return pressure_ok
 
 
 def check_boiler_sensors(t_vorne, t_hinten, config):
@@ -512,17 +521,22 @@ async def display_task():
         t_verd = await asyncio.to_thread(read_temperature, "28-213bd4460d65")
         t_boiler = (
                                t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+        pressure_ok = await asyncio.to_thread(check_pressure)
 
         lcd.clear()
-        lcd.write_string(f"T-Vorne: {t_boiler_vorne if t_boiler_vorne is not None else 'Fehler':.2f} C")
-        lcd.cursor_pos = (1, 0)
-        lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
-        lcd.cursor_pos = (2, 0)
-        lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
-        lcd.cursor_pos = (3, 0)
-        lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
-        logging.debug(
-            f"Display-Seite 1 aktualisiert: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
+        if not pressure_ok:
+            lcd.write_string("FEHLER: Druck zu niedrig")
+            logging.error(f"Display zeigt Druckfehler: Druckschalter={pressure_ok}")
+        else:
+            lcd.write_string(f"T-Vorne: {t_boiler_vorne if t_boiler_vorne is not None else 'Fehler':.2f} C")
+            lcd.cursor_pos = (1, 0)
+            lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
+            lcd.cursor_pos = (2, 0)
+            lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
+            lcd.cursor_pos = (3, 0)
+            lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
+            logging.debug(
+                f"Display-Seite 1 aktualisiert: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
         await asyncio.sleep(5)
 
         # Seite 2: Kompressorstatus
@@ -569,14 +583,15 @@ async def display_task():
 # Asynchrone Hauptschleife
 async def main_loop():
     """Hauptschleife des Programms, asynchron ausgeführt."""
-    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt
+    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
 
     # GPIO initialisieren
     try:
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(GIO21_PIN, GPIO.OUT)
         GPIO.output(GIO21_PIN, GPIO.LOW)
-        logging.info("GPIO erfolgreich initialisiert")
+        GPIO.setup(PRESSURE_SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)  # Druckschalter mit Pull-Down
+        logging.info("GPIO erfolgreich initialisiert: Kompressor=GPIO21, Druckschalter=GPIO17")
     except Exception as e:
         logging.error(f"Fehler bei der GPIO-Initialisierung: {e}")
         exit(1)
@@ -621,6 +636,22 @@ async def main_loop():
             t_verd = await asyncio.to_thread(read_temperature, sensor_map["verd"])
             t_boiler = (
                                    t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+
+            # Druckschalter prüfen
+            pressure_ok = await asyncio.to_thread(check_pressure)
+            if not pressure_ok:
+                await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                if not pressure_error_sent:
+                    await send_telegram_message(session, CHAT_ID,
+                                                "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
+                    pressure_error_sent = True
+                    logging.error(
+                        f"Druck zu niedrig erkannt: Kompressor ausgeschaltet, Temperaturen: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, verd={t_verd}")
+                continue  # Überspringt den Rest der Schleife, bis Druck wieder OK
+            else:
+                if pressure_error_sent:
+                    logging.info("Druck wieder normal, Fehlermeldungsstatus zurückgesetzt")
+                    pressure_error_sent = False  # Zurücksetzen, wenn Druck wieder OK
 
             # Fehlerprüfung und Kompressorsteuerung
             fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
