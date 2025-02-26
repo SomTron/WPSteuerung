@@ -46,12 +46,7 @@ MIN_PAUSE = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUS
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
 
-# Logging einrichten
-logging.basicConfig(
-    filename="heizungssteuerung.log",
-    level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+
 
 # Globale Variablen für den Programmstatus
 last_api_call = None
@@ -74,13 +69,34 @@ original_einschaltpunkt = EINSCHALTPUNKT
 original_ausschaltpunkt = AUSSCHALTPUNKT
 pressure_error_sent = False
 
+
+
+# Logging einrichten
+logging.basicConfig(
+    filename="heizungssteuerung.log",
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 # LCD global initialisieren
 lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
 
 
 # Asynchrone Funktion zum Senden von Telegram-Nachrichten
 async def send_telegram_message(session, chat_id, message, reply_markup=None, parse_mode=None):
-    """Sendet eine Nachricht über Telegram."""
+    """
+    Sendet eine Nachricht über die Telegram-API.
+
+    Args:
+        session (aiohttp.ClientSession): Die HTTP-Sitzung für die API-Anfrage.
+        chat_id (str): Die ID des Chatrooms, an den die Nachricht gesendet wird.
+        message (str): Der Text der zu sendenden Nachricht.
+        reply_markup (telegram.ReplyKeyboardMarkup, optional): Tastaturmarkup für interaktive Antworten.
+        parse_mode (str, optional): Formatierungsmodus der Nachricht (z.B. "Markdown").
+
+    Returns:
+        bool: True bei Erfolg, False bei Fehler.
+    """
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {"chat_id": chat_id, "text": message}
@@ -632,7 +648,14 @@ async def display_task():
 
 
 async def initialize_gpio():
-    """Initialisiert GPIO-Pins mit Wiederholungslogik asynchron."""
+    """
+    Initialisiert GPIO-Pins mit Wiederholungslogik für Robustheit.
+
+    Versucht bis zu 3 Mal, die GPIO-Pins zu initialisieren, mit einer Pause von 1 Sekunde zwischen den Versuchen.
+
+    Returns:
+        bool: True bei erfolgreicher Initialisierung, False bei wiederholtem Fehlschlag.
+    """
     max_attempts = 3
     for attempt in range(max_attempts):
         try:
@@ -645,88 +668,129 @@ async def initialize_gpio():
         except Exception as e:
             logging.error(f"GPIO-Initialisierung fehlgeschlagen (Versuch {attempt + 1}/{max_attempts}): {e}")
             if attempt < max_attempts - 1:
-                await asyncio.sleep(1)  # Asynchrone Pause vor erneutem Versuch
-    logging.critical("GPIO-Initialisierung nach mehreren Versuchen fehlgeschlagen. Programm wird beendet.")
+                await asyncio.sleep(1)  # Warte asynchron 1 Sekunde vor dem nächsten Versuch
+    logging.critical("GPIO-Initialisierung nach mehreren Versuchen fehlgeschlagen.")
     return False
 
 
 # Asynchrone Hauptschleife
 async def main_loop():
-    """Hauptschleife des Programms, asynchron ausgeführt."""
+    """
+    Hauptschleife des Programms, die Steuerung und Überwachung asynchron ausführt.
+
+    Initialisiert die Hardware, startet asynchrone Tasks für Telegram und Display,
+    und steuert den Kompressor basierend auf Temperatur- und Drucksensorwerten.
+    Überwacht die Konfigurationsdatei auf Änderungen und speichert regelmäßig Daten in eine CSV-Datei.
+
+    Verwendet globale Variablen:
+        last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today,
+        last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time,
+        last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT,
+        original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
+
+    Raises:
+        asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
+    """
+    # Zugriff auf globale Variablen für Zustandsverwaltung
     global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
 
-    # GPIO initialisieren
+    # GPIO-Pins initialisieren (Kompressor und Druckschalter)
+    # Beendet das Programm bei wiederholtem Fehlschlag
     if not await initialize_gpio():
+        logging.critical("Programm wird aufgrund fehlender GPIO-Initialisierung beendet.")
         exit(1)
 
+    # Asynchrone HTTP-Sitzung für Telegram- und Solax-API-Anfragen starten
     async with aiohttp.ClientSession() as session:
+        # Startnachricht mit aktuellem Zeitstempel an Telegram senden
         now = datetime.datetime.now()
         message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
         await send_telegram_message(session, CHAT_ID, message)
+        # Willkommensnachricht mit Tastatur an Telegram senden
         await send_welcome_message(session, CHAT_ID)
 
-        # Tasks starten
-        telegram_task_handle = asyncio.create_task(telegram_task(session))
-        display_task_handle = asyncio.create_task(display_task())
+        # Asynchrone Tasks starten: Telegram-Updates und Display-Anzeige
+        telegram_task_handle = asyncio.create_task(telegram_task(session))  # Verarbeitet Telegram-Nachrichten
+        display_task_handle = asyncio.create_task(display_task())  # Aktualisiert das LCD-Display
 
         try:
+            # Endlosschleife für die Hauptsteuerung
             while True:
+                # Konfiguration laden und validieren, um sicherzustellen, dass Werte gültig sind
                 config = validate_config(load_config())
+
+                # Prüfen, ob sich die Konfigurationsdatei geändert hat
                 current_hash = calculate_file_hash("config.ini")
                 if last_config_hash != current_hash:
-                    await reload_config(session)
+                    await reload_config(session)  # Konfiguration neu laden, falls geändert
                     last_config_hash = current_hash
 
+                # Solax-Daten von der API abrufen, mit Fallback bei Fehler
                 solax_data = await get_solax_data(session)
                 if solax_data is None:
-                    solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0, "batPower": 0, "soc": 0,
-                                  "powerdc1": 0, "powerdc2": 0, "api_fehler": True}
+                    # Fallback-Daten verwenden, falls API-Abfrage fehlschlägt
+                    solax_data = {
+                        "acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                        "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                        "api_fehler": True
+                    }
 
+                # Sollwerte (Ein-/Ausschaltpunkte) basierend auf Solax-Daten und Nachtzeit anpassen
                 await asyncio.to_thread(adjust_shutdown_and_start_points, solax_data, config)
 
+                # Temperaturen von den drei Sensoren (vorne, hinten, Verdampfer) auslesen
                 t_boiler_vorne = await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"])
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
-                t_boiler = (
-                                       t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+                # Durchschnittstemperatur des Boilers berechnen, falls beide Sensoren gültig
+                t_boiler = (t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
 
+                # Druckschalter prüfen (GPIO 17): LOW = Druck zu niedrig, HIGH = Druck OK
                 pressure_ok = await asyncio.to_thread(check_pressure)
                 if not pressure_ok:
+                    # Bei zu niedrigem Druck: Kompressor ausschalten und einmalig melden
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     if not pressure_error_sent:
-                        await send_telegram_message(session, CHAT_ID,
-                                                    "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
+                        await send_telegram_message(session, CHAT_ID, "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
                         pressure_error_sent = True
-                        logging.error(
-                            f"Druck zu niedrig erkannt: Kompressor ausgeschaltet, Temperaturen: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, verd={t_verd}")
-                    continue
+                        logging.error(f"Druck zu niedrig erkannt: Kompressor ausgeschaltet, Temperaturen: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, verd={t_verd}")
+                    continue  # Überspringe den Rest der Schleife, bis Druck wieder OK
                 else:
+                    # Druck wieder normal: Fehlermeldungsstatus zurücksetzen
                     if pressure_error_sent:
                         logging.info("Druck wieder normal, Fehlermeldungsstatus zurückgesetzt")
                         pressure_error_sent = False
 
+                # Boiler-Sensoren auf Fehler (Ausfall, Übertemperatur, Differenz) prüfen
                 fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
                 if fehler:
+                    # Bei Fehler: Kompressor ausschalten und Schleife fortsetzen
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     logging.info(f"Kompressor wegen Fehler ausgeschaltet: {fehler}")
                     continue
 
+                # Kompressorsteuerung basierend auf Temperaturen
                 if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
+                    # Verdampfertemperatur zu niedrig: Kompressor ausschalten
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
                 elif t_boiler != "Fehler":
+                    # Boiler-Temperatur unter Einschaltpunkt: Kompressor einschalten
                     if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, True)
+                    # Boiler-Temperatur über Ausschaltpunkt: Kompressor ausschalten
                     elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
 
+                # Aktuelle Laufzeit berechnen, wenn Kompressor aktiv
                 if kompressor_ein and start_time:
                     current_runtime = datetime.datetime.now() - start_time
 
+                # Datenlogging in CSV-Datei, bei Statusänderung oder alle Minute
                 now = datetime.datetime.now()
-                if last_log_time is None or (now - last_log_time) >= datetime.timedelta(
-                        minutes=1) or kompressor_ein != last_kompressor_status:
+                if last_log_time is None or (now - last_log_time) >= datetime.timedelta(minutes=1) or kompressor_ein != last_kompressor_status:
                     async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
+                        # CSV-Zeile mit Zeitstempel und aktuellen Werten erstellen
                         csv_line = (
                             f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                             f"{t_boiler_vorne if t_boiler_vorne is not None else 'N/A'},"
@@ -737,20 +801,21 @@ async def main_loop():
                         )
                         await csvfile.write(csv_line)
                         logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
-                        logging.debug(
-                            f"Zusätzliche Daten: TotalRuntime={total_runtime_today}, LastShutdown={last_shutdown_time}")
+                        logging.debug(f"Zusätzliche Daten: TotalRuntime={total_runtime_today}, LastShutdown={last_shutdown_time}")
                     last_log_time = now
                     last_kompressor_status = kompressor_ein
 
+                # Pause von 0,5 Sekunden, um CPU-Last zu reduzieren
                 await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
+            # Bei Programmabbruch (z.B. Ctrl+C): Tasks sauber beenden
             logging.info("Hauptschleife abgebrochen, Tasks werden beendet.")
             telegram_task_handle.cancel()
             display_task_handle.cancel()
+            # Warten, bis alle Tasks abgebrochen sind, Fehler ignorieren
             await asyncio.gather(telegram_task_handle, display_task_handle, return_exceptions=True)
             raise
-
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
 async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
