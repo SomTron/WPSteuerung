@@ -81,6 +81,9 @@ last_kompressor_status = None  # Letzter Status des Kompressors
 test_counter = 1  # Zähler für Testeinträge
 last_update_id = None  # Initialisiere die Variable für die letzte Update-ID
 previous_updates_len = 0  # Initialisiere die Variable für die vorherige Länge der Updates
+urlaubsmodus_aktiv = False  # Status des Urlaubsmodus
+original_einschaltpunkt = EINSCHALTPUNKT  # Ursprünglicher Einschaltpunkt
+original_ausschaltpunkt = AUSSCHALTPUNKT  # Ursprünglicher Ausschaltpunkt
 
 print("Variablen erstellt, Programm läuft")
 
@@ -107,7 +110,9 @@ def get_custom_keyboard():
     keyboard = [
         ["🌡️ Temperaturen"],  # Erste Zeile mit einer Schaltfläche
         ["📊 Status"],        # Zweite Zeile mit einer Schaltfläche
-        ["🆘 Hilfe"]          # Dritte Zeile mit einer Schaltfläche
+        ["🌴 Urlaub"],        # Dritte Zeile mit einer Schaltfläche
+        ["🏠 Urlaub aus"],    # Vierte Zeile mit einer Schaltfläche
+        ["🆘 Hilfe"]          # Fünfte Zeile mit einer Schaltfläche
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
@@ -221,6 +226,9 @@ def send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_sta
     Sendet den aktuellen Status (Temperaturen, Kompressorstatus, Laufzeiten, Sollwerte) als Telegram-Nachricht.
     """
     try:
+        # Debugging: Aktuelle Werte in der Statusnachricht
+        logging.debug(f"Statusnachricht: Einschaltpunkt={einschaltpunkt}, Ausschaltpunkt={ausschaltpunkt}")
+
         message = (
             f"🌡️ Aktuelle Temperaturen:\n"
             f"Boiler vorne: {t_boiler_vorne:.2f} °C\n"
@@ -230,8 +238,8 @@ def send_status_telegram(t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_sta
             f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
             f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
             f"🎯 Sollwerte:\n"
-            f"Einschaltpunkt: {einschaltpunkt} °C\n"
-            f"Ausschaltpunkt: {ausschaltpunkt} °C"
+            f"Einschaltpunkt: {einschaltpunkt} °C\n"  # Verwende übergebene Parameter
+            f"Ausschaltpunkt: {ausschaltpunkt} °C"  # Verwende übergebene Parameter
         )
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {"chat_id": CHAT_ID, "text": message}
@@ -257,49 +265,97 @@ def get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
         return None
 
 
-def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    """
-    Verarbeitet Telegram-Nachrichten und reagiert auf die Befehle "Temperaturen", "Status" und unbekannte Befehle.
-    """
+def process_telegram_messages(t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+    global EINSCHALTPUNKT, AUSSCHALTPUNKT  # Zugriff auf globale Sollwerte
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
-            chat_id = update.get('message', {}).get('chat', {}).get('id')  # Chat-ID extrahieren
+            chat_id = update.get('message', {}).get('chat', {}).get('id')
             if message_text and chat_id:
-                message_text = message_text.strip().lower()  # Normalisiere die Nachricht
-
-                # Reagiere auf den Befehl "Temperaturen"
-                if message_text == "🌡️ temperaturen":
+                message_text = message_text.strip().lower()
+                if message_text == "🌡️ temperaturen" or message_text == "temperaturen":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
                         send_temperature_telegram(t_boiler_vorne, t_boiler_hinten, t_verd)
                     else:
                         send_telegram_message("Fehler beim Abrufen der Temperaturen.")
-
-                # Reagiere auf den Befehl "Status"
-                elif message_text == "📊 status":
+                elif message_text == "📊 status" or message_text == "status":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
                         send_status_telegram(
                             t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status,
-                            aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt
+                            aktuelle_laufzeit, gesamtlaufzeit, EINSCHALTPUNKT, AUSSCHALTPUNKT  # Änderung hier
                         )
                     else:
                         send_telegram_message("Fehler beim Abrufen des Status.")
-
-                # Reagiere auf den Befehl "Hilfe"
-                elif message_text == "🆘 hilfe":
+                elif message_text == "🆘 hilfe" or message_text == "hilfe":
                     send_help_message()
-
-                # Reagiere auf unbekannte Befehle
+                elif message_text == "🌴 urlaub" or message_text == "urlaub":
+                    aktivere_urlaubsmodus()
+                elif message_text == "🏠 urlaub aus" or message_text == "urlaub aus":
+                    deaktivere_urlaubsmodus()
                 else:
-                    send_unknown_command_message(chat_id)  # Tastatur erneut anzeigen
-
-            # Aktualisiere last_update_id auf die letzte verarbeitete Nachricht + 1
+                    send_unknown_command_message(chat_id)
             last_update_id = update['update_id'] + 1
             logging.debug(f"Aktualisierte last_update_id: {last_update_id}")
-
     return last_update_id
 
+def aktivere_urlaubsmodus():
+    """
+    Aktiviert den Urlaubsmodus und verringert den Ein- und Ausschaltpunkt.
+    """
+    global urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt
 
+    try:
+        if not urlaubsmodus_aktiv:
+            urlaubsmodus_aktiv = True
+            original_einschaltpunkt = EINSCHALTPUNKT  # Speichere den ursprünglichen Wert
+            original_ausschaltpunkt = AUSSCHALTPUNKT  # Speichere den ursprünglichen Wert
+
+            # Debugging: Aktuelle Werte vor der Änderung
+            logging.debug(f"Vor Urlaubsmodus: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+
+            # Verringere den Ein- und Ausschaltpunkt um den konfigurierten Wert
+            urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABsenkung", 6))  # Fallback-Wert 6
+            EINSCHALTPUNKT -= urlaubsabsenkung
+            AUSSCHALTPUNKT -= urlaubsabsenkung
+
+            # Debugging: Aktuelle Werte nach der Änderung
+            logging.debug(f"Nach Urlaubsmodus: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+
+            logging.info(f"Urlaubsmodus aktiviert. Neue Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+            send_telegram_message(f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
+    except KeyError as e:
+        logging.error(f"Fehler beim Aktivieren des Urlaubsmodus: Abschnitt oder Schlüssel fehlt in der Konfiguration. {e}")
+        send_telegram_message("❌ Fehler: Konfiguration für den Urlaubsmodus fehlt oder ist ungültig.")
+    except ValueError as e:
+        logging.error(f"Fehler beim Aktivieren des Urlaubsmodus: Ungültiger Wert in der Konfiguration. {e}")
+        send_telegram_message("❌ Fehler: Ungültiger Wert für die Urlaubsabsenkung in der Konfiguration.")
+    except Exception as e:
+        logging.error(f"Unerwarteter Fehler beim Aktivieren des Urlaubsmodus: {e}")
+        send_telegram_message("❌ Unerwarteter Fehler beim Aktivieren des Urlaubsmodus.")
+
+def deaktivere_urlaubsmodus():
+    """
+    Deaktiviert den Urlaubsmodus und stellt die ursprünglichen Ein- und Ausschaltpunkte wieder her.
+    """
+    global urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt
+
+    try:
+        if urlaubsmodus_aktiv:
+            # Debugging: Aktuelle Werte vor der Wiederherstellung
+            logging.debug(f"Vor Deaktivierung: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+
+            urlaubsmodus_aktiv = False
+            EINSCHALTPUNKT = original_einschaltpunkt  # Stelle den ursprünglichen Wert wieder her
+            AUSSCHALTPUNKT = original_ausschaltpunkt  # Stelle den ursprünglichen Wert wieder her
+
+            # Debugging: Aktuelle Werte nach der Wiederherstellung
+            logging.debug(f"Nach Deaktivierung: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+
+            logging.info(f"Urlaubsmodus deaktiviert. Ursprüngliche Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+            send_telegram_message(f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
+    except Exception as e:
+        logging.error(f"Unerwarteter Fehler beim Deaktivieren des Urlaubsmodus: {e}")
+        send_telegram_message("❌ Unerwarteter Fehler beim Deaktivieren des Urlaubsmodus.")
 
 def limit_temperature(temp):
     """Begrenzt die Temperatur auf maximal 70 Grad."""
@@ -339,17 +395,11 @@ def load_config():
     return config
 
 def reload_config():
-    """
-    Lädt die Konfigurationsdatei neu und aktualisiert die globalen Variablen.
-    """
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv
 
     config_file = "config.ini"
-
-    # Hash-Wert der Konfigurationsdatei vor dem Neuladen berechnen
     current_hash = calculate_file_hash(config_file)
 
-    # Überprüfen, ob sich die Konfigurationsdatei geändert hat
     if last_config_hash is not None and current_hash != last_config_hash:
         logging.info("Konfigurationsdatei wurde geändert.")
         send_telegram_message("🔧 Konfigurationsdatei wurde geändert.")
@@ -357,25 +407,27 @@ def reload_config():
     try:
         config.read(config_file)
 
-        # Werte aus der Konfigurationsdatei holen und überprüfen
-        AUSSCHALTPUNKT = check_value(
-            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
-            min_value=30, max_value=80, default_value=50,
-            parameter_name="AUSSCHALTPUNKT"
-        )
-        AUSSCHALTPUNKT_ERHOEHT = check_value(
-            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
-            min_value=35, max_value=85, default_value=55,
-            parameter_name="AUSSCHALTPUNKT_ERHOEHT",
-            other_value=AUSSCHALTPUNKT, comparison=">="  # AUSSCHALTPUNKT_ERHOEHT >= AUSSCHALTPUNKT
-        )
-        EINSCHALTPUNKT = check_value(
-            int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]),
-            min_value=20, max_value=70, default_value=40,
-            parameter_name="EINSCHALTPUNKT",
-            other_value=AUSSCHALTPUNKT, comparison="<",  # EINSCHALTPUNKT < AUSSCHALTPUNKT
-            min_difference=2  # Mindestunterschied von 2 Grad
-        )
+        # Nur Werte aktualisieren, wenn Urlaubsmodus nicht aktiv ist
+        if not urlaubsmodus_aktiv:
+            AUSSCHALTPUNKT = check_value(
+                int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
+                min_value=30, max_value=80, default_value=50,
+                parameter_name="AUSSCHALTPUNKT"
+            )
+            AUSSCHALTPUNKT_ERHOEHT = check_value(
+                int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
+                min_value=35, max_value=85, default_value=55,
+                parameter_name="AUSSCHALTPUNKT_ERHOEHT",
+                other_value=AUSSCHALTPUNKT, comparison=">="
+            )
+            EINSCHALTPUNKT = check_value(
+                int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]),
+                min_value=20, max_value=70, default_value=40,
+                parameter_name="EINSCHALTPUNKT",
+                other_value=AUSSCHALTPUNKT, comparison="<",
+                min_difference=2
+            )
+
         MIN_LAUFZEIT_MINUTEN = check_value(
             int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
             min_value=1, max_value=60, default_value=10,
@@ -392,15 +444,12 @@ def reload_config():
             parameter_name="VERDAMPFERTEMPERATUR"
         )
 
-        # Telegram-Daten aus der Konfiguration lesen
         BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
         CHAT_ID = config["Telegram"]["CHAT_ID"]
 
-        # Beide Werte in timedelta-Objekte umwandeln
         MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
         MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
 
-        # SolaxCloud-Daten aus der Konfiguration lesen
         TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
         SN = config["SolaxCloud"]["SN"]
 
@@ -414,9 +463,7 @@ def reload_config():
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
 
-    # Hash-Wert nach dem Neuladen speichern
     last_config_hash = current_hash
-
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None, min_difference=None):
     """
@@ -462,87 +509,7 @@ def check_value(value, min_value, max_value, default_value, parameter_name, othe
 
     return value
 
-def reload_config():
-    """
-    Lädt die Konfigurationsdatei neu und aktualisiert die globalen Variablen.
-    """
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT_MINUTEN, MIN_PAUSE_MINUTEN, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash
 
-    config_file = "config.ini"
-
-    # Hash-Wert der Konfigurationsdatei vor dem Neuladen berechnen
-    current_hash = calculate_file_hash(config_file)
-
-    # Hash-Wert ins Log schreiben
-    logging.info(f"Hash-Wert der Konfigurationsdatei: {current_hash}")
-
-    # Überprüfen, ob sich die Konfigurationsdatei geändert hat
-    if last_config_hash is not None and current_hash != last_config_hash:
-        logging.info("Konfigurationsdatei wurde geändert.")
-        send_telegram_message("🔧 Konfigurationsdatei wurde geändert.")
-
-    try:
-        config.read(config_file)
-
-        # Werte aus der Konfigurationsdatei holen und überprüfen
-        AUSSCHALTPUNKT = check_value(
-            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
-            min_value=30, max_value=80, default_value=50,
-            parameter_name="AUSSCHALTPUNKT"
-        )
-        AUSSCHALTPUNKT_ERHOEHT = check_value(
-            int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
-            min_value=35, max_value=85, default_value=55,
-            parameter_name="AUSSCHALTPUNKT_ERHOEHT",
-            other_value=AUSSCHALTPUNKT, comparison=">="  # AUSSCHALTPUNKT_ERHOEHT >= AUSSCHALTPUNKT
-        )
-        EINSCHALTPUNKT = check_value(
-            int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]),
-            min_value=20, max_value=70, default_value=40,
-            parameter_name="EINSCHALTPUNKT",
-            other_value=AUSSCHALTPUNKT, comparison="<",  # EINSCHALTPUNKT < AUSSCHALTPUNKT
-            min_difference=2  # Mindestunterschied von 2 Grad
-        )
-        MIN_LAUFZEIT_MINUTEN = check_value(
-            int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
-            min_value=1, max_value=60, default_value=10,
-            parameter_name="MIN_LAUFZEIT"
-        )
-        MIN_PAUSE_MINUTEN = check_value(
-            int(config["Heizungssteuerung"]["MIN_PAUSE"]),
-            min_value=1, max_value=60, default_value=20,
-            parameter_name="MIN_PAUSE"
-        )
-        VERDAMPFERTEMPERATUR = check_value(
-            int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
-            min_value=10, max_value=40, default_value=25,
-            parameter_name="VERDAMPFERTEMPERATUR"
-        )
-
-        # Telegram-Daten aus der Konfiguration lesen
-        BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
-        CHAT_ID = config["Telegram"]["CHAT_ID"]
-
-        # Beide Werte in timedelta-Objekte umwandeln
-        MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
-        MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
-
-        # SolaxCloud-Daten aus der Konfiguration lesen
-        TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
-        SN = config["SolaxCloud"]["SN"]
-
-        logging.info("Konfiguration erfolgreich neu geladen.")
-    except FileNotFoundError:
-        logging.error("Konfigurationsdatei config.ini nicht gefunden.")
-    except KeyError as e:
-        logging.error(f"Fehlender Schlüssel in der Konfigurationsdatei: {e}")
-    except ValueError as e:
-        logging.error(f"Ungültiger Wert in der Konfigurationsdatei: {e}")
-    except Exception as e:
-        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
-
-    # Hash-Wert nach dem Neuladen speichern
-    last_config_hash = current_hash
 def is_nighttime(config):
     """Prüft, ob es Nacht ist, basierend auf den Zeiten in der Konfiguration.
     Args:        config (configparser.ConfigParser): Die Konfiguration.
@@ -551,8 +518,8 @@ def is_nighttime(config):
     now = datetime.now()
 
     try:
-        start_time_str = config["Heizungssteuerung"][NACHTABSENKUNG_START]
-        end_time_str = config["Heizungssteuerung"][NACHTABSENKUNG_END]
+        start_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "22:00")
+        end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
 
         start_hour, start_minute = map(int, start_time_str.split(':'))
         end_hour, end_minute = map(int, end_time_str.split(':'))
@@ -574,6 +541,7 @@ def is_nighttime(config):
     except Exception as e:
         logging.error(f"Unerwarteter Fehler in is_nighttime: {e}")
         return False
+
 
 def calculate_shutdown_point(config, is_night, solax_data):
     """Berechnet den Ausschalttemperaturpunkt unter Berücksichtigung der Nachtabsenkung und des Solarüberschusses.
@@ -617,52 +585,49 @@ def calculate_shutdown_point(config, is_night, solax_data):
             return 50  # Ultimativer Standardwert
 
 def adjust_shutdown_and_start_points(solax_data, config):
-    """Passt den Ausschalt- und Einschaltpunkt basierend auf Solax-Daten und der Nachtzeit an.
+    global aktueller_ausschaltpunkt, aktueller_einschaltpunkt, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT
 
-    Args:
-        solax_data (dict): Die Daten von SolaxCloud.
-        config (configparser.ConfigParser): Die Konfiguration.
+    is_night = is_nighttime(config)
 
-    Global:
-        aktueller_ausschaltpunkt (int): Der aktuelle Ausschaltpunkt.
-        aktueller_einschaltpunkt (int): Der aktuelle Einschaltpunkt.
-    """
-    global aktueller_ausschaltpunkt, aktueller_einschaltpunkt
+    # Wenn Urlaubsmodus aktiv ist, verwende die angepassten Sollwerte direkt
+    if urlaubsmodus_aktiv:
+        aktueller_ausschaltpunkt = AUSSCHALTPUNKT
+        aktueller_einschaltpunkt = EINSCHALTPUNKT
+        logging.info(f"Urlaubsmodus aktiv: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}")
+        return
 
-    is_night = is_nighttime(config)  # Verwendung der verbesserten Funktion
-
-    aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data) # Verwendung der verbesserten Funktion
-
+    # Standardlogik für Nicht-Urlaubsmodus
+    aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
 
     try:
-        # Überprüfen auf Solarüberschuss (wie zuvor vereinfacht)
         solar_ueberschuss = (
-            solax_data and
+            solax_data is not None and
             (solax_data.get("batPower", 0) > 600 or
              (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
         )
 
         if solar_ueberschuss:
-            aktueller_einschaltpunkt = aktueller_ausschaltpunkt  # Bei Solarüberschuss gleich dem Ausschaltpunkt
+            aktueller_einschaltpunkt = aktueller_ausschaltpunkt
         else:
             nacht_reduction = int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY]) if is_night else 0
-            aktueller_einschaltpunkt = int(config["Heizungssteuerung"][EINSCHALTPUNKT_KEY]) - nacht_reduction
+            aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
 
         logging.info(f"Ausschaltpunkt: {aktueller_ausschaltpunkt}, Einschaltpunkt: {aktueller_einschaltpunkt}")
-
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler beim Anpassen der Punkte: {e}")
+        nacht_reduction = int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY]) if is_night else 0
+        aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
+        aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
 
         # Fehlerbehandlung: Standardwerte oder andere Logik implementieren
         try:
-           nacht_reduction = int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY]) if is_night else 0
-           aktueller_einschaltpunkt = int(config["Heizungssteuerung"][EINSCHALTPUNKT_KEY]) - nacht_reduction
-           aktueller_ausschaltpunkt = int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY]) - nacht_reduction
+            nacht_reduction = int(config["Heizungssteuerung"][NACHTABSENKUNG_KEY]) if is_night else 0
+            aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction  # Direkter String
+            aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction  # Direkter String
         except (KeyError, ValueError) as e:
-           logging.error(f"Fehler beim Verwenden der Standardwerte: {e}")
-           aktueller_einschaltpunkt = 40  # Standardwert
-           aktueller_ausschaltpunkt = 50  # Standardwert
-
+            logging.error(f"Fehler beim Verwenden der Standardwerte: {e}")
+            aktueller_einschaltpunkt = 40  # Standardwert
+            aktueller_ausschaltpunkt = 50  # Standardwert
 
 def read_temperature(sensor_id):
     device_file = os.path.join(BASE_DIR, sensor_id, "w1_slave")
@@ -774,7 +739,6 @@ def set_kompressor_status(ein, force_off=False):
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
     return None, laufzeit_unterschreitung, pausenzeit_unterschreitung  # Keine Unterschreitung, aber die Werte werden immer zurückgegeben
 
-
 def get_solax_data():
     """Ruft Daten von der Solax-API ab und speichert sie im Cache.
 
@@ -862,6 +826,13 @@ try:
                 "api_fehler": True
             }
 
+        # Nur reload_config aufrufen, wenn sich die Konfiguration geändert hat
+        current_hash = calculate_file_hash("config.ini")
+        if last_config_hash != current_hash:
+            reload_config()
+            last_config_hash = current_hash
+
+
         adjust_shutdown_and_start_points(solax_data, config)
 
         # Temperaturen lesen
@@ -890,13 +861,15 @@ try:
         t_boiler_hinten = read_temperature("28-445bd44686f4")  # Beispiel, ersetze mit deiner Funktion
         t_verd = read_temperature("28-213bd4460d65")  # Beispiel, ersetze mit deiner Funktion
 
+        # Debugging: Aktuelle Werte in der Hauptschleife
+        logging.debug(f"Hauptschleife: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+
         # Telegram-Updates abrufen
         updates = get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, last_update_id)
         if updates:
             last_update_id = process_telegram_messages(
                 t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
-                kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0],
-                EINSCHALTPUNKT, aktueller_ausschaltpunkt  # Sollwerte übergeben
+                kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0]
             )
 
 
@@ -911,21 +884,18 @@ try:
             continue
 
         # Kompressorsteuerung basierend auf Temperaturen
-        einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
         if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
             if kompressor_ein:
                 set_kompressor_status(False)
                 logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor wurde ausgeschaltet.")
             logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor bleibt ausgeschaltet.")
         elif t_boiler != "Fehler":
-            logging.debug(
-                f"T-Boiler: {t_boiler:.2f}, EINSCHALTPUNKT: {EINSCHALTPUNKT}, aktueller_ausschaltpunkt: {aktueller_ausschaltpunkt}")
-            reload_config()  # Konfiguration neu laden
-            if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
+            logging.debug(f"T-Boiler: {t_boiler:.2f}, EINSCHALTPUNKT: {EINSCHALTPUNKT}, aktueller_ausschaltpunkt: {aktueller_ausschaltpunkt}")
+            reload_config()  # Konfiguration neu laden, respektiert jetzt Urlaubsmodus
+            if t_boiler < EINSCHALTPUNKT and not kompressor_ein:  # Änderung hier
                 set_kompressor_status(True)
                 logging.info(f"T-Boiler Temperatur unter {EINSCHALTPUNKT} Grad. Kompressor eingeschaltet.")
             elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
-                # Hier wird der Kompressor ausgeschaltet, wenn die Temperatur den Ausschaltpunkt erreicht
                 _, laufzeit_unterschreitung, pausenzeit_unterschreitung = set_kompressor_status(False)
                 logging.info(f"T-Boiler Temperatur {aktueller_ausschaltpunkt} Grad erreicht. Kompressor ausgeschaltet.")
 
