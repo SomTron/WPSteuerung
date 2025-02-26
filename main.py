@@ -427,6 +427,49 @@ def load_config():
     logging.debug(f"Konfiguration geladen: {dict(config['Heizungssteuerung'])}")
     return config
 
+def validate_config(config):
+    """Validiert die Konfigurationswerte und setzt Fallbacks bei Fehlern."""
+    defaults = {
+        "Heizungssteuerung": {
+            "AUSSCHALTPUNKT": "50",
+            "AUSSCHALTPUNKT_ERHOEHT": "55",
+            "EINSCHALTPUNKT": "40",
+            "VERDAMPFERTEMPERATUR": "25",
+            "MIN_LAUFZEIT": "10",
+            "MIN_PAUSE": "20",
+            "NACHTABSENKUNG_KEY": "0"
+        },
+        "Telegram": {"BOT_TOKEN": "", "CHAT_ID": ""},
+        "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
+    }
+    for section in defaults:
+        if section not in config:
+            config[section] = {}
+            logging.warning(f"Abschnitt {section} fehlt in config.ini, wird mit Standardwerten erstellt.")
+        for key, default in defaults[section].items():
+            try:
+                if key in config[section]:
+                    # Versuche, den Wert als Integer zu parsen, falls er numerisch sein sollte
+                    if key not in ["BOT_TOKEN", "CHAT_ID", "TOKEN_ID", "SN"]:
+                        value = int(config[section][key])
+                        # Überprüfe den Wertbereich
+                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT", "EINSCHALTPUNKT"] else 20
+                        max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
+                        if not (min_val <= value <= max_val):
+                            logging.warning(f"Ungültiger Wert für {key} in {section}: {value}. Verwende Standardwert: {default}")
+                            config[section][key] = default
+                        else:
+                            config[section][key] = str(value)  # Schreibe als String zurück
+                    else:
+                        config[section][key] = config[section][key]  # Strings bleiben unverändert
+                else:
+                    config[section][key] = default
+                    logging.warning(f"Schlüssel {key} in {section} fehlt, verwende Standardwert: {default}")
+            except ValueError as e:
+                config[section][key] = default
+                logging.error(f"Ungültiger Wert für {key} in {section}: {e}, verwende Standardwert: {default}")
+    logging.debug(f"Validierte Konfiguration: {dict(config['Heizungssteuerung'])}")
+    return config
 
 def is_nighttime(config):
     """Prüft, ob es Nachtzeit ist."""
@@ -627,7 +670,7 @@ async def main_loop():
 
         # Hauptschleife für Steuerung
         while True:
-            config = load_config()
+            config = validate_config(load_config())
             current_hash = calculate_file_hash("config.ini")
             if last_config_hash != current_hash:
                 await reload_config(session)
