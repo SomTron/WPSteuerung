@@ -39,7 +39,7 @@ BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
 CHAT_ID = config["Telegram"]["CHAT_ID"]
 AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
 AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
-EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
+TEMP_OFFSET = int(config["Heizungssteuerung"]["TEMP_OFFSET"])
 VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
 MIN_LAUFZEIT = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))
 MIN_PAUSE = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
@@ -58,23 +58,26 @@ last_runtime = datetime.timedelta()
 current_runtime = datetime.timedelta()
 total_runtime_today = datetime.timedelta()
 last_day = datetime.datetime.now().date()
-aktueller_ausschaltpunkt = AUSSCHALTPUNKT
 last_shutdown_time = datetime.datetime.now()
 last_config_hash = None
 last_log_time = datetime.datetime.now() - datetime.timedelta(minutes=1)
 last_kompressor_status = None
 last_update_id = None
 urlaubsmodus_aktiv = False
-original_einschaltpunkt = EINSCHALTPUNKT
-original_ausschaltpunkt = AUSSCHALTPUNKT
 pressure_error_sent = False
+# Initiale Sollwerte
+aktueller_ausschaltpunkt = AUSSCHALTPUNKT
+aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Einschaltpunkt basiert auf Offset
+original_ausschaltpunkt = AUSSCHALTPUNKT
+original_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Konsistenz im Urlaubsmodus
+
 
 
 
 # Logging einrichten
 logging.basicConfig(
     filename="heizungssteuerung.log",
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -178,8 +181,7 @@ async def send_temperature_telegram(session, t_boiler_vorne, t_boiler_hinten, t_
     return await send_telegram_message(session, CHAT_ID, message)
 
 
-async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
-                               gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
+async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """Sendet den aktuellen Status über Telegram."""
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
@@ -190,7 +192,7 @@ async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd,
         f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
         f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
         f"🎯 Sollwerte:\n"
-        f"Einschaltpunkt: {einschaltpunkt} °C\n"
+        f"Einschaltpunkt: {einschaltpunkt} °C\n"  # Hier wird aktueller_einschaltpunkt übergeben
         f"Ausschaltpunkt: {ausschaltpunkt} °C"
     )
     return await send_telegram_message(session, CHAT_ID, message)
@@ -320,7 +322,7 @@ def set_kompressor_status(ein, force_off=False):
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session):
     """Lädt die Konfigurationsdatei asynchron neu und aktualisiert globale Variablen."""
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, TEMP_OFFSET, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv
 
     config_file = "config.ini"
     current_hash = calculate_file_hash(config_file)
@@ -347,14 +349,13 @@ async def reload_config(session):
                 parameter_name="AUSSCHALTPUNKT_ERHOEHT",
                 other_value=AUSSCHALTPUNKT, comparison=">="
             )
-            EINSCHALTPUNKT = check_value(
-                int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]),
-                min_value=20, max_value=70, default_value=40,
-                parameter_name="EINSCHALTPUNKT",
-                other_value=AUSSCHALTPUNKT, comparison="<",
-                min_difference=2
+            TEMP_OFFSET = check_value(
+                int(config["Heizungssteuerung"]["TEMP_OFFSET"]),
+                min_value=5, max_value=20, default_value=10,  # Angemessener Bereich für Offset
+                parameter_name="TEMP_OFFSET"
             )
 
+        # Rest bleibt gleich
         MIN_LAUFZEIT_MINUTEN = check_value(
             int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
             min_value=1, max_value=60, default_value=10,
@@ -379,7 +380,7 @@ async def reload_config(session):
         SN = config["SolaxCloud"]["SN"]
 
         logging.info(
-            f"Konfiguration erfolgreich neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, EINSCHALTPUNKT={EINSCHALTPUNKT}, MIN_LAUFZEIT={MIN_LAUFZEIT}")
+            f"Konfiguration erfolgreich neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, MIN_LAUFZEIT={MIN_LAUFZEIT}")
         logging.debug(f"Vollständige Konfiguration: {dict(config['Heizungssteuerung'])}")
         last_config_hash = current_hash
 
@@ -395,39 +396,63 @@ async def reload_config(session):
 
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
 def adjust_shutdown_and_start_points(solax_data, config):
-    """Passt die Ein- und Ausschaltpunkte basierend auf Solax-Daten und Nachtzeit an."""
-    global aktueller_ausschaltpunkt, EINSCHALTPUNKT, AUSSCHALTPUNKT
+    """
+    Passt die Ein- und Ausschaltpunkte basierend auf Solax-Daten und Nachtzeit an.
+    Der Einschaltpunkt wird als Ausschaltpunkt minus TEMP_OFFSET berechnet.
+
+    Args:
+        solax_data (dict): Daten von der Solax-API.
+        config (configparser.ConfigParser): Konfigurationsdaten.
+    """
+    global aktueller_ausschaltpunkt, AUSSCHALTPUNKT, TEMP_OFFSET
+    if not hasattr(adjust_shutdown_and_start_points, "last_night"):
+        adjust_shutdown_and_start_points.last_night = None
+        adjust_shutdown_and_start_points.last_solar_ueberschuss = None
+        adjust_shutdown_and_start_points.last_config_hash = None
+        adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = None
+        adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = None
 
     is_night = is_nighttime(config)
+    solar_ueberschuss = (
+        solax_data is not None and
+        (solax_data.get("batPower", 0) > 600 or
+         (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
+    )
+    current_config_hash = calculate_file_hash("config.ini")
+
+    # Prüfe, ob sich relevante Bedingungen geändert haben
+    if (is_night == adjust_shutdown_and_start_points.last_night and
+        solar_ueberschuss == adjust_shutdown_and_start_points.last_solar_ueberschuss and
+        current_config_hash == adjust_shutdown_and_start_points.last_config_hash):
+        return
+
+    # Zustand aktualisieren
+    adjust_shutdown_and_start_points.last_night = is_night
+    adjust_shutdown_and_start_points.last_solar_ueberschuss = solar_ueberschuss
+    adjust_shutdown_and_start_points.last_config_hash = current_config_hash
 
     if urlaubsmodus_aktiv:
         aktueller_ausschaltpunkt = AUSSCHALTPUNKT
-        aktueller_einschaltpunkt = EINSCHALTPUNKT
-        logging.info(f"Urlaubsmodus aktiv: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}")
-        return
+        aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Im Urlaubsmodus Offset beibehalten
+    else:
+        # Ausschaltpunkt Berechnen
+        aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
+        # Einschaltpunkt als Ausschaltpunkt minus Offset
+        aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
 
-    aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
+        # Sicherstellen, dass der Einschaltpunkt nicht unter einen Mindestwert fällt
+        MIN_EINSCHALTPUNKT = 20
+        if aktueller_einschaltpunkt < MIN_EINSCHALTPUNKT:
+            aktueller_einschaltpunkt = MIN_EINSCHALTPUNKT
+            logging.warning(f"Einschaltpunkt auf Mindestwert {MIN_EINSCHALTPUNKT} gesetzt, da er sonst zu niedrig wäre.")
 
-    try:
-        solar_ueberschuss = (
-            solax_data is not None and
-            (solax_data.get("batPower", 0) > 600 or
-             (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
-        )
-
-        if solar_ueberschuss:
-            aktueller_einschaltpunkt = aktueller_ausschaltpunkt
-        else:
-            nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0  # Angepasst
-            aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
-
+    # Nur loggen, wenn sich die Sollwerte ändern
+    if (aktueller_ausschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt or
+        aktueller_einschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt):
         logging.info(f"Sollwerte angepasst: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}, Solarüberschuss={solar_ueberschuss}, Nachtzeit={is_night}")
         logging.debug(f"Solax-Daten für Anpassung: {solax_data}")
-    except (KeyError, ValueError) as e:
-        logging.error(f"Fehler beim Anpassen der Punkte: {e}, Solax-Daten={solax_data}")
-        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0  # Angepasst
-        aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
-        aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
+        adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = aktueller_ausschaltpunkt
+        adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = aktueller_einschaltpunkt
 
 # Weitere Hilfsfunktionen
 def calculate_file_hash(file_path):
@@ -459,11 +484,11 @@ def validate_config(config):
         "Heizungssteuerung": {
             "AUSSCHALTPUNKT": "50",
             "AUSSCHALTPUNKT_ERHOEHT": "55",
-            "EINSCHALTPUNKT": "40",
+            "TEMP_OFFSET": "10",  # Neuer Standardwert für Offset (z.B. 10°C)
             "VERDAMPFERTEMPERATUR": "25",
             "MIN_LAUFZEIT": "10",
             "MIN_PAUSE": "20",
-            "NACHTABSENKUNG": "0"  # Angepasst von NACHTABSENKUNG_KEY
+            "NACHTABSENKUNG": "0"
         },
         "Telegram": {"BOT_TOKEN": "", "CHAT_ID": ""},
         "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
@@ -477,7 +502,7 @@ def validate_config(config):
                 if key in config[section]:
                     if key not in ["BOT_TOKEN", "CHAT_ID", "TOKEN_ID", "SN"]:
                         value = int(config[section][key])
-                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT", "EINSCHALTPUNKT"] else 20
+                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT"] else 20
                         max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
                         if not (min_val <= value <= max_val):
                             logging.warning(f"Ungültiger Wert für {key} in {section}: {value}. Verwende Standardwert: {default}")
@@ -560,22 +585,26 @@ def is_data_old(timestamp):
 # Asynchrone Task für Telegram-Updates
 async def telegram_task(session):
     """Separate Task für schnelle Telegram-Update-Verarbeitung."""
-    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, EINSCHALTPUNKT, AUSSCHALTPUNKT
+    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, AUSSCHALTPUNKT, aktueller_einschaltpunkt
     while True:
-        updates = await get_telegram_updates(session, last_update_id)
-        if updates:
-            last_update_id = await process_telegram_messages_async(
-                session,
-                await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"]),  # Boiler vorne
-                await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"]),  # Boiler hinten
-                await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"]),  # Verdampfer
-                updates,
-                last_update_id,
-                kompressor_ein,
-                str(current_runtime).split('.')[0],
-                str(total_runtime_today).split('.')[0]
-            )
-        await asyncio.sleep(0.1)  # Schnelles Polling für Telegram
+        try:
+            updates = await get_telegram_updates(session, last_update_id)
+            if updates:
+                last_update_id = await process_telegram_messages_async(
+                    session,
+                    await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"]),
+                    await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"]),
+                    await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"]),
+                    updates,
+                    last_update_id,
+                    kompressor_ein,
+                    str(current_runtime).split('.')[0],
+                    str(total_runtime_today).split('.')[0]
+                )
+            await asyncio.sleep(0.1)  # Schnelles Polling für Telegram
+        except Exception as e:
+            logging.error(f"Fehler in telegram_task: {e}", exc_info=True)
+            await asyncio.sleep(1)  # Warte länger bei Fehler, um Spam zu vermeiden
 
 
 # Asynchrone Task für Display-Updates
@@ -691,7 +720,7 @@ async def main_loop():
     Raises:
         asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
     """
-    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
+    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
 
     # GPIO-Pins initialisieren (Kompressor und Druckschalter)
     if not await initialize_gpio():
@@ -765,7 +794,7 @@ async def main_loop():
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
                 elif t_boiler != "Fehler":
-                    if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
+                    if t_boiler < aktueller_einschaltpunkt and not kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, True)
                     elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
@@ -815,7 +844,7 @@ async def main_loop():
 async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
                                           kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
-    global EINSCHALTPUNKT, AUSSCHALTPUNKT
+    global AUSSCHALTPUNKT, aktueller_einschaltpunkt
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
@@ -831,7 +860,8 @@ async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hint
                 elif message_text == "📊 status" or message_text == "status":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
                         await send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status,
-                                                   aktuelle_laufzeit, gesamtlaufzeit, EINSCHALTPUNKT, AUSSCHALTPUNKT)
+                                                   aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt,
+                                                   aktueller_ausschaltpunkt)
                     else:
                         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen des Status.")
                 elif message_text == "🆘 hilfe" or message_text == "hilfe":
@@ -858,31 +888,34 @@ async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hint
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
     """Aktiviert den Urlaubsmodus und passt Sollwerte an."""
-    global urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt
+    global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     if not urlaubsmodus_aktiv:
         urlaubsmodus_aktiv = True
-        original_einschaltpunkt = EINSCHALTPUNKT
-        original_ausschaltpunkt = AUSSCHALTPUNKT
+        # Speichere die aktuellen Sollwerte vor der Änderung
+        original_einschaltpunkt = aktueller_einschaltpunkt
+        original_ausschaltpunkt = aktueller_ausschaltpunkt
         urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-        EINSCHALTPUNKT -= urlaubsabsenkung
-        AUSSCHALTPUNKT -= urlaubsabsenkung
+        # Passe die Sollwerte an
+        aktueller_ausschaltpunkt = AUSSCHALTPUNKT - urlaubsabsenkung
+        aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
         logging.info(
-            f"Urlaubsmodus aktiviert. Alte Werte: Einschaltpunkt={original_einschaltpunkt}, Ausschaltpunkt={original_ausschaltpunkt}, Neue Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+            f"Urlaubsmodus aktiviert. Alte Werte: Einschaltpunkt={original_einschaltpunkt}, Ausschaltpunkt={original_ausschaltpunkt}, Neue Werte: Einschaltpunkt={aktueller_einschaltpunkt}, Ausschaltpunkt={aktueller_ausschaltpunkt}")
         await send_telegram_message(session, CHAT_ID,
-                                    f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
+                                    f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
 
 
 async def deaktivere_urlaubsmodus(session):
     """Deaktiviert den Urlaubsmodus und stellt ursprüngliche Werte wieder her."""
-    global urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT, original_einschaltpunkt, original_ausschaltpunkt
+    global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     if urlaubsmodus_aktiv:
         urlaubsmodus_aktiv = False
-        EINSCHALTPUNKT = original_einschaltpunkt
-        AUSSCHALTPUNKT = original_ausschaltpunkt
+        # Stelle die ursprünglichen Sollwerte wieder her
+        aktueller_einschaltpunkt = original_einschaltpunkt
+        aktueller_ausschaltpunkt = original_ausschaltpunkt
         logging.info(
-            f"Urlaubsmodus deaktiviert. Wiederhergestellte Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+            f"Urlaubsmodus deaktiviert. Wiederhergestellte Werte: Einschaltpunkt={aktueller_einschaltpunkt}, Ausschaltpunkt={aktueller_ausschaltpunkt}")
         await send_telegram_message(session, CHAT_ID,
-                                    f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
+                                    f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
 
 
 # Programmstart
