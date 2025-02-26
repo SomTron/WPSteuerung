@@ -1,8 +1,8 @@
 import os
 import glob
-import time
+import time as sleep_time
 import smbus2
-from datetime import datetime, timedelta
+import datetime
 from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
 import logging
@@ -31,8 +31,8 @@ try:
     AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
     EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
     VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
-    MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))  # Mindestlaufzeit
-    MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))  # Mindestpause
+    MIN_LAUFZEIT = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))  # Mindestlaufzeit
+    MIN_PAUSE = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))  # Mindestpause
     AUSSCHALTPUNKT_KEY = "AUSSCHALTPUNKT"
     AUSSCHALTPUNKT_ERHOEHT_KEY = "AUSSCHALTPUNKT_ERHOEHT"  # Hier wird die Konstante definiert
     NACHTABSENKUNG_KEY = "NACHTABSENKUNG"
@@ -69,14 +69,14 @@ last_api_data = None  # Zuletzt empfangene API-Daten
 last_api_timestamp = None  # Zeitstempel der letzten API-Daten
 kompressor_ein = False  # Status des Kompressors
 start_time = None  # Startzeit des Kompressors
-last_runtime = timedelta()  # Letzte Laufzeit des Kompressors
-current_runtime = timedelta()  # Aktuelle Laufzeit des Kompressors
-total_runtime_today = timedelta()  # Gesamtlaufzeit des Kompressors heute
-last_day = datetime.now().date()  # Letzter Tag, an dem die Laufzeit berechnet wurde
+last_runtime = datetime.timedelta()  # Letzte Laufzeit des Kompressors
+current_runtime = datetime.timedelta()  # Aktuelle Laufzeit des Kompressors
+total_runtime_today = datetime.timedelta()  # Gesamtlaufzeit des Kompressors heute
+last_day = datetime.datetime.now().date()  # Letzter Tag, an dem die Laufzeit berechnet wurde
 aktueller_ausschaltpunkt = AUSSCHALTPUNKT  # Aktueller Ausschaltpunkt
-last_shutdown_time = datetime.now()  # Zeitpunkt des letzten Ausschaltens
+last_shutdown_time = datetime.datetime.now()  # Zeitpunkt des letzten Ausschaltens
 last_config_hash = None  # Hash-Wert der letzten Konfigurationsdatei
-last_log_time = datetime.now() - timedelta(minutes=1)  # Zeitpunkt des letzten Log-Eintrags
+last_log_time = datetime.datetime.now() - datetime.timedelta(minutes=1)  # Zeitpunkt des letzten Log-Eintrags
 last_kompressor_status = None  # Letzter Status des Kompressors
 test_counter = 1  # Zähler für Testeinträge
 last_update_id = None  # Initialisiere die Variable für die letzte Update-ID
@@ -197,7 +197,7 @@ def send_help_message():
         return False
 
 # Senden der Willkommensnachricht mit Tastatur beim Start
-now = datetime.now()
+now = datetime.datetime.now()
 message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
 if send_telegram_message(message):
     logging.info("Telegram-Nachricht erfolgreich gesendet.")
@@ -447,8 +447,8 @@ def reload_config():
         BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
         CHAT_ID = config["Telegram"]["CHAT_ID"]
 
-        MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
-        MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
+        MIN_LAUFZEIT = datetime.timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
+        MIN_PAUSE = datetime.timedelta(minutes=MIN_PAUSE_MINUTEN)
 
         TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
         SN = config["SolaxCloud"]["SN"]
@@ -511,35 +511,47 @@ def check_value(value, min_value, max_value, default_value, parameter_name, othe
 
 
 def is_nighttime(config):
-    """Prüft, ob es Nacht ist, basierend auf den Zeiten in der Konfiguration.
-    Args:        config (configparser.ConfigParser): Die Konfiguration.
-    Returns:        bool: True, wenn es Nacht ist, False sonst.
-    """
-    now = datetime.now()
+    now = datetime.datetime.now()
+    logging.info(f"now: {now}, type: {type(now)}")
 
     try:
         start_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "22:00")
         end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
+        logging.info(f"Config times: start={start_time_str}, end={end_time_str}")
 
         start_hour, start_minute = map(int, start_time_str.split(':'))
         end_hour, end_minute = map(int, end_time_str.split(':'))
+        logging.info(f"Parsed: start={start_hour}:{start_minute}, end={end_hour}:{end_minute}")
 
-        start_time = datetime.datetime.combine(now.date(), datetime.time(start_hour, start_minute))
-        end_time = datetime.datetime.combine(now.date(), datetime.time(end_hour, end_minute))
+        start_time_obj = datetime.time(start_hour, start_minute)
+        end_time_obj = datetime.time(end_hour, end_minute)
+        logging.info(f"Time objects: start={start_time_obj}, end={end_time_obj}")
 
-        if start_time > end_time:  # Fall, dass die Nacht über Mitternacht geht
-            end_time = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(end_hour, end_minute))
+        current_date = now.date()
+        logging.info(f"Current date: {current_date}, type: {type(current_date)}")
 
-        return start_time <= now <= end_time
+        start_time = datetime.datetime.combine(current_date, start_time_obj)
+        end_time = datetime.datetime.combine(current_date, end_time_obj)
+        logging.info(f"Initial: start_time={start_time}, end_time={end_time}")
+
+        if start_time > end_time:
+            next_date = current_date + datetime.timedelta(days=1)
+            logging.info(f"Next date: {next_date}, type: {type(next_date)}")
+            end_time = datetime.datetime.combine(next_date, end_time_obj)
+            logging.info(f"Adjusted end_time: {end_time}")
+
+        result = start_time <= now <= end_time
+        logging.info(f"Result: {result}")
+        return result
 
     except KeyError as e:
-        logging.error(f"Fehlender Schlüssel in der Konfiguration: {e}")
+        logging.error(f"Missing key in config: {e}")
         return False
     except ValueError as e:
-        logging.error(f"Ungültiges Zeitformat in der Konfiguration: {e}")
+        logging.error(f"Invalid time format in config: {e}")
         return False
     except Exception as e:
-        logging.error(f"Unerwarteter Fehler in is_nighttime: {e}")
+        logging.error(f"Unexpected error in is_nighttime: {e}")
         return False
 
 
@@ -681,7 +693,7 @@ def check_boiler_sensors(t_vorne, t_hinten, config):
 def set_kompressor_status(ein, force_off=False):
     global kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, laufzeit_unterschreitung, pausenzeit_unterschreitung
 
-    now = datetime.now()
+    now = datetime.datetime.now()
     logging.debug(f"set_kompressor_status aufgerufen: ein={ein}, force_off={force_off}")
 
     if ein:
@@ -699,7 +711,7 @@ def set_kompressor_status(ein, force_off=False):
             # Kompressor einschalten
             kompressor_ein = True
             start_time = now
-            current_runtime = timedelta()
+            current_runtime = datetime.timedelta()
             laufzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Unterschreitung
             pausenzeit_unterschreitung = "N/A" # Setze auf "N/A" falls keine Unterschreitung
             logging.info("Kompressor EIN. Startzeit gesetzt.")
@@ -747,10 +759,10 @@ def get_solax_data():
     """
     global last_api_call, last_api_data, last_api_timestamp
 
-    now = datetime.now()
+    now = datetime.datetime.now()
 
     # Cache-Prüfung (verbessert)
-    if last_api_call and now - last_api_call < timedelta(minutes=5):
+    if last_api_call and now - last_api_call < datetime.timedelta(minutes=5):
         logging.debug("Verwende zwischengespeicherte API-Daten.")
         return last_api_data
 
@@ -796,7 +808,7 @@ def get_solax_data():
         return None
 
 def is_data_old(timestamp):
-    if timestamp and (datetime.now() - timestamp) > timedelta(minutes=15):
+    if timestamp and (datetime.datetime.now() - timestamp) > datetime.timedelta(minutes=15):
         return True
     return False
 
@@ -879,7 +891,7 @@ try:
         if fehler:
             lcd.clear()
             lcd.write_string(f"FEHLER: {fehler}")
-            time.sleep(5)
+            sleep_time.sleep(5)
             set_kompressor_status(False, force_off=True)
             continue
 
@@ -901,7 +913,7 @@ try:
 
         # Aktuelle Laufzeit aktualisieren
         if kompressor_ein and start_time:
-            current_runtime = datetime.now() - start_time
+            current_runtime = datetime.datetime.now() - start_time
 
         # Seite 1: Temperaturen anzeigen
         lcd.clear()
@@ -916,7 +928,7 @@ try:
         lcd.cursor_pos = (3, 0)
         lcd.write_string(f"T-Verd: {temperatures[2]:.2f} C")
 
-        time.sleep(5)
+        sleep_time.sleep(5)
 
         # Seite 2: Kompressorstatus, Soll/Ist-Werte und Laufzeiten
         lcd.clear()
@@ -936,7 +948,7 @@ try:
         lcd.cursor_pos = (3, 0)
         lcd.write_string(f"Gesamt: {str(total_runtime_today).split('.')[0]}")
 
-        time.sleep(5)
+        sleep_time.sleep(5)
 
         # Seite 3: SolaxCloud-Daten anzeigen
         lcd.clear()
@@ -1001,10 +1013,10 @@ try:
             lcd.cursor_pos = (3, 0)
             lcd.write_string("API-Fehler")
 
-        time.sleep(5)
+        sleep_time.sleep(5)
 
         # Logging-Bedingungen prüfen
-        now = datetime.now()
+        now = datetime.datetime.now()
         time_diff = None
         if last_log_time:
             time_diff = now - last_log_time
@@ -1016,7 +1028,7 @@ try:
         logging.debug(f"last_kompressor_status: {last_kompressor_status}")
 
         # Sofortiges Logging bei Kompressorstatusänderung ODER minütliches Logging
-        if (last_log_time is None or time_diff >= timedelta(minutes=1) or
+        if (last_log_time is None or time_diff >= datetime.timedelta(minutes=1) or
                 kompressor_ein != last_kompressor_status):
 
             logging.debug("CSV-Schreibbedingung erfüllt")
@@ -1077,7 +1089,7 @@ try:
             last_log_time = now
             last_kompressor_status = kompressor_ein
 
-        time.sleep(1)  # Kurze Pause, um die CPU-Last zu reduzieren
+        sleep_time.sleep(1)  # Kurze Pause, um die CPU-Last zu reduzieren
         print("Druchgang durchlaufen")
 
 except KeyboardInterrupt:
