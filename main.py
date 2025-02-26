@@ -204,10 +204,11 @@ async def send_help_message(session):
         "🤖 Verfügbare Befehle:\n\n"
         "🌡️ *Temperaturen* – Sendet die aktuellen Temperaturen.\n"
         "📊 *Status* – Sendet den aktuellen Status.\n"
+        "🌴 *Urlaub* – Aktiviert den Urlaubsmodus.\n"
+        "🏠 *Urlaub aus* – Deaktiviert den Urlaubsmodus.\n"
         "🆘 *Hilfe* – Zeigt diese Nachricht an."
     )
     return await send_telegram_message(session, CHAT_ID, message, parse_mode="Markdown")
-
 
 # Synchron bleibende Funktionen
 def read_temperature(sensor_id):
