@@ -7,11 +7,11 @@ import RPi.GPIO as GPIO
 import logging
 import configparser
 import csv
-import aiohttp  # Für asynchrone HTTP-Anfragen
+import aiohttp
 import hashlib
 from telegram import ReplyKeyboardMarkup
-import asyncio  # Für asynchrone Programmierung
-import aiofiles  # Für asynchrone Dateioperationen
+import asyncio
+import aiofiles
 
 # Basisverzeichnis für Temperatursensoren
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -28,45 +28,45 @@ config = configparser.ConfigParser()
 config.read("config.ini")
 
 # Globale Variablen initialisieren
-BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]  # Telegram Bot-Token
-CHAT_ID = config["Telegram"]["CHAT_ID"]  # Chat-ID für Telegram
-AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])  # Normaler Ausschaltpunkt
-AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])  # Erhöhter Ausschaltpunkt
-EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])  # Einschaltpunkt
-VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])  # Mindesttemperatur Verdampfer
-MIN_LAUFZEIT = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))  # Mindestlaufzeit
-MIN_PAUSE = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))  # Mindestpause
-TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]  # SolaxCloud Token-ID
-SN = config["SolaxCloud"]["SN"]  # SolaxCloud Seriennummer
+BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
+CHAT_ID = config["Telegram"]["CHAT_ID"]
+AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
+AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
+EINSCHALTPUNKT = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])
+VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
+MIN_LAUFZEIT = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))
+MIN_PAUSE = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
+TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
+SN = config["SolaxCloud"]["SN"]
 
 # Logging einrichten
 logging.basicConfig(
-    filename="heizungssteuerung.log",  # Logdatei
-    level=logging.DEBUG,  # Detaillierte Protokollierung
+    filename="heizungssteuerung.log",
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 # Globale Variablen für den Programmstatus
-last_api_call = None  # Zeitpunkt des letzten API-Aufrufs
-last_api_data = None  # Zuletzt empfangene API-Daten
-last_api_timestamp = None  # Zeitstempel der letzten API-Daten
-kompressor_ein = False  # Status des Kompressors
-start_time = None  # Startzeit des Kompressors
-last_runtime = datetime.timedelta()  # Letzte Laufzeit des Kompressors
-current_runtime = datetime.timedelta()  # Aktuelle Laufzeit
-total_runtime_today = datetime.timedelta()  # Gesamtlaufzeit heute
-last_day = datetime.datetime.now().date()  # Letzter Tag für Laufzeitberechnung
-aktueller_ausschaltpunkt = AUSSCHALTPUNKT  # Aktueller Ausschaltpunkt
-last_shutdown_time = datetime.datetime.now()  # Zeitpunkt des letzten Ausschaltens
-last_config_hash = None  # Hash der letzten Konfiguration
-last_log_time = datetime.datetime.now() - datetime.timedelta(minutes=1)  # Zeitpunkt des letzten Logs
-last_kompressor_status = None  # Letzter Kompressorstatus
-last_update_id = None  # Letzte Telegram-Update-ID
-urlaubsmodus_aktiv = False  # Status des Urlaubsmodus
-original_einschaltpunkt = EINSCHALTPUNKT  # Ursprünglicher Einschaltpunkt
-original_ausschaltpunkt = AUSSCHALTPUNKT  # Ursprünglicher Ausschaltpunkt
+last_api_call = None
+last_api_data = None
+last_api_timestamp = None
+kompressor_ein = False
+start_time = None
+last_runtime = datetime.timedelta()
+current_runtime = datetime.timedelta()
+total_runtime_today = datetime.timedelta()
+last_day = datetime.datetime.now().date()
+aktueller_ausschaltpunkt = AUSSCHALTPUNKT
+last_shutdown_time = datetime.datetime.now()
+last_config_hash = None
+last_log_time = datetime.datetime.now() - datetime.timedelta(minutes=1)
+last_kompressor_status = None
+last_update_id = None
+urlaubsmodus_aktiv = False
+original_einschaltpunkt = EINSCHALTPUNKT
+original_ausschaltpunkt = AUSSCHALTPUNKT
 
-# LCD global initialisieren, damit es im finally-Block verfügbar ist
+# LCD global initialisieren
 lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
 
 
@@ -82,15 +82,16 @@ async def send_telegram_message(session, chat_id, message, reply_markup=None, pa
             data["parse_mode"] = parse_mode
         async with session.post(url, json=data) as response:
             response.raise_for_status()
-            logging.info("Telegram-Nachricht gesendet.")
+            logging.info(f"Telegram-Nachricht gesendet: {message}")
+            logging.debug(f"Antwort-Details: URL={url}, Daten={data}")
             return True
     except aiohttp.ClientError as e:
-        logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
+        logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}, Nachricht={message}")
         return False
 
 
 # Asynchrone Funktion zum Abrufen von Telegram-Updates
-async def get_telegram_updates(session, t_boiler_vorne, t_boiler_hinten, t_verd, offset=None):
+async def get_telegram_updates(session, offset=None):
     """Ruft Updates von der Telegram-API ab."""
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
@@ -98,6 +99,7 @@ async def get_telegram_updates(session, t_boiler_vorne, t_boiler_hinten, t_verd,
         async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
             response.raise_for_status()
             updates = await response.json()
+            logging.debug(f"Telegram-Updates empfangen: {updates}")
             return updates.get('result', [])
     except aiohttp.ClientError as e:
         logging.error(f"Fehler bei der Telegram-API-Abfrage: {e}")
@@ -122,12 +124,13 @@ async def get_solax_data(session):
                 last_api_data = data.get("result")
                 last_api_timestamp = now
                 last_api_call = now
+                logging.info(f"Solax-Daten erfolgreich abgerufen: {last_api_data}")
                 return last_api_data
             else:
                 logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
                 return None
     except aiohttp.ClientError as e:
-        logging.error(f"Fehler bei der API-Anfrage: {e}")
+        logging.error(f"Fehler bei der Solax-API-Anfrage: {e}")
         return None
 
 
@@ -135,11 +138,11 @@ async def get_solax_data(session):
 def get_custom_keyboard():
     """Erstellt eine benutzerdefinierte Tastatur mit verfügbaren Befehlen."""
     keyboard = [
-        ["🌡️ Temperaturen"],  # Erste Zeile
-        ["📊 Status"],  # Zweite Zeile
-        ["🌴 Urlaub"],  # Dritte Zeile
-        ["🏠 Urlaub aus"],  # Vierte Zeile
-        ["🆘 Hilfe"]  # Fünfte Zeile
+        ["🌡️ Temperaturen"],
+        ["📊 Status"],
+        ["🌴 Urlaub"],
+        ["🏠 Urlaub aus"],
+        ["🆘 Hilfe"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
@@ -207,7 +210,10 @@ def read_temperature(sensor_id):
             lines = f.readlines()
             if lines[0].strip()[-3:] == "YES":
                 temp_data = lines[1].split("=")[-1]
-                return float(temp_data) / 1000.0
+                temp = float(temp_data) / 1000.0
+                logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
+                return temp
+            logging.warning(f"Ungültige Daten von Sensor {sensor_id}")
             return None
     except Exception as e:
         logging.error(f"Fehler beim Lesen des Sensors {sensor_id}: {e}")
@@ -220,15 +226,20 @@ def check_boiler_sensors(t_vorne, t_hinten, config):
         ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
     except (KeyError, ValueError):
         ausschaltpunkt = 50
+        logging.warning(f"Ausschaltpunkt nicht gefunden, verwende Standard: {ausschaltpunkt}")
     fehler = None
     is_overtemp = False
     if t_vorne is None or t_hinten is None:
         fehler = "Fühlerfehler!"
+        logging.error(f"Fühlerfehler erkannt: vorne={t_vorne}, hinten={t_hinten}")
     elif t_vorne >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10):
         fehler = "Übertemperatur!"
         is_overtemp = True
+        logging.error(f"Übertemperatur erkannt: vorne={t_vorne}, hinten={t_hinten}, Grenze={ausschaltpunkt + 10}")
     elif abs(t_vorne - t_hinten) > 10:
         fehler = "Fühlerdifferenz!"
+        logging.warning(
+            f"Fühlerdifferenz erkannt: vorne={t_vorne}, hinten={t_hinten}, Differenz={abs(t_vorne - t_hinten)}")
     return fehler, is_overtemp
 
 
@@ -240,19 +251,20 @@ def set_kompressor_status(ein, force_off=False):
         if not kompressor_ein:
             pause_time = now - last_shutdown_time
             if pause_time < MIN_PAUSE:
-                logging.info(f"Kompressor bleibt aus (zu kurze Pause: {pause_time}).")
+                logging.info(f"Kompressor bleibt aus (zu kurze Pause: {pause_time}, benötigt: {MIN_PAUSE})")
                 return False
             kompressor_ein = True
             start_time = now
             current_runtime = datetime.timedelta()
-            logging.info("Kompressor EIN.")
+            logging.info(f"Kompressor EIN geschaltet. Startzeit: {start_time}")
         else:
             current_runtime = now - start_time
+            logging.debug(f"Kompressor läuft bereits, aktuelle Laufzeit: {current_runtime}")
     else:
         if kompressor_ein:
             elapsed_time = now - start_time
             if elapsed_time < MIN_LAUFZEIT and not force_off:
-                logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}).")
+                logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {MIN_LAUFZEIT})")
                 return True
             kompressor_ein = False
             current_runtime = elapsed_time
@@ -260,13 +272,16 @@ def set_kompressor_status(ein, force_off=False):
             last_runtime = current_runtime
             last_shutdown_time = now
             start_time = None
-            logging.info(f"Kompressor AUS. Laufzeit: {elapsed_time}")
+            logging.info(
+                f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")
+        else:
+            logging.debug("Kompressor bereits ausgeschaltet")
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
     return None
 
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
-async def reload_config():
+async def reload_config(session):
     """Lädt die Konfigurationsdatei asynchron neu und aktualisiert globale Variablen."""
     global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, EINSCHALTPUNKT, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv
 
@@ -274,9 +289,8 @@ async def reload_config():
     current_hash = calculate_file_hash(config_file)
 
     if last_config_hash is not None and current_hash != last_config_hash:
-        logging.info("Konfigurationsdatei wurde geändert.")
-        async with aiohttp.ClientSession() as session:
-            await send_telegram_message(session, CHAT_ID, "🔧 Konfigurationsdatei wurde geändert.")
+        logging.info(f"Konfigurationsdatei geändert. Alter Hash: {last_config_hash}, Neuer Hash: {current_hash}")
+        await send_telegram_message(session, CHAT_ID, "🔧 Konfigurationsdatei wurde geändert.")
 
     try:
         async with aiofiles.open(config_file, mode='r') as f:
@@ -327,11 +341,13 @@ async def reload_config():
         TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
         SN = config["SolaxCloud"]["SN"]
 
-        logging.info("Konfiguration erfolgreich neu geladen.")
+        logging.info(
+            f"Konfiguration erfolgreich neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, EINSCHALTPUNKT={EINSCHALTPUNKT}, MIN_LAUFZEIT={MIN_LAUFZEIT}")
+        logging.debug(f"Vollständige Konfiguration: {dict(config['Heizungssteuerung'])}")
         last_config_hash = current_hash
 
     except FileNotFoundError:
-        logging.error("Konfigurationsdatei config.ini nicht gefunden.")
+        logging.error("Konfigurationsdatei config.ini nicht gefunden!")
     except KeyError as e:
         logging.error(f"Fehlender Schlüssel in der Konfigurationsdatei: {e}")
     except ValueError as e:
@@ -369,9 +385,11 @@ def adjust_shutdown_and_start_points(solax_data, config):
             nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG_KEY"]) if is_night else 0
             aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
 
-        logging.info(f"Ausschaltpunkt: {aktueller_ausschaltpunkt}, Einschaltpunkt: {aktueller_einschaltpunkt}")
+        logging.info(
+            f"Sollwerte angepasst: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}, Solarüberschuss={solar_ueberschuss}, Nachtzeit={is_night}")
+        logging.debug(f"Solax-Daten für Anpassung: {solax_data}")
     except (KeyError, ValueError) as e:
-        logging.error(f"Fehler beim Anpassen der Punkte: {e}")
+        logging.error(f"Fehler beim Anpassen der Punkte: {e}, Solax-Daten={solax_data}")
         nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG_KEY"]) if is_night else 0
         aktueller_einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
         aktueller_ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
@@ -385,8 +403,11 @@ def calculate_file_hash(file_path):
         with open(file_path, "rb") as f:
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
-    except Exception:
+        hash_value = sha256_hash.hexdigest()
+        logging.debug(f"Hash für {file_path} berechnet: {hash_value}")
+        return hash_value
+    except Exception as e:
+        logging.error(f"Fehler beim Berechnen des Hash-Werts für {file_path}: {e}")
         return None
 
 
@@ -394,6 +415,7 @@ def load_config():
     """Lädt die Konfigurationsdatei synchron."""
     config = configparser.ConfigParser()
     config.read("config.ini")
+    logging.debug(f"Konfiguration geladen: {dict(config['Heizungssteuerung'])}")
     return config
 
 
@@ -410,7 +432,9 @@ def is_nighttime(config):
         if start_time > end_time:
             end_time = datetime.datetime.combine(now.date() + datetime.timedelta(days=1),
                                                  datetime.time(end_hour, end_minute))
-        return start_time <= now <= end_time
+        is_night = start_time <= now <= end_time
+        logging.debug(f"Nachtzeitprüfung: Jetzt={now}, Start={start_time}, Ende={end_time}, Ist Nacht={is_night}")
+        return is_night
     except Exception as e:
         logging.error(f"Fehler in is_nighttime: {e}")
         return False
@@ -426,11 +450,14 @@ def calculate_shutdown_point(config, is_night, solax_data):
                  (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
         )
         if solar_ueberschuss:
-            return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
+            shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
         else:
-            return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
+            shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
+        logging.debug(
+            f"Ausschaltpunkt berechnet: Solarüberschuss={solar_ueberschuss}, Nachtreduktion={nacht_reduction}, Ergebnis={shutdown_point}")
+        return shutdown_point
     except (KeyError, ValueError) as e:
-        logging.error(f"Fehler beim Lesen der Konfiguration: {e}")
+        logging.error(f"Fehler beim Berechnen des Ausschaltpunkts: {e}, Solax-Daten={solax_data}")
         return 50
 
 
@@ -438,16 +465,105 @@ def check_value(value, min_value, max_value, default_value, parameter_name, othe
                 min_difference=None):
     """Überprüft und korrigiert einen Konfigurationswert."""
     if not (min_value <= value <= max_value):
-        logging.error(f"Ungültiger Wert für {parameter_name}: {value}. Verwende Standardwert: {default_value}.")
+        logging.warning(f"Ungültiger Wert für {parameter_name}: {value}. Verwende Standardwert: {default_value}.")
         value = default_value
     if other_value is not None and comparison == "<" and not (value < other_value):
+        logging.warning(
+            f"{parameter_name} ({value}) ungültig im Vergleich zu {other_value}, verwende Standardwert: {default_value}")
         value = default_value
     return value
 
 
 def is_data_old(timestamp):
     """Prüft, ob Solax-Daten veraltet sind."""
-    return timestamp and (datetime.datetime.now() - timestamp) > datetime.timedelta(minutes=15)
+    is_old = timestamp and (datetime.datetime.now() - timestamp) > datetime.timedelta(minutes=15)
+    logging.debug(f"Prüfe Solax-Datenalter: Zeitstempel={timestamp}, Ist alt={is_old}")
+    return is_old
+
+
+# Asynchrone Task für Telegram-Updates
+async def telegram_task(session):
+    """Separate Task für schnelle Telegram-Update-Verarbeitung."""
+    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, EINSCHALTPUNKT, AUSSCHALTPUNKT
+    while True:
+        updates = await get_telegram_updates(session, last_update_id)
+        if updates:
+            last_update_id = await process_telegram_messages_async(
+                session,
+                await asyncio.to_thread(read_temperature, "28-0bd6d4461d84"),  # Boiler vorne
+                await asyncio.to_thread(read_temperature, "28-445bd44686f4"),  # Boiler hinten
+                await asyncio.to_thread(read_temperature, "28-213bd4460d65"),  # Verdampfer
+                updates,
+                last_update_id,
+                kompressor_ein,
+                str(current_runtime).split('.')[0],
+                str(total_runtime_today).split('.')[0]
+            )
+        await asyncio.sleep(0.1)  # Schnelles Polling für Telegram
+
+
+# Asynchrone Task für Display-Updates
+async def display_task():
+    """Separate Task für Display-Updates, entkoppelt von der Hauptschleife."""
+    while True:
+        # Seite 1: Temperaturen
+        t_boiler_vorne = await asyncio.to_thread(read_temperature, "28-0bd6d4461d84")
+        t_boiler_hinten = await asyncio.to_thread(read_temperature, "28-445bd44686f4")
+        t_verd = await asyncio.to_thread(read_temperature, "28-213bd4460d65")
+        t_boiler = (
+                               t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+
+        lcd.clear()
+        lcd.write_string(f"T-Vorne: {t_boiler_vorne if t_boiler_vorne is not None else 'Fehler':.2f} C")
+        lcd.cursor_pos = (1, 0)
+        lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
+        lcd.cursor_pos = (2, 0)
+        lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
+        lcd.cursor_pos = (3, 0)
+        lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
+        logging.debug(
+            f"Display-Seite 1 aktualisiert: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
+        await asyncio.sleep(5)
+
+        # Seite 2: Kompressorstatus
+        lcd.clear()
+        lcd.write_string(f"Kompressor: {'EIN' if kompressor_ein else 'AUS'}")
+        lcd.cursor_pos = (1, 0)
+        if t_boiler != "Fehler":
+            lcd.write_string(f"Soll:{aktueller_ausschaltpunkt:.1f}C Ist:{t_boiler:.1f}C")
+        else:
+            lcd.write_string("Soll:N/A Ist:Fehler")
+        lcd.cursor_pos = (2, 0)
+        lcd.write_string(
+            f"Aktuell: {str(current_runtime).split('.')[0]}" if kompressor_ein else f"Letzte: {str(last_runtime).split('.')[0]}")
+        lcd.cursor_pos = (3, 0)
+        lcd.write_string(f"Gesamt: {str(total_runtime_today).split('.')[0]}")
+        logging.debug(
+            f"Display-Seite 2 aktualisiert: Status={'EIN' if kompressor_ein else 'AUS'}, Laufzeit={current_runtime if kompressor_ein else last_runtime}")
+        await asyncio.sleep(5)
+
+        # Seite 3: Solax-Daten
+        lcd.clear()
+        if last_api_data:
+            solar = last_api_data.get("powerdc1", 0) + last_api_data.get("powerdc2", 0)
+            feedinpower = last_api_data.get("feedinpower", "N/A")
+            consumeenergy = last_api_data.get("consumeenergy", "N/A")
+            batPower = last_api_data.get("batPower", "N/A")
+            soc = last_api_data.get("soc", "N/A")
+            old_suffix = " ALT" if is_data_old(last_api_timestamp) else ""
+            lcd.write_string(f"Solar: {solar} W{old_suffix}")
+            lcd.cursor_pos = (1, 0)
+            lcd.write_string(f"Netz: {feedinpower if feedinpower != 'N/A' else 'N/A'}{old_suffix}")
+            lcd.cursor_pos = (2, 0)
+            lcd.write_string(f"Verbrauch: {consumeenergy if consumeenergy != 'N/A' else 'N/A'}{old_suffix}")
+            lcd.cursor_pos = (3, 0)
+            lcd.write_string(f"Bat:{batPower}W,SOC:{soc}%")
+            logging.debug(
+                f"Display-Seite 3 aktualisiert: Solar={solar}, Netz={feedinpower}, Verbrauch={consumeenergy}, Batterie={batPower}, SOC={soc}")
+        else:
+            lcd.write_string("Fehler bei Solax-Daten")
+            logging.warning("Keine Solax-Daten für Display verfügbar")
+        await asyncio.sleep(5)
 
 
 # Asynchrone Hauptschleife
@@ -460,6 +576,7 @@ async def main_loop():
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(GIO21_PIN, GPIO.OUT)
         GPIO.output(GIO21_PIN, GPIO.LOW)
+        logging.info("GPIO erfolgreich initialisiert")
     except Exception as e:
         logging.error(f"Fehler bei der GPIO-Initialisierung: {e}")
         exit(1)
@@ -479,12 +596,16 @@ async def main_loop():
             "verd": "28-213bd4460d65"
         }
 
-        # Hauptschleife
+        # Telegram- und Display-Tasks starten
+        telegram_task_handle = asyncio.create_task(telegram_task(session))
+        display_task_handle = asyncio.create_task(display_task())
+
+        # Hauptschleife für Steuerung
         while True:
-            config = load_config()  # Synchron, später optimierbar
+            config = load_config()
             current_hash = calculate_file_hash("config.ini")
             if last_config_hash != current_hash:
-                await reload_config()  # Asynchrones Neuladen der Konfiguration
+                await reload_config(session)
                 last_config_hash = current_hash
 
             solax_data = await get_solax_data(session)
@@ -492,102 +613,40 @@ async def main_loop():
                 solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0, "batPower": 0, "soc": 0,
                               "powerdc1": 0, "powerdc2": 0, "api_fehler": True}
 
-            # Synchroner Aufruf im Thread
             await asyncio.to_thread(adjust_shutdown_and_start_points, solax_data, config)
 
             # Temperaturen lesen
-            t_boiler_vorne = read_temperature(sensor_map["vorne"])
-            t_boiler_hinten = read_temperature(sensor_map["hinten"])
-            t_verd = read_temperature(sensor_map["verd"])
+            t_boiler_vorne = await asyncio.to_thread(read_temperature, sensor_map["vorne"])
+            t_boiler_hinten = await asyncio.to_thread(read_temperature, sensor_map["hinten"])
+            t_verd = await asyncio.to_thread(read_temperature, sensor_map["verd"])
             t_boiler = (
                                    t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
 
-            # Telegram-Updates abrufen und verarbeiten
-            updates = await get_telegram_updates(session, t_boiler_vorne, t_boiler_hinten, t_verd, last_update_id)
-            if updates:
-                last_update_id = await process_telegram_messages_async(
-                    session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
-                    kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0]
-                )
-
-            # Boiler-Sensoren prüfen
+            # Fehlerprüfung und Kompressorsteuerung
             fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
             if fehler:
-                lcd.clear()
-                lcd.write_string(f"FEHLER: {fehler}")
-                await asyncio.sleep(5)
-                set_kompressor_status(False, force_off=True)
+                await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                logging.info(f"Kompressor wegen Fehler ausgeschaltet: {fehler}")
                 continue
 
-            # Kompressorsteuerung
             if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
                 if kompressor_ein:
-                    set_kompressor_status(False)
-                    logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor ausgeschaltet.")
+                    await asyncio.to_thread(set_kompressor_status, False)
             elif t_boiler != "Fehler":
                 if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
-                    set_kompressor_status(True)
-                    logging.info(f"T-Boiler Temperatur unter {EINSCHALTPUNKT} Grad. Kompressor eingeschaltet.")
+                    await asyncio.to_thread(set_kompressor_status, True)
                 elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
-                    set_kompressor_status(False)
-                    logging.info(
-                        f"T-Boiler Temperatur {aktueller_ausschaltpunkt} Grad erreicht. Kompressor ausgeschaltet.")
+                    await asyncio.to_thread(set_kompressor_status, False)
 
             if kompressor_ein and start_time:
                 current_runtime = datetime.datetime.now() - start_time
-
-            # Display-Seite 1: Temperaturen
-            lcd.clear()
-            lcd.write_string(f"T-Vorne: {t_boiler_vorne if t_boiler_vorne is not None else 'Fehler':.2f} C")
-            lcd.cursor_pos = (1, 0)
-            lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
-            lcd.cursor_pos = (2, 0)
-            lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
-            lcd.cursor_pos = (3, 0)
-            lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
-            await asyncio.sleep(5)
-
-            # Display-Seite 2: Kompressorstatus und Laufzeiten
-            lcd.clear()
-            lcd.write_string(f"Kompressor: {'EIN' if kompressor_ein else 'AUS'}")
-            lcd.cursor_pos = (1, 0)
-            if t_boiler != "Fehler":
-                lcd.write_string(f"Soll:{aktueller_ausschaltpunkt:.1f}C Ist:{t_boiler:.1f}C")
-            else:
-                lcd.write_string("Soll:N/A Ist:Fehler")
-            lcd.cursor_pos = (2, 0)
-            lcd.write_string(
-                f"Aktuell: {str(current_runtime).split('.')[0]}" if kompressor_ein else f"Letzte: {str(last_runtime).split('.')[0]}")
-            lcd.cursor_pos = (3, 0)
-            lcd.write_string(f"Gesamt: {str(total_runtime_today).split('.')[0]}")
-            await asyncio.sleep(5)
-
-            # Display-Seite 3: Solax-Daten
-            lcd.clear()
-            if solax_data:
-                solar = solax_data.get("powerdc1", 0) + solax_data.get("powerdc2", 0)
-                feedinpower = solax_data.get("feedinpower", "N/A")
-                consumeenergy = solax_data.get("consumeenergy", "N/A")
-                batPower = solax_data.get("batPower", "N/A")
-                soc = solax_data.get("soc", "N/A")
-                old_suffix = " ALT" if is_data_old(last_api_timestamp) else ""
-                lcd.write_string(f"Solar: {solar} W{old_suffix}")
-                lcd.cursor_pos = (1, 0)
-                lcd.write_string(f"Netz: {feedinpower if feedinpower != 'N/A' else 'N/A'}{old_suffix}")
-                lcd.cursor_pos = (2, 0)
-                lcd.write_string(f"Verbrauch: {consumeenergy if consumeenergy != 'N/A' else 'N/A'}{old_suffix}")
-                lcd.cursor_pos = (3, 0)
-                lcd.write_string(f"Bat:{batPower}W,SOC:{soc}%")
-            else:
-                lcd.write_string("Fehler bei Solax-Daten")
-            await asyncio.sleep(5)
 
             # Logging und CSV-Schreiben
             now = datetime.datetime.now()
             if last_log_time is None or (now - last_log_time) >= datetime.timedelta(
                     minutes=1) or kompressor_ein != last_kompressor_status:
                 async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                    await csvfile.write(
+                    csv_line = (
                         f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                         f"{t_boiler_vorne if t_boiler_vorne is not None else 'N/A'},"
                         f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
@@ -595,10 +654,14 @@ async def main_loop():
                         f"{t_verd if t_verd is not None else 'N/A'},"
                         f"{'EIN' if kompressor_ein else 'AUS'}\n"
                     )
+                    await csvfile.write(csv_line)
+                    logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
+                    logging.debug(
+                        f"Zusätzliche Daten: TotalRuntime={total_runtime_today}, LastShutdown={last_shutdown_time}")
                 last_log_time = now
                 last_kompressor_status = kompressor_ein
 
-            await asyncio.sleep(1)  # Hauptzyklus-Pause
+            await asyncio.sleep(0.5)  # Reduzierte Pause für schnellere Steuerung
 
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
@@ -612,6 +675,7 @@ async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hint
             chat_id = update.get('message', {}).get('chat', {}).get('id')
             if message_text and chat_id:
                 message_text = message_text.strip().lower()
+                logging.debug(f"Telegram-Nachricht empfangen: Text={message_text}, Chat-ID={chat_id}")
                 if message_text == "🌡️ temperaturen" or message_text == "temperaturen":
                     if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
                         await send_temperature_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd)
@@ -626,12 +690,21 @@ async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hint
                 elif message_text == "🆘 hilfe" or message_text == "hilfe":
                     await send_help_message(session)
                 elif message_text == "🌴 urlaub" or message_text == "urlaub":
-                    await aktivere_urlaubsmodus(session)
+                    if urlaubsmodus_aktiv:
+                        await send_telegram_message(session, CHAT_ID, "🌴 Urlaubsmodus ist bereits aktiviert.")
+                        logging.info("Urlaubsmodus bereits aktiv, keine Änderung")
+                    else:
+                        await aktivere_urlaubsmodus(session)
                 elif message_text == "🏠 urlaub aus" or message_text == "urlaub aus":
-                    await deaktivere_urlaubsmodus(session)
+                    if not urlaubsmodus_aktiv:
+                        await send_telegram_message(session, CHAT_ID, "🏠 Urlaubsmodus ist bereits deaktiviert.")
+                        logging.info("Urlaubsmodus bereits deaktiviert, keine Änderung")
+                    else:
+                        await deaktivere_urlaubsmodus(session)
                 else:
                     await send_unknown_command_message(session, chat_id)
             last_update_id = update['update_id'] + 1
+            logging.debug(f"last_update_id aktualisiert: {last_update_id}")
     return last_update_id
 
 
@@ -647,7 +720,7 @@ async def aktivere_urlaubsmodus(session):
         EINSCHALTPUNKT -= urlaubsabsenkung
         AUSSCHALTPUNKT -= urlaubsabsenkung
         logging.info(
-            f"Urlaubsmodus aktiviert. Neue Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+            f"Urlaubsmodus aktiviert. Alte Werte: Einschaltpunkt={original_einschaltpunkt}, Ausschaltpunkt={original_ausschaltpunkt}, Neue Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
         await send_telegram_message(session, CHAT_ID,
                                     f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
 
@@ -660,7 +733,7 @@ async def deaktivere_urlaubsmodus(session):
         EINSCHALTPUNKT = original_einschaltpunkt
         AUSSCHALTPUNKT = original_ausschaltpunkt
         logging.info(
-            f"Urlaubsmodus deaktiviert. Ursprüngliche Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
+            f"Urlaubsmodus deaktiviert. Wiederhergestellte Werte: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
         await send_telegram_message(session, CHAT_ID,
                                     f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {EINSCHALTPUNKT} °C\nAusschaltpunkt: {AUSSCHALTPUNKT} °C")
 
