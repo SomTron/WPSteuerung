@@ -657,26 +657,14 @@ def read_temperature(sensor_id):
         return None
 
 def check_boiler_sensors(t_vorne, t_hinten, config):
-    """Überprüft die Boiler-Sensoren auf Fehler (Fühlerfehler, Übertemperatur, Fühlerdifferenz).
-
-    Args:
-        t_vorne (float/int): Temperatur vorne.
-        t_hinten (float/int): Temperatur hinten.
-        config (configparser.ConfigParser): Die Konfiguration.
-
-    Returns:
-        tuple: Ein Tupel mit zwei Werten:
-            - fehler (str or None): Eine Fehlermeldung oder None, wenn kein Fehler vorliegt.
-            - is_overtemp (bool): True, wenn eine Übertemperatur vorliegt, False sonst.
-    """
     try:
         ausschaltpunkt = int(config["Heizungssteuerung"][AUSSCHALTPUNKT_KEY])
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler beim Lesen des Ausschaltszeitpunkts: {e}")
-        ausschaltpunkt = 50  # Standardwert
+        ausschaltpunkt = 50
 
-    fehler = None  # Initialisiere fehler mit None
-    is_overtemp = False  # Initialisiere is_overtemp mit False
+    fehler = None
+    is_overtemp = False
 
     if t_vorne is None or t_hinten is None:
         fehler = "Fühlerfehler!"
@@ -824,70 +812,41 @@ try:
 
     while True:
         config = load_config()
-        solax_data = get_solax_data()
-        if solax_data is None:
-            logging.warning("Keine gültigen Solax-Daten erhalten. Verwende Standardwerte.")
-            solax_data = {
-                "acpower": 0,
-                "feedinpower": 0,
-                "consumeenergy": 0,
-                "batPower": 0,
-                "soc": 0,
-                "powerdc1": 0,
-                "powerdc2": 0,
-                "api_fehler": True
-            }
-
-        # Nur reload_config aufrufen, wenn sich die Konfiguration geändert hat
         current_hash = calculate_file_hash("config.ini")
         if last_config_hash != current_hash:
             reload_config()
             last_config_hash = current_hash
 
+        solax_data = get_solax_data()
+        if solax_data is None:
+            solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0, "batPower": 0, "soc": 0, "powerdc1": 0,
+                          "powerdc2": 0, "api_fehler": True}
 
         adjust_shutdown_and_start_points(solax_data, config)
 
-        # Temperaturen lesen
-        try:
-            temperatures = ["Fehler"] * 3
-            for i, sensor_id in enumerate(sensor_ids):
-                temp = read_temperature(sensor_id)
-                if temp is not None:
-                    temperatures[i] = temp
-                logging.debug(f"Sensor {i + 1}: {temperatures[i]:.2f} °C")
-        except Exception as e:
-            error_message = f"Fehler bei der Temperaturmessung: {e}"
-            logging.error(error_message)
-            send_telegram_message(error_message)
-            continue
+        # Temperaturen einheitlich lesen
+        sensor_map = {
+            "vorne": "28-0bd6d4461d84",
+            "hinten": "28-445bd44686f4",
+            "verd": "28-213bd4460d65"
+        }
+        t_boiler_vorne = read_temperature(sensor_map["vorne"])
+        t_boiler_hinten = read_temperature(sensor_map["hinten"])
+        t_verd = read_temperature(sensor_map["verd"])
 
-        if temperatures[0] != "Fehler" and temperatures[1] != "Fehler":
-            t_boiler = (temperatures[0] + temperatures[1]) / 2
-        else:
-            t_boiler = "Fehler"
+        # Boiler-Temperatur einmal berechnen
+        t_boiler = "Fehler"
+        if t_boiler_vorne is not None and t_boiler_hinten is not None:
+            t_boiler = (t_boiler_vorne + t_boiler_hinten) / 2
+        logging.debug(f"T-Boiler: {t_boiler}, T-Verd: {t_verd}")
 
-        t_verd = temperatures[2] if temperatures[2] != "Fehler" else None
-        logging.debug(f"T-Verd: {t_verd:.2f} °C")
-
-        t_boiler_vorne = read_temperature("28-0bd6d4461d84")  # Beispiel, ersetze mit deiner Funktion
-        t_boiler_hinten = read_temperature("28-445bd44686f4")  # Beispiel, ersetze mit deiner Funktion
-        t_verd = read_temperature("28-213bd4460d65")  # Beispiel, ersetze mit deiner Funktion
-
-        # Debugging: Aktuelle Werte in der Hauptschleife
-        logging.debug(f"Hauptschleife: Einschaltpunkt={EINSCHALTPUNKT}, Ausschaltpunkt={AUSSCHALTPUNKT}")
-
-        # Telegram-Updates abrufen
-        updates = get_telegram_updates(t_boiler_vorne, t_boiler_hinten, t_verd, last_update_id)
-        if updates:
-            last_update_id = process_telegram_messages(
-                t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
-                kompressor_ein, str(current_runtime).split('.')[0], str(total_runtime_today).split('.')[0]
-            )
-
-
+        # Alte Sensor-Liste anpassen (falls noch benötigt)
+        temperatures = [t_boiler_vorne if t_boiler_vorne is not None else "Fehler",
+                        t_boiler_hinten if t_boiler_hinten is not None else "Fehler",
+                        t_verd if t_verd is not None else "Fehler"]
 
         # Fehlerprüfung und Kompressorsteuerung
-        fehler, is_overtemp = check_boiler_sensors(temperatures[0], temperatures[1], config)
+        fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
         if fehler:
             lcd.clear()
             lcd.write_string(f"FEHLER: {fehler}")
@@ -895,16 +854,14 @@ try:
             set_kompressor_status(False, force_off=True)
             continue
 
-        # Kompressorsteuerung basierend auf Temperaturen
+        # Kompressorsteuerung
         if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
             if kompressor_ein:
                 set_kompressor_status(False)
-                logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor wurde ausgeschaltet.")
+                logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor ausgeschaltet.")
             logging.info(f"Verdampfertemperatur unter {VERDAMPFERTEMPERATUR} Grad. Kompressor bleibt ausgeschaltet.")
         elif t_boiler != "Fehler":
-            logging.debug(f"T-Boiler: {t_boiler:.2f}, EINSCHALTPUNKT: {EINSCHALTPUNKT}, aktueller_ausschaltpunkt: {aktueller_ausschaltpunkt}")
-            reload_config()  # Konfiguration neu laden, respektiert jetzt Urlaubsmodus
-            if t_boiler < EINSCHALTPUNKT and not kompressor_ein:  # Änderung hier
+            if t_boiler < EINSCHALTPUNKT and not kompressor_ein:
                 set_kompressor_status(True)
                 logging.info(f"T-Boiler Temperatur unter {EINSCHALTPUNKT} Grad. Kompressor eingeschaltet.")
             elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
