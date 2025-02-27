@@ -233,6 +233,26 @@ async def send_help_message(session):
     )
     return await send_telegram_message(session, CHAT_ID, message, parse_mode="Markdown")
 
+async def shutdown(session):
+    """Sendet eine Telegram-Nachricht beim Programmende und bereinigt Ressourcen."""
+    now = datetime.datetime.now()
+    message = f"🛑 Programm beendet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
+    await send_telegram_message(session, CHAT_ID, message)
+    GPIO.output(GIO21_PIN, GPIO.LOW)  # Kompressor ausschalten
+    GPIO.cleanup()  # GPIO-Pins bereinigen
+    lcd.close()  # LCD schließen
+    logging.info("Heizungssteuerung sicher beendet, Hardware in sicherem Zustand.")
+
+async def run_program():
+    """Hauptfunktion zum Starten des Programms."""
+    async with aiohttp.ClientSession() as session:
+        try:
+            await main_loop(session)
+        except KeyboardInterrupt:
+            logging.info("Programm durch Benutzer beendet.")
+        finally:
+            await shutdown(session)
+
 # Synchron bleibende Funktionen
 def read_temperature(sensor_id):
     """Liest die Temperatur von einem DS18B20-Sensor."""
@@ -723,7 +743,7 @@ async def initialize_gpio():
 
 
 # Asynchrone Hauptschleife
-async def main_loop():
+async def main_loop(session):
     """
     Hauptschleife des Programms, die Steuerung und Überwachung asynchron ausführt.
 
@@ -952,13 +972,4 @@ async def deaktivere_urlaubsmodus(session):
 
 # Programmstart
 if __name__ == "__main__":
-    try:
-        asyncio.run(main_loop())
-    except KeyboardInterrupt:
-        logging.info("Programm durch Benutzer beendet.")
-    finally:
-        # Sicherstellen, dass der Kompressor aus ist, bevor GPIO bereinigt wird
-        GPIO.output(GIO21_PIN, GPIO.LOW)  # Kompressor ausschalten
-        GPIO.cleanup()  # GPIO-Pins bereinigen
-        lcd.close()  # LCD schließen
-        logging.info("Heizungssteuerung sicher beendet, Hardware in sicherem Zustand.")
+    asyncio.run(run_program())
