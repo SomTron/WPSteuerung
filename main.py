@@ -1,12 +1,10 @@
 import os
-import glob
 import smbus2
 import datetime
 from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
 import logging
 import configparser
-import csv
 import aiohttp
 import hashlib
 from telegram import ReplyKeyboardMarkup
