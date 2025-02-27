@@ -360,7 +360,7 @@ def set_kompressor_status(ein, force_off=False):
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session):
     """Lädt die Konfigurationsdatei asynchron neu und aktualisiert globale Variablen."""
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, TEMP_OFFSET, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv
+    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, TEMP_OFFSET, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
 
     config_file = "config.ini"
     current_hash = calculate_file_hash(config_file)
@@ -389,11 +389,15 @@ async def reload_config(session):
             )
             TEMP_OFFSET = check_value(
                 int(config["Heizungssteuerung"]["TEMP_OFFSET"]),
-                min_value=5, max_value=20, default_value=10,  # Angemessener Bereich für Offset
+                min_value=5, max_value=20, default_value=10,
                 parameter_name="TEMP_OFFSET"
             )
+            VERDAMPFERTEMPERATUR = check_value(
+                int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
+                min_value=4, max_value=40, default_value=6,
+                parameter_name="VERDAMPFERTEMPERATUR"
+            )
 
-        # Rest bleibt gleich
         MIN_LAUFZEIT_MINUTEN = check_value(
             int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
             min_value=1, max_value=60, default_value=10,
@@ -404,11 +408,6 @@ async def reload_config(session):
             min_value=1, max_value=60, default_value=20,
             parameter_name="MIN_PAUSE"
         )
-        VERDAMPFERTEMPERATUR = check_value(
-            int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
-            min_value=10, max_value=40, default_value=25,
-            parameter_name="VERDAMPFERTEMPERATUR"
-        )
 
         BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
         CHAT_ID = config["Telegram"]["CHAT_ID"]
@@ -417,17 +416,17 @@ async def reload_config(session):
         TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
         SN = config["SolaxCloud"]["SN"]
 
+        # Berechne Sollwerte neu nach Konfigurationsänderung
+        solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                                                       "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                                                       "api_fehler": True}
+        aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_nighttime(config), solax_data)
+        aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
+
         logging.info(
-            f"Konfiguration erfolgreich neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, MIN_LAUFZEIT={MIN_LAUFZEIT}")
-        logging.debug(f"Vollständige Konfiguration: {dict(config['Heizungssteuerung'])}")
+            f"Konfiguration neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, VERDAMPFERTEMPERATUR={VERDAMPFERTEMPERATUR}, Einschaltpunkt={aktueller_einschaltpunkt}, Ausschaltpunkt={aktueller_ausschaltpunkt}")
         last_config_hash = current_hash
 
-    except FileNotFoundError:
-        logging.error("Konfigurationsdatei config.ini nicht gefunden!")
-    except KeyError as e:
-        logging.error(f"Fehlender Schlüssel in der Konfigurationsdatei: {e}")
-    except ValueError as e:
-        logging.error(f"Ungültiger Wert in der Konfigurationsdatei: {e}")
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
 
@@ -891,8 +890,8 @@ async def main_loop(session):
             raise
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
-async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id,
-                                          kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+    global AUSSCHALTPUNKT, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     global AUSSCHALTPUNKT, aktueller_einschaltpunkt
     if updates:
