@@ -45,7 +45,6 @@ TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
 
 
-
 # Globale Variablen für den Programmstatus
 last_api_call = None
 last_api_data = None
@@ -69,7 +68,7 @@ original_ausschaltpunkt = AUSSCHALTPUNKT
 original_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Konsistenz im Urlaubsmodus
 ausschluss_grund = None  # Grund, warum der Kompressor nicht läuft (z.B. "Zu kurze Pause")
 t_boiler = None
-
+solar_ueberschuss_aktiv = False
 
 
 # Logging einrichten
@@ -433,65 +432,38 @@ async def reload_config(session):
 
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
 def adjust_shutdown_and_start_points(solax_data, config):
-    """
-    Passt die Ein- und Ausschaltpunkte basierend auf Solax-Daten und Nachtzeit an.
-    Der Einschaltpunkt wird als Ausschaltpunkt minus TEMP_OFFSET berechnet.
-
-    Args:
-        solax_data (dict): Daten von der Solax-API.
-        config (configparser.ConfigParser): Konfigurationsdaten.
-    """
-    global aktueller_ausschaltpunkt, AUSSCHALTPUNKT, TEMP_OFFSET
+    global aktueller_ausschaltpunkt, aktueller_einschaltpunkt, AUSSCHALTPUNKT, TEMP_OFFSET
     if not hasattr(adjust_shutdown_and_start_points, "last_night"):
         adjust_shutdown_and_start_points.last_night = None
-        adjust_shutdown_and_start_points.last_solar_ueberschuss = None
         adjust_shutdown_and_start_points.last_config_hash = None
         adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = None
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = None
 
     is_night = is_nighttime(config)
-    solar_ueberschuss = (
-        solax_data is not None and
-        (solax_data.get("batPower", 0) > 600 or
-         (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
-    )
     current_config_hash = calculate_file_hash("config.ini")
 
-    # Prüfe, ob sich relevante Bedingungen geändert haben
     if (is_night == adjust_shutdown_and_start_points.last_night and
-        solar_ueberschuss == adjust_shutdown_and_start_points.last_solar_ueberschuss and
         current_config_hash == adjust_shutdown_and_start_points.last_config_hash):
         return
 
-    # Zustand aktualisieren
     adjust_shutdown_and_start_points.last_night = is_night
-    adjust_shutdown_and_start_points.last_solar_ueberschuss = solar_ueberschuss
     adjust_shutdown_and_start_points.last_config_hash = current_config_hash
 
-    if urlaubsmodus_aktiv:
-        aktueller_ausschaltpunkt = AUSSCHALTPUNKT
-        aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Im Urlaubsmodus Offset beibehalten
-    else:
-        # Ausschaltpunkt Berechnen
-        aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
-        # Einschaltpunkt als Ausschaltpunkt minus Offset
-        aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
+    # Immer calculate_shutdown_point verwenden, auch im Urlaubsmodus
+    aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
+    aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
 
-        # Sicherstellen, dass der Einschaltpunkt nicht unter einen Mindestwert fällt
-        MIN_EINSCHALTPUNKT = 20
-        if aktueller_einschaltpunkt < MIN_EINSCHALTPUNKT:
-            aktueller_einschaltpunkt = MIN_EINSCHALTPUNKT
-            logging.warning(f"Einschaltpunkt auf Mindestwert {MIN_EINSCHALTPUNKT} gesetzt, da er sonst zu niedrig wäre.")
+    MIN_EINSCHALTPUNKT = 20
+    if aktueller_einschaltpunkt < MIN_EINSCHALTPUNKT:
+        aktueller_einschaltpunkt = MIN_EINSCHALTPUNKT
+        logging.warning(f"Einschaltpunkt auf Mindestwert {MIN_EINSCHALTPUNKT} gesetzt.")
 
-    # Nur loggen, wenn sich die Sollwerte ändern
     if (aktueller_ausschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt or
         aktueller_einschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt):
-        logging.info(f"Sollwerte angepasst: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}, Solarüberschuss={solar_ueberschuss}, Nachtzeit={is_night}")
-        logging.debug(f"Solax-Daten für Anpassung: {solax_data}")
+        logging.info(f"Sollwerte angepasst: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}, Solarüberschuss_aktiv={solar_ueberschuss_aktiv}")
         adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = aktueller_ausschaltpunkt
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = aktueller_einschaltpunkt
 
-# Weitere Hilfsfunktionen
 def calculate_file_hash(file_path):
     """Berechnet den SHA-256-Hash einer Datei."""
     sha256_hash = hashlib.sha256()
@@ -580,23 +552,34 @@ def is_nighttime(config):
 
 
 def calculate_shutdown_point(config, is_night, solax_data):
-    """Berechnet den Ausschaltpunkt basierend auf Nachtzeit und Solax-Daten."""
+    """Berechnet den Ausschaltpunkt basierend auf Nachtzeit und Solax-Daten mit Hysterese."""
+    global solar_ueberschuss_aktiv
     try:
-        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0  # Angepasst
-        solar_ueberschuss = (
-            solax_data and
-            (solax_data.get("batPower", 0) > 600 or
-             (solax_data.get("soc", 0) > 95 and solax_data.get("feedinpower", 0) > 600))
-        )
-        if solar_ueberschuss:
+        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
+        bat_power = solax_data.get("batPower", 0)
+        feedin_power = solax_data.get("feedinpower", 0)
+        soc = solax_data.get("soc", 0)
+
+        # Solarüberschuss wird aktiviert, wenn die Bedingungen erfüllt sind
+        if bat_power > 600 or (soc > 95 and feedin_power > 600):
+            solar_ueberschuss_aktiv = True
+            logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+
+        # Solarüberschuss wird deaktiviert, wenn die Leistung unter 0 fällt
+        elif bat_power < 0 or feedin_power < 0:
+            solar_ueberschuss_aktiv = False
+            logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}")
+
+        # Ausschaltpunkt basierend auf dem Zustand setzen
+        if solar_ueberschuss_aktiv:
             shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
         else:
             shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
-        logging.debug(f"Ausschaltpunkt berechnet: Solarüberschuss={solar_ueberschuss}, Nachtreduktion={nacht_reduction}, Ergebnis={shutdown_point}")
+
+        logging.debug(f"Ausschaltpunkt berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, Nachtreduktion={nacht_reduction}, Ergebnis={shutdown_point}")
         return shutdown_point
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler beim Berechnen des Ausschaltpunkts: {e}, Solax-Daten={solax_data}")
-        return 50
 
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
