@@ -464,6 +464,7 @@ def adjust_shutdown_and_start_points(solax_data, config):
         adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = aktueller_ausschaltpunkt
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = aktueller_einschaltpunkt
 
+
 def calculate_file_hash(file_path):
     """Berechnet den SHA-256-Hash einer Datei."""
     sha256_hash = hashlib.sha256()
