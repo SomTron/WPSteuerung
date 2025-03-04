@@ -69,6 +69,7 @@ original_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Konsistenz im Urlaubsm
 ausschluss_grund = None  # Grund, warum der Kompressor nicht läuft (z.B. "Zu kurze Pause")
 t_boiler = None
 solar_ueberschuss_aktiv = False
+lcd = None
 
 
 # Logging einrichten
@@ -78,8 +79,18 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# LCD global initialisieren
-lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
+# Funktion zur LCD-Initialisierung
+async def initialize_lcd(session):
+    global lcd
+    try:
+        lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
+        lcd.clear()  # Display zurücksetzen
+        logging.info("LCD erfolgreich initialisiert")
+    except Exception as e:
+        error_msg = f"Fehler bei der LCD-Initialisierung: {e}"
+        logging.error(error_msg)
+        await send_telegram_message(session, CHAT_ID, error_msg)
+        lcd = None  # Setze lcd auf None, falls die Initialisierung fehlschlägt
 
 
 # Asynchrone Funktion zum Senden von Telegram-Nachrichten
@@ -107,7 +118,6 @@ async def send_telegram_message(session, chat_id, message, reply_markup=None, pa
         async with session.post(url, json=data) as response:
             response.raise_for_status()
             logging.info(f"Telegram-Nachricht gesendet: {message}")
-            logging.debug(f"Antwort-Details: URL={url}, Daten={data}")
             return True
     except aiohttp.ClientError as e:
         logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}, Nachricht={message}")
@@ -631,70 +641,81 @@ async def telegram_task(session):
 # Asynchrone Task für Display-Updates
 async def display_task():
     """Separate Task für Display-Updates, entkoppelt von der Hauptschleife."""
+    global lcd
     while True:
-        # Seite 1: Temperaturen
-        t_boiler_vorne = await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"])
-        t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
-        t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
-        t_boiler = (
-                               t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
-        pressure_ok = await asyncio.to_thread(check_pressure)
+        if lcd is None:
+            logging.debug("LCD nicht verfügbar, überspringe Display-Update")
+            await asyncio.sleep(5)
+            continue
 
-        lcd.clear()
-        if not pressure_ok:
-            lcd.write_string("FEHLER: Druck zu niedrig")
-            logging.error(f"Display zeigt Druckfehler: Druckschalter={pressure_ok}")
-        else:
-            lcd.write_string(f"T-Vorne: {t_boiler_vorne if t_boiler_vorne is not None else 'Fehler':.2f} C")
+        try:
+            # Seite 1: Temperaturen
+            t_boiler_vorne = await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"])
+            t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
+            t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
+            t_boiler = (
+                t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+            pressure_ok = await asyncio.to_thread(check_pressure)
+
+            lcd.clear()
+            if not pressure_ok:
+                lcd.write_string("FEHLER: Druck zu niedrig")
+                logging.error(f"Display zeigt Druckfehler: Druckschalter={pressure_ok}")
+            else:
+                lcd.write_string(f"T-Vorne: {t_boiler_vorne if t_boiler_vorne is not None else 'Fehler':.2f} C")
+                lcd.cursor_pos = (1, 0)
+                lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
+                lcd.cursor_pos = (2, 0)
+                lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
+                lcd.cursor_pos = (3, 0)
+                lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
+                logging.debug(f"Display-Seite 1 aktualisiert: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
+            await asyncio.sleep(5)
+
+            # Seite 2: Kompressorstatus
+            lcd.clear()
+            lcd.write_string(f"Kompressor: {'EIN' if kompressor_ein else 'AUS'}")
             lcd.cursor_pos = (1, 0)
-            lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
+            if t_boiler != "Fehler":
+                lcd.write_string(f"Soll:{aktueller_ausschaltpunkt:.1f}C Ist:{t_boiler:.1f}C")
+            else:
+                lcd.write_string("Soll:N/A Ist:Fehler")
             lcd.cursor_pos = (2, 0)
-            lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
+            lcd.write_string(
+                f"Aktuell: {str(current_runtime).split('.')[0]}" if kompressor_ein else f"Letzte: {str(last_runtime).split('.')[0]}")
             lcd.cursor_pos = (3, 0)
-            lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
-            logging.debug(
-                f"Display-Seite 1 aktualisiert: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
-        await asyncio.sleep(5)
+            lcd.write_string(f"Gesamt: {str(total_runtime_today).split('.')[0]}")
+            logging.debug(f"Display-Seite 2 aktualisiert: Status={'EIN' if kompressor_ein else 'AUS'}, Laufzeit={current_runtime if kompressor_ein else last_runtime}")
+            await asyncio.sleep(5)
 
-        # Seite 2: Kompressorstatus
-        lcd.clear()
-        lcd.write_string(f"Kompressor: {'EIN' if kompressor_ein else 'AUS'}")
-        lcd.cursor_pos = (1, 0)
-        if t_boiler != "Fehler":
-            lcd.write_string(f"Soll:{aktueller_ausschaltpunkt:.1f}C Ist:{t_boiler:.1f}C")
-        else:
-            lcd.write_string("Soll:N/A Ist:Fehler")
-        lcd.cursor_pos = (2, 0)
-        lcd.write_string(
-            f"Aktuell: {str(current_runtime).split('.')[0]}" if kompressor_ein else f"Letzte: {str(last_runtime).split('.')[0]}")
-        lcd.cursor_pos = (3, 0)
-        lcd.write_string(f"Gesamt: {str(total_runtime_today).split('.')[0]}")
-        logging.debug(
-            f"Display-Seite 2 aktualisiert: Status={'EIN' if kompressor_ein else 'AUS'}, Laufzeit={current_runtime if kompressor_ein else last_runtime}")
-        await asyncio.sleep(5)
+            # Seite 3: Solax-Daten
+            lcd.clear()
+            if last_api_data:
+                solar = last_api_data.get("powerdc1", 0) + last_api_data.get("powerdc2", 0)
+                feedinpower = last_api_data.get("feedinpower", "N/A")
+                consumeenergy = last_api_data.get("consumeenergy", "N/A")
+                batPower = last_api_data.get("batPower", "N/A")
+                soc = last_api_data.get("soc", "N/A")
+                old_suffix = " ALT" if is_data_old(last_api_timestamp) else ""
+                lcd.write_string(f"Solar: {solar} W{old_suffix}")
+                lcd.cursor_pos = (1, 0)
+                lcd.write_string(f"Netz: {feedinpower if feedinpower != 'N/A' else 'N/A'}{old_suffix}")
+                lcd.cursor_pos = (2, 0)
+                lcd.write_string(f"Verbrauch: {consumeenergy if consumeenergy != 'N/A' else 'N/A'}{old_suffix}")
+                lcd.cursor_pos = (3, 0)
+                lcd.write_string(f"Bat:{batPower}W,SOC:{soc}%")
+                logging.debug(f"Display-Seite 3 aktualisiert: Solar={solar}, Netz={feedinpower}, Verbrauch={consumeenergy}, Batterie={batPower}, SOC={soc}")
+            else:
+                lcd.write_string("Fehler bei Solax-Daten")
+                logging.warning("Keine Solax-Daten für Display verfügbar")
+            await asyncio.sleep(5)
 
-        # Seite 3: Solax-Daten
-        lcd.clear()
-        if last_api_data:
-            solar = last_api_data.get("powerdc1", 0) + last_api_data.get("powerdc2", 0)
-            feedinpower = last_api_data.get("feedinpower", "N/A")
-            consumeenergy = last_api_data.get("consumeenergy", "N/A")
-            batPower = last_api_data.get("batPower", "N/A")
-            soc = last_api_data.get("soc", "N/A")
-            old_suffix = " ALT" if is_data_old(last_api_timestamp) else ""
-            lcd.write_string(f"Solar: {solar} W{old_suffix}")
-            lcd.cursor_pos = (1, 0)
-            lcd.write_string(f"Netz: {feedinpower if feedinpower != 'N/A' else 'N/A'}{old_suffix}")
-            lcd.cursor_pos = (2, 0)
-            lcd.write_string(f"Verbrauch: {consumeenergy if consumeenergy != 'N/A' else 'N/A'}{old_suffix}")
-            lcd.cursor_pos = (3, 0)
-            lcd.write_string(f"Bat:{batPower}W,SOC:{soc}%")
-            logging.debug(
-                f"Display-Seite 3 aktualisiert: Solar={solar}, Netz={feedinpower}, Verbrauch={consumeenergy}, Batterie={batPower}, SOC={soc}")
-        else:
-            lcd.write_string("Fehler bei Solax-Daten")
-            logging.warning("Keine Solax-Daten für Display verfügbar")
-        await asyncio.sleep(5)
+        except Exception as e:
+            error_msg = f"Fehler beim Display-Update: {e}"
+            logging.error(error_msg)
+            await send_telegram_message(session, CHAT_ID, error_msg)
+            lcd = None  # Setze lcd auf None bei Fehler während der Nutzung
+            await asyncio.sleep(5)  # Warte, bevor es weitergeht
 
 
 async def initialize_gpio():
@@ -743,26 +764,29 @@ async def main_loop(session):
     """
     global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler
 
-    # GPIO-Pins initialisieren (Kompressor und Druckschalter)
+    # GPIO-Pins initialisieren
     if not await initialize_gpio():
         logging.critical("Programm wird aufgrund fehlender GPIO-Initialisierung beendet.")
         exit(1)
 
     async with aiohttp.ClientSession() as session:
-        # Startnachricht mit aktuellem Zeitstempel an Telegram senden
+        # LCD initialisieren
+        await initialize_lcd(session)
+
+        # Startnachricht
         now = datetime.datetime.now()
         message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
         await send_telegram_message(session, CHAT_ID, message)
         await send_welcome_message(session, CHAT_ID)
 
-        # Asynchrone Tasks starten: Telegram-Updates und Display-Anzeige
+        # Asynchrone Tasks starten
         telegram_task_handle = asyncio.create_task(telegram_task(session))
         display_task_handle = asyncio.create_task(display_task())
 
-        # Zeitpunkt des letzten erfolgreichen Zyklus für Watchdog
+        # Watchdog-Variablen
         last_cycle_time = datetime.datetime.now()
-        watchdog_warning_count = 0  # Zähler für Watchdog-Warnungen
-        WATCHDOG_MAX_WARNINGS = 3  # Maximale Warnungen vor Abschaltung
+        watchdog_warning_count = 0
+        WATCHDOG_MAX_WARNINGS = 3
 
         try:
             while True:
@@ -789,7 +813,7 @@ async def main_loop(session):
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
-                                       t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+                                   t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
 
                 # Druckschalter prüfen
                 pressure_ok = await asyncio.to_thread(check_pressure)
@@ -799,8 +823,7 @@ async def main_loop(session):
                         await send_telegram_message(session, CHAT_ID,
                                                     "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
                         pressure_error_sent = True
-                        logging.error(
-                            f"Druck zu niedrig erkannt: Kompressor ausgeschaltet, Temperaturen: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, verd={t_verd}")
+                        logging.error(f"Druck zu niedrig erkannt: Kompressor ausgeschaltet")
                     continue
                 else:
                     if pressure_error_sent:
@@ -814,30 +837,24 @@ async def main_loop(session):
                     logging.info(f"Kompressor wegen Fehler ausgeschaltet: {fehler}")
                     continue
 
-                # Kompressorsteuerung basierend auf Temperaturen
+                # Kompressorsteuerung
                 if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
                     ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
-                    logging.debug(f"Ausschlussgrund gesetzt: {ausschluss_grund}")
                 elif t_boiler != "Fehler":
                     if t_boiler < aktueller_einschaltpunkt and not kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, True)
-                        if not kompressor_ein:  # Wenn Einschalten fehlschlägt, wurde ausschluss_grund bereits gesetzt
-                            logging.info(
-                                f"Kompressor nicht eingeschaltet trotz t_boiler < aktueller_einschaltpunkt: {ausschluss_grund}")
-                        else:
-                            ausschluss_grund = None  # Nur zurücksetzen, wenn Kompressor erfolgreich eingeschaltet wurde
                     elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
-                        ausschluss_grund = None  # Kein Ausschlussgrund, wenn ausgeschaltet
 
                 if kompressor_ein and start_time:
                     current_runtime = datetime.datetime.now() - start_time
 
-                # Datenlogging in CSV-Datei
+                # Datenlogging
                 now = datetime.datetime.now()
-                if last_log_time is None or (now - last_log_time) >= datetime.timedelta(minutes=1) or kompressor_ein != last_kompressor_status:
+                if last_log_time is None or (now - last_log_time) >= datetime.timedelta(
+                        minutes=1) or kompressor_ein != last_kompressor_status:
                     async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
                         csv_line = (
                             f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
@@ -849,22 +866,22 @@ async def main_loop(session):
                         )
                         await csvfile.write(csv_line)
                         logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
-                        logging.debug(f"Zusätzliche Daten: TotalRuntime={total_runtime_today}, LastShutdown={last_shutdown_time}")
                     last_log_time = now
                     last_kompressor_status = kompressor_ein
 
-                # Watchdog: Prüfen, ob der Zyklus zu lange dauert
+                # Watchdog
                 cycle_duration = (datetime.datetime.now() - last_cycle_time).total_seconds()
-                if cycle_duration > 10:  # Erhöhtes Timeout auf 10 Sekunden
+                if cycle_duration > 10:
                     watchdog_warning_count += 1
-                    logging.error(f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
+                    logging.error(
+                        f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
                     if watchdog_warning_count >= WATCHDOG_MAX_WARNINGS:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                        logging.critical("Maximale Watchdog-Warnungen erreicht, Hardware wird sicher heruntergefahren.")
-                        break  # Schleife beenden
+                        logging.critical("Maximale Watchdog-Warnungen erreicht, Hardware wird heruntergefahren.")
+                        break
 
-                last_cycle_time = datetime.datetime.now()  # Zykluszeit aktualisieren
-                await asyncio.sleep(2)  # Erhöhte Pause auf 2 Sekunden
+                last_cycle_time = datetime.datetime.now()
+                await asyncio.sleep(2)
 
         except asyncio.CancelledError:
             logging.info("Hauptschleife abgebrochen, Tasks werden beendet.")
@@ -872,6 +889,29 @@ async def main_loop(session):
             display_task_handle.cancel()
             await asyncio.gather(telegram_task_handle, display_task_handle, return_exceptions=True)
             raise
+
+async def shutdown(session):
+    """Sendet eine Telegram-Nachricht beim Programmende und bereinigt Ressourcen."""
+    now = datetime.datetime.now()
+    message = f"🛑 Programm beendet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
+    await send_telegram_message(session, CHAT_ID, message)
+    GPIO.output(GIO21_PIN, GPIO.LOW)
+    GPIO.cleanup()
+    if lcd is not None:
+        lcd.close()
+    logging.info("Heizungssteuerung sicher beendet.")
+
+
+async def run_program():
+    """Hauptfunktion zum Starten des Programms."""
+    async with aiohttp.ClientSession() as session:
+        try:
+            await main_loop(session)
+        except KeyboardInterrupt:
+            logging.info("Programm durch Benutzer beendet.")
+        finally:
+            await shutdown(session)
+
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
 async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
