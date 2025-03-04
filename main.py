@@ -938,7 +938,7 @@ async def aktivere_urlaubsmodus(session):
 
 
 async def deaktivere_urlaubsmodus(session):
-    """Deaktiviert den Urlaubsmodus und stellt ursprüngliche Werte wieder her."""
+    # Deaktiviert den Urlaubsmodus und stellt ursprüngliche Werte wieder her.
     global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     if urlaubsmodus_aktiv:
         urlaubsmodus_aktiv = False
