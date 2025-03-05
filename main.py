@@ -70,6 +70,8 @@ ausschluss_grund = None  # Grund, warum der Kompressor nicht läuft (z.B. "Zu ku
 t_boiler = None
 solar_ueberschuss_aktiv = False
 lcd = None
+last_pressure_error_time = None  # Zeitpunkt des letzten Druckfehlers
+PRESSURE_ERROR_DELAY = datetime.timedelta(minutes=5)  # 5 Minuten Verzögerung
 
 
 # Logging einrichten
@@ -285,8 +287,9 @@ def read_temperature(sensor_id):
 
 def check_pressure():
     """Prüft den Druckschalter (GPIO 17)."""
-    pressure_ok = GPIO.input(PRESSURE_SENSOR_PIN)  # HIGH = Druck OK, LOW = Druck zu niedrig
-    logging.debug(f"Druckschalter-Status: {pressure_ok} (HIGH=OK, LOW=zu niedrig)")
+    # HIGH bedeutet Durchgang (Schalter betätigt, normal), LOW bedeutet offen (Fehler)
+    pressure_ok = GPIO.input(PRESSURE_SENSOR_PIN) == GPIO.HIGH
+    logging.debug(f"Druckschalter-Status: {'Normal' if pressure_ok else 'Fehler (offen)'} (HIGH=Normal, LOW=Fehler)")
     return pressure_ok
 
 
@@ -762,7 +765,7 @@ async def main_loop(session):
     Raises:
         asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
     """
-    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler
+    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler, last_pressure_error_time
 
     # GPIO-Pins initialisieren
     if not await initialize_gpio():
@@ -817,18 +820,35 @@ async def main_loop(session):
 
                 # Druckschalter prüfen
                 pressure_ok = await asyncio.to_thread(check_pressure)
+                now = datetime.datetime.now()
+
                 if not pressure_ok:
-                    await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                    # Kompressor ausschalten, falls er läuft
+                    if kompressor_ein:
+                        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                        logging.info("Kompressor wegen Druckfehler ausgeschaltet")
+
+                    # Zeitpunkt des Druckfehlers speichern
+                    last_pressure_error_time = now
+
+                    # Telegram-Nachricht senden, wenn der Fehler noch nicht gemeldet wurde
                     if not pressure_error_sent:
-                        await send_telegram_message(session, CHAT_ID,
-                                                    "❌ Fehler: Druck zu niedrig! Kompressor ausgeschaltet.")
+                        error_msg = "❌ Druckfehler: Kompressor läuft nicht aufgrund eines Problems mit dem Druckschalter! 5-Minuten-Sperre aktiviert."
+                        await send_telegram_message(session, CHAT_ID, error_msg)
                         pressure_error_sent = True
-                        logging.error(f"Druck zu niedrig erkannt: Kompressor ausgeschaltet")
-                    continue
+                        logging.error("Druckfehler erkannt: Telegram-Nachricht gesendet, 5-Minuten-Sperre gestartet")
+                    ausschluss_grund = "Druckschalter offen"
+                    continue  # Schleife fortsetzen, keine weiteren Steueraktionen ausführen
                 else:
-                    if pressure_error_sent:
-                        logging.info("Druck wieder normal, Fehlermeldungsstatus zurückgesetzt")
+                    if pressure_error_sent and (last_pressure_error_time is None or (
+                            now - last_pressure_error_time) >= PRESSURE_ERROR_DELAY):
+                        # Wenn der Druck wieder normal ist und die 5-Minuten-Sperre abgelaufen ist
+                        info_msg = "✅ Druckschalter wieder normal. Kompressor kann wieder laufen."
+                        await send_telegram_message(session, CHAT_ID, info_msg)
+                        logging.info(
+                            "Druckschalter wieder normal, 5-Minuten-Sperre abgelaufen, Fehlermeldungsstatus zurückgesetzt")
                         pressure_error_sent = False
+                        last_pressure_error_time = None  # Zurücksetzen, wenn Sperre abgelaufen
 
                 # Boiler-Sensoren auf Fehler prüfen
                 fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
@@ -838,7 +858,14 @@ async def main_loop(session):
                     continue
 
                 # Kompressorsteuerung
-                if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
+                if last_pressure_error_time and (now - last_pressure_error_time) < PRESSURE_ERROR_DELAY:
+                    # Kompressor bleibt aus, wenn die 5-Minuten-Sperre aktiv ist
+                    if kompressor_ein:
+                        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                    remaining_time = (PRESSURE_ERROR_DELAY - (now - last_pressure_error_time)).total_seconds()
+                    ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
+                    logging.debug(f"Kompressor gesperrt wegen Druckfehler, verbleibende Zeit: {remaining_time:.0f}s")
+                elif t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
                     ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
