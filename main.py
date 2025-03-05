@@ -286,10 +286,10 @@ def read_temperature(sensor_id):
 
 
 def check_pressure():
-    """Prüft den Druckschalter (GPIO 17)."""
-    # HIGH bedeutet Durchgang (Schalter betätigt, normal), LOW bedeutet offen (Fehler)
-    pressure_ok = GPIO.input(PRESSURE_SENSOR_PIN) == GPIO.HIGH
-    logging.debug(f"Druckschalter-Status: {'Normal' if pressure_ok else 'Fehler (offen)'} (HIGH=Normal, LOW=Fehler)")
+    """Prüft den Druckschalter (GPIO 17) mit Pull-up und NO-Schalter."""
+    raw_value = GPIO.input(PRESSURE_SENSOR_PIN)
+    pressure_ok = raw_value == GPIO.LOW  # LOW = Druck OK, HIGH = Fehler
+    logging.info(f"Druckschalter: {raw_value} -> {'OK' if pressure_ok else 'Fehler'} (LOW=OK, HIGH=Fehler)")
     return pressure_ok
 
 
@@ -736,13 +736,13 @@ async def initialize_gpio():
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(GIO21_PIN, GPIO.OUT)
             GPIO.output(GIO21_PIN, GPIO.LOW)
-            GPIO.setup(PRESSURE_SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-            logging.info("GPIO erfolgreich initialisiert: Kompressor=GPIO21, Druckschalter=GPIO17")
+            GPIO.setup(PRESSURE_SENSOR_PIN, GPIO.IN)  # Externer Pull-up, kein interner Widerstand
+            logging.info("GPIO erfolgreich initialisiert: Kompressor=GPIO21, Druckschalter=GPIO17 (Pull-up)")
             return True
         except Exception as e:
             logging.error(f"GPIO-Initialisierung fehlgeschlagen (Versuch {attempt + 1}/{max_attempts}): {e}")
             if attempt < max_attempts - 1:
-                await asyncio.sleep(1)  # Warte asynchron 1 Sekunde vor dem nächsten Versuch
+                await asyncio.sleep(1)
     logging.critical("GPIO-Initialisierung nach mehreren Versuchen fehlgeschlagen.")
     return False
 
