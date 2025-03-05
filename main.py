@@ -566,7 +566,6 @@ def is_nighttime(config):
 
 
 def calculate_shutdown_point(config, is_night, solax_data):
-    """Berechnet den Ausschaltpunkt basierend auf Nachtzeit und Solax-Daten mit Hysterese."""
     global solar_ueberschuss_aktiv
     try:
         nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
@@ -574,15 +573,14 @@ def calculate_shutdown_point(config, is_night, solax_data):
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
-        # Solarüberschuss wird aktiviert, wenn die Bedingungen erfüllt sind
+        # Solarüberschuss aktivieren
         if bat_power > 600 or (soc > 95 and feedin_power > 600):
             solar_ueberschuss_aktiv = True
             logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
-
-        # Solarüberschuss wird deaktiviert, wenn die Leistung unter 0 fällt
-        elif bat_power < 0 or feedin_power < 0:
+        # Solarüberschuss deaktivieren mit Hysterese
+        elif bat_power < 50 and feedin_power < 50:
             solar_ueberschuss_aktiv = False
-            logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}")
+            logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
         # Ausschaltpunkt basierend auf dem Zustand setzen
         if solar_ueberschuss_aktiv:
@@ -594,6 +592,7 @@ def calculate_shutdown_point(config, is_night, solax_data):
         return shutdown_point
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler beim Berechnen des Ausschaltpunkts: {e}, Solax-Daten={solax_data}")
+        return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])  # Fallback-Wert
 
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
@@ -635,11 +634,10 @@ async def telegram_task(session):
                     str(current_runtime).split('.')[0],
                     str(total_runtime_today).split('.')[0]
                 )
-            await asyncio.sleep(0.1)  # Schnelles Polling für Telegram
+            await asyncio.sleep(0.1)  # Schnelles Polling für Telegram, solange es funktioniert
         except Exception as e:
             logging.error(f"Fehler in telegram_task: {e}", exc_info=True)
-            await asyncio.sleep(1)  # Warte länger bei Fehler, um Spam zu vermeiden
-
+            await asyncio.sleep(300)  # Warte 5 Minuten bei Fehler, bevor es erneut versucht wird
 
 # Asynchrone Task für Display-Updates
 async def display_task():
@@ -898,7 +896,7 @@ async def main_loop(session):
 
                 # Watchdog
                 cycle_duration = (datetime.datetime.now() - last_cycle_time).total_seconds()
-                if cycle_duration > 10:
+                if cycle_duration > 15:
                     watchdog_warning_count += 1
                     logging.error(
                         f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
