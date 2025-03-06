@@ -337,7 +337,7 @@ def check_boiler_sensors(t_oben, t_hinten, config):
         fehler = "Übertemperatur!"
         is_overtemp = True
         logging.error(f"Übertemperatur erkannt: oben={t_oben}, hinten={t_hinten}, Grenze={ausschaltpunkt + 10}")
-    elif abs(t_oben - t_hinten) > 40:
+    elif abs(t_oben - t_hinten) > 50:
         fehler = "Fühlerdifferenz!"
         logging.warning(f"Fühlerdifferenz erkannt: oben={t_oben}, hinten={t_hinten}, Differenz={abs(t_oben - t_hinten)}")
     return fehler, is_overtemp
