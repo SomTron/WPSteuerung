@@ -199,7 +199,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
     # Basisnachricht
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
-        f"Boiler vorne: {t_boiler_oben:.2f} °C\n"
+        f"Boiler oben: {t_boiler_oben:.2f} °C\n"
         f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
         f"Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
@@ -674,7 +674,7 @@ async def telegram_task(session):
             if updates:
                 last_update_id = await process_telegram_messages_async(
                     session,
-                    await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"]),
+                    await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"]),
                     await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"]),
                     await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"]),
                     updates,
@@ -1005,7 +1005,7 @@ async def run_program():
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
-                    "Zeitstempel,T_Vorne,T_Hinten,T_Boiler,T_Verd,Kompressor,"
+                    "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
                     "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2\n"
                 )
                 await csvfile.write(header)
