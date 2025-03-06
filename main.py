@@ -14,7 +14,7 @@ import aiofiles
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
 SENSOR_IDS = {
-    "vorne": "28-0bd6d4461d84",
+    "oben": "28-0bd6d4461d84",
     "hinten": "28-445bd44686f4",
     "verd": "28-213bd4460d65"
 }
@@ -185,13 +185,13 @@ def get_custom_keyboard():
 
 
 # Asynchrone Hilfsfunktionen für Telegram
-async def send_temperature_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd):
+async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd):
     """Sendet die aktuellen Temperaturen über Telegram."""
-    message = f"🌡️ Aktuelle Temperaturen:\nKessel vorne: {t_boiler_vorne:.2f} °C\nKessel hinten: {t_boiler_hinten:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
+    message = f"🌡️ Aktuelle Temperaturen:\nKessel oben: {t_boiler_oben:.2f} °C\nKessel hinten: {t_boiler_hinten:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
     return await send_telegram_message(session, CHAT_ID, message)
 
 
-async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
+async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """Sendet den aktuellen Status über Telegram."""
     global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config
@@ -199,7 +199,7 @@ async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd,
     # Basisnachricht
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
-        f"Boiler vorne: {t_boiler_vorne:.2f} °C\n"
+        f"Boiler vorne: {t_boiler_oben:.2f} °C\n"
         f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
         f"Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
@@ -321,7 +321,7 @@ def check_pressure():
     return pressure_ok
 
 
-def check_boiler_sensors(t_vorne, t_hinten, config):
+def check_boiler_sensors(t_oben, t_hinten, config):
     """Prüft die Boiler-Sensoren auf Fehler."""
     try:
         ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
@@ -330,17 +330,16 @@ def check_boiler_sensors(t_vorne, t_hinten, config):
         logging.warning(f"Ausschaltpunkt nicht gefunden, verwende Standard: {ausschaltpunkt}")
     fehler = None
     is_overtemp = False
-    if t_vorne is None or t_hinten is None:
+    if t_oben is None or t_hinten is None:
         fehler = "Fühlerfehler!"
-        logging.error(f"Fühlerfehler erkannt: vorne={t_vorne}, hinten={t_hinten}")
-    elif t_vorne >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10):
+        logging.error(f"Fühlerfehler erkannt: oben={t_oben}, hinten={t_hinten}")
+    elif t_oben >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10):
         fehler = "Übertemperatur!"
         is_overtemp = True
-        logging.error(f"Übertemperatur erkannt: vorne={t_vorne}, hinten={t_hinten}, Grenze={ausschaltpunkt + 10}")
-    elif abs(t_vorne - t_hinten) > 10:
+        logging.error(f"Übertemperatur erkannt: oben={t_oben}, hinten={t_hinten}, Grenze={ausschaltpunkt + 10}")
+    elif abs(t_oben - t_hinten) > 40:
         fehler = "Fühlerdifferenz!"
-        logging.warning(
-            f"Fühlerdifferenz erkannt: vorne={t_vorne}, hinten={t_hinten}, Differenz={abs(t_vorne - t_hinten)}")
+        logging.warning(f"Fühlerdifferenz erkannt: oben={t_oben}, hinten={t_hinten}, Differenz={abs(t_oben - t_hinten)}")
     return fehler, is_overtemp
 
 
@@ -701,26 +700,24 @@ async def display_task():
 
         try:
             # Seite 1: Temperaturen
-            t_boiler_vorne = await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"])
+            t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])  # vorher "vorne"
             t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
             t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
             t_boiler = (
-                t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
-            pressure_ok = await asyncio.to_thread(check_pressure)
-
+                               t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
             lcd.clear()
             if not pressure_ok:
                 lcd.write_string("FEHLER: Druck zu niedrig")
-                logging.error(f"Display zeigt Druckfehler: Druckschalter={pressure_ok}")
             else:
-                lcd.write_string(f"T-Vorne: {t_boiler_vorne if t_boiler_vorne is not None else 'Fehler':.2f} C")
+                lcd.write_string(
+                    f"T-Oben: {t_boiler_oben if t_boiler_oben is not None else 'Fehler':.2f} C")  # vorher "T-Vorne"
                 lcd.cursor_pos = (1, 0)
                 lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
                 lcd.cursor_pos = (2, 0)
                 lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
                 lcd.cursor_pos = (3, 0)
                 lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
-                logging.debug(f"Display-Seite 1 aktualisiert: vorne={t_boiler_vorne}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
+                logging.debug(f"Display-Seite 1 aktualisiert: vorne={t_boiler_oben}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
             await asyncio.sleep(5)
 
             # Seite 2: Kompressorstatus
@@ -860,11 +857,12 @@ async def main_loop(session):
                 await asyncio.to_thread(adjust_shutdown_and_start_points, solax_data, config)
 
                 # Temperaturen auslesen
-                t_boiler_vorne = await asyncio.to_thread(read_temperature, SENSOR_IDS["vorne"])
+                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])  # vorher "vorne"
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
-                                   t_boiler_vorne + t_boiler_hinten) / 2 if t_boiler_vorne is not None and t_boiler_hinten is not None else "Fehler"
+                                   t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
+
 
                 # Druckschalter prüfen
                 pressure_ok = await asyncio.to_thread(check_pressure)
@@ -899,7 +897,7 @@ async def main_loop(session):
                         last_pressure_error_time = None  # Zurücksetzen, wenn Sperre abgelaufen
 
                 # Boiler-Sensoren auf Fehler prüfen
-                fehler, is_overtemp = check_boiler_sensors(t_boiler_vorne, t_boiler_hinten, config)
+                fehler, is_overtemp = check_boiler_sensors(t_boiler_oben, t_boiler_hinten, config)
                 if fehler:
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     logging.info(f"Kompressor wegen Fehler ausgeschaltet: {fehler}")
@@ -941,7 +939,7 @@ async def main_loop(session):
 
                         csv_line = (
                             f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
-                            f"{t_boiler_vorne if t_boiler_vorne is not None else 'N/A'},"
+                            f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
                             f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
                             f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
                             f"{t_verd if t_verd is not None else 'N/A'},"
@@ -1011,7 +1009,7 @@ async def run_program():
             await shutdown(session)
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
-async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
     global AUSSCHALTPUNKT, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     global AUSSCHALTPUNKT, aktueller_einschaltpunkt
@@ -1023,13 +1021,13 @@ async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hint
                 message_text = message_text.strip().lower()
                 logging.debug(f"Telegram-Nachricht empfangen: Text={message_text}, Chat-ID={chat_id}")
                 if message_text == "🌡️ temperaturen" or message_text == "temperaturen":
-                    if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
-                        await send_temperature_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd)
+                    if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
+                        await send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd)
                     else:
                         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Temperaturen.")
                 elif message_text == "📊 status" or message_text == "status":
-                    if t_boiler_vorne != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
-                        await send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status,
+                    if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
+                        await send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status,
                                                    aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt,
                                                    aktueller_ausschaltpunkt)
                     else:
