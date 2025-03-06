@@ -926,8 +926,15 @@ async def main_loop(session):
 
                 # Datenlogging
                 now = datetime.datetime.now()
-                if last_log_time is None or (now - last_log_time) >= datetime.timedelta(
-                        minutes=1) or kompressor_ein != last_kompressor_status:
+                should_log = False
+
+                # Prüfe, ob eine Minute vergangen ist oder der Kompressorstatus sich geändert hat
+                if last_log_time is None or (now - last_log_time) >= datetime.timedelta(minutes=1):
+                    should_log = True
+                elif kompressor_ein != last_kompressor_status:
+                    should_log = True
+
+                if should_log:
                     async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
                         # PV-Daten aus solax_data extrahieren, mit Fallbacks für fehlende Werte
                         acpower = solax_data.get("acpower", "N/A")
@@ -954,6 +961,7 @@ async def main_loop(session):
                         await csvfile.write(csv_line)
                         logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
                     last_log_time = now
+                    last_kompressor_status = kompressor_ein  # Aktualisiere den letzten Status
 
                 # Watchdog
                 cycle_duration = (datetime.datetime.now() - last_cycle_time).total_seconds()
