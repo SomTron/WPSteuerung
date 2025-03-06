@@ -700,24 +700,26 @@ async def display_task():
 
         try:
             # Seite 1: Temperaturen
-            t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])  # vorher "vorne"
+            t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
             t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
             t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
             t_boiler = (
-                               t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
+                t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
+            pressure_ok = await asyncio.to_thread(check_pressure)  # Druckschalter hier prüfen
+
             lcd.clear()
             if not pressure_ok:
                 lcd.write_string("FEHLER: Druck zu niedrig")
+                logging.error(f"Display zeigt Druckfehler: Druckschalter={pressure_ok}")
             else:
-                lcd.write_string(
-                    f"T-Oben: {t_boiler_oben if t_boiler_oben is not None else 'Fehler':.2f} C")  # vorher "T-Vorne"
+                lcd.write_string(f"T-Oben: {t_boiler_oben if t_boiler_oben is not None else 'Fehler':.2f} C")
                 lcd.cursor_pos = (1, 0)
                 lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
                 lcd.cursor_pos = (2, 0)
                 lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
                 lcd.cursor_pos = (3, 0)
                 lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
-                logging.debug(f"Display-Seite 1 aktualisiert: vorne={t_boiler_oben}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
+                logging.debug(f"Display-Seite 1 aktualisiert: oben={t_boiler_oben}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
             await asyncio.sleep(5)
 
             # Seite 2: Kompressorstatus
