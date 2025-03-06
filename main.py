@@ -72,6 +72,7 @@ solar_ueberschuss_aktiv = False
 lcd = None
 last_pressure_error_time = None  # Zeitpunkt des letzten Druckfehlers
 PRESSURE_ERROR_DELAY = datetime.timedelta(minutes=5)  # 5 Minuten Verzögerung
+last_pressure_state = None
 
 
 # Logging einrichten
@@ -287,9 +288,15 @@ def read_temperature(sensor_id):
 
 def check_pressure():
     """Prüft den Druckschalter (GPIO 17) mit Pull-up und NO-Schalter."""
+    global last_pressure_state
     raw_value = GPIO.input(PRESSURE_SENSOR_PIN)
     pressure_ok = raw_value == GPIO.LOW  # LOW = Druck OK, HIGH = Fehler
-    logging.info(f"Druckschalter: {raw_value} -> {'OK' if pressure_ok else 'Fehler'} (LOW=OK, HIGH=Fehler)")
+
+    # Logging nur bei erstem Aufruf oder Änderung des Status
+    if last_pressure_state is None or last_pressure_state != pressure_ok:
+        logging.info(f"Druckschalter: {raw_value} -> {'OK' if pressure_ok else 'Fehler'} (LOW=OK, HIGH=Fehler)")
+        last_pressure_state = pressure_ok  # Aktualisiere den letzten Status
+
     return pressure_ok
 
 
