@@ -82,18 +82,52 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Funktion zur LCD-Initialisierung
+# Neuer Telegram-Handler für Logging
+class TelegramHandler(logging.Handler):
+    def __init__(self, bot_token, chat_id, session):
+        super().__init__()
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.session = session
+        self.setLevel(logging.WARNING)  # Nur Warnings und Errors senden
+
+    async def send_telegram(self, message):
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        data = {"chat_id": self.chat_id, "text": message}
+        try:
+            async with self.session.post(url, json=data) as response:
+                response.raise_for_status()
+        except aiohttp.ClientError as e:
+            print(f"Fehler beim Senden an Telegram: {e}")  # Fallback-Ausgabe
+
+    def emit(self, record):
+        # Formatiere die Nachricht wie im Log
+        msg = self.format(record)
+        # Da emit synchron ist, müssen wir die asynchrone Funktion in den Event-Loop einhängen
+        asyncio.create_task(self.send_telegram(msg))
+
+# Logging einrichten mit Telegram-Handler
+async def setup_logging(session):
+    logging.basicConfig(
+        filename="heizungssteuerung.log",
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+    telegram_handler = TelegramHandler(BOT_TOKEN, CHAT_ID, session)
+    telegram_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logging.getLogger().addHandler(telegram_handler)
+    logging.info("Logging mit Telegram-Handler initialisiert")
+
+# Funktion zur LCD-Initialisierung (angepasst)
 async def initialize_lcd(session):
     global lcd
     try:
         lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
-        lcd.clear()  # Display zurücksetzen
+        lcd.clear()
         logging.info("LCD erfolgreich initialisiert")
     except Exception as e:
-        error_msg = f"Fehler bei der LCD-Initialisierung: {e}"
-        logging.error(error_msg)
-        await send_telegram_message(session, CHAT_ID, error_msg)
-        lcd = None  # Setze lcd auf None, falls die Initialisierung fehlschlägt
+        logging.error(f"Fehler bei der LCD-Initialisierung: {e}")
+        lcd = None
 
 
 # Asynchrone Funktion zum Senden von Telegram-Nachrichten
@@ -274,9 +308,22 @@ async def shutdown(session):
     lcd.close()  # LCD schließen
     logging.info("Heizungssteuerung sicher beendet, Hardware in sicherem Zustand.")
 
+# Hauptprogrammstart
 async def run_program():
-    """Hauptfunktion zum Starten des Programms."""
     async with aiohttp.ClientSession() as session:
+        # Logging mit Telegram-Handler einrichten
+        await setup_logging(session)
+
+        # CSV-Header schreiben, falls die Datei noch nicht existiert
+        if not os.path.exists("heizungsdaten.csv"):
+            async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
+                header = (
+                    "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2\n"
+                )
+                await csvfile.write(header)
+                logging.info("CSV-Header geschrieben: " + header.strip())
+
         try:
             await main_loop(session)
         except KeyboardInterrupt:
