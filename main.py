@@ -191,9 +191,12 @@ async def send_temperature_telegram(session, t_boiler_vorne, t_boiler_hinten, t_
     return await send_telegram_message(session, CHAT_ID, message)
 
 
-async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
+async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
+                               gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """Sendet den aktuellen Status über Telegram."""
-    global ausschluss_grund, t_boiler  # Zugriff auf den aktuellen Boiler-Wert und Ausschlussgrund
+    global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config
+
+    # Basisnachricht
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
         f"Boiler vorne: {t_boiler_vorne:.2f} °C\n"
@@ -204,13 +207,31 @@ async def send_status_telegram(session, t_boiler_vorne, t_boiler_hinten, t_verd,
         f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
         f"🎯 Sollwerte:\n"
         f"Einschaltpunkt: {einschaltpunkt} °C\n"
-        f"Ausschaltpunkt: {ausschaltpunkt} °C"
+        f"Ausschaltpunkt: {ausschaltpunkt} °C\n"
     )
-    # Debug: Überprüfe den aktuellen Wert von ausschluss_grund
-    logging.debug(f"Statusabfrage - Kompressor aus: {not kompressor_status}, ausschluss_grund: {ausschluss_grund}")
-    # Zeige den Ausschlussgrund, wenn der Kompressor aus ist und ein Grund vorliegt
+
+    # Aktive Modi hinzufügen
+    active_modes = []
+    if is_nighttime(config):
+        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"])
+        active_modes.append(f"Nachtabsenkung ({nacht_reduction} °C)")
+    if urlaubsmodus_aktiv:
+        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
+        active_modes.append(f"Urlaubsmodus (-{urlaubsabsenkung} °C)")
+    if solar_ueberschuss_aktiv:
+        erhöhung = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - int(
+            config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
+        active_modes.append(f"PV-Überschuss (+{erhöhung} °C)")
+
+    if active_modes:
+        message += "\n🔄 Aktive Modi:\n- " + "\n- ".join(active_modes)
+    else:
+        message += "\n🔄 Aktive Modi: Keine"
+
+    # Ausschlussgrund, falls vorhanden
     if not kompressor_status and ausschluss_grund:
         message += f"\n\n⚠️ Kompressor ausgeschaltet wegen: {ausschluss_grund}"
+
     return await send_telegram_message(session, CHAT_ID, message)
 
 async def send_welcome_message(session, chat_id):
