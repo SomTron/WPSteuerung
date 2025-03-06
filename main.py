@@ -931,18 +931,31 @@ async def main_loop(session):
                 if last_log_time is None or (now - last_log_time) >= datetime.timedelta(
                         minutes=1) or kompressor_ein != last_kompressor_status:
                     async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
+                        # PV-Daten aus solax_data extrahieren, mit Fallbacks für fehlende Werte
+                        acpower = solax_data.get("acpower", "N/A")
+                        feedinpower = solax_data.get("feedinpower", "N/A")
+                        batPower = solax_data.get("batPower", "N/A")
+                        soc = solax_data.get("soc", "N/A")
+                        powerdc1 = solax_data.get("powerdc1", "N/A")
+                        powerdc2 = solax_data.get("powerdc2", "N/A")
+
                         csv_line = (
                             f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                             f"{t_boiler_vorne if t_boiler_vorne is not None else 'N/A'},"
                             f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
                             f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
                             f"{t_verd if t_verd is not None else 'N/A'},"
-                            f"{'EIN' if kompressor_ein else 'AUS'}\n"
+                            f"{'EIN' if kompressor_ein else 'AUS'},"
+                            f"{acpower},"
+                            f"{feedinpower},"
+                            f"{batPower},"
+                            f"{soc},"
+                            f"{powerdc1},"
+                            f"{powerdc2}\n"
                         )
                         await csvfile.write(csv_line)
                         logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
                     last_log_time = now
-                    last_kompressor_status = kompressor_ein
 
                 # Watchdog
                 cycle_duration = (datetime.datetime.now() - last_cycle_time).total_seconds()
@@ -980,13 +993,22 @@ async def shutdown(session):
 async def run_program():
     """Hauptfunktion zum Starten des Programms."""
     async with aiohttp.ClientSession() as session:
+        # CSV-Header schreiben, falls die Datei noch nicht existiert
+        if not os.path.exists("heizungsdaten.csv"):
+            async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
+                header = (
+                    "Zeitstempel,T_Vorne,T_Hinten,T_Boiler,T_Verd,Kompressor,"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2\n"
+                )
+                await csvfile.write(header)
+                logging.info("CSV-Header geschrieben: " + header.strip())
+
         try:
             await main_loop(session)
         except KeyboardInterrupt:
             logging.info("Programm durch Benutzer beendet.")
         finally:
             await shutdown(session)
-
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
 async def process_telegram_messages_async(session, t_boiler_vorne, t_boiler_hinten, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
