@@ -77,7 +77,7 @@ PRESSURE_ERROR_DELAY = datetime.timedelta(minutes=5)  # 5 Minuten Verzögerung
 # Logging einrichten
 logging.basicConfig(
     filename="heizungssteuerung.log",
-    level=logging.WARNING,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -428,6 +428,10 @@ async def reload_config(session):
         TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
         SN = config["SolaxCloud"]["SN"]
 
+        # Alte Sollwerte speichern
+        old_einschaltpunkt = aktueller_einschaltpunkt
+        old_ausschaltpunkt = aktueller_ausschaltpunkt
+
         # Berechne Sollwerte neu nach Konfigurationsänderung
         solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                                        "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
@@ -435,8 +439,19 @@ async def reload_config(session):
         aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_nighttime(config), solax_data)
         aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
 
+        # Logging bei Änderung der Sollwerte
+        if old_einschaltpunkt != aktueller_einschaltpunkt or old_ausschaltpunkt != aktueller_ausschaltpunkt:
+            logging.info(
+                f"Sollwerte durch Konfigurationsänderung angepasst: "
+                f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
+                f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
+            )
+
         logging.info(
-            f"Konfiguration neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, VERDAMPFERTEMPERATUR={VERDAMPFERTEMPERATUR}, Einschaltpunkt={aktueller_einschaltpunkt}, Ausschaltpunkt={aktueller_ausschaltpunkt}")
+            f"Konfiguration neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, "
+            f"VERDAMPFERTEMPERATUR={VERDAMPFERTEMPERATUR}, Einschaltpunkt={aktueller_einschaltpunkt}, "
+            f"Ausschaltpunkt={aktueller_ausschaltpunkt}"
+        )
         last_config_hash = current_hash
 
     except Exception as e:
@@ -462,6 +477,10 @@ def adjust_shutdown_and_start_points(solax_data, config):
     adjust_shutdown_and_start_points.last_night = is_night
     adjust_shutdown_and_start_points.last_config_hash = current_config_hash
 
+    # Alte Werte speichern, um Änderungen zu erkennen
+    old_ausschaltpunkt = aktueller_ausschaltpunkt
+    old_einschaltpunkt = aktueller_einschaltpunkt
+
     # Immer calculate_shutdown_point verwenden, auch im Urlaubsmodus
     aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
     aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
@@ -473,10 +492,13 @@ def adjust_shutdown_and_start_points(solax_data, config):
 
     if (aktueller_ausschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt or
         aktueller_einschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt):
-        logging.info(f"Sollwerte angepasst: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}, Solarüberschuss_aktiv={solar_ueberschuss_aktiv}")
+        logging.info(
+            f"Sollwerte angepasst: Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
+            f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}, "
+            f"Solarüberschuss_aktiv={solar_ueberschuss_aktiv}"
+        )
         adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = aktueller_ausschaltpunkt
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = aktueller_einschaltpunkt
-
 
 def calculate_file_hash(file_path):
     """Berechnet den SHA-256-Hash einer Datei."""
@@ -993,28 +1015,38 @@ async def aktivere_urlaubsmodus(session):
         original_einschaltpunkt = aktueller_einschaltpunkt
         original_ausschaltpunkt = aktueller_ausschaltpunkt
         urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
+        # Alte Werte speichern
+        old_einschaltpunkt = aktueller_einschaltpunkt
+        old_ausschaltpunkt = aktueller_ausschaltpunkt
         # Passe die Sollwerte an
         aktueller_ausschaltpunkt = AUSSCHALTPUNKT - urlaubsabsenkung
         aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
         logging.info(
-            f"Urlaubsmodus aktiviert. Alte Werte: Einschaltpunkt={original_einschaltpunkt}, Ausschaltpunkt={original_ausschaltpunkt}, Neue Werte: Einschaltpunkt={aktueller_einschaltpunkt}, Ausschaltpunkt={aktueller_ausschaltpunkt}")
+            f"Urlaubsmodus aktiviert. Sollwerte geändert: "
+            f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
+            f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
+        )
         await send_telegram_message(session, CHAT_ID,
                                     f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
 
-
 async def deaktivere_urlaubsmodus(session):
-    # Deaktiviert den Urlaubsmodus und stellt ursprüngliche Werte wieder her.
+    """Deaktiviert den Urlaubsmodus und stellt ursprüngliche Werte wieder her."""
     global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     if urlaubsmodus_aktiv:
         urlaubsmodus_aktiv = False
+        # Alte Werte speichern
+        old_einschaltpunkt = aktueller_einschaltpunkt
+        old_ausschaltpunkt = aktueller_ausschaltpunkt
         # Stelle die ursprünglichen Sollwerte wieder her
         aktueller_einschaltpunkt = original_einschaltpunkt
         aktueller_ausschaltpunkt = original_ausschaltpunkt
         logging.info(
-            f"Urlaubsmodus deaktiviert. Wiederhergestellte Werte: Einschaltpunkt={aktueller_einschaltpunkt}, Ausschaltpunkt={aktueller_ausschaltpunkt}")
+            f"Urlaubsmodus deaktiviert. Sollwerte wiederhergestellt: "
+            f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
+            f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
+        )
         await send_telegram_message(session, CHAT_ID,
                                     f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
-
 
 # Programmstart
 if __name__ == "__main__":
