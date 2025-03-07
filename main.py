@@ -319,7 +319,7 @@ async def run_program():
             async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
                 header = (
                     "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2\n"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy\n"
                 )
                 await csvfile.write(header)
                 logging.info("CSV-Header geschrieben: " + header.strip())
@@ -997,6 +997,7 @@ async def main_loop(session):
                         soc = solax_data.get("soc", "N/A")
                         powerdc1 = solax_data.get("powerdc1", "N/A")
                         powerdc2 = solax_data.get("powerdc2", "N/A")
+                        consumeenergy = solax_data.get("consumeenergy", "N/A")
 
                         csv_line = (
                             f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
@@ -1010,7 +1011,8 @@ async def main_loop(session):
                             f"{batPower},"
                             f"{soc},"
                             f"{powerdc1},"
-                            f"{powerdc2}\n"
+                            f"{powerdc2},"
+                            f"{consumeenergy}\n"
                         )
                         await csvfile.write(csv_line)
                         logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
@@ -1058,7 +1060,7 @@ async def run_program():
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
                     "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2\n"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy\n"
                 )
                 await csvfile.write(header)
                 logging.info("CSV-Header geschrieben: " + header.strip())
