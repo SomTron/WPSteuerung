@@ -192,7 +192,7 @@ import io
 
 
 async def get_boiler_temperature_history(session, hours):
-    """Erstellt und sendet ein Diagramm für den angegebenen Zeitraum (6h oder 24h)."""
+    """Erstellt und sendet ein Diagramm mit ca. 20 Temperaturwerten gleichmäßig über den angegebenen Zeitraum (6h oder 24h)."""
     try:
         # Listen für Temperaturdaten
         temp_oben = []
@@ -216,37 +216,46 @@ async def get_boiler_temperature_history(session, hours):
             await send_telegram_message(session, CHAT_ID, "Keine gültigen Temperaturdaten verfügbar.")
             return
 
+        # Zeitfenster definieren
         now = datetime.datetime.now()
         time_ago = now - datetime.timedelta(hours=hours)
+        target_points = 20  # Ziel: ca. 20 Datenpunkte
 
-        # Anzahl der Messpunkte anpassen
-        target_points = 60 if hours == 6 else 120  # 60 für 6h, 120 für 24h
-
-        # Filterfunktion für Zeitfenster und Sampling
-        def filter_data(data, start_time, duration_hours, target_points):
-            filtered = [(ts, val) for ts, val in data if ts >= start_time]
-            if not filtered:
-                return []
-            total_seconds = duration_hours * 3600
-            interval = max(1, total_seconds // target_points)  # Mindestens 1 Sekunde
-            result = []
-            last_added = None
-            for ts, val in filtered:
-                if last_added is None or (ts - last_added).total_seconds() >= interval:
-                    result.append((ts, val))
-                    last_added = ts
-            return result[:target_points]
-
-        # Daten filtern
-        filtered_oben = filter_data(temp_oben, time_ago, hours, target_points)
-        filtered_hinten = filter_data(temp_hinten, time_ago, hours, target_points)
+        # Filtere Daten für das gewählte Zeitfenster
+        filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
+        filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
 
         if not filtered_oben or not filtered_hinten:
             await send_telegram_message(session, CHAT_ID, f"Keine Daten für die letzten {hours}h verfügbar.")
             return
 
-        timestamps, t_oben_vals = zip(*filtered_oben[::-1])
-        _, t_hinten_vals = zip(*filtered_hinten[::-1])
+        # Berechne das Zielintervall basierend auf dem Zeitfenster und der Zielanzahl
+        total_seconds = hours * 3600  # Zeitfenster in Sekunden
+        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds  # Intervall zwischen Punkten
+
+        # Funktion zum gleichmäßigen Sampling von ca. 20 Punkten
+        def sample_data(data, interval, num_points):
+            if len(data) <= num_points:
+                return data[::-1]  # Weniger Daten als gewünscht, alle verwenden
+            sampled = []
+            last_added = None
+            for ts, val in data:
+                if last_added is None or (last_added - ts).total_seconds() >= interval:
+                    sampled.append((ts, val))
+                    last_added = ts
+                if len(sampled) >= num_points:
+                    break
+            return sampled[::-1]  # Umkehren, damit älteste zuerst
+
+        sampled_oben = sample_data(filtered_oben, target_interval, target_points)
+        sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
+
+        if not sampled_oben or not sampled_hinten:
+            await send_telegram_message(session, CHAT_ID, f"Keine ausreichenden Daten für die letzten {hours}h.")
+            return
+
+        timestamps, t_oben_vals = zip(*sampled_oben)
+        _, t_hinten_vals = zip(*sampled_hinten)
 
         # Diagramm erstellen
         plt.figure(figsize=(10, 5))
@@ -269,18 +278,19 @@ async def get_boiler_temperature_history(session, hours):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
-        form.add_field("caption", f"📈 Verlauf {hours}h (~{target_points} Punkte, T_Oben = blau, T_Hinten = rot)")
+        form.add_field("caption", f"📈 Verlauf {hours}h (~{len(sampled_oben)} Punkte, T_Oben = blau, T_Hinten = rot)")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
             response.raise_for_status()
-            logging.info(f"Temperaturdiagramm für {hours}h erfolgreich gesendet.")
+            logging.info(f"Temperaturdiagramm für {hours}h mit {len(sampled_oben)} Punkten erfolgreich gesendet.")
 
         buf.close()
 
     except Exception as e:
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
+
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
     """Ruft Daten von der Solax-API ab und cached sie."""
