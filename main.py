@@ -169,11 +169,10 @@ async def send_telegram_message(session, chat_id, message, reply_markup=None, pa
 
 # Asynchrone Funktion zum Abrufen von Telegram-Updates
 async def get_telegram_updates(session, offset=None):
-    """Ruft Updates von der Telegram-API ab."""
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-        params = {"offset": offset} if offset else {}
-        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+        params = {"offset": offset, "timeout": 20} if offset else {"timeout": 20}  # Long Polling mit 20 Sekunden
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=25)) as response:
             response.raise_for_status()
             updates = await response.json()
             logging.debug(f"Telegram-Updates empfangen: {updates}")
@@ -181,7 +180,6 @@ async def get_telegram_updates(session, offset=None):
     except aiohttp.ClientError as e:
         logging.error(f"Fehler bei der Telegram-API-Abfrage: {e}")
         return None
-
 
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
