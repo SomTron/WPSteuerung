@@ -93,18 +93,21 @@ class TelegramHandler(logging.Handler):
 
     async def send_telegram(self, message):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        data = {"chat_id": self.chat_id, "text": message}
+        data = {"chat_id": self.chat_id, "text": message[:4096]}  # Telegram-Nachrichtenlänge begrenzen
         try:
             async with self.session.post(url, json=data) as response:
                 response.raise_for_status()
+                logging.debug(f"Telegram-Nachricht gesendet: {message}")
         except aiohttp.ClientError as e:
-            print(f"Fehler beim Senden an Telegram: {e}")  # Fallback-Ausgabe
+            logging.error(f"Fehler beim Senden an Telegram: {e}, Nachricht: {message}")  # Ins Log schreiben
 
     def emit(self, record):
-        # Formatiere die Nachricht wie im Log
-        msg = self.format(record)
-        # Da emit synchron ist, müssen wir die asynchrone Funktion in den Event-Loop einhängen
-        asyncio.create_task(self.send_telegram(msg))
+        try:
+            msg = self.format(record)
+            task = asyncio.create_task(self.send_telegram(msg))
+            task.add_done_callback(lambda t: logging.debug(f"Telegram-Task abgeschlossen: {t.result()}"))
+        except Exception as e:
+            logging.error(f"Fehler in TelegramHandler.emit: {e}", exc_info=True)
 
 # Logging einrichten mit Telegram-Handler
 async def setup_logging(session):
@@ -114,9 +117,12 @@ async def setup_logging(session):
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
     telegram_handler = TelegramHandler(BOT_TOKEN, CHAT_ID, session)
+    telegram_handler.setLevel(logging.WARNING)
     telegram_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logging.getLogger().addHandler(telegram_handler)
     logging.info("Logging mit Telegram-Handler initialisiert")
+    # Testnachricht
+    logging.error("Test: Telegram-Handler initialisiert")  # Sollte per Telegram gesendet werden
 
 # Funktion zur LCD-Initialisierung (angepasst)
 async def initialize_lcd(session):
