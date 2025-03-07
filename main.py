@@ -181,6 +181,53 @@ async def get_telegram_updates(session, offset=None):
         logging.error(f"Fehler bei der Telegram-API-Abfrage: {e}")
         return None
 
+
+async def get_boiler_temperature_history(session):
+    """Liest die letzten 20 Temperaturen der Boilerfühler (oben und hinten) im 5-Minuten-Abstand aus der CSV-Datei."""
+    try:
+        temp_oben = []
+        temp_hinten = []
+        async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
+            lines = await csvfile.readlines()
+            # Überspringen des Headers und Umkehren der Reihenfolge (neueste zuerst)
+            lines = lines[1:][::-1]
+
+            # Zeitstempel und Temperaturen extrahieren
+            for line in lines:
+                parts = line.strip().split(',')
+                if len(parts) >= 5:  # Mindestens Zeitstempel, T_Oben, T_Hinten, T_Boiler, T_Verd
+                    timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
+                    if t_oben != "N/A" and t_oben != "Fehler" and t_hinten != "N/A" and t_hinten != "Fehler":
+                        timestamp = datetime.datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        temp_oben.append((timestamp, float(t_oben)))
+                        temp_hinten.append((timestamp, float(t_hinten)))
+
+            # Filtern auf 5-Minuten-Abstand (wir verwenden eine Liste für beide Fühler)
+            filtered_temps = []
+            last_time = None
+            for i in range(min(len(temp_oben), len(temp_hinten))):
+                timestamp, t_oben = temp_oben[i]
+                _, t_hinten = temp_hinten[i]
+                if last_time is None or (last_time - timestamp).total_seconds() >= 300:  # 300 Sekunden = 5 Minuten
+                    filtered_temps.append((timestamp, t_oben, t_hinten))
+                    last_time = timestamp
+                if len(filtered_temps) >= 20:
+                    break
+
+        if not filtered_temps:
+            return "Keine gültigen Temperaturdaten verfügbar."
+
+        # Nachricht formatieren
+        message = "📈 Boiler-Temperaturverlauf (letzte 20 Werte, ~5-Min-Abstand):\n\n"
+        message += "Zeitstempel | T_Oben | T_Hinten\n"
+        message += "-" * 40 + "\n"
+        for i, (timestamp, t_oben, t_hinten) in enumerate(filtered_temps[::-1], 1):  # Älteste zuerst
+            message += f"{timestamp.strftime('%d.%m.%Y %H:%M:%S')} | {t_oben:.2f} °C | {t_hinten:.2f} °C\n"
+        return message
+
+    except Exception as e:
+        logging.error(f"Fehler beim Auslesen des Temperaturverlaufs: {e}")
+        return f"Fehler beim Abrufen des Verlaufs: {str(e)}"
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
     """Ruft Daten von der Solax-API ab und cached sie."""
@@ -213,10 +260,9 @@ async def get_solax_data(session):
 def get_custom_keyboard():
     """Erstellt eine benutzerdefinierte Tastatur mit verfügbaren Befehlen."""
     keyboard = [
-        ["🌡️ Temperaturen"],
-        ["📊 Status"],
-        ["🌴 Urlaub"],
-        ["🏠 Urlaub aus"],
+        ["🌡️ Temperaturen", "📊 Status"],
+        ["📈 Verlauf"],  # Neuer Button
+        ["🌴 Urlaub", "🏠 Urlaub aus"],
         ["🆘 Hilfe"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -232,7 +278,7 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_v
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """Sendet den aktuellen Status über Telegram."""
-    global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config
+    global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
 
     # Basisnachricht
     message = (
@@ -241,7 +287,15 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
         f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
         f"Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
-        f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
+    )
+
+    # Laufzeit je nach Kompressorstatus anzeigen
+    if kompressor_status:
+        message += f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
+    else:
+        message += f"⏱️ Letzte Laufzeit: {str(last_runtime).split('.')[0]}\n"
+
+    message += (
         f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
         f"🎯 Sollwerte:\n"
         f"Einschaltpunkt: {einschaltpunkt} °C\n"
@@ -296,6 +350,7 @@ async def send_help_message(session):
         "🤖 Verfügbare Befehle:\n\n"
         "🌡️ *Temperaturen* – Sendet die aktuellen Temperaturen.\n"
         "📊 *Status* – Sendet den aktuellen Status.\n"
+        "📈 *Verlauf* – Zeigt die letzten 20 Temperaturen (oben und hinten) im 5-Minuten-Abstand.\n"
         "🌴 *Urlaub* – Aktiviert den Urlaubsmodus.\n"
         "🏠 *Urlaub aus* – Deaktiviert den Urlaubsmodus.\n"
         "🆘 *Hilfe* – Zeigt diese Nachricht an."
@@ -1123,6 +1178,9 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                         logging.info("Urlaubsmodus bereits deaktiviert, keine Änderung")
                     else:
                         await deaktivere_urlaubsmodus(session)
+                elif message_text == "📈 verlauf" or message_text == "verlauf":
+                    history_message = await get_boiler_temperature_history(session)
+                    await send_telegram_message(session, CHAT_ID, history_message)
                 else:
                     await send_unknown_command_message(session, chat_id)
             last_update_id = update['update_id'] + 1
