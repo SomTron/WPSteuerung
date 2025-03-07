@@ -219,7 +219,7 @@ async def get_boiler_temperature_history(session, hours):
         # Zeitfenster definieren
         now = datetime.datetime.now()
         time_ago = now - datetime.timedelta(hours=hours)
-        target_points = 20  # Ziel: ca. 20 Datenpunkte
+        target_points = 50  # Ziel: ca. 20 Datenpunkte
 
         # Filtere Daten für das gewählte Zeitfenster
         filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
