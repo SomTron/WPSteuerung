@@ -641,20 +641,25 @@ def validate_config(config):
 
 
 def is_nighttime(config):
-    """Prüft, ob es Nachtzeit ist."""
+    """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
     now = datetime.datetime.now()
     try:
         start_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "22:00")
         end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
         start_hour, start_minute = map(int, start_time_str.split(':'))
         end_hour, end_minute = map(int, end_time_str.split(':'))
-        start_time = datetime.datetime.combine(now.date(), datetime.time(start_hour, start_minute))
-        end_time = datetime.datetime.combine(now.date(), datetime.time(end_hour, end_minute))
-        if start_time > end_time:
-            end_time = datetime.datetime.combine(now.date() + datetime.timedelta(days=1),
-                                                 datetime.time(end_hour, end_minute))
-        is_night = start_time <= now <= end_time
-        logging.debug(f"Nachtzeitprüfung: Jetzt={now}, Start={start_time}, Ende={end_time}, Ist Nacht={is_night}")
+
+        # Aktuelle Zeit in Stunden und Minuten umrechnen
+        now_time = now.hour * 60 + now.minute
+        start_time_minutes = start_hour * 60 + start_minute
+        end_time_minutes = end_hour * 60 + end_minute
+
+        if start_time_minutes > end_time_minutes:  # Über Mitternacht
+            is_night = now_time >= start_time_minutes or now_time <= end_time_minutes
+        else:
+            is_night = start_time_minutes <= now_time <= end_time_minutes
+
+        logging.debug(f"Nachtzeitprüfung: Jetzt={now_time}, Start={start_time_minutes}, Ende={end_time_minutes}, Ist Nacht={is_night}")
         return is_night
     except Exception as e:
         logging.error(f"Fehler in is_nighttime: {e}")
