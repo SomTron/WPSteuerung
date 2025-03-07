@@ -275,6 +275,7 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_v
     return await send_telegram_message(session, CHAT_ID, message)
 
 
+
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     """Sendet den aktuellen Status über Telegram."""
