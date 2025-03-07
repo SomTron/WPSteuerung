@@ -171,8 +171,8 @@ async def send_telegram_message(session, chat_id, message, reply_markup=None, pa
 async def get_telegram_updates(session, offset=None):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-        params = {"offset": offset, "timeout": 20} if offset else {"timeout": 20}  # Long Polling mit 20 Sekunden
-        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=25)) as response:
+        params = {"offset": offset, "timeout": 20} if offset else {"timeout": 20}
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=35)) as response:
             response.raise_for_status()
             updates = await response.json()
             logging.debug(f"Telegram-Updates empfangen: {updates}")
@@ -723,26 +723,35 @@ def is_data_old(timestamp):
 # Asynchrone Task für Telegram-Updates
 async def telegram_task(session):
     """Separate Task für schnelle Telegram-Update-Verarbeitung."""
-    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, AUSSCHALTPUNKT, aktueller_einschaltpunkt
+    global last_update_id
+    max_retries = 3
     while True:
-        try:
-            updates = await get_telegram_updates(session, last_update_id)
-            if updates:
-                last_update_id = await process_telegram_messages_async(
-                    session,
-                    await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"]),
-                    await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"]),
-                    await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"]),
-                    updates,
-                    last_update_id,
-                    kompressor_ein,
-                    str(current_runtime).split('.')[0],
-                    str(total_runtime_today).split('.')[0]
-                )
-            await asyncio.sleep(0.1)  # Schnelles Polling für Telegram, solange es funktioniert
-        except Exception as e:
-            logging.error(f"Fehler in telegram_task: {e}", exc_info=True)
-            await asyncio.sleep(300)  # Warte 5 Minuten bei Fehler, bevor es erneut versucht wird
+        for attempt in range(max_retries):
+            try:
+                updates = await get_telegram_updates(session, last_update_id)
+                if updates is not None:
+                    last_update_id = await process_telegram_messages_async(
+                        session,
+                        await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"]),
+                        await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"]),
+                        await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"]),
+                        updates,
+                        last_update_id,
+                        kompressor_ein,
+                        str(current_runtime).split('.')[0],
+                        str(total_runtime_today).split('.')[0]
+                    )
+                    break  # Erfolgreich, Schleife verlassen
+                else:
+                    logging.warning(f"Telegram-Updates waren None, Versuch {attempt + 1}/{max_retries}")
+            except Exception as e:
+                logging.error(f"Fehler in telegram_task (Versuch {attempt + 1}/{max_retries}): {e}", exc_info=True)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(10)  # 10 Sekunden warten vor erneutem Versuch
+                else:
+                    logging.error("Maximale Wiederholungen erreicht, warte 5 Minuten")
+                    await asyncio.sleep(300)  # 5 Minuten warten nach Fehlschlag
+        await asyncio.sleep(0.1)  # Schnelles Polling bei Erfolg
 
 # Asynchrone Task für Display-Updates
 async def display_task():
