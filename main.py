@@ -678,7 +678,9 @@ def adjust_shutdown_and_start_points(solax_data, config):
     old_ausschaltpunkt = aktueller_ausschaltpunkt
     old_einschaltpunkt = aktueller_einschaltpunkt
 
-    aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
+    ausschaltpunkt, einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
+    aktueller_ausschaltpunkt = ausschaltpunkt
+    aktueller_einschaltpunkt = einschaltpunkt
 
     MIN_EINSCHALTPUNKT = 20
     if aktueller_einschaltpunkt < MIN_EINSCHALTPUNKT:
@@ -694,6 +696,7 @@ def adjust_shutdown_and_start_points(solax_data, config):
         )
         adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = aktueller_ausschaltpunkt
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = aktueller_einschaltpunkt
+
 def calculate_file_hash(file_path):
     """Berechnet den SHA-256-Hash einer Datei."""
     sha256_hash = hashlib.sha256()
@@ -787,7 +790,6 @@ def is_nighttime(config):
 
 
 def calculate_shutdown_point(config, is_night, solax_data):
-    global solar_ueberschuss_aktiv
     try:
         nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
         bat_power = solax_data.get("batPower", 0)
@@ -821,7 +823,6 @@ def calculate_shutdown_point(config, is_night, solax_data):
         logging.error(f"Fehler beim Berechnen der Sollwerte: {e}, Solax-Daten={solax_data}")
         default_ausschalt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
         return default_ausschalt, default_ausschalt - int(config["Heizungssteuerung"]["TEMP_OFFSET"])
-
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
                 min_difference=None):
