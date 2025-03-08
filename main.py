@@ -341,13 +341,12 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_v
     return await send_telegram_message(session, CHAT_ID, message)
 
 
-
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    """Sendet den aktuellen Status über Telegram."""
+    """Sendet den aktuellen Status über Telegram mit mehreren Einschalt- und Ausschaltpunkten."""
     global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
 
-    # Basisnachricht
+    # Basisnachricht mit Temperaturen
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
         f"Boiler oben: {t_boiler_oben:.2f} °C\n"
@@ -362,12 +361,30 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
     else:
         message += f"⏱️ Letzte Laufzeit: {str(last_runtime).split('.')[0]}\n"
 
-    message += (
-        f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
-        f"🎯 Sollwerte:\n"
-        f"Einschaltpunkt: {einschaltpunkt} °C\n"
-        f"Ausschaltpunkt: {ausschaltpunkt} °C\n"
-    )
+    message += f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
+
+    # Mehrere Sollwerte anzeigen
+    message += "🎯 Sollwerte:\n"
+
+    if solar_ueberschuss_aktiv:
+        # PV-Überschuss-Modus: Berücksichtigt obere und untere Grenzen
+        message += (
+            f"- Mit PV-Überschuss:\n"
+            f"  Einschaltpunkt (oben): {EINSCHALTPUNKT} °C\n"
+            f"  Ausschaltpunkt (oben): {AUSSCHALTPUNKT_ERHOEHT} °C\n"
+            f"  Min. untere Temp: {UNTERER_FUEHLER_MIN} °C\n"
+            f"  Max. untere Temp: {UNTERER_FUEHLER_MAX} °C\n"
+        )
+    else:
+        # Normalmodus: Nur obere Temperatur relevant
+        message += (
+            f"- Normalbetrieb:\n"
+            f"  Einschaltpunkt (oben): {einschaltpunkt} °C\n"
+            f"  Ausschaltpunkt (oben): {ausschaltpunkt} °C\n"
+        )
+
+    # Verdampfertemperatur-Sollwert
+    message += f"- Verdampfer Min: {VERDAMPFERTEMPERATUR} °C\n"
 
     # Aktive Modi hinzufügen
     active_modes = []
