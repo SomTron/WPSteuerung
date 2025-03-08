@@ -190,10 +190,6 @@ async def get_telegram_updates(session, offset=None):
         return None
 
 
-import matplotlib.pyplot as plt
-import io
-
-
 async def get_boiler_temperature_history(session, hours):
     """Erstellt und sendet ein Diagramm mit ca. 20 Temperaturwerten gleichmäßig über den angegebenen Zeitraum (6h oder 24h)."""
     try:
@@ -343,7 +339,7 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_v
 
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    """Sendet den aktuellen Status über Telegram mit mehreren Einschalt- und Ausschaltpunkten."""
+    """Sendet den aktuellen Status über Telegram mit korrekten Einschalt- und Ausschaltpunkten."""
     global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
 
     # Basisnachricht mit Temperaturen
@@ -367,7 +363,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
     message += "🎯 Sollwerte:\n"
 
     if solar_ueberschuss_aktiv:
-        # PV-Überschuss-Modus: Berücksichtigt obere und untere Grenzen
+        # PV-Überschuss-Modus
         message += (
             f"- Mit PV-Überschuss:\n"
             f"  Einschaltpunkt (oben): {EINSCHALTPUNKT} °C\n"
@@ -376,7 +372,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
             f"  Max. untere Temp: {UNTERER_FUEHLER_MAX} °C\n"
         )
     else:
-        # Normalmodus: Nur obere Temperatur relevant
+        # Normalmodus
         message += (
             f"- Normalbetrieb:\n"
             f"  Einschaltpunkt (oben): {einschaltpunkt} °C\n"
@@ -408,6 +404,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
     if not kompressor_status and ausschluss_grund:
         message += f"\n\n⚠️ Kompressor ausgeschaltet wegen: {ausschluss_grund}"
 
+    # Sicherstellen, dass die Nachricht gesendet wird
     return await send_telegram_message(session, CHAT_ID, message)
 
 async def send_welcome_message(session, chat_id):
@@ -589,7 +586,6 @@ def set_kompressor_status(ein, force_off=False):
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session):
-    """Lädt die Konfigurationsdatei asynchron neu und aktualisiert globale Variablen."""
     global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, TEMP_OFFSET, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
 
     config_file = "config.ini"
@@ -608,18 +604,18 @@ async def reload_config(session):
         if not urlaubsmodus_aktiv:
             AUSSCHALTPUNKT = check_value(
                 int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
-                min_value=30, max_value=80, default_value=50,
+                min_value=30, max_value=80, default_value=45,
                 parameter_name="AUSSCHALTPUNKT"
             )
             AUSSCHALTPUNKT_ERHOEHT = check_value(
                 int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
-                min_value=35, max_value=85, default_value=55,
+                min_value=35, max_value=85, default_value=52,
                 parameter_name="AUSSCHALTPUNKT_ERHOEHT",
                 other_value=AUSSCHALTPUNKT, comparison=">="
             )
             TEMP_OFFSET = check_value(
                 int(config["Heizungssteuerung"]["TEMP_OFFSET"]),
-                min_value=3, max_value=20, default_value=10,
+                min_value=3, max_value=20, default_value=3,
                 parameter_name="TEMP_OFFSET"
             )
             VERDAMPFERTEMPERATUR = check_value(
@@ -650,20 +646,12 @@ async def reload_config(session):
         old_einschaltpunkt = aktueller_einschaltpunkt
         old_ausschaltpunkt = aktueller_ausschaltpunkt
 
-        # Berechne Sollwerte neu nach Konfigurationsänderung
+        # Berechne Sollwerte neu
         solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                                        "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
                                                        "api_fehler": True}
-        # Entpacke das Tupel von calculate_shutdown_point
-        aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_nighttime(config), solax_data)
-
-        # Logging bei Änderung der Sollwerte
-        if old_einschaltpunkt != aktueller_einschaltpunkt or old_ausschaltpunkt != aktueller_ausschaltpunkt:
-            logging.info(
-                f"Sollwerte durch Konfigurationsänderung angepasst: "
-                f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
-                f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
-            )
+        aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_nighttime(config),
+                                                                                      solax_data)
 
         logging.info(
             f"Konfiguration neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, "
@@ -810,14 +798,14 @@ def is_nighttime(config):
 
 
 def calculate_shutdown_point(config, is_night, solax_data):
-    global solar_ueberschuss_aktiv
     try:
-        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
+        # Nachtabsenkung nur anwenden, wenn explizit definiert und Nachtzeit ist
+        nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
         bat_power = solax_data.get("batPower", 0)
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
-        # Solarüberschuss aktivieren
+        # Solarüberschuss-Logik
         if bat_power > 600 or (soc > 95 and feedin_power > 600):
             solar_ueberschuss_aktiv = True
             logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
@@ -825,12 +813,19 @@ def calculate_shutdown_point(config, is_night, solax_data):
             solar_ueberschuss_aktiv = False
             logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
+        # Sollwerte basierend auf Modus
         if solar_ueberschuss_aktiv:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction  # 52 °C
-            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])  # 42 °C, könnte dynamisch sein
+            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction  # z.B. 52 °C
+            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction  # z.B. 42 °C
         else:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction  # 45 °C
-            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])  # 42 °C
+            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction  # z.B. 45 °C
+            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction  # z.B. 42 °C
+
+        # Sicherstellen, dass Einschaltpunkt < Ausschaltpunkt
+        if einschaltpunkt >= ausschaltpunkt:
+            logging.error(f"Logikfehler: Einschaltpunkt ({einschaltpunkt}) >= Ausschaltpunkt ({ausschaltpunkt})")
+            # Fallback: Setze Ausschaltpunkt auf Einschaltpunkt + TEMP_OFFSET
+            ausschaltpunkt = einschaltpunkt + int(config["Heizungssteuerung"]["TEMP_OFFSET"])
 
         logging.debug(f"Sollwerte berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, "
                       f"Nachtreduktion={nacht_reduction}, Ausschaltpunkt={ausschaltpunkt}, "
