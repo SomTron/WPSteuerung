@@ -658,7 +658,7 @@ async def reload_config(session):
 
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
 def adjust_shutdown_and_start_points(solax_data, config):
-    global aktueller_ausschaltpunkt, aktueller_einschaltpunkt, AUSSCHALTPUNKT, TEMP_OFFSET
+    global aktueller_ausschaltpunkt, aktueller_einschaltpunkt, solar_ueberschuss_aktiv
     if not hasattr(adjust_shutdown_and_start_points, "last_night"):
         adjust_shutdown_and_start_points.last_night = None
         adjust_shutdown_and_start_points.last_config_hash = None
@@ -675,13 +675,10 @@ def adjust_shutdown_and_start_points(solax_data, config):
     adjust_shutdown_and_start_points.last_night = is_night
     adjust_shutdown_and_start_points.last_config_hash = current_config_hash
 
-    # Alte Werte speichern, um Änderungen zu erkennen
     old_ausschaltpunkt = aktueller_ausschaltpunkt
     old_einschaltpunkt = aktueller_einschaltpunkt
 
-    # Immer calculate_shutdown_point verwenden, auch im Urlaubsmodus
-    aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
-    aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
+    aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
 
     MIN_EINSCHALTPUNKT = 20
     if aktueller_einschaltpunkt < MIN_EINSCHALTPUNKT:
@@ -697,7 +694,6 @@ def adjust_shutdown_and_start_points(solax_data, config):
         )
         adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = aktueller_ausschaltpunkt
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = aktueller_einschaltpunkt
-
 def calculate_file_hash(file_path):
     """Berechnet den SHA-256-Hash einer Datei."""
     sha256_hash = hashlib.sha256()
@@ -797,6 +793,7 @@ def calculate_shutdown_point(config, is_night, solax_data):
         bat_power = solax_data.get("batPower", 0)
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
+        temp_offset = int(config["Heizungssteuerung"]["TEMP_OFFSET"])
 
         # Solarüberschuss aktivieren
         if bat_power > 600 or (soc > 95 and feedin_power > 600):
@@ -809,15 +806,21 @@ def calculate_shutdown_point(config, is_night, solax_data):
 
         # Ausschaltpunkt basierend auf dem Zustand setzen
         if solar_ueberschuss_aktiv:
-            shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
+            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
         else:
-            shutdown_point = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
+            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
 
-        logging.debug(f"Ausschaltpunkt berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, Nachtreduktion={nacht_reduction}, Ergebnis={shutdown_point}")
-        return shutdown_point
+        # Einschaltpunkt relativ zum Ausschaltpunkt berechnen
+        einschaltpunkt = ausschaltpunkt - temp_offset
+
+        logging.debug(f"Sollwerte berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, "
+                      f"Nachtreduktion={nacht_reduction}, Ausschaltpunkt={ausschaltpunkt}, "
+                      f"Einschaltpunkt={einschaltpunkt}")
+        return ausschaltpunkt, einschaltpunkt
     except (KeyError, ValueError) as e:
-        logging.error(f"Fehler beim Berechnen des Ausschaltpunkts: {e}, Solax-Daten={solax_data}")
-        return int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])  # Fallback-Wert
+        logging.error(f"Fehler beim Berechnen der Sollwerte: {e}, Solax-Daten={solax_data}")
+        default_ausschalt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
+        return default_ausschalt, default_ausschalt - int(config["Heizungssteuerung"]["TEMP_OFFSET"])
 
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
@@ -1044,12 +1047,11 @@ async def main_loop(session):
                 await asyncio.to_thread(adjust_shutdown_and_start_points, solax_data, config)
 
                 # Temperaturen auslesen
-                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])  # vorher "vorne"
+                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
-                                   t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
-
+                                   t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten
 
                 # Druckschalter prüfen
                 pressure_ok = await asyncio.to_thread(check_pressure)
