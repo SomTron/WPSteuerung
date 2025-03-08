@@ -40,12 +40,15 @@ config.read("config.ini")
 # Globale Variablen initialisieren
 BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
 CHAT_ID = config["Telegram"]["CHAT_ID"]
-AUSSCHALTPUNKT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"])
-TEMP_OFFSET = int(config["Heizungssteuerung"]["TEMP_OFFSET"])
+AUSSCHALTPUNKT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
+AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 52))
+EINSCHALTPUNKT = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
+TEMP_OFFSET = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
 VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
 MIN_LAUFZEIT = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))
 MIN_PAUSE = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
+UNTERER_FUEHLER_MIN = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 45))
+UNTERER_FUEHLER_MAX = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MAX", 50))
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
 
@@ -599,7 +602,7 @@ async def reload_config(session):
             )
             TEMP_OFFSET = check_value(
                 int(config["Heizungssteuerung"]["TEMP_OFFSET"]),
-                min_value=5, max_value=20, default_value=10,
+                min_value=3, max_value=20, default_value=10,
                 parameter_name="TEMP_OFFSET"
             )
             VERDAMPFERTEMPERATUR = check_value(
@@ -634,8 +637,8 @@ async def reload_config(session):
         solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                                        "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
                                                        "api_fehler": True}
-        aktueller_ausschaltpunkt = calculate_shutdown_point(config, is_nighttime(config), solax_data)
-        aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
+        # Entpacke das Tupel von calculate_shutdown_point
+        aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_nighttime(config), solax_data)
 
         # Logging bei Änderung der Sollwerte
         if old_einschaltpunkt != aktueller_einschaltpunkt or old_ausschaltpunkt != aktueller_ausschaltpunkt:
@@ -790,30 +793,27 @@ def is_nighttime(config):
 
 
 def calculate_shutdown_point(config, is_night, solax_data):
+    global solar_ueberschuss_aktiv
     try:
         nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"]) if is_night else 0
         bat_power = solax_data.get("batPower", 0)
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
-        temp_offset = int(config["Heizungssteuerung"]["TEMP_OFFSET"])
 
         # Solarüberschuss aktivieren
         if bat_power > 600 or (soc > 95 and feedin_power > 600):
             solar_ueberschuss_aktiv = True
             logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
-        # Solarüberschuss deaktivieren mit Hysterese
         elif bat_power < 50 and feedin_power < 50:
             solar_ueberschuss_aktiv = False
             logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
-        # Ausschaltpunkt basierend auf dem Zustand setzen
         if solar_ueberschuss_aktiv:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
+            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction  # 52 °C
+            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])  # 42 °C, könnte dynamisch sein
         else:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
-
-        # Einschaltpunkt relativ zum Ausschaltpunkt berechnen
-        einschaltpunkt = ausschaltpunkt - temp_offset
+            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction  # 45 °C
+            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"])  # 42 °C
 
         logging.debug(f"Sollwerte berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, "
                       f"Nachtreduktion={nacht_reduction}, Ausschaltpunkt={ausschaltpunkt}, "
@@ -821,8 +821,7 @@ def calculate_shutdown_point(config, is_night, solax_data):
         return ausschaltpunkt, einschaltpunkt
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler beim Berechnen der Sollwerte: {e}, Solax-Daten={solax_data}")
-        default_ausschalt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-        return default_ausschalt, default_ausschalt - int(config["Heizungssteuerung"]["TEMP_OFFSET"])
+        return 45, 42  # Fallback-Werte
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
                 min_difference=None):
@@ -1087,33 +1086,66 @@ async def main_loop(session):
                         pressure_error_sent = False
                         last_pressure_error_time = None  # Zurücksetzen, wenn Sperre abgelaufen
 
-                # Boiler-Sensoren auf Fehler prüfen
-                fehler, is_overtemp = check_boiler_sensors(t_boiler_oben, t_boiler_hinten, config)
-                if fehler:
-                    await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                    logging.info(f"Kompressor wegen Fehler ausgeschaltet: {fehler}")
-                    continue
+                        # Boiler-Sensoren auf Fehler prüfen
+                        fehler, is_overtemp = check_boiler_sensors(t_boiler_oben, t_boiler_hinten, config)
+                        if fehler:
+                            await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                            logging.info(f"Kompressor wegen Fehler ausgeschaltet: {fehler}")
+                            continue
 
-                # Kompressorsteuerung
-                if last_pressure_error_time and (now - last_pressure_error_time) < PRESSURE_ERROR_DELAY:
-                    # Kompressor bleibt aus, wenn die 5-Minuten-Sperre aktiv ist
-                    if kompressor_ein:
-                        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                    remaining_time = (PRESSURE_ERROR_DELAY - (now - last_pressure_error_time)).total_seconds()
-                    ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
-                    logging.debug(f"Kompressor gesperrt wegen Druckfehler, verbleibende Zeit: {remaining_time:.0f}s")
-                elif t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
-                    if kompressor_ein:
-                        await asyncio.to_thread(set_kompressor_status, False)
-                    ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
-                elif t_boiler != "Fehler":
-                    if t_boiler < aktueller_einschaltpunkt and not kompressor_ein:
-                        await asyncio.to_thread(set_kompressor_status, True)
-                    elif t_boiler >= aktueller_ausschaltpunkt and kompressor_ein:
-                        await asyncio.to_thread(set_kompressor_status, False)
+                        # Kompressorsteuerung
+                        if last_pressure_error_time and (now - last_pressure_error_time) < PRESSURE_ERROR_DELAY:
+                            # Kompressor bleibt aus, wenn die 5-Minuten-Sperre aktiv ist
+                            if kompressor_ein:
+                                await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                            remaining_time = (PRESSURE_ERROR_DELAY - (now - last_pressure_error_time)).total_seconds()
+                            ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
+                            logging.debug(
+                                f"Kompressor gesperrt wegen Druckfehler, verbleibende Zeit: {remaining_time:.0f}s")
+                        elif t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
+                            if kompressor_ein:
+                                await asyncio.to_thread(set_kompressor_status, False)
+                            ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
+                        elif t_boiler_oben is not None and t_boiler_hinten is not None:
+                            # PV-Überschuss prüfen
+                            bat_power = solax_data.get("batPower", 0)
+                            feedin_power = solax_data.get("feedinpower", 0)
+                            soc = solax_data.get("soc", 0)
 
-                if kompressor_ein and start_time:
-                    current_runtime = datetime.datetime.now() - start_time
+                            if bat_power > 600 or (soc > 95 and feedin_power > 600):
+                                solar_ueberschuss_aktiv = True
+                            elif bat_power < 50 and feedin_power < 50:
+                                solar_ueberschuss_aktiv = False
+
+                            if solar_ueberschuss_aktiv:
+                                # Mit PV-Überschuss: Heizen bis obere Temp = 52°C oder untere Temp ≥ 50°C
+                                if t_boiler_hinten < UNTERER_FUEHLER_MIN and t_boiler_oben < AUSSCHALTPUNKT_ERHOEHT:
+                                    if not kompressor_ein:
+                                        await asyncio.to_thread(set_kompressor_status, True)
+                                    logging.debug(
+                                        f"PV-Überschuss: Heizen, da T_Hinten={t_boiler_hinten} < {UNTERER_FUEHLER_MIN}")
+                                elif t_boiler_oben >= AUSSCHALTPUNKT_ERHOEHT or t_boiler_hinten >= UNTERER_FUEHLER_MAX:
+                                    if kompressor_ein:
+                                        await asyncio.to_thread(set_kompressor_status, False)
+                                    logging.debug(
+                                        f"PV-Überschuss: Ausschalten, da T_Oben={t_boiler_oben} ≥ {AUSSCHALTPUNKT_ERHOEHT} oder T_Hinten={t_boiler_hinten} ≥ {UNTERER_FUEHLER_MAX}")
+                                aktueller_ausschaltpunkt = AUSSCHALTPUNKT_ERHOEHT
+                                aktueller_einschaltpunkt = EINSCHALTPUNKT  # Kann bei Bedarf angepasst werden
+                            else:
+                                # Ohne PV-Überschuss: Heizen, wenn T_Oben < 42°C, Ausschalten bei 45°C
+                                if t_boiler_oben < EINSCHALTPUNKT and not kompressor_ein:
+                                    await asyncio.to_thread(set_kompressor_status, True)
+                                    logging.debug(
+                                        f"Kein PV-Überschuss: Einschalten, da T_Oben={t_boiler_oben} < {EINSCHALTPUNKT}")
+                                elif t_boiler_oben >= AUSSCHALTPUNKT and kompressor_ein:
+                                    await asyncio.to_thread(set_kompressor_status, False)
+                                    logging.debug(
+                                        f"Kein PV-Überschuss: Ausschalten, da T_Oben={t_boiler_oben} ≥ {AUSSCHALTPUNKT}")
+                                aktueller_ausschaltpunkt = AUSSCHALTPUNKT
+                                aktueller_einschaltpunkt = EINSCHALTPUNKT
+
+                        if kompressor_ein and start_time:
+                            current_runtime = datetime.datetime.now() - start_time
 
                 # Datenlogging
                 now = datetime.datetime.now()
