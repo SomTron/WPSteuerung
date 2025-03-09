@@ -199,6 +199,7 @@ async def get_boiler_temperature_history(session, hours):
         temp_hinten = []
         einschaltpunkte = []
         ausschaltpunkte = []
+        solar_ueberschuss_ever_active = False  # Prüft, ob PV-Modus im Zeitraum aktiv war
 
         # CSV-Datei asynchron lesen
         async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
@@ -209,13 +210,16 @@ async def get_boiler_temperature_history(session, hours):
                 parts = line.strip().split(',')
                 if len(parts) >= 17:  # Anpassung an neues Format
                     timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
-                    einschaltpunkt, ausschaltpunkt = parts[13], parts[14]
+                    einschaltpunkt, ausschaltpunkt, solar_ueberschuss = parts[13], parts[14], parts[15]
                     if all(x not in ("N/A", "Fehler") for x in (t_oben, t_hinten, einschaltpunkt, ausschaltpunkt)):
                         timestamp = datetime.datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                         temp_oben.append((timestamp, float(t_oben)))
                         temp_hinten.append((timestamp, float(t_hinten)))
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
+                        # Prüfe, ob PV-Modus aktiv war
+                        if int(solar_ueberschuss) == 1:
+                            solar_ueberschuss_ever_active = True
 
         # Zeitfenster definieren (immer gesamter Zeitraum, auch ohne Daten)
         now = datetime.datetime.now()
@@ -268,9 +272,10 @@ async def get_boiler_temperature_history(session, hours):
             timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
             plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--', color="orange")
 
-        # Fixe Grenzwerte immer anzeigen
-        plt.axhline(y=UNTERER_FUEHLER_MIN, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
-        plt.axhline(y=UNTERER_FUEHLER_MAX, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+        # Zeige Min/Max untere Temperatur nur bei aktiviertem PV-Modus
+        if solar_ueberschuss_ever_active:
+            plt.axhline(y=UNTERER_FUEHLER_MIN, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
+            plt.axhline(y=UNTERER_FUEHLER_MAX, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
 
         # Zeitachse auf gesamten Zeitraum setzen
         plt.xlim(time_ago, now)
