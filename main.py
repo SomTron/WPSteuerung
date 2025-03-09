@@ -217,27 +217,23 @@ async def get_boiler_temperature_history(session, hours):
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
 
-        if not temp_oben or not temp_hinten:
-            await send_telegram_message(session, CHAT_ID, "Keine gültigen Temperaturdaten verfügbar.")
-            return
-
-        # Zeitfenster definieren
+        # Zeitfenster definieren (immer gesamter Zeitraum, auch ohne Daten)
         now = datetime.datetime.now()
         time_ago = now - datetime.timedelta(hours=hours)
         target_points = 50
+        total_seconds = hours * 3600
+        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds
 
-        # Filtere Daten
+        # Filtere Daten, aber behalte leere Listen möglich
         filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
         filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
         filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
         filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
 
-        if not filtered_oben or not filtered_hinten:
-            await send_telegram_message(session, CHAT_ID, f"Keine Daten für die letzten {hours}h verfügbar.")
-            return
-
-        # Sampling-Funktion
+        # Sampling-Funktion (funktioniert auch mit leeren Listen)
         def sample_data(data, interval, num_points):
+            if not data:
+                return []  # Leere Liste bei keinen Daten
             if len(data) <= num_points:
                 return data[::-1]
             sampled = []
@@ -250,36 +246,39 @@ async def get_boiler_temperature_history(session, hours):
                     break
             return sampled[::-1]
 
-        total_seconds = hours * 3600
-        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds
-
         sampled_oben = sample_data(filtered_oben, target_interval, target_points)
         sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
         sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
         sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
 
-        if not sampled_oben or not sampled_hinten:
-            await send_telegram_message(session, CHAT_ID, f"Keine ausreichenden Daten für die letzten {hours}h.")
-            return
-
-        timestamps_oben, t_oben_vals = zip(*sampled_oben)
-        timestamps_hinten, t_hinten_vals = zip(*sampled_hinten)
-        timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
-        timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
-
-        # Diagramm erstellen
+        # Diagramm erstellen, auch wenn keine Daten vorhanden sind
         plt.figure(figsize=(12, 6))
-        plt.plot(timestamps_oben, t_oben_vals, label="T_Oben", marker="o", color="blue")
-        plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
-        plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--', color="green")
-        plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--', color="orange")
+
+        # Plot nur, wenn Daten vorhanden sind (Lücken bei fehlenden Werten)
+        if sampled_oben:
+            timestamps_oben, t_oben_vals = zip(*sampled_oben)
+            plt.plot(timestamps_oben, t_oben_vals, label="T_Oben", marker="o", color="blue")
+        if sampled_hinten:
+            timestamps_hinten, t_hinten_vals = zip(*sampled_hinten)
+            plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
+        if sampled_einschalt:
+            timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
+            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--', color="green")
+        if sampled_ausschalt:
+            timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
+            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--', color="orange")
+
+        # Fixe Grenzwerte immer anzeigen
         plt.axhline(y=UNTERER_FUEHLER_MIN, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
         plt.axhline(y=UNTERER_FUEHLER_MAX, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+
+        # Zeitachse auf gesamten Zeitraum setzen
+        plt.xlim(time_ago, now)
 
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
         plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
-        plt.legend()
+        plt.legend(loc="lower left")  # Legende links unten
         plt.grid(True)
         plt.xticks(rotation=45)
         plt.tight_layout()
