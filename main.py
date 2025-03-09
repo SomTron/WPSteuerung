@@ -191,11 +191,14 @@ async def get_telegram_updates(session, offset=None):
 
 
 async def get_boiler_temperature_history(session, hours):
-    """Erstellt und sendet ein Diagramm mit ca. 20 Temperaturwerten gleichmäßig über den angegebenen Zeitraum (6h oder 24h)."""
+    """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten und Grenzwerten."""
+    global UNTERER_FUEHLER_MIN, UNTERER_FUEHLER_MAX
     try:
-        # Listen für Temperaturdaten
+        # Listen für Daten
         temp_oben = []
         temp_hinten = []
+        einschaltpunkte = []
+        ausschaltpunkte = []
 
         # CSV-Datei asynchron lesen
         async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
@@ -204,12 +207,15 @@ async def get_boiler_temperature_history(session, hours):
 
             for line in lines:
                 parts = line.strip().split(',')
-                if len(parts) >= 5:
+                if len(parts) >= 17:  # Anpassung an neues Format
                     timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
-                    if t_oben not in ("N/A", "Fehler") and t_hinten not in ("N/A", "Fehler"):
+                    einschaltpunkt, ausschaltpunkt = parts[13], parts[14]
+                    if all(x not in ("N/A", "Fehler") for x in (t_oben, t_hinten, einschaltpunkt, ausschaltpunkt)):
                         timestamp = datetime.datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                         temp_oben.append((timestamp, float(t_oben)))
                         temp_hinten.append((timestamp, float(t_hinten)))
+                        einschaltpunkte.append((timestamp, float(einschaltpunkt)))
+                        ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
 
         if not temp_oben or not temp_hinten:
             await send_telegram_message(session, CHAT_ID, "Keine gültigen Temperaturdaten verfügbar.")
@@ -218,24 +224,22 @@ async def get_boiler_temperature_history(session, hours):
         # Zeitfenster definieren
         now = datetime.datetime.now()
         time_ago = now - datetime.timedelta(hours=hours)
-        target_points = 50  # Ziel: ca. 20 Datenpunkte
+        target_points = 50
 
-        # Filtere Daten für das gewählte Zeitfenster
+        # Filtere Daten
         filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
         filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
+        filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
+        filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
 
         if not filtered_oben or not filtered_hinten:
             await send_telegram_message(session, CHAT_ID, f"Keine Daten für die letzten {hours}h verfügbar.")
             return
 
-        # Berechne das Zielintervall basierend auf dem Zeitfenster und der Zielanzahl
-        total_seconds = hours * 3600  # Zeitfenster in Sekunden
-        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds  # Intervall zwischen Punkten
-
-        # Funktion zum gleichmäßigen Sampling von ca. 20 Punkten
+        # Sampling-Funktion
         def sample_data(data, interval, num_points):
             if len(data) <= num_points:
-                return data[::-1]  # Weniger Daten als gewünscht, alle verwenden
+                return data[::-1]
             sampled = []
             last_added = None
             for ts, val in data:
@@ -244,22 +248,34 @@ async def get_boiler_temperature_history(session, hours):
                     last_added = ts
                 if len(sampled) >= num_points:
                     break
-            return sampled[::-1]  # Umkehren, damit älteste zuerst
+            return sampled[::-1]
+
+        total_seconds = hours * 3600
+        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds
 
         sampled_oben = sample_data(filtered_oben, target_interval, target_points)
         sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
+        sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
+        sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
 
         if not sampled_oben or not sampled_hinten:
             await send_telegram_message(session, CHAT_ID, f"Keine ausreichenden Daten für die letzten {hours}h.")
             return
 
-        timestamps, t_oben_vals = zip(*sampled_oben)
-        _, t_hinten_vals = zip(*sampled_hinten)
+        timestamps_oben, t_oben_vals = zip(*sampled_oben)
+        timestamps_hinten, t_hinten_vals = zip(*sampled_hinten)
+        timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
+        timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
 
         # Diagramm erstellen
-        plt.figure(figsize=(10, 5))
-        plt.plot(timestamps, t_oben_vals, label="T_Oben", marker="o", color="blue")
-        plt.plot(timestamps, t_hinten_vals, label="T_Hinten", marker="x", color="red")
+        plt.figure(figsize=(12, 6))
+        plt.plot(timestamps_oben, t_oben_vals, label="T_Oben", marker="o", color="blue")
+        plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
+        plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--', color="green")
+        plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--', color="orange")
+        plt.axhline(y=UNTERER_FUEHLER_MIN, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
+        plt.axhline(y=UNTERER_FUEHLER_MAX, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
         plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
@@ -277,12 +293,12 @@ async def get_boiler_temperature_history(session, hours):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
-        form.add_field("caption", f"📈 Verlauf {hours}h (~{len(sampled_oben)} Punkte, T_Oben = blau, T_Hinten = rot)")
+        form.add_field("caption", f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot)")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
             response.raise_for_status()
-            logging.info(f"Temperaturdiagramm für {hours}h mit {len(sampled_oben)} Punkten erfolgreich gesendet.")
+            logging.info(f"Temperaturdiagramm für {hours}h mit historischen Sollwerten gesendet.")
 
         buf.close()
 
@@ -1045,7 +1061,9 @@ async def main_loop(session):
             solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                                            "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
                                                            "api_fehler": True}
-            await asyncio.to_thread(adjust_shutdown_and_start_points, solax_data, config)
+            is_night = is_nighttime(config)
+            nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+            aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
 
             t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
             t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
@@ -1094,21 +1112,14 @@ async def main_loop(session):
                     if t_boiler_hinten < UNTERER_FUEHLER_MIN and t_boiler_oben < aktueller_ausschaltpunkt:
                         if not kompressor_ein:
                             await asyncio.to_thread(set_kompressor_status, True)
-                        logging.debug(f"PV-Überschuss: Heizen, da T_Hinten={t_boiler_hinten} < {UNTERER_FUEHLER_MIN}")
                     elif t_boiler_oben >= aktueller_ausschaltpunkt or t_boiler_hinten >= UNTERER_FUEHLER_MAX:
                         if kompressor_ein:
                             await asyncio.to_thread(set_kompressor_status, False)
-                        logging.debug(
-                            f"PV-Überschuss: Ausschalten, da T_Oben={t_boiler_oben} ≥ {aktueller_ausschaltpunkt}")
                 else:
                     if t_boiler_oben < aktueller_einschaltpunkt and not kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, True)
-                        logging.debug(
-                            f"Normalbetrieb: Einschalten, da T_Oben={t_boiler_oben} < {aktueller_einschaltpunkt}")
                     elif t_boiler_oben >= aktueller_ausschaltpunkt and kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
-                        logging.debug(
-                            f"Normalbetrieb: Ausschalten, da T_Oben={t_boiler_oben} ≥ {aktueller_ausschaltpunkt}")
 
             if kompressor_ein and start_time:
                 current_runtime = datetime.datetime.now() - start_time
@@ -1132,7 +1143,8 @@ async def main_loop(session):
                         f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
                         f"{t_verd if t_verd is not None else 'N/A'},"
                         f"{'EIN' if kompressor_ein else 'AUS'},"
-                        f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy}\n"
+                        f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
+                        f"{aktueller_einschaltpunkt},{aktueller_ausschaltpunkt},{int(solar_ueberschuss_aktiv)},{nacht_reduction}\n"
                     )
                     await csvfile.write(csv_line)
                     logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
@@ -1172,18 +1184,16 @@ async def shutdown(session):
 
 
 async def run_program():
-    """Hauptfunktion zum Starten des Programms."""
     async with aiohttp.ClientSession() as session:
-        # CSV-Header schreiben, falls die Datei noch nicht existiert
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
                     "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy\n"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
+                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung\n"
                 )
                 await csvfile.write(header)
                 logging.info("CSV-Header geschrieben: " + header.strip())
-
         try:
             await main_loop(session)
         except KeyboardInterrupt:
