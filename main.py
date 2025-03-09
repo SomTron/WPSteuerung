@@ -490,12 +490,21 @@ async def run_program():
 
 # Synchron bleibende Funktionen
 def read_temperature(sensor_id):
-    """Liest die Temperatur von einem DS18B20-Sensor."""
+    """Liest die Temperatur von einem DS18B20-Sensor.
+
+    Args:
+        sensor_id (str): Die ID des Sensors (z.B. '28-0bd6d4461d84').
+
+    Returns:
+        float or None: Die Temperatur in °C oder None bei Fehlern.
+    """
     device_file = os.path.join(BASE_DIR, sensor_id, "w1_slave")
     try:
         with open(device_file, "r") as f:
             lines = f.readlines()
+            # Prüfe, ob der Sensor korrekt gelesen wurde (CRC-Check)
             if lines[0].strip()[-3:] == "YES":
+                # Extrahiere die Temperatur aus der zweiten Zeile (in Milligrad Celsius)
                 temp_data = lines[1].split("=")[-1]
                 temp = float(temp_data) / 1000.0
                 # Plausibilitätsprüfung: Temperaturen außerhalb -20°C bis 100°C sind unwahrscheinlich
@@ -504,8 +513,12 @@ def read_temperature(sensor_id):
                     return None
                 logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
                 return temp
-            logging.warning(f"Ungültige Daten von Sensor {sensor_id}")
-            return None
+            else:
+                logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")
+                return None
+    except FileNotFoundError:
+        logging.error(f"Sensor-Datei nicht gefunden: {device_file}")
+        return None
     except Exception as e:
         logging.error(f"Fehler beim Lesen des Sensors {sensor_id}: {e}")
         return None
@@ -922,38 +935,44 @@ async def display_task():
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
-                    t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
-                pressure_ok = await asyncio.to_thread(check_pressure)  # Druckschalter hier prüfen
+                                   t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
+                pressure_ok = await asyncio.to_thread(check_pressure)
 
                 lcd.clear()
                 if not pressure_ok:
                     lcd.write_string("FEHLER: Druck zu niedrig")
                     logging.error(f"Display zeigt Druckfehler: Druckschalter={pressure_ok}")
                 else:
-                    lcd.write_string(f"T-Oben: {t_boiler_oben if t_boiler_oben is not None else 'Fehler':.2f} C")
+                    # Prüfe Typ und formatiere entsprechend
+                    oben_str = f"{t_boiler_oben:.2f}" if isinstance(t_boiler_oben, (int, float)) else "Fehler"
+                    hinten_str = f"{t_boiler_hinten:.2f}" if isinstance(t_boiler_hinten, (int, float)) else "Fehler"
+                    boiler_str = f"{t_boiler:.2f}" if isinstance(t_boiler, (int, float)) else "Fehler"
+                    verd_str = f"{t_verd:.2f}" if isinstance(t_verd, (int, float)) else "Fehler"
+
+                    lcd.write_string(f"T-Oben: {oben_str} C")
                     lcd.cursor_pos = (1, 0)
-                    lcd.write_string(f"T-Hinten: {t_boiler_hinten if t_boiler_hinten is not None else 'Fehler':.2f} C")
+                    lcd.write_string(f"T-Hinten: {hinten_str} C")
                     lcd.cursor_pos = (2, 0)
-                    lcd.write_string(f"T-Boiler: {t_boiler if t_boiler != 'Fehler' else 'Fehler':.2f} C")
+                    lcd.write_string(f"T-Boiler: {boiler_str} C")
                     lcd.cursor_pos = (3, 0)
-                    lcd.write_string(f"T-Verd: {t_verd if t_verd is not None else 'Fehler':.2f} C")
-                    logging.debug(f"Display-Seite 1 aktualisiert: oben={t_boiler_oben}, hinten={t_boiler_hinten}, boiler={t_boiler}, verd={t_verd}")
+                    lcd.write_string(f"T-Verd: {verd_str} C")
+                    logging.debug(
+                        f"Display-Seite 1 aktualisiert: oben={oben_str}, hinten={hinten_str}, boiler={boiler_str}, verd={verd_str}")
                 await asyncio.sleep(5)
 
                 # Seite 2: Kompressorstatus
                 lcd.clear()
                 lcd.write_string(f"Kompressor: {'EIN' if kompressor_ein else 'AUS'}")
                 lcd.cursor_pos = (1, 0)
-                if t_boiler != "Fehler":
-                    lcd.write_string(f"Soll:{aktueller_ausschaltpunkt:.1f}C Ist:{t_boiler:.1f}C")
-                else:
-                    lcd.write_string("Soll:N/A Ist:Fehler")
+                boiler_str = f"{t_boiler:.1f}" if isinstance(t_boiler, (int, float)) else "Fehler"
+                lcd.write_string(f"Soll:{aktueller_ausschaltpunkt:.1f}C Ist:{boiler_str}C")
                 lcd.cursor_pos = (2, 0)
                 lcd.write_string(
                     f"Aktuell: {str(current_runtime).split('.')[0]}" if kompressor_ein else f"Letzte: {str(last_runtime).split('.')[0]}")
                 lcd.cursor_pos = (3, 0)
                 lcd.write_string(f"Gesamt: {str(total_runtime_today).split('.')[0]}")
-                logging.debug(f"Display-Seite 2 aktualisiert: Status={'EIN' if kompressor_ein else 'AUS'}, Laufzeit={current_runtime if kompressor_ein else last_runtime}")
+                logging.debug(
+                    f"Display-Seite 2 aktualisiert: Status={'EIN' if kompressor_ein else 'AUS'}, Laufzeit={current_runtime if kompressor_ein else last_runtime}")
                 await asyncio.sleep(5)
 
                 # Seite 3: Solax-Daten
@@ -972,7 +991,8 @@ async def display_task():
                     lcd.write_string(f"Verbrauch: {consumeenergy if consumeenergy != 'N/A' else 'N/A'}{old_suffix}")
                     lcd.cursor_pos = (3, 0)
                     lcd.write_string(f"Bat:{batPower}W,SOC:{soc}%")
-                    logging.debug(f"Display-Seite 3 aktualisiert: Solar={solar}, Netz={feedinpower}, Verbrauch={consumeenergy}, Batterie={batPower}, SOC={soc}")
+                    logging.debug(
+                        f"Display-Seite 3 aktualisiert: Solar={solar}, Netz={feedinpower}, Verbrauch={consumeenergy}, Batterie={batPower}, SOC={soc}")
                 else:
                     lcd.write_string("Fehler bei Solax-Daten")
                     logging.warning("Keine Solax-Daten für Display verfügbar")
@@ -983,7 +1003,7 @@ async def display_task():
                 logging.error(error_msg)
                 await send_telegram_message(session, CHAT_ID, error_msg)
                 lcd = None  # Setze lcd auf None bei Fehler während der Nutzung
-                await asyncio.sleep(5)  # Warte, bevor es weitergeht
+                await asyncio.sleep(5)
 
 
 async def initialize_gpio():
