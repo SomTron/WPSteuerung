@@ -323,30 +323,37 @@ async def get_boiler_temperature_history(session, hours):
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
-    """Ruft Daten von der Solax-API ab und cached sie."""
     global last_api_call, last_api_data, last_api_timestamp
     now = datetime.datetime.now()
     if last_api_call and now - last_api_call < datetime.timedelta(minutes=5):
         logging.debug("Verwende zwischengespeicherte API-Daten.")
         return last_api_data
 
-    try:
-        params = {"tokenId": TOKEN_ID, "sn": SN}
-        async with session.get(API_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-            response.raise_for_status()
-            data = await response.json()
-            if data.get("success"):
-                last_api_data = data.get("result")
-                last_api_timestamp = now
-                last_api_call = now
-                logging.info(f"Solax-Daten erfolgreich abgerufen: {last_api_data}")
-                return last_api_data
+    max_retries = 3
+    retry_delay = 5  # Sekunden zwischen Wiederholungen
+
+    for attempt in range(max_retries):
+        try:
+            params = {"tokenId": TOKEN_ID, "sn": SN}
+            async with session.get(API_URL, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                response.raise_for_status()
+                data = await response.json()
+                if data.get("success"):
+                    last_api_data = data.get("result")
+                    last_api_timestamp = now
+                    last_api_call = now
+                    logging.info(f"Solax-Daten erfolgreich abgerufen: {last_api_data}")
+                    return last_api_data
+                else:
+                    logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
+                    return None
+        except aiohttp.ClientError as e:
+            logging.error(f"Fehler bei der API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
             else:
-                logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
+                logging.error("Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
                 return None
-    except aiohttp.ClientError as e:
-        logging.error(f"Fehler bei der API-Anfrage: {e}")
-        return None
 
 
 # Funktion für die benutzerdefinierte Telegram-Tastatur
@@ -1088,15 +1095,35 @@ async def main_loop(session):
     try:
         while True:
             try:
+                now = datetime.datetime.now()
+                # Prüfe Tageswechsel nur einmal pro Minute oder bei Statusänderung
+                should_check_day = (last_log_time is None or (now - last_log_time) >= datetime.timedelta(minutes=1))
+                if should_check_day:
+                    current_day = now.date()
+                    if current_day != last_day:
+                        logging.info(f"Neuer Tag erkannt: {current_day}. Setze Gesamtlaufzeit zurück.")
+                        total_runtime_today = datetime.timedelta()
+                        last_day = current_day
+
+
                 config = validate_config(load_config())
                 current_hash = calculate_file_hash("config.ini")
                 if last_config_hash != current_hash:
                     await reload_config(session)
                     last_config_hash = current_hash
 
-                solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                                                               "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                                                               "api_fehler": True}
+                solax_data = await get_solax_data(session)
+                if solax_data is None:
+                    if last_api_data and not is_data_old(last_api_timestamp):
+                        solax_data = last_api_data
+                        logging.warning("API-Anfrage fehlgeschlagen, verwende zwischengespeicherte Daten.")
+                    else:
+                        solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                                      "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                                      "api_fehler": True}
+                        logging.error(
+                            "API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
+
                 is_night = is_nighttime(config)
                 nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
                 aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
@@ -1188,19 +1215,32 @@ async def main_loop(session):
                     last_kompressor_status = kompressor_ein
 
                 cycle_duration = (datetime.datetime.now() - last_cycle_time).total_seconds()
-                if cycle_duration > 15:
+                if cycle_duration > 30:
                     watchdog_warning_count += 1
                     logging.error(
                         f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
                     if watchdog_warning_count >= WATCHDOG_MAX_WARNINGS:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                         logging.critical("Maximale Watchdog-Warnungen erreicht, Hardware wird heruntergefahren.")
-                        break
+
+                        # Telegram-Nachricht senden
+                        watchdog_message = (
+                            "🚨 **Kritischer Fehler**: Software wird aufgrund des Watchdogs beendet.\n"
+                            f"Grund: Maximale Warnungen ({WATCHDOG_MAX_WARNINGS}) erreicht, Zykluszeit > 15s.\n"
+                            f"Letzte Zykluszeit: {cycle_duration:.2f}s"
+                        )
+                        await send_telegram_message(session, CHAT_ID, watchdog_message, parse_mode="Markdown")
+
+                        # Programm beenden
+                        await shutdown(session)  # Bereinigt GPIO und sendet Abschalt-Nachricht
+                        raise SystemExit("Watchdog-Exit: Programm wird beendet.")
+
+
                 last_cycle_time = datetime.datetime.now()
                 await asyncio.sleep(2)
             except Exception as e:
                 logging.error(f"Fehler in der Hauptschleife: {e}", exc_info=True)
-                await asyncio.sleep(5)  # Kurze Pause vor dem nächsten Versuch
+                await asyncio.sleep(30)  # Kurze Pause vor dem nächsten Versuch
 
     except asyncio.CancelledError:
         logging.info("Hauptschleife abgebrochen, Tasks werden beendet.")
