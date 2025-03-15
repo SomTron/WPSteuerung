@@ -1,6 +1,10 @@
 # Ignoriere Konfigurationsdateien
 config.ini
 
+# Ignoriere Infodatepí
+Infos
+
+
 # Ignoriere PyCharm-Projektdateien
 .idea/
 
