@@ -1,6 +1,6 @@
 import os
 import smbus2
-import datetime
+from datetime import datetime, timedelta
 from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
 import logging
@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import io
 from aiohttp import FormData
 import pandas as pd
-from datetime import datetime, timedelta
+
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -47,8 +47,8 @@ AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERH
 EINSCHALTPUNKT = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
 TEMP_OFFSET = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
 VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
-MIN_LAUFZEIT = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))
-MIN_PAUSE = datetime.timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
+MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))
+MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
 UNTERER_FUEHLER_MIN = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 45))
 UNTERER_FUEHLER_MAX = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MAX", 50))
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
@@ -61,13 +61,13 @@ last_api_data = None
 last_api_timestamp = None
 kompressor_ein = False
 start_time = None
-last_runtime = datetime.timedelta()
-current_runtime = datetime.timedelta()
-total_runtime_today = datetime.timedelta()
-last_day = datetime.datetime.now().date()
-last_shutdown_time = datetime.datetime.now()
+last_runtime = timedelta()
+current_runtime = timedelta()
+total_runtime_today = timedelta()
+last_day = datetime.now().date()
+last_shutdown_time = datetime.now()
 last_config_hash = None
-last_log_time = datetime.datetime.now() - datetime.timedelta(minutes=1)
+last_log_time = datetime.now() - timedelta(minutes=1)
 last_kompressor_status = None
 last_update_id = None
 urlaubsmodus_aktiv = False
@@ -81,7 +81,7 @@ t_boiler = None
 solar_ueberschuss_aktiv = False
 lcd = None
 last_pressure_error_time = None  # Zeitpunkt des letzten Druckfehlers
-PRESSURE_ERROR_DELAY = datetime.timedelta(minutes=5)  # 5 Minuten Verzögerung
+PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 last_pressure_state = None
 
 
@@ -216,7 +216,7 @@ async def get_boiler_temperature_history(session, hours):
                     kompressor = parts[5]  # Kompressorstatus
                     einschaltpunkt, ausschaltpunkt, solar_ueberschuss = parts[13], parts[14], parts[15]
                     if all(x not in ("N/A", "Fehler") for x in (t_oben, t_hinten, einschaltpunkt, ausschaltpunkt)):
-                        timestamp = datetime.datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                         temp_oben.append((timestamp, float(t_oben)))
                         temp_hinten.append((timestamp, float(t_hinten)))
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
@@ -227,8 +227,8 @@ async def get_boiler_temperature_history(session, hours):
                             solar_ueberschuss_ever_active = True
 
         # Zeitfenster definieren
-        now = datetime.datetime.now()
-        time_ago = now - datetime.timedelta(hours=hours)
+        now = datetime.now()
+        time_ago = now - timedelta(hours=hours)
         target_points = 50
         total_seconds = hours * 3600
         target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds
@@ -326,8 +326,8 @@ async def get_boiler_temperature_history(session, hours):
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
     global last_api_call, last_api_data, last_api_timestamp
-    now = datetime.datetime.now()
-    if last_api_call and now - last_api_call < datetime.timedelta(minutes=5):
+    now = datetime.now()
+    if last_api_call and now - last_api_call < timedelta(minutes=5):
         logging.debug("Verwende zwischengespeicherte API-Daten.")
         return last_api_data
 
@@ -377,30 +377,27 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_v
     return await send_telegram_message(session, CHAT_ID, message)
 
 
-async def calculate_runtimes():
-    """Berechnet die Laufzeiten für den aktuellen Tag, die letzten 5 Tage, Wochen und Monate."""
+def calculate_runtimes():
     try:
-        # Lade die CSV-Datei
-        df = pd.read_csv("heizungsdaten.csv", parse_dates=["Zeitstempel"])
+        # Lese die CSV-Datei
+        df = pd.read_csv("heizungsdaten.csv", on_bad_lines="skip", parse_dates=["Zeitstempel"])
 
-        # Filtere die Daten auf die letzten 5 Tage, Wochen und Monate
+        # Aktuelles Datum
         now = datetime.now()
-        last_5_days = [now - timedelta(days=i) for i in range(5)]
-        last_week = now - timedelta(weeks=1)
-        two_weeks_ago = now - timedelta(weeks=2)
-        last_month = now - timedelta(weeks=4)
-        two_months_ago = now - timedelta(weeks=8)
 
-        # Berechne die Laufzeiten
-        runtimes = {
-            "today": calculate_runtime_percentage(df, now.date()),
-            "last_5_days": [calculate_runtime_percentage(df, day.date()) for day in last_5_days],
-            "last_week": calculate_runtime_percentage(df, last_week.date(), now.date()),
-            "two_weeks_ago": calculate_runtime_percentage(df, two_weeks_ago.date(), last_week.date()),
-            "last_month": calculate_runtime_percentage(df, last_month.date(), now.date()),
-            "two_months_ago": calculate_runtime_percentage(df, two_months_ago.date(), last_month.date()),
-            "total": calculate_runtime_percentage(df)
+        # Zeiträume definieren
+        time_periods = {
+            "Aktuelle Woche": (now - timedelta(days=7), now),
+            "Vorherige Woche": (now - timedelta(days=14), now - timedelta(days=7)),
+            "Aktueller Monat": (now - timedelta(days=30), now),
+            "Vorheriger Monat": (now - timedelta(days=60), now - timedelta(days=30)),
         }
+
+        # Berechne die Laufzeiten für jeden Zeitraum
+        runtimes = {}
+        for period, (start_date, end_date) in time_periods.items():
+            runtime_percentage = calculate_runtime_percentage(df, start_date, end_date)
+            runtimes[period] = runtime_percentage
 
         return runtimes
     except Exception as e:
@@ -408,38 +405,33 @@ async def calculate_runtimes():
         return None
 
 
-def calculate_runtime_percentage(df, start_date=None, end_date=None):
+def calculate_runtime_percentage(df, start_date, end_date):
     """Berechnet die Laufzeit in Prozent für einen bestimmten Zeitraum."""
-    if start_date and end_date:
-        mask = (df["Zeitstempel"] >= start_date) & (df["Zeitstempel"] < end_date)
-    elif start_date:
-        mask = (df["Zeitstempel"].dt.date == start_date)
-    else:
-        mask = df["Zeitstempel"].notna()  # Alle Daten
+    # Filtere die Daten für den Zeitraum
+    mask = (df["Zeitstempel"] >= start_date) & (df["Zeitstempel"] < end_date)
+    filtered_df = df.loc[mask]
 
-    runtime = df.loc[
-                  mask & (df["Kompressor"] == "EIN"), "Zeitstempel"].count() * 2 / 60  # Annahme: 2 Sekunden pro Eintrag
-    total_time = (end_date - start_date).total_seconds() / 3600 if start_date and end_date else 24
-    return (runtime / total_time) * 100 if total_time > 0 else 0
+    # Zähle die Anzahl der Einträge, bei denen der Kompressor eingeschaltet war
+    runtime_entries = filtered_df[filtered_df["Kompressor"] == "EIN"].shape[0]
+
+    # Gesamtzeit in Stunden (z. B. 7 Tage = 168 Stunden)
+    total_hours = (end_date - start_date).total_seconds() / 3600
+
+    # Laufzeit in Prozent
+    runtime_percentage = (runtime_entries * 2 / 60 / total_hours) * 100  # Annahme: 2 Sekunden pro Eintrag
+    return runtime_percentage
+
 
 async def send_runtimes_telegram(session):
     """Sendet die Laufzeiten über Telegram."""
-    runtimes = await calculate_runtimes()
+    runtimes = calculate_runtimes()
     if runtimes:
         message = (
             "⏱️ Laufzeiten:\n\n"
-            f"• Heute: {runtimes['today']:.1f}%\n"
-            f"• Letzte 5 Tage:\n"
-            f"  - Tag 1: {runtimes['last_5_days'][0]:.1f}%\n"
-            f"  - Tag 2: {runtimes['last_5_days'][1]:.1f}%\n"
-            f"  - Tag 3: {runtimes['last_5_days'][2]:.1f}%\n"
-            f"  - Tag 4: {runtimes['last_5_days'][3]:.1f}%\n"
-            f"  - Tag 5: {runtimes['last_5_days'][4]:.1f}%\n"
-            f"• Letzte Woche: {runtimes['last_week']:.1f}%\n"
-            f"• Vorletzte Woche: {runtimes['two_weeks_ago']:.1f}%\n"
-            f"• Letzter Monat: {runtimes['last_month']:.1f}%\n"
-            f"• Vorletzter Monat: {runtimes['two_months_ago']:.1f}%\n"
-            f"• Gesamtlaufzeit: {runtimes['total']:.1f}%"
+            f"• Aktuelle Woche: {runtimes['Aktuelle Woche']:.1f}%\n"
+            f"• Vorherige Woche: {runtimes['Vorherige Woche']:.1f}%\n"
+            f"• Aktueller Monat: {runtimes['Aktueller Monat']:.1f}%\n"
+            f"• Vorheriger Monat: {runtimes['Vorheriger Monat']:.1f}%\n"
         )
         await send_telegram_message(session, CHAT_ID, message)
     else:
@@ -550,7 +542,7 @@ async def send_help_message(session):
 
 async def shutdown(session):
     """Sendet eine Telegram-Nachricht beim Programmende und bereinigt Ressourcen."""
-    now = datetime.datetime.now()
+    now = datetime.now()
     message = f"🛑 Programm beendet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
     await send_telegram_message(session, CHAT_ID, message)
     GPIO.output(GIO21_PIN, GPIO.LOW)  # Kompressor ausschalten
@@ -664,7 +656,7 @@ def set_kompressor_status(ein, force_off=False):
         bool or None: False, wenn Einschalten fehlschlägt; True, wenn Ausschalten verweigert wird; None bei Erfolg.
     """
     global kompressor_ein, start_time, current_runtime, total_runtime_today, last_runtime, last_shutdown_time, ausschluss_grund
-    now = datetime.datetime.now()
+    now = datetime.now()
     if ein:
         if not kompressor_ein:
             pause_time = now - last_shutdown_time
@@ -674,7 +666,7 @@ def set_kompressor_status(ein, force_off=False):
                 return False
             kompressor_ein = True
             start_time = now
-            current_runtime = datetime.timedelta()
+            current_runtime = timedelta()
             ausschluss_grund = None  # Kein Ausschlussgrund, wenn Kompressor läuft
             logging.info(f"Kompressor EIN geschaltet. Startzeit: {start_time}")
         else:
@@ -759,8 +751,8 @@ async def reload_config(session):
 
         BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
         CHAT_ID = config["Telegram"]["CHAT_ID"]
-        MIN_LAUFZEIT = datetime.timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
-        MIN_PAUSE = datetime.timedelta(minutes=MIN_PAUSE_MINUTEN)
+        MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
+        MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
         TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
         SN = config["SolaxCloud"]["SN"]
 
@@ -895,7 +887,7 @@ def validate_config(config):
 
 def is_nighttime(config):
     """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
-    now = datetime.datetime.now()
+    now = datetime.now()
     try:
         start_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "22:00")
         end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
@@ -972,7 +964,7 @@ def check_value(value, min_value, max_value, default_value, parameter_name, othe
 
 def is_data_old(timestamp):
     """Prüft, ob Solax-Daten veraltet sind."""
-    is_old = timestamp and (datetime.datetime.now() - timestamp) > datetime.timedelta(minutes=15)
+    is_old = timestamp and (datetime.now() - timestamp) > timedelta(minutes=15)
     logging.debug(f"Prüfe Solax-Datenalter: Zeitstempel={timestamp}, Ist alt={is_old}")
     return is_old
 
@@ -1151,7 +1143,7 @@ async def main_loop(session):
 
     await initialize_lcd(session)
 
-    now = datetime.datetime.now()
+    now = datetime.now()
     message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
     await send_telegram_message(session, CHAT_ID, message)
     await send_welcome_message(session, CHAT_ID)
@@ -1159,21 +1151,21 @@ async def main_loop(session):
     telegram_task_handle = asyncio.create_task(telegram_task())
     display_task_handle = asyncio.create_task(display_task())
 
-    last_cycle_time = datetime.datetime.now()
+    last_cycle_time = datetime.now()
     watchdog_warning_count = 0
     WATCHDOG_MAX_WARNINGS = 3
 
     try:
         while True:
             try:
-                now = datetime.datetime.now()
+                now = datetime.now()
                 # Prüfe Tageswechsel nur einmal pro Minute oder bei Statusänderung
-                should_check_day = (last_log_time is None or (now - last_log_time) >= datetime.timedelta(minutes=1))
+                should_check_day = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1))
                 if should_check_day:
                     current_day = now.date()
                     if current_day != last_day:
                         logging.info(f"Neuer Tag erkannt: {current_day}. Setze Gesamtlaufzeit zurück.")
-                        total_runtime_today = datetime.timedelta()
+                        total_runtime_today = timedelta()
                         last_day = current_day
 
 
@@ -1205,7 +1197,7 @@ async def main_loop(session):
                 t_boiler = (
                                        t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
                 pressure_ok = await asyncio.to_thread(check_pressure)
-                now = datetime.datetime.now()
+                now = datetime.now()
 
                 if not pressure_ok:
                     if kompressor_ein:
@@ -1256,10 +1248,10 @@ async def main_loop(session):
                             await asyncio.to_thread(set_kompressor_status, False)
 
                 if kompressor_ein and start_time:
-                    current_runtime = datetime.datetime.now() - start_time
+                    current_runtime = datetime.now() - start_time
 
-                now = datetime.datetime.now()
-                should_log = (last_log_time is None or (now - last_log_time) >= datetime.timedelta(minutes=1)) or (
+                now = datetime.now()
+                should_log = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1)) or (
                             kompressor_ein != last_kompressor_status)
                 if should_log:
                     async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
@@ -1285,7 +1277,7 @@ async def main_loop(session):
                     last_log_time = now
                     last_kompressor_status = kompressor_ein
 
-                cycle_duration = (datetime.datetime.now() - last_cycle_time).total_seconds()
+                cycle_duration = (datetime.now() - last_cycle_time).total_seconds()
                 if cycle_duration > 30:
                     watchdog_warning_count += 1
                     logging.error(
@@ -1307,7 +1299,7 @@ async def main_loop(session):
                         raise SystemExit("Watchdog-Exit: Programm wird beendet.")
 
 
-                last_cycle_time = datetime.datetime.now()
+                last_cycle_time = datetime.now()
                 await asyncio.sleep(2)
             except Exception as e:
                 logging.error(f"Fehler in der Hauptschleife: {e}", exc_info=True)
