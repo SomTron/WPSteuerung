@@ -396,8 +396,11 @@ def calculate_runtimes():
         # Berechne die Laufzeiten für jeden Zeitraum
         runtimes = {}
         for period, (start_date, end_date) in time_periods.items():
-            runtime_percentage = calculate_runtime_percentage(df, start_date, end_date)
-            runtimes[period] = runtime_percentage
+            runtime_percentage, runtime_duration = calculate_runtime(df, start_date, end_date)
+            runtimes[period] = {
+                "percentage": runtime_percentage,
+                "duration": runtime_duration
+            }
 
         return runtimes
     except Exception as e:
@@ -405,21 +408,46 @@ def calculate_runtimes():
         return None
 
 
-def calculate_runtime_percentage(df, start_date, end_date):
-    """Berechnet die Laufzeit in Prozent für einen bestimmten Zeitraum."""
+def calculate_runtime(df, start_date, end_date):
+    """Berechnet die Laufzeit in Prozent und die tatsächliche Laufzeit für einen bestimmten Zeitraum."""
     # Filtere die Daten für den Zeitraum
     mask = (df["Zeitstempel"] >= start_date) & (df["Zeitstempel"] < end_date)
     filtered_df = df.loc[mask]
 
-    # Zähle die Anzahl der Einträge, bei denen der Kompressor eingeschaltet war
-    runtime_entries = filtered_df[filtered_df["Kompressor"] == "EIN"].shape[0]
+    # Initialisiere Variablen für die Laufzeitberechnung
+    total_runtime = timedelta()  # Gesamtlaufzeit
+    previous_time = None
+    kompressor_was_on = False
 
-    # Gesamtzeit in Stunden (z. B. 7 Tage = 168 Stunden)
+    # Iteriere durch die gefilterten Daten
+    for index, row in filtered_df.iterrows():
+        current_time = row["Zeitstempel"]
+        kompressor_is_on = row["Kompressor"] == "EIN"
+
+        # Berechne die Zeitdifferenz zum vorherigen Eintrag
+        if previous_time is not None:
+            time_diff = current_time - previous_time
+
+            # Wenn der Kompressor eingeschaltet war, addiere die Zeitdifferenz zur Laufzeit
+            if kompressor_was_on:
+                total_runtime += time_diff
+
+        # Aktualisiere den vorherigen Zeitstempel und den Kompressorstatus
+        previous_time = current_time
+        kompressor_was_on = kompressor_is_on
+
+    # Gesamtzeit des Zeitraums in Stunden
     total_hours = (end_date - start_date).total_seconds() / 3600
 
     # Laufzeit in Prozent
-    runtime_percentage = (runtime_entries * 2 / 60 / total_hours) * 100  # Annahme: 2 Sekunden pro Eintrag
-    return runtime_percentage
+    runtime_percentage = (total_runtime.total_seconds() / 3600 / total_hours) * 100
+
+    # Tatsächliche Laufzeit in Stunden und Minuten
+    runtime_hours = int(total_runtime.total_seconds() // 3600)
+    runtime_minutes = int((total_runtime.total_seconds() % 3600) // 60)
+    runtime_duration = f"{runtime_hours}h {runtime_minutes}min"
+
+    return runtime_percentage, runtime_duration
 
 
 async def send_runtimes_telegram(session):
@@ -428,10 +456,10 @@ async def send_runtimes_telegram(session):
     if runtimes:
         message = (
             "⏱️ Laufzeiten:\n\n"
-            f"• Aktuelle Woche: {runtimes['Aktuelle Woche']:.1f}%\n"
-            f"• Vorherige Woche: {runtimes['Vorherige Woche']:.1f}%\n"
-            f"• Aktueller Monat: {runtimes['Aktueller Monat']:.1f}%\n"
-            f"• Vorheriger Monat: {runtimes['Vorheriger Monat']:.1f}%\n"
+            f"• Aktuelle Woche: {runtimes['Aktuelle Woche']['percentage']:.1f}% ({runtimes['Aktuelle Woche']['duration']})\n"
+            f"• Vorherige Woche: {runtimes['Vorherige Woche']['percentage']:.1f}% ({runtimes['Vorherige Woche']['duration']})\n"
+            f"• Aktueller Monat: {runtimes['Aktueller Monat']['percentage']:.1f}% ({runtimes['Aktueller Monat']['duration']})\n"
+            f"• Vorheriger Monat: {runtimes['Vorheriger Monat']['percentage']:.1f}% ({runtimes['Vorheriger Monat']['duration']})\n"
         )
         await send_telegram_message(session, CHAT_ID, message)
     else:
