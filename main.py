@@ -15,6 +15,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
 from aiohttp import FormData
+import pandas as pd
+from datetime import datetime, timedelta
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -361,9 +363,9 @@ def get_custom_keyboard():
     """Erstellt eine benutzerdefinierte Tastatur mit verfügbaren Befehlen."""
     keyboard = [
         ["🌡️ Temperaturen", "📊 Status"],
-        ["📈 Verlauf 6h", "📉 Verlauf 24h"],  # Neue Buttons
+        ["📈 Verlauf 6h", "📉 Verlauf 24h"],
         ["🌴 Urlaub", "🏠 Urlaub aus"],
-        ["🆘 Hilfe"]
+        ["🆘 Hilfe", "⏱️ Laufzeiten"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
@@ -374,6 +376,74 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_v
     message = f"🌡️ Aktuelle Temperaturen:\nKessel oben: {t_boiler_oben:.2f} °C\nKessel hinten: {t_boiler_hinten:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
     return await send_telegram_message(session, CHAT_ID, message)
 
+
+async def calculate_runtimes():
+    """Berechnet die Laufzeiten für den aktuellen Tag, die letzten 5 Tage, Wochen und Monate."""
+    try:
+        # Lade die CSV-Datei
+        df = pd.read_csv("heizungsdaten.csv", parse_dates=["Zeitstempel"])
+
+        # Filtere die Daten auf die letzten 5 Tage, Wochen und Monate
+        now = datetime.now()
+        last_5_days = [now - timedelta(days=i) for i in range(5)]
+        last_week = now - timedelta(weeks=1)
+        two_weeks_ago = now - timedelta(weeks=2)
+        last_month = now - timedelta(weeks=4)
+        two_months_ago = now - timedelta(weeks=8)
+
+        # Berechne die Laufzeiten
+        runtimes = {
+            "today": calculate_runtime_percentage(df, now.date()),
+            "last_5_days": [calculate_runtime_percentage(df, day.date()) for day in last_5_days],
+            "last_week": calculate_runtime_percentage(df, last_week.date(), now.date()),
+            "two_weeks_ago": calculate_runtime_percentage(df, two_weeks_ago.date(), last_week.date()),
+            "last_month": calculate_runtime_percentage(df, last_month.date(), now.date()),
+            "two_months_ago": calculate_runtime_percentage(df, two_months_ago.date(), last_month.date()),
+            "total": calculate_runtime_percentage(df)
+        }
+
+        return runtimes
+    except Exception as e:
+        logging.error(f"Fehler beim Berechnen der Laufzeiten: {e}")
+        return None
+
+
+def calculate_runtime_percentage(df, start_date=None, end_date=None):
+    """Berechnet die Laufzeit in Prozent für einen bestimmten Zeitraum."""
+    if start_date and end_date:
+        mask = (df["Zeitstempel"] >= start_date) & (df["Zeitstempel"] < end_date)
+    elif start_date:
+        mask = (df["Zeitstempel"].dt.date == start_date)
+    else:
+        mask = df["Zeitstempel"].notna()  # Alle Daten
+
+    runtime = df.loc[
+                  mask & (df["Kompressor"] == "EIN"), "Zeitstempel"].count() * 2 / 60  # Annahme: 2 Sekunden pro Eintrag
+    total_time = (end_date - start_date).total_seconds() / 3600 if start_date and end_date else 24
+    return (runtime / total_time) * 100 if total_time > 0 else 0
+
+async def send_runtimes_telegram(session):
+    """Sendet die Laufzeiten über Telegram."""
+    runtimes = await calculate_runtimes()
+    if runtimes:
+        message = (
+            "⏱️ Laufzeiten:\n\n"
+            f"• Heute: {runtimes['today']:.1f}%\n"
+            f"• Letzte 5 Tage:\n"
+            f"  - Tag 1: {runtimes['last_5_days'][0]:.1f}%\n"
+            f"  - Tag 2: {runtimes['last_5_days'][1]:.1f}%\n"
+            f"  - Tag 3: {runtimes['last_5_days'][2]:.1f}%\n"
+            f"  - Tag 4: {runtimes['last_5_days'][3]:.1f}%\n"
+            f"  - Tag 5: {runtimes['last_5_days'][4]:.1f}%\n"
+            f"• Letzte Woche: {runtimes['last_week']:.1f}%\n"
+            f"• Vorletzte Woche: {runtimes['two_weeks_ago']:.1f}%\n"
+            f"• Letzter Monat: {runtimes['last_month']:.1f}%\n"
+            f"• Vorletzter Monat: {runtimes['two_months_ago']:.1f}%\n"
+            f"• Gesamtlaufzeit: {runtimes['total']:.1f}%"
+        )
+        await send_telegram_message(session, CHAT_ID, message)
+    else:
+        await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Laufzeiten.")
 
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
@@ -471,6 +541,7 @@ async def send_help_message(session):
         "📊 *Status* – Sendet den aktuellen Status.\n"
         "📈 *Verlauf 6h* – Zeigt den Temperaturverlauf der letzten 6 Stunden.\n"
         "📉 *Verlauf 24h* – Zeigt den Temperaturverlauf der letzten 24 Stunden.\n"
+        "⏱️ *Laufzeiten* – Zeigt die Laufzeiten des Kompressors.\n"  # Neuer Befehl
         "🌴 *Urlaub* – Aktiviert den Urlaubsmodus.\n"
         "🏠 *Urlaub aus* – Deaktiviert den Urlaubsmodus.\n"
         "🆘 *Hilfe* – Zeigt diese Nachricht an."
@@ -1309,12 +1380,13 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                     await get_boiler_temperature_history(session, 6)
                 elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
                     await get_boiler_temperature_history(session, 24)
+                elif message_text == "⏱️ laufzeiten" or message_text == "laufzeiten":  # Neuer Button
+                    await send_runtimes_telegram(session)
                 else:
                     await send_unknown_command_message(session, chat_id)
             last_update_id = update['update_id'] + 1
             logging.debug(f"last_update_id aktualisiert: {last_update_id}")
     return last_update_id
-
 
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
