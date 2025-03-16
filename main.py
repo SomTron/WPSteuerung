@@ -201,7 +201,7 @@ async def get_boiler_temperature_history(session, hours):
         temp_hinten = []
         einschaltpunkte = []
         ausschaltpunkte = []
-        kompressor_status = []  # Neue Liste für Kompressorstatus
+        kompressor_status = []
         solar_ueberschuss_ever_active = False
 
         # CSV-Datei asynchron lesen
@@ -209,22 +209,28 @@ async def get_boiler_temperature_history(session, hours):
             lines = await csvfile.readlines()
             lines = lines[1:][::-1]  # Header überspringen und umkehren (neueste zuerst)
 
-            for line in lines:
-                parts = line.strip().split(',')
-                if len(parts) >= 17:  # Anpassung an neues Format
-                    timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
-                    kompressor = parts[5]  # Kompressorstatus
-                    einschaltpunkt, ausschaltpunkt, solar_ueberschuss = parts[13], parts[14], parts[15]
-                    if all(x not in ("N/A", "Fehler") for x in (t_oben, t_hinten, einschaltpunkt, ausschaltpunkt)):
-                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        temp_oben.append((timestamp, float(t_oben)))
-                        temp_hinten.append((timestamp, float(t_hinten)))
-                        einschaltpunkte.append((timestamp, float(einschaltpunkt)))
-                        ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
-                        # Kompressorstatus hinzufügen (1 für EIN, 0 für AUS)
-                        kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0))
-                        if int(solar_ueberschuss) == 1:
-                            solar_ueberschuss_ever_active = True
+        for line in lines:
+            parts = line.strip().split(',')
+            if len(parts) >= 17:
+                timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
+                kompressor = parts[5]
+                einschaltpunkt, ausschaltpunkt, solar_ueberschuss = parts[13], parts[14], parts[15]
+                if not all(x not in ("N/A", "Fehler", "") and x.strip() for x in
+                           (t_oben, t_hinten, einschaltpunkt, ausschaltpunkt)):
+                    logging.warning(f"Ungültige Datenzeile übersprungen: {line.strip()}")
+                    continue
+                try:
+                    timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                    temp_oben.append((timestamp, float(t_oben)))
+                    temp_hinten.append((timestamp, float(t_hinten)))
+                    einschaltpunkte.append((timestamp, float(einschaltpunkt)))
+                    ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
+                    kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0))
+                    if int(solar_ueberschuss) == 1:
+                        solar_ueberschuss_ever_active = True
+                except ValueError as e:
+                    logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
+                    continue
 
         # Zeitfenster definieren
         now = datetime.now()
@@ -1301,7 +1307,7 @@ async def main_loop(session):
                             f"{aktueller_einschaltpunkt},{aktueller_ausschaltpunkt},{int(solar_ueberschuss_aktiv)},{nacht_reduction}\n"
                         )
                         await csvfile.write(csv_line)
-                        logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
+                        logging.debug(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
                     last_log_time = now
                     last_kompressor_status = kompressor_ein
 
