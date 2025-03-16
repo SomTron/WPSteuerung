@@ -209,28 +209,35 @@ async def get_boiler_temperature_history(session, hours):
             lines = await csvfile.readlines()
             lines = lines[1:][::-1]  # Header überspringen und umkehren (neueste zuerst)
 
-        for line in lines:
-            parts = line.strip().split(',')
-            if len(parts) >= 17:
-                timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
-                kompressor = parts[5]
-                einschaltpunkt, ausschaltpunkt, solar_ueberschuss = parts[13], parts[14], parts[15]
-                if not all(x not in ("N/A", "Fehler", "") and x.strip() for x in
-                           (t_oben, t_hinten, einschaltpunkt, ausschaltpunkt)):
-                    logging.warning(f"Ungültige Datenzeile übersprungen: {line.strip()}")
-                    continue
-                try:
-                    timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                    temp_oben.append((timestamp, float(t_oben)))
-                    temp_hinten.append((timestamp, float(t_hinten)))
-                    einschaltpunkte.append((timestamp, float(einschaltpunkt)))
-                    ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
-                    kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0))
-                    if int(solar_ueberschuss) == 1:
-                        solar_ueberschuss_ever_active = True
-                except ValueError as e:
-                    logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
-                    continue
+            for line in lines:
+                parts = line.strip().split(',')
+                if len(parts) >= 17:  # Anpassung an neues Format
+                    timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
+                    kompressor = parts[5]  # Kompressorstatus
+                    einschaltpunkt, ausschaltpunkt, solar_ueberschuss = parts[13], parts[14], parts[15]
+
+                    # Prüfe auf ungültige Werte und setze Fallbacks
+                    if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or not (t_hinten.strip() and t_hinten not in ("N/A", "Fehler")):
+                        logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
+                        continue
+                    einschaltpunkt = einschaltpunkt if einschaltpunkt.strip() and einschaltpunkt not in ("N/A", "Fehler") else "42"
+                    ausschaltpunkt = ausschaltpunkt if ausschaltpunkt.strip() and ausschaltpunkt not in ("N/A", "Fehler") else "45"
+                    solar_ueberschuss = solar_ueberschuss if solar_ueberschuss.strip() and solar_ueberschuss not in ("N/A", "Fehler") else "0"
+
+                    try:
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        temp_oben.append((timestamp, float(t_oben)))
+                        temp_hinten.append((timestamp, float(t_hinten)))
+                        einschaltpunkte.append((timestamp, float(einschaltpunkt)))
+                        ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
+                        kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0))
+                        if int(solar_ueberschuss) == 1:
+                            solar_ueberschuss_ever_active = True
+                    except ValueError as e:
+                        logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
+                        continue
+                else:
+                    logging.warning(f"Zeile mit unzureichenden Spalten übersprungen: {line.strip()}")
 
         # Zeitfenster definieren
         now = datetime.now()
@@ -275,7 +282,7 @@ async def get_boiler_temperature_history(session, hours):
         if sampled_kompressor:
             timestamps_komp, komp_vals = zip(*sampled_kompressor)
             plt.fill_between(timestamps_komp, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
-                            where=[val == 1 for val in komp_vals], color='green', alpha=0.2, label="Kompressor EIN")
+                             where=[val == 1 for val in komp_vals], color='green', alpha=0.2, label="Kompressor EIN")
 
         # Temperaturen und Sollwerte plotten
         if sampled_oben:
@@ -329,6 +336,7 @@ async def get_boiler_temperature_history(session, hours):
     except Exception as e:
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
+
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
     global last_api_call, last_api_data, last_api_timestamp
@@ -1221,6 +1229,16 @@ async def main_loop(session):
                         logging.error(
                             "API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
 
+                # Werte aus solax_data extrahieren mit Fallbacks
+                acpower = solax_data.get("acpower", "N/A")
+                feedinpower = solax_data.get("feedinpower", "N/A")
+                batPower = solax_data.get("batPower", "N/A")
+                soc = solax_data.get("soc", "N/A")
+                powerdc1 = solax_data.get("powerdc1", "N/A")
+                powerdc2 = solax_data.get("powerdc2", "N/A")
+                consumeenergy = solax_data.get("consumeenergy", "N/A")
+
+
                 is_night = is_nighttime(config)
                 nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
                 aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
@@ -1289,13 +1307,14 @@ async def main_loop(session):
                             kompressor_ein != last_kompressor_status)
                 if should_log:
                     async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                        acpower = solax_data.get("acpower", "N/A")
-                        feedinpower = solax_data.get("feedinpower", "N/A")
-                        batPower = solax_data.get("batPower", "N/A")
-                        soc = solax_data.get("soc", "N/A")
-                        powerdc1 = solax_data.get("powerdc1", "N/A")
-                        powerdc2 = solax_data.get("powerdc2", "N/A")
-                        consumeenergy = solax_data.get("consumeenergy", "N/A")
+                        einschaltpunkt_str = str(
+                            aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
+                        ausschaltpunkt_str = str(
+                            aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
+                        solar_ueberschuss_str = str(
+                            int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
+                        nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
+
                         csv_line = (
                             f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                             f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
@@ -1304,10 +1323,10 @@ async def main_loop(session):
                             f"{t_verd if t_verd is not None else 'N/A'},"
                             f"{'EIN' if kompressor_ein else 'AUS'},"
                             f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
-                            f"{aktueller_einschaltpunkt},{aktueller_ausschaltpunkt},{int(solar_ueberschuss_aktiv)},{nacht_reduction}\n"
+                            f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str}\n"
                         )
                         await csvfile.write(csv_line)
-                        logging.debug(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
+                        logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
                     last_log_time = now
                     last_kompressor_status = kompressor_ein
 
