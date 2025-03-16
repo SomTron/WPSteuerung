@@ -202,7 +202,7 @@ async def get_boiler_temperature_history(session, hours):
         einschaltpunkte = []
         ausschaltpunkte = []
         kompressor_status = []
-        solar_ueberschuss_ever_active = False
+        solar_ueberschuss_periods = []  # Zeitpunkte, in denen Solarüberschuss aktiv war
 
         # CSV-Datei asynchron lesen
         async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
@@ -231,8 +231,10 @@ async def get_boiler_temperature_history(session, hours):
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
                         kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0))
+                        # Füge Zeitpunkt hinzu, wenn Solarüberschuss aktiv war
                         if int(solar_ueberschuss) == 1:
-                            solar_ueberschuss_ever_active = True
+                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
+                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
                     except ValueError as e:
                         logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
                         continue
@@ -252,6 +254,7 @@ async def get_boiler_temperature_history(session, hours):
         filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
         filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
         filtered_kompressor = [(ts, val) for ts, val in kompressor_status if ts >= time_ago]
+        filtered_solar_ueberschuss = [(ts, val) for ts, val in solar_ueberschuss_periods if ts >= time_ago]
 
         # Sampling-Funktion
         def sample_data(data, interval, num_points):
@@ -274,6 +277,8 @@ async def get_boiler_temperature_history(session, hours):
         sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
         sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
         sampled_kompressor = sample_data(filtered_kompressor, target_interval, target_points)
+        sampled_solar_min = sample_data([(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MIN], target_interval, target_points)
+        sampled_solar_max = sample_data([(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MAX], target_interval, target_points)
 
         # Diagramm erstellen
         plt.figure(figsize=(12, 6))
@@ -298,10 +303,13 @@ async def get_boiler_temperature_history(session, hours):
             timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
             plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--', color="orange")
 
-        # Min/Max untere Temperatur bei PV-Modus
-        if solar_ueberschuss_ever_active:
-            plt.axhline(y=UNTERER_FUEHLER_MIN, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
-            plt.axhline(y=UNTERER_FUEHLER_MAX, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+        # Min/Max untere Temperatur nur bei Solarüberschuss zeichnen
+        if sampled_solar_min:
+            timestamps_min, min_vals = zip(*sampled_solar_min)
+            plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
+        if sampled_solar_max:
+            timestamps_max, max_vals = zip(*sampled_solar_max)
+            plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
 
         # Zeitachse setzen
         plt.xlim(time_ago, now)
@@ -336,6 +344,7 @@ async def get_boiler_temperature_history(session, hours):
     except Exception as e:
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
+
 
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
