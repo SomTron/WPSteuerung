@@ -83,6 +83,7 @@ lcd = None
 last_pressure_error_time = None  # Zeitpunkt des letzten Druckfehlers
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 last_pressure_state = None
+csv_lock = asyncio.Lock()
 
 
 # Logging einrichten
@@ -91,6 +92,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+logging.info(f"Programm gestartet: {datetime.now()}")
 
 # Neuer Telegram-Handler für Logging
 class TelegramHandler(logging.Handler):
@@ -212,31 +215,38 @@ async def get_boiler_temperature_history(session, hours):
             for line in lines:
                 parts = line.strip().split(',')
                 if len(parts) >= 17:  # Anpassung an neues Format
-                    timestamp_str, t_oben, t_hinten = parts[0], parts[1], parts[2]
-                    kompressor = parts[5]  # Kompressorstatus
-                    einschaltpunkt, ausschaltpunkt, solar_ueberschuss = parts[13], parts[14], parts[15]
-
-                    # Prüfe auf ungültige Werte und setze Fallbacks
-                    if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or not (t_hinten.strip() and t_hinten not in ("N/A", "Fehler")):
-                        logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
-                        continue
-                    einschaltpunkt = einschaltpunkt if einschaltpunkt.strip() and einschaltpunkt not in ("N/A", "Fehler") else "42"
-                    ausschaltpunkt = ausschaltpunkt if ausschaltpunkt.strip() and ausschaltpunkt not in ("N/A", "Fehler") else "45"
-                    solar_ueberschuss = solar_ueberschuss if solar_ueberschuss.strip() and solar_ueberschuss not in ("N/A", "Fehler") else "0"
+                    timestamp_str = parts[0].strip()  # Zeitstempel aus der ersten Spalte
+                    # Entferne unerwartete Zeichen (z. B. Nullbytes) und extrahiere den gültigen Teil
+                    timestamp_str = ''.join(c for c in timestamp_str if c.isprintable())
 
                     try:
+                        # Versuche, den bereinigten Zeitstempel zu parsen
                         timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        t_oben, t_hinten = parts[1], parts[2]
+                        kompressor = parts[5]  # Kompressorstatus
+                        einschaltpunkt = parts[13] if parts[13].strip() and parts[13] not in ("N/A", "Fehler") else "42"
+                        ausschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "45"
+                        solar_ueberschuss = parts[15] if parts[15].strip() and parts[15] not in (
+                        "N/A", "Fehler") else "0"
+
+                        # Prüfe auf ungültige Werte und überspringe die Zeile
+                        if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or not (
+                                t_hinten.strip() and t_hinten not in ("N/A", "Fehler")):
+                            logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
+                            continue
+
+                        # Konvertiere Werte und speichere sie in den Listen
                         temp_oben.append((timestamp, float(t_oben)))
                         temp_hinten.append((timestamp, float(t_hinten)))
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
                         kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0))
-                        # Füge Zeitpunkt hinzu, wenn Solarüberschuss aktiv war
                         if int(solar_ueberschuss) == 1:
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
                     except ValueError as e:
-                        logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
+                        logging.error(
+                            f"Fehler beim Parsen der Zeile: {line.strip()}, Bereinigter Zeitstempel: '{timestamp_str}', Fehler: {e}")
                         continue
                 else:
                     logging.warning(f"Zeile mit unzureichenden Spalten übersprungen: {line.strip()}")
@@ -256,7 +266,7 @@ async def get_boiler_temperature_history(session, hours):
         filtered_kompressor = [(ts, val) for ts, val in kompressor_status if ts >= time_ago]
         filtered_solar_ueberschuss = [(ts, val) for ts, val in solar_ueberschuss_periods if ts >= time_ago]
 
-        # Sampling-Funktion
+        # Sampling-Funktion (wie im Original)
         def sample_data(data, interval, num_points):
             if not data:
                 return []
@@ -277,8 +287,12 @@ async def get_boiler_temperature_history(session, hours):
         sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
         sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
         sampled_kompressor = sample_data(filtered_kompressor, target_interval, target_points)
-        sampled_solar_min = sample_data([(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MIN], target_interval, target_points)
-        sampled_solar_max = sample_data([(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MAX], target_interval, target_points)
+        sampled_solar_min = sample_data(
+            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MIN], target_interval,
+            target_points)
+        sampled_solar_max = sample_data(
+            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MAX], target_interval,
+            target_points)
 
         # Diagramm erstellen
         plt.figure(figsize=(12, 6))
@@ -298,18 +312,22 @@ async def get_boiler_temperature_history(session, hours):
             plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
         if sampled_einschalt:
             timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
-            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--', color="green")
+            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--',
+                     color="green")
         if sampled_ausschalt:
             timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
-            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--', color="orange")
+            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--',
+                     color="orange")
 
         # Min/Max untere Temperatur nur bei Solarüberschuss zeichnen
         if sampled_solar_min:
             timestamps_min, min_vals = zip(*sampled_solar_min)
-            plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
+            plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.',
+                     label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
         if sampled_solar_max:
             timestamps_max, max_vals = zip(*sampled_solar_max)
-            plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+            plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.',
+                     label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
 
         # Zeitachse setzen
         plt.xlim(time_ago, now)
@@ -344,7 +362,6 @@ async def get_boiler_temperature_history(session, hours):
     except Exception as e:
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
-
 
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
@@ -1315,27 +1332,28 @@ async def main_loop(session):
                 should_log = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1)) or (
                             kompressor_ein != last_kompressor_status)
                 if should_log:
-                    async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                        einschaltpunkt_str = str(
-                            aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
-                        ausschaltpunkt_str = str(
-                            aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
-                        solar_ueberschuss_str = str(
-                            int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
-                        nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
+                    async with csv_lock:  # Sperre den Zugriff auf die Datei
+                        async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
+                            einschaltpunkt_str = str(
+                                aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
+                            ausschaltpunkt_str = str(
+                                aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
+                            solar_ueberschuss_str = str(
+                                int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
+                            nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
 
-                        csv_line = (
-                            f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
-                            f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
-                            f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
-                            f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
-                            f"{t_verd if t_verd is not None else 'N/A'},"
-                            f"{'EIN' if kompressor_ein else 'AUS'},"
-                            f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
-                            f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str}\n"
-                        )
-                        await csvfile.write(csv_line)
-                        logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
+                            csv_line = (
+                                f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
+                                f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
+                                f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
+                                f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
+                                f"{t_verd if t_verd is not None else 'N/A'},"
+                                f"{'EIN' if kompressor_ein else 'AUS'},"
+                                f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
+                                f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str}\n"
+                            )
+                            await csvfile.write(csv_line)
+                            logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
                     last_log_time = now
                     last_kompressor_status = kompressor_ein
 
