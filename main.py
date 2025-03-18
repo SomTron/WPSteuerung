@@ -395,7 +395,19 @@ async def get_solax_data(session):
                 await asyncio.sleep(retry_delay)
             else:
                 logging.error("Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
-                return None
+                # Fallback-Werte, wenn keine API-Daten verfügbar sind
+                fallback_data = {
+                    "acpower": 0,
+                    "feedinpower": 0,
+                    "batPower": 0,
+                    "soc": 0,
+                    "powerdc1": 0,
+                    "powerdc2": 0,
+                    "consumeenergy": 0,
+                    "api_fehler": True  # Kennzeichnung, dass Fallback-Daten verwendet wurden
+                }
+                # Keine Telegram-Nachricht mehr senden
+                return fallback_data
 
 
 # Funktion für die benutzerdefinierte Telegram-Tastatur
@@ -987,15 +999,18 @@ def calculate_shutdown_point(config, is_night, solax_data):
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
-        # Solarüberschuss-Logik
-        if bat_power > 600 or (soc > 95 and feedin_power > 600):
-            if not solar_ueberschuss_aktiv:
-                solar_ueberschuss_aktiv = True
-                logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+        # Solarüberschuss-Logik (nur aktiv, wenn API-Daten verfügbar sind)
+        if solax_data.get("api_fehler", False):  # Fallback-Modus: Kein Solarüberschuss
+            solar_ueberschuss_aktiv = False
         else:
-            if solar_ueberschuss_aktiv:
-                solar_ueberschuss_aktiv = False
-                logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+            if bat_power > 600 or (soc > 95 and feedin_power > 600):
+                if not solar_ueberschuss_aktiv:
+                    solar_ueberschuss_aktiv = True
+                    logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedinpower}, soc={soc}")
+            else:
+                if solar_ueberschuss_aktiv:
+                    solar_ueberschuss_aktiv = False
+                    logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedinpower}, soc={soc}")
 
         # Sollwerte basierend auf Modus
         if solar_ueberschuss_aktiv:
