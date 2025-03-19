@@ -410,6 +410,21 @@ async def get_solax_data(session):
                 return fallback_data
 
 
+def get_power_source(solax_data):
+    pv_production = solax_data.get("powerdc1", 0) + solax_data.get("powerdc2", 0)
+    bat_power = solax_data.get("batPower", 0)
+    feedin_power = solax_data.get("feedinpower", 0)
+    consumption = solax_data.get("consumeenergy", 0)
+
+    if pv_production > 0 and (bat_power >= 0 or feedin_power > 0):
+        return "Direkter PV-Strom"
+    elif bat_power < 0 and feedin_power >= 0 and pv_production <= consumption:
+        return "Strom aus der Batterie"
+    elif feedin_power < 0:
+        return "Strom vom Netz"
+    else:
+        return "Unbekannt"  # Fallback für edge cases wie batPower = 0, feedinpower = 0
+
 # Funktion für die benutzerdefinierte Telegram-Tastatur
 def get_custom_keyboard():
     """Erstellt eine benutzerdefinierte Tastatur mit verfügbaren Befehlen."""
@@ -519,8 +534,14 @@ async def send_runtimes_telegram(session):
 
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    """Sendet den aktuellen Status über Telegram mit korrekten Einschalt- und Ausschaltpunkten."""
+    """Sendet den aktuellen Status über Telegram mit korrekten Einschalt- und Ausschaltpunkten sowie der Energiequelle."""
     global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
+
+    # Hole Solax-Daten, um die Energiequelle zu bestimmen
+    solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                                                   "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                                                   "api_fehler": True}
+    power_source = get_power_source(solax_data)
 
     # Basisnachricht mit Temperaturen
     message = (
@@ -529,6 +550,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
         f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
         f"Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
+        f"⚡ Energiequelle: {power_source}\n"  # Neue Zeile für die Energiequelle
     )
 
     # Laufzeit je nach Kompressorstatus anzeigen
@@ -543,7 +565,6 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
     message += "🎯 Sollwerte:\n"
 
     if solar_ueberschuss_aktiv:
-        # PV-Überschuss-Modus
         message += (
             f"- Mit PV-Überschuss:\n"
             f"  Einschaltpunkt (oben): {EINSCHALTPUNKT} °C\n"
@@ -552,14 +573,12 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
             f"  Max. untere Temp: {UNTERER_FUEHLER_MAX} °C\n"
         )
     else:
-        # Normalmodus
         message += (
             f"- Normalbetrieb:\n"
             f"  Einschaltpunkt (oben): {einschaltpunkt} °C\n"
             f"  Ausschaltpunkt (oben): {ausschaltpunkt} °C\n"
         )
 
-    # Verdampfertemperatur-Sollwert
     message += f"- Verdampfer Min: {VERDAMPFERTEMPERATUR} °C\n"
 
     # Aktive Modi hinzufügen
@@ -584,7 +603,6 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
     if not kompressor_status and ausschluss_grund:
         message += f"\n\n⚠️ Kompressor ausgeschaltet wegen: {ausschluss_grund}"
 
-    # Sicherstellen, dass die Nachricht gesendet wird
     return await send_telegram_message(session, CHAT_ID, message)
 
 async def send_welcome_message(session, chat_id):
@@ -633,19 +651,15 @@ async def shutdown(session):
 # Hauptprogrammstart
 async def run_program():
     async with aiohttp.ClientSession() as session:
-        # Logging mit Telegram-Handler einrichten
-        await setup_logging(session)
-
-        # CSV-Header schreiben, falls die Datei noch nicht existiert
         if not os.path.exists("heizungsdaten.csv"):
-            async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
+            async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
                     "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy\n"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
+                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"  # PowerSource hinzugefügt
                 )
                 await csvfile.write(header)
                 logging.info("CSV-Header geschrieben: " + header.strip())
-
         try:
             await main_loop(session)
         except KeyboardInterrupt:
@@ -1270,6 +1284,9 @@ async def main_loop(session):
                         logging.error(
                             "API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
 
+                # Energiequelle bestimmen
+                power_source = get_power_source(solax_data)
+
                 # Werte aus solax_data extrahieren mit Fallbacks
                 acpower = solax_data.get("acpower", "N/A")
                 feedinpower = solax_data.get("feedinpower", "N/A")
@@ -1356,6 +1373,7 @@ async def main_loop(session):
                             solar_ueberschuss_str = str(
                                 int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
                             nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
+                            power_source_str = power_source if power_source else "N/A"  # Energiequelle als String
 
                             csv_line = (
                                 f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
@@ -1365,12 +1383,13 @@ async def main_loop(session):
                                 f"{t_verd if t_verd is not None else 'N/A'},"
                                 f"{'EIN' if kompressor_ein else 'AUS'},"
                                 f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
-                                f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str}\n"
+                                f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str},"
+                                f"{power_source_str}\n"  # PowerSource hinzugefügt
                             )
                             await csvfile.write(csv_line)
-                            logging.info(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
-                    last_log_time = now
-                    last_kompressor_status = kompressor_ein
+                            logging.debug(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
+                        last_log_time = now
+                        last_kompressor_status = kompressor_ein
 
                 cycle_duration = (datetime.now() - last_cycle_time).total_seconds()
                 if cycle_duration > 30:
@@ -1384,7 +1403,7 @@ async def main_loop(session):
                         # Telegram-Nachricht senden
                         watchdog_message = (
                             "🚨 **Kritischer Fehler**: Software wird aufgrund des Watchdogs beendet.\n"
-                            f"Grund: Maximale Warnungen ({WATCHDOG_MAX_WARNINGS}) erreicht, Zykluszeit > 15s.\n"
+                            f"Grund: Maximale Warnungen ({WATCHDOG_MAX_WARNINGS}) erreicht, Zykluszeit > 30s.\n"
                             f"Letzte Zykluszeit: {cycle_duration:.2f}s"
                         )
                         await send_telegram_message(session, CHAT_ID, watchdog_message, parse_mode="Markdown")
