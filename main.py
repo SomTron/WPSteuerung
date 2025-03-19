@@ -205,7 +205,7 @@ async def get_boiler_temperature_history(session, hours):
         einschaltpunkte = []
         ausschaltpunkte = []
         kompressor_status = []
-        solar_ueberschuss_periods = []  # Zeitpunkte, in denen Solarüberschuss aktiv war
+        solar_ueberschuss_periods = []
 
         # CSV-Datei asynchron lesen
         async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
@@ -214,39 +214,42 @@ async def get_boiler_temperature_history(session, hours):
 
             for line in lines:
                 parts = line.strip().split(',')
-                if len(parts) >= 17:  # Anpassung an neues Format
-                    timestamp_str = parts[0].strip()  # Zeitstempel aus der ersten Spalte
-                    # Entferne unerwartete Zeichen (z. B. Nullbytes) und extrahiere den gültigen Teil
+                # Akzeptiere Zeilen mit mindestens 13 Spalten (älteres Format) und fülle fehlende auf
+                if len(parts) >= 13:  # Mindestens bis ConsumeEnergy
+                    # Fülle fehlende Spalten mit Standardwerten auf
+                    while len(parts) < 18:
+                        parts.append("N/A")
+
+                    timestamp_str = parts[0].strip()
                     timestamp_str = ''.join(c for c in timestamp_str if c.isprintable())
 
                     try:
-                        # Versuche, den bereinigten Zeitstempel zu parsen
                         timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                         t_oben, t_hinten = parts[1], parts[2]
-                        kompressor = parts[5]  # Kompressorstatus
+                        kompressor = parts[5]
                         einschaltpunkt = parts[13] if parts[13].strip() and parts[13] not in ("N/A", "Fehler") else "42"
                         ausschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "45"
                         solar_ueberschuss = parts[15] if parts[15].strip() and parts[15] not in (
                         "N/A", "Fehler") else "0"
+                        power_source = parts[17] if parts[17].strip() and parts[17] not in (
+                        "N/A", "Fehler") else "Unbekannt"
 
-                        # Prüfe auf ungültige Werte und überspringe die Zeile
                         if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or not (
                                 t_hinten.strip() and t_hinten not in ("N/A", "Fehler")):
                             logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
                             continue
 
-                        # Konvertiere Werte und speichere sie in den Listen
                         temp_oben.append((timestamp, float(t_oben)))
                         temp_hinten.append((timestamp, float(t_hinten)))
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
-                        kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0))
+                        kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0, power_source))
                         if int(solar_ueberschuss) == 1:
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
                     except ValueError as e:
                         logging.error(
-                            f"Fehler beim Parsen der Zeile: {line.strip()}, Bereinigter Zeitstempel: '{timestamp_str}', Fehler: {e}")
+                            f"Fehler beim Parsen der Zeile: {line.strip()}, Zeitstempel: '{timestamp_str}', Fehler: {e}")
                         continue
                 else:
                     logging.warning(f"Zeile mit unzureichenden Spalten übersprungen: {line.strip()}")
@@ -263,10 +266,10 @@ async def get_boiler_temperature_history(session, hours):
         filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
         filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
         filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
-        filtered_kompressor = [(ts, val) for ts, val in kompressor_status if ts >= time_ago]
+        filtered_kompressor = [(ts, val, ps) for ts, val, ps in kompressor_status if ts >= time_ago]
         filtered_solar_ueberschuss = [(ts, val) for ts, val in solar_ueberschuss_periods if ts >= time_ago]
 
-        # Sampling-Funktion (wie im Original)
+        # Sampling-Funktion
         def sample_data(data, interval, num_points):
             if not data:
                 return []
@@ -274,9 +277,10 @@ async def get_boiler_temperature_history(session, hours):
                 return data[::-1]
             sampled = []
             last_added = None
-            for ts, val in data:
+            for item in data:
+                ts = item[0]
                 if last_added is None or (last_added - ts).total_seconds() >= interval:
-                    sampled.append((ts, val))
+                    sampled.append(item)
                     last_added = ts
                 if len(sampled) >= num_points:
                     break
@@ -297,11 +301,34 @@ async def get_boiler_temperature_history(session, hours):
         # Diagramm erstellen
         plt.figure(figsize=(12, 6))
 
-        # Kompressorstatus als Hintergrundfläche darstellen
+        # Farben basierend auf PowerSource definieren
+        color_map = {
+            "Direkter PV-Strom": "green",
+            "Strom aus der Batterie": "yellow",
+            "Strom vom Netz": "red",
+            "Unbekannt": "gray"
+        }
+
+        # Kompressorstatus als Hintergrundfläche mit variablen Farben
         if sampled_kompressor:
-            timestamps_komp, komp_vals = zip(*sampled_kompressor)
-            plt.fill_between(timestamps_komp, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
-                             where=[val == 1 for val in komp_vals], color='green', alpha=0.2, label="Kompressor EIN")
+            timestamps_komp = [item[0] for item in sampled_kompressor]
+            komp_vals = [item[1] for item in sampled_kompressor]
+            power_sources = [item[2] for item in sampled_kompressor]
+
+            current_start_idx = 0
+            for i in range(1, len(timestamps_komp)):
+                if power_sources[i] != power_sources[current_start_idx] or i == len(timestamps_komp) - 1:
+                    segment_timestamps = timestamps_komp[current_start_idx:i + 1]
+                    segment_vals = komp_vals[current_start_idx:i + 1]
+                    color = color_map.get(power_sources[current_start_idx], "gray")
+                    plt.fill_between(segment_timestamps, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
+                                     where=[val == 1 for val in segment_vals], color=color, alpha=0.2,
+                                     label=f"Kompressor EIN ({power_sources[current_start_idx]})" if current_start_idx == 0 else None)
+                    current_start_idx = i
+
+            handles, labels = plt.gca().get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            plt.legend(by_label.values(), by_label.keys(), loc="lower left")
 
         # Temperaturen und Sollwerte plotten
         if sampled_oben:
@@ -319,7 +346,6 @@ async def get_boiler_temperature_history(session, hours):
             plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--',
                      color="orange")
 
-        # Min/Max untere Temperatur nur bei Solarüberschuss zeichnen
         if sampled_solar_min:
             timestamps_min, min_vals = zip(*sampled_solar_min)
             plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.',
@@ -329,14 +355,11 @@ async def get_boiler_temperature_history(session, hours):
             plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.',
                      label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
 
-        # Zeitachse setzen
         plt.xlim(time_ago, now)
-        plt.ylim(0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5)  # Dynamische Y-Achse
-
+        plt.ylim(0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5)
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
         plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
-        plt.legend(loc="lower left")
         plt.grid(True)
         plt.xticks(rotation=45)
         plt.tight_layout()
@@ -346,11 +369,11 @@ async def get_boiler_temperature_history(session, hours):
         buf.seek(0)
         plt.close()
 
-        # Bild über Telegram senden
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
-        form.add_field("caption", f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, Kompressor EIN = grün)")
+        form.add_field("caption",
+                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
@@ -854,12 +877,24 @@ async def reload_config(session):
         old_einschaltpunkt = aktueller_einschaltpunkt
         old_ausschaltpunkt = aktueller_ausschaltpunkt
 
-        # Berechne Sollwerte neu
-        solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                                                       "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                                                       "api_fehler": True}
-        aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_nighttime(config),
-                                                                                      solax_data)
+        # Solax-Daten abrufen und sicherstellen, dass alle Werte definiert sind
+        solax_data = await get_solax_data(session) or {
+            "acpower": 0,
+            "feedinpower": 0,
+            "consumeenergy": 0,
+            "batPower": 0,
+            "soc": 0,
+            "powerdc1": 0,
+            "powerdc2": 0,
+            "api_fehler": True
+        }
+
+        # Sollwerte berechnen
+        aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(
+            config,
+            is_nighttime(config),
+            solax_data
+        )
 
         logging.info(
             f"Konfiguration neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, "
@@ -870,6 +905,9 @@ async def reload_config(session):
 
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
+        # Fallback-Werte setzen, falls das Laden fehlschlägt
+        aktueller_ausschaltpunkt = AUSSCHALTPUNKT
+        aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET
 
 
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
@@ -1010,23 +1048,21 @@ def calculate_shutdown_point(config, is_night, solax_data):
     try:
         nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
         bat_power = solax_data.get("batPower", 0)
-        feedin_power = solax_data.get("feedinpower", 0)
+        feedin_power = solax_data.get("feedinpower", 0)  # Korrekt mit .get()
         soc = solax_data.get("soc", 0)
 
-        # Solarüberschuss-Logik (nur aktiv, wenn API-Daten verfügbar sind)
-        if solax_data.get("api_fehler", False):  # Fallback-Modus: Kein Solarüberschuss
+        if solax_data.get("api_fehler", False):
             solar_ueberschuss_aktiv = False
         else:
             if bat_power > 600 or (soc > 95 and feedin_power > 600):
                 if not solar_ueberschuss_aktiv:
                     solar_ueberschuss_aktiv = True
-                    logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedinpower}, soc={soc}")
+                    logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
             else:
                 if solar_ueberschuss_aktiv:
                     solar_ueberschuss_aktiv = False
-                    logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedinpower}, soc={soc}")
+                    logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
-        # Sollwerte basierend auf Modus
         if solar_ueberschuss_aktiv:
             ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
             einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
