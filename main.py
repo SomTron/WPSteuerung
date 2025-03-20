@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import io
 from aiohttp import FormData
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
@@ -387,125 +388,133 @@ async def get_boiler_temperature_history(session, hours):
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
 
 async def get_runtime_bar_chart(session, days=7):
-    """Erstellt ein gestapeltes Balkendiagramm der Kompressor-Laufzeiten, aggregiert nach Tagen, Wochen, Monaten oder Jahren.
-    Perioden ohne Daten werden nicht angezeigt."""
+    logging.info(f"Funktion aufgerufen mit days={days}")
     try:
-        # Datenstrukturen für Laufzeiten
-        runtime_per_period = {}  # {Periode: {"PV": Minuten, ...}}
+        runtime_per_period = {}
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
             "Strom vom Netz": "red",
             "Unbekannt": "gray"
         }
+        valid_power_sources = set(color_map.keys())  # Gültige Stromquellen, außerhalb der Schleife definiert
 
-        # Zeitfenster definieren
         now = datetime.now()
         time_ago = now - timedelta(days=days)
-        logging.debug(f"Zeitfenster: {time_ago} bis {now}")
+        logging.debug(f"Zeitfenster: {time_ago} bis {now}, days={days}")
 
-        # Aggregationslogik basierend auf days
         if days <= 30:
             period_type = "day"
             max_periods = days
-        elif days <= 210:  # Bis 30 Wochen
+            all_periods = [time_ago.date() + timedelta(days=i) for i in range(days)]
+        elif days <= 210:
             period_type = "week"
             max_periods = min(30, (days + 6) // 7)
-        elif days <= 900:  # Bis 30 Monate
+            all_periods = [time_ago.date() + timedelta(days=i*7 - time_ago.weekday())
+                          for i in range(max_periods)]
+        elif days <= 900:
             period_type = "month"
             max_periods = min(30, (days + 29) // 30)
-        else:  # Jahre
+            start_month = time_ago.replace(day=1)
+            all_periods = [start_month + relativedelta(months=i) for i in range(max_periods)]
+        else:
             period_type = "year"
             max_periods = min(30, (days + 364) // 365)
+            start_year = time_ago.replace(month=1, day=1)
+            all_periods = [start_year + relativedelta(years=i) for i in range(max_periods)]
+        logging.info(f"Periodentyp: {period_type}, max_periods: {max_periods}")
 
-        # CSV-Datei asynchron lesen
-        async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
-            lines = await csvfile.readlines()
-            lines = lines[1:]  # Header überspringen
-            logging.debug(f"Anzahl CSV-Zeilen (ohne Header): {len(lines)}")
+        try:
+            async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
+                lines = await csvfile.readlines()
+        except FileNotFoundError:
+            logging.warning("heizungsdaten.csv nicht gefunden.")
+            await send_telegram_message(session, CHAT_ID, "Keine Daten verfügbar: CSV-Datei fehlt.")
+            return
 
-            last_timestamp = None
-            last_status = None
-            last_power_source = None
+        if len(lines) <= 1:
+            logging.warning("Keine Daten in heizungsdaten.csv vorhanden.")
+            await send_telegram_message(session, CHAT_ID, "Keine Daten in der CSV-Datei vorhanden.")
+            return
 
-            for line in lines:
-                parts = line.strip().split(',')
-                if len(parts) < 18:
-                    while len(parts) < 18:
-                        parts.append("N/A")
-                timestamp_str = parts[0].strip()
-                kompressor = parts[5].strip()
-                power_source = parts[17].strip() or "Unbekannt"
+        lines = lines[1:]
+        logging.debug(f"Anzahl CSV-Zeilen (ohne Header): {len(lines)}")
 
-                try:
-                    timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                    if timestamp < time_ago:
-                        continue
+        last_timestamp = None
+        last_status = None
+        last_power_source = None
+        seen_invalid_sources = set()  # Für einmaliges Logging
 
-                    # Periode bestimmen
-                    if period_type == "day":
-                        period = timestamp.date()
-                    elif period_type == "week":
-                        period = timestamp.date() - timedelta(days=timestamp.weekday())  # Wochenstart (Montag)
-                    elif period_type == "month":
-                        period = timestamp.date().replace(day=1)  # Monatsstart
-                    else:  # year
-                        period = timestamp.date().replace(month=1, day=1)  # Jahresstart
+        for line in lines:
+            parts = line.strip().split(',')
+            if len(parts) < 18:
+                parts.extend(["N/A"] * (18 - len(parts)))
+                logging.debug(f"Zeile aufgefüllt: {line.strip()}")
 
-                    if period not in runtime_per_period:
-                        runtime_per_period[period] = {
-                            "Direkter PV-Strom": 0,
-                            "Strom aus der Batterie": 0,
-                            "Strom vom Netz": 0,
-                            "Unbekannt": 0
-                        }
+            timestamp_str = parts[0].strip()
+            kompressor = parts[5].strip()
+            # Hier wird die neue Logik eingefügt:
+            valid_power_sources = {"Direkter PV-Strom", "Strom aus der Batterie", "Strom vom Netz", "Unbekannt"}
+            power_source = parts[17].strip()
+            if not power_source or power_source not in valid_power_sources:
+                if power_source and power_source not in seen_invalid_sources:
+                    logging.warning(f"Ungültige Stromquelle gefunden: '{power_source}', Zeile: {line.strip()}")
+                    seen_invalid_sources.add(power_source)
+                power_source = "Unbekannt"
 
-                    # Laufzeit berechnen
-                    if last_timestamp and last_status == "EIN":
-                        time_diff = (timestamp - last_timestamp).total_seconds() / 60
-                        if time_diff > 0:
-                            last_period = (last_timestamp.date() if period_type == "day" else
-                                          last_timestamp.date() - timedelta(days=last_timestamp.weekday()) if period_type == "week" else
-                                          last_timestamp.date().replace(day=1) if period_type == "month" else
-                                          last_timestamp.date().replace(month=1, day=1))
-                            runtime_per_period[last_period][last_power_source] += time_diff
-
-                    last_timestamp = timestamp
-                    last_status = kompressor
-                    last_power_source = power_source
-
-                except ValueError as e:
-                    logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
+            try:
+                timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                if timestamp < time_ago:
                     continue
 
-        # Prüfe, ob Daten vorhanden sind
-        if not runtime_per_period:
-            logging.warning("Keine Laufzeitdaten verfügbar.")
-            await send_telegram_message(session, CHAT_ID, "Keine Laufzeitdaten für den angegebenen Zeitraum verfügbar.")
-            return
+                if period_type == "day":
+                    period = timestamp.date()
+                elif period_type == "week":
+                    period = timestamp.date() - timedelta(days=timestamp.weekday())
+                elif period_type == "month":
+                    period = timestamp.date().replace(day=1)
+                else:
+                    period = timestamp.date().replace(month=1, day=1)
 
-        # Nur Perioden mit Laufzeiten > 0 auswählen
-        active_periods = {p: times for p, times in runtime_per_period.items()
-                         if sum(times.values()) > 0}  # Summe der Laufzeiten pro Periode
-        if not active_periods:
-            logging.warning("Keine Perioden mit Laufzeiten > 0 gefunden.")
-            await send_telegram_message(session, CHAT_ID, "Keine Perioden mit Laufzeiten im angegebenen Zeitraum.")
-            return
+                if period not in runtime_per_period:
+                    runtime_per_period[period] = {
+                        "Direkter PV-Strom": 0,
+                        "Strom aus der Batterie": 0,
+                        "Strom vom Netz": 0,
+                        "Unbekannt": 0
+                    }
 
-        # Begrenze auf die letzten max_periods und sortiere
-        periods_sorted = sorted(active_periods.keys())[-max_periods:]
-        pv_times = [active_periods[p].get("Direkter PV-Strom", 0) for p in periods_sorted]
-        battery_times = [active_periods[p].get("Strom aus der Batterie", 0) for p in periods_sorted]
-        grid_times = [active_periods[p].get("Strom vom Netz", 0) for p in periods_sorted]
-        unknown_times = [active_periods[p].get("Unbekannt", 0) for p in periods_sorted]
+                if last_timestamp and last_status == "EIN":
+                    time_diff = (timestamp - last_timestamp).total_seconds() / 60
+                    if time_diff > 0:
+                        last_period = (last_timestamp.date() if period_type == "day" else
+                                      last_timestamp.date() - timedelta(days=last_timestamp.weekday()) if period_type == "week" else
+                                      last_timestamp.date().replace(day=1) if period_type == "month" else
+                                      last_timestamp.date().replace(month=1, day=1))
+                        runtime_per_period[last_period][last_power_source] += time_diff
 
-        # Diagramm erstellen
-        plt.figure(figsize=(10, 6))
-        plt.bar(periods_sorted, pv_times, label="PV", color=color_map["Direkter PV-Strom"])
-        plt.bar(periods_sorted, battery_times, bottom=pv_times, label="Batterie", color=color_map["Strom aus der Batterie"])
-        plt.bar(periods_sorted, grid_times, bottom=[pv + bat for pv, bat in zip(pv_times, battery_times)],
+                last_timestamp = timestamp
+                last_status = kompressor
+                last_power_source = power_source
+
+            except ValueError as e:
+                logging.error(f"Ungültiger Zeitstempel in Zeile: {line.strip()}, Fehler: {e}")
+                continue
+            except Exception as e:
+                logging.error(f"Unerwarteter Fehler bei Zeile: {line.strip()}, Fehler: {e}, last_power_source: {last_power_source}")
+                continue
+
+        pv_times = [runtime_per_period.get(p, {"Direkter PV-Strom": 0})["Direkter PV-Strom"] for p in all_periods]
+        battery_times = [runtime_per_period.get(p, {"Strom aus der Batterie": 0})["Strom aus der Batterie"] for p in all_periods]
+        grid_times = [runtime_per_period.get(p, {"Strom vom Netz": 0})["Strom vom Netz"] for p in all_periods]
+        unknown_times = [runtime_per_period.get(p, {"Unbekannt": 0})["Unbekannt"] for p in all_periods]
+
+        plt.figure(figsize=(12, 6))
+        plt.bar(all_periods, pv_times, label="PV", color=color_map["Direkter PV-Strom"])
+        plt.bar(all_periods, battery_times, bottom=pv_times, label="Batterie", color=color_map["Strom aus der Batterie"])
+        plt.bar(all_periods, grid_times, bottom=[pv + bat for pv, bat in zip(pv_times, battery_times)],
                 label="Netz", color=color_map["Strom vom Netz"])
-        plt.bar(periods_sorted, unknown_times,
+        plt.bar(all_periods, unknown_times,
                 bottom=[pv + bat + grid for pv, bat, grid in zip(pv_times, battery_times, grid_times)],
                 label="Unbekannt", color=color_map["Unbekannt"])
 
@@ -513,10 +522,9 @@ async def get_runtime_bar_chart(session, days=7):
         plt.ylabel("Laufzeit (Minuten)")
         plt.title(f"Kompressor-Laufzeiten (letzte {days} Tage, {period_type})")
         plt.legend(loc="upper left")
-        plt.xticks(rotation=45)
+        plt.xticks(all_periods, rotation=45)
         plt.tight_layout()
 
-        # Bild speichern und senden
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
@@ -535,8 +543,9 @@ async def get_runtime_bar_chart(session, days=7):
         buf.close()
 
     except Exception as e:
-        logging.error(f"Fehler beim Erstellen des Diagramms: {e}", exc_info=True)
-        await send_telegram_message(session, CHAT_ID, f"Fehler: {str(e)}")
+        logging.error(f"Kritischer Fehler in get_runtime_bar_chart: {e}", exc_info=True)
+        await send_telegram_message(session, CHAT_ID, f"Kritischer Fehler beim Erstellen des Diagramms: {str(e)}")
+
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
     global last_api_call, last_api_data, last_api_timestamp
@@ -1679,10 +1688,12 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                     if len(parts) > 1:
                         try:
                             days = int(parts[1])
-                            if days < 1 or days > 30:  # Begrenzung auf 1-30 Tage
+                            if days < 1 or days > 900:  # Begrenzung auf 1-30 Tage
                                 days = 7
+                                logging.warning(f"Ungültige Tagesanzahl '{parts[1]}', muss zwischen 1 und 900 liegen. Verwende Standardwert 7.")
                         except ValueError:
                             days = 7
+                            logging.warning(f"Ungültige Zahl '{parts[1]}', verwende Standardwert 7.")
                     logging.info(f"Laufzeiten-Diagramm wird für {days} Tage erstellt.")
                     await get_runtime_bar_chart(session, days=days)
                 else:
