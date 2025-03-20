@@ -386,6 +386,157 @@ async def get_boiler_temperature_history(session, hours):
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
 
+async def get_runtime_bar_chart(session, days=7):
+    """Erstellt ein gestapeltes Balkendiagramm der Kompressor-Laufzeiten, aggregiert nach Tagen, Wochen, Monaten oder Jahren.
+    Perioden ohne Daten werden nicht angezeigt."""
+    try:
+        # Datenstrukturen für Laufzeiten
+        runtime_per_period = {}  # {Periode: {"PV": Minuten, ...}}
+        color_map = {
+            "Direkter PV-Strom": "green",
+            "Strom aus der Batterie": "yellow",
+            "Strom vom Netz": "red",
+            "Unbekannt": "gray"
+        }
+
+        # Zeitfenster definieren
+        now = datetime.now()
+        time_ago = now - timedelta(days=days)
+        logging.debug(f"Zeitfenster: {time_ago} bis {now}")
+
+        # Aggregationslogik basierend auf days
+        if days <= 30:
+            period_type = "day"
+            max_periods = days
+        elif days <= 210:  # Bis 30 Wochen
+            period_type = "week"
+            max_periods = min(30, (days + 6) // 7)
+        elif days <= 900:  # Bis 30 Monate
+            period_type = "month"
+            max_periods = min(30, (days + 29) // 30)
+        else:  # Jahre
+            period_type = "year"
+            max_periods = min(30, (days + 364) // 365)
+
+        # CSV-Datei asynchron lesen
+        async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
+            lines = await csvfile.readlines()
+            lines = lines[1:]  # Header überspringen
+            logging.debug(f"Anzahl CSV-Zeilen (ohne Header): {len(lines)}")
+
+            last_timestamp = None
+            last_status = None
+            last_power_source = None
+
+            for line in lines:
+                parts = line.strip().split(',')
+                if len(parts) < 18:
+                    while len(parts) < 18:
+                        parts.append("N/A")
+                timestamp_str = parts[0].strip()
+                kompressor = parts[5].strip()
+                power_source = parts[17].strip() or "Unbekannt"
+
+                try:
+                    timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                    if timestamp < time_ago:
+                        continue
+
+                    # Periode bestimmen
+                    if period_type == "day":
+                        period = timestamp.date()
+                    elif period_type == "week":
+                        period = timestamp.date() - timedelta(days=timestamp.weekday())  # Wochenstart (Montag)
+                    elif period_type == "month":
+                        period = timestamp.date().replace(day=1)  # Monatsstart
+                    else:  # year
+                        period = timestamp.date().replace(month=1, day=1)  # Jahresstart
+
+                    if period not in runtime_per_period:
+                        runtime_per_period[period] = {
+                            "Direkter PV-Strom": 0,
+                            "Strom aus der Batterie": 0,
+                            "Strom vom Netz": 0,
+                            "Unbekannt": 0
+                        }
+
+                    # Laufzeit berechnen
+                    if last_timestamp and last_status == "EIN":
+                        time_diff = (timestamp - last_timestamp).total_seconds() / 60
+                        if time_diff > 0:
+                            last_period = (last_timestamp.date() if period_type == "day" else
+                                          last_timestamp.date() - timedelta(days=last_timestamp.weekday()) if period_type == "week" else
+                                          last_timestamp.date().replace(day=1) if period_type == "month" else
+                                          last_timestamp.date().replace(month=1, day=1))
+                            runtime_per_period[last_period][last_power_source] += time_diff
+
+                    last_timestamp = timestamp
+                    last_status = kompressor
+                    last_power_source = power_source
+
+                except ValueError as e:
+                    logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
+                    continue
+
+        # Prüfe, ob Daten vorhanden sind
+        if not runtime_per_period:
+            logging.warning("Keine Laufzeitdaten verfügbar.")
+            await send_telegram_message(session, CHAT_ID, "Keine Laufzeitdaten für den angegebenen Zeitraum verfügbar.")
+            return
+
+        # Nur Perioden mit Laufzeiten > 0 auswählen
+        active_periods = {p: times for p, times in runtime_per_period.items()
+                         if sum(times.values()) > 0}  # Summe der Laufzeiten pro Periode
+        if not active_periods:
+            logging.warning("Keine Perioden mit Laufzeiten > 0 gefunden.")
+            await send_telegram_message(session, CHAT_ID, "Keine Perioden mit Laufzeiten im angegebenen Zeitraum.")
+            return
+
+        # Begrenze auf die letzten max_periods und sortiere
+        periods_sorted = sorted(active_periods.keys())[-max_periods:]
+        pv_times = [active_periods[p].get("Direkter PV-Strom", 0) for p in periods_sorted]
+        battery_times = [active_periods[p].get("Strom aus der Batterie", 0) for p in periods_sorted]
+        grid_times = [active_periods[p].get("Strom vom Netz", 0) for p in periods_sorted]
+        unknown_times = [active_periods[p].get("Unbekannt", 0) for p in periods_sorted]
+
+        # Diagramm erstellen
+        plt.figure(figsize=(10, 6))
+        plt.bar(periods_sorted, pv_times, label="PV", color=color_map["Direkter PV-Strom"])
+        plt.bar(periods_sorted, battery_times, bottom=pv_times, label="Batterie", color=color_map["Strom aus der Batterie"])
+        plt.bar(periods_sorted, grid_times, bottom=[pv + bat for pv, bat in zip(pv_times, battery_times)],
+                label="Netz", color=color_map["Strom vom Netz"])
+        plt.bar(periods_sorted, unknown_times,
+                bottom=[pv + bat + grid for pv, bat, grid in zip(pv_times, battery_times, grid_times)],
+                label="Unbekannt", color=color_map["Unbekannt"])
+
+        plt.xlabel("Periode" if period_type == "day" else f"{period_type.capitalize()} (Startdatum)")
+        plt.ylabel("Laufzeit (Minuten)")
+        plt.title(f"Kompressor-Laufzeiten (letzte {days} Tage, {period_type})")
+        plt.legend(loc="upper left")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        # Bild speichern und senden
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=100)
+        buf.seek(0)
+        plt.close()
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        form = FormData()
+        form.add_field("chat_id", CHAT_ID)
+        form.add_field("caption", f"📊 Laufzeiten der letzten {days} Tage ({period_type})")
+        form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
+
+        async with session.post(url, data=form) as response:
+            response.raise_for_status()
+            logging.info(f"Laufzeit-Diagramm für {days} Tage ({period_type}) gesendet.")
+
+        buf.close()
+
+    except Exception as e:
+        logging.error(f"Fehler beim Erstellen des Diagramms: {e}", exc_info=True)
+        await send_telegram_message(session, CHAT_ID, f"Fehler: {str(e)}")
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
     global last_api_call, last_api_data, last_api_timestamp
@@ -1522,13 +1673,23 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                     await get_boiler_temperature_history(session, 6)
                 elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
                     await get_boiler_temperature_history(session, 24)
-                elif message_text == "⏱️ laufzeiten" or message_text == "laufzeiten":  # Neuer Button
-                    await send_runtimes_telegram(session)
+                elif message_text.startswith("⏱️ laufzeiten") or message_text.startswith("laufzeiten"):
+                    parts = message_text.split()
+                    days = 7  # Standardwert
+                    if len(parts) > 1:
+                        try:
+                            days = int(parts[1])
+                            if days < 1 or days > 30:  # Begrenzung auf 1-30 Tage
+                                days = 7
+                        except ValueError:
+                            days = 7
+                    logging.info(f"Laufzeiten-Diagramm wird für {days} Tage erstellt.")
+                    await get_runtime_bar_chart(session, days=days)
                 else:
                     await send_unknown_command_message(session, chat_id)
-            last_update_id = update['update_id'] + 1
-            logging.debug(f"last_update_id aktualisiert: {last_update_id}")
-    return last_update_id
+                last_update_id = update['update_id'] + 1
+                logging.debug(f"last_update_id aktualisiert: {last_update_id}")
+            return last_update_id
 
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
