@@ -733,11 +733,11 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd, 
         f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
         f"Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
-        f"⚡ Energiequelle: {power_source}\n"  # Neue Zeile für die Energiequelle
     )
 
-    # Laufzeit je nach Kompressorstatus anzeigen
+    # Wenn Kompressor läuft, füge Energiequelle und aktuelle Laufzeit hinzu
     if kompressor_status:
+        message += f"⚡ Energiequelle: {power_source}\n"
         message += f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
     else:
         message += f"⏱️ Letzte Laufzeit: {str(last_runtime).split('.')[0]}\n"
