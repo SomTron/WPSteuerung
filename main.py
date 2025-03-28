@@ -307,6 +307,7 @@ async def get_boiler_temperature_history(session, hours):
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
             "Strom vom Netz": "red",
+            "PV + Netzstrom": "orange",  # Neue Farbe für gemischten Bezug
             "Unbekannt": "gray"
         }
 
@@ -387,6 +388,7 @@ async def get_boiler_temperature_history(session, hours):
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
 
+
 async def get_runtime_bar_chart(session, days=7):
     logging.info(f"Funktion aufgerufen mit days={days}")
     try:
@@ -395,9 +397,10 @@ async def get_runtime_bar_chart(session, days=7):
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
             "Strom vom Netz": "red",
+            "PV + Netzstrom": "orange",  # Neue Kategorie
             "Unbekannt": "gray"
         }
-        valid_power_sources = set(color_map.keys())  # Gültige Stromquellen, außerhalb der Schleife definiert
+        valid_power_sources = set(color_map.keys())
 
         now = datetime.now()
         time_ago = now - timedelta(days=days)
@@ -410,8 +413,8 @@ async def get_runtime_bar_chart(session, days=7):
         elif days <= 210:
             period_type = "week"
             max_periods = min(30, (days + 6) // 7)
-            all_periods = [time_ago.date() + timedelta(days=i*7 - time_ago.weekday())
-                          for i in range(max_periods)]
+            all_periods = [time_ago.date() + timedelta(days=i * 7 - time_ago.weekday())
+                           for i in range(max_periods)]
         elif days <= 900:
             period_type = "month"
             max_periods = min(30, (days + 29) // 30)
@@ -443,7 +446,7 @@ async def get_runtime_bar_chart(session, days=7):
         last_timestamp = None
         last_status = None
         last_power_source = None
-        seen_invalid_sources = set()  # Für einmaliges Logging
+        seen_invalid_sources = set()
 
         for line in lines:
             parts = line.strip().split(',')
@@ -453,9 +456,8 @@ async def get_runtime_bar_chart(session, days=7):
 
             timestamp_str = parts[0].strip()
             kompressor = parts[5].strip()
-            # Hier wird die neue Logik eingefügt:
-            valid_power_sources = {"Direkter PV-Strom", "Strom aus der Batterie", "Strom vom Netz", "Unbekannt"}
             power_source = parts[17].strip()
+
             if not power_source or power_source not in valid_power_sources:
                 if power_source and power_source not in seen_invalid_sources:
                     logging.warning(f"Ungültige Stromquelle gefunden: '{power_source}', Zeile: {line.strip()}")
@@ -481,6 +483,7 @@ async def get_runtime_bar_chart(session, days=7):
                         "Direkter PV-Strom": 0,
                         "Strom aus der Batterie": 0,
                         "Strom vom Netz": 0,
+                        "PV + Netzstrom": 0,  # Neue Kategorie
                         "Unbekannt": 0
                     }
 
@@ -488,9 +491,10 @@ async def get_runtime_bar_chart(session, days=7):
                     time_diff = (timestamp - last_timestamp).total_seconds() / 60
                     if time_diff > 0:
                         last_period = (last_timestamp.date() if period_type == "day" else
-                                      last_timestamp.date() - timedelta(days=last_timestamp.weekday()) if period_type == "week" else
-                                      last_timestamp.date().replace(day=1) if period_type == "month" else
-                                      last_timestamp.date().replace(month=1, day=1))
+                                       last_timestamp.date() - timedelta(
+                                           days=last_timestamp.weekday()) if period_type == "week" else
+                                       last_timestamp.date().replace(day=1) if period_type == "month" else
+                                       last_timestamp.date().replace(month=1, day=1))
                         runtime_per_period[last_period][last_power_source] += time_diff
 
                 last_timestamp = timestamp
@@ -501,21 +505,31 @@ async def get_runtime_bar_chart(session, days=7):
                 logging.error(f"Ungültiger Zeitstempel in Zeile: {line.strip()}, Fehler: {e}")
                 continue
             except Exception as e:
-                logging.error(f"Unerwarteter Fehler bei Zeile: {line.strip()}, Fehler: {e}, last_power_source: {last_power_source}")
+                logging.error(
+                    f"Unerwarteter Fehler bei Zeile: {line.strip()}, Fehler: {e}, last_power_source: {last_power_source}")
                 continue
 
+        # Daten für das Diagramm vorbereiten
         pv_times = [runtime_per_period.get(p, {"Direkter PV-Strom": 0})["Direkter PV-Strom"] for p in all_periods]
-        battery_times = [runtime_per_period.get(p, {"Strom aus der Batterie": 0})["Strom aus der Batterie"] for p in all_periods]
+        battery_times = [runtime_per_period.get(p, {"Strom aus der Batterie": 0})["Strom aus der Batterie"] for p in
+                         all_periods]
+        mixed_times = [runtime_per_period.get(p, {"PV + Netzstrom": 0})["PV + Netzstrom"] for p in
+                       all_periods]  # Neue Kategorie
         grid_times = [runtime_per_period.get(p, {"Strom vom Netz": 0})["Strom vom Netz"] for p in all_periods]
         unknown_times = [runtime_per_period.get(p, {"Unbekannt": 0})["Unbekannt"] for p in all_periods]
 
         plt.figure(figsize=(12, 6))
         plt.bar(all_periods, pv_times, label="PV", color=color_map["Direkter PV-Strom"])
-        plt.bar(all_periods, battery_times, bottom=pv_times, label="Batterie", color=color_map["Strom aus der Batterie"])
-        plt.bar(all_periods, grid_times, bottom=[pv + bat for pv, bat in zip(pv_times, battery_times)],
+        plt.bar(all_periods, battery_times, bottom=pv_times, label="Batterie",
+                color=color_map["Strom aus der Batterie"])
+        plt.bar(all_periods, mixed_times, bottom=[pv + bat for pv, bat in zip(pv_times, battery_times)],
+                label="PV + Netz", color=color_map["PV + Netzstrom"])  # Neue Kategorie
+        plt.bar(all_periods, grid_times,
+                bottom=[pv + bat + mix for pv, bat, mix in zip(pv_times, battery_times, mixed_times)],
                 label="Netz", color=color_map["Strom vom Netz"])
         plt.bar(all_periods, unknown_times,
-                bottom=[pv + bat + grid for pv, bat, grid in zip(pv_times, battery_times, grid_times)],
+                bottom=[pv + bat + mix + grid for pv, bat, mix, grid in
+                        zip(pv_times, battery_times, mixed_times, grid_times)],
                 label="Unbekannt", color=color_map["Unbekannt"])
 
         plt.xlabel("Periode" if period_type == "day" else f"{period_type.capitalize()} (Startdatum)")
