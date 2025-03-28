@@ -596,17 +596,22 @@ async def get_solax_data(session):
 def get_power_source(solax_data):
     pv_production = solax_data.get("powerdc1", 0) + solax_data.get("powerdc2", 0)
     bat_power = solax_data.get("batPower", 0)
-    feedin_power = solax_data.get("feedinpower", 0)
+    feedin_power = solax_data.get("feedinpower", 0)  # positiv = Einspeisung, negativ = Bezug
     consumption = solax_data.get("consumeenergy", 0)
 
-    if pv_production > 0 and (bat_power >= 0 or feedin_power > 0):
+    if feedin_power < 0:  # Wir beziehen Strom vom Netz
+        if pv_production > 0:
+            return "PV + Netzstrom"
+        else:
+            return "Strom vom Netz"
+    elif feedin_power > 0:  # Wir speisen ein
         return "Direkter PV-Strom"
-    elif bat_power < 0 and feedin_power >= 0 and pv_production <= consumption:
+    elif bat_power < 0:  # Batterie entlädt
         return "Strom aus der Batterie"
-    elif feedin_power < 0:
-        return "Strom vom Netz"
+    elif pv_production > 0 and bat_power >= 0 and feedin_power == 0:  # PV deckt Verbrauch
+        return "Direkter PV-Strom"
     else:
-        return "Unbekannt"  # Fallback für edge cases wie batPower = 0, feedinpower = 0
+        return "Unbekannt"
 
 # Funktion für die benutzerdefinierte Telegram-Tastatur
 def get_custom_keyboard():
