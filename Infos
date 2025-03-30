@@ -1,0 +1,10 @@
+Download daten:
+Windows Powershell: scp -r patrik@192.168.0.210: /home/patrik/heizungsdaten.csv C:\Users\Patrik\Desktop\
+
+tail -f heizungssteuerung.log
+letzte Logs anzeigen
+
+wpsteuerung.ddns.net
+
+source myenv/bin/activate
+Venv: myenv starten
