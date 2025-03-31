@@ -6,5 +6,7 @@ letzte Logs anzeigen
 
 wpsteuerung.ddns.net
 
+sudo systemctl restart my_script.service
+
 source myenv/bin/activate
 Venv: myenv starten
