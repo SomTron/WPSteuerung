@@ -481,8 +481,8 @@ async def get_runtime_bar_chart(session, days=7):
                 logging.debug(f"Zeile aufgefüllt: {line.strip()}")
 
             timestamp_str = parts[0].strip()
-            kompressor = parts[5].strip()
-            power_source = parts[17].strip()
+            kompressor = parts[6].strip()  # Anpassung: Index 6 statt 5, da T_Mittig hinzugefügt wurde
+            power_source = parts[18].strip()  # Anpassung: Index 18 statt 17, da T_Mittig hinzugefügt wurde
 
             if not power_source or power_source not in valid_power_sources:
                 if power_source and power_source not in seen_invalid_sources:
@@ -1311,39 +1311,27 @@ def is_data_old(timestamp):
 
 # Asynchrone Task für Telegram-Updates
 async def telegram_task():
-    """Task für Telegram-Interaktionen."""
-    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, last_runtime, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
+    """Task zum kontinuierlichen Abrufen und Verarbeiten von Telegram-Nachrichten."""
+    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, last_runtime
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # Hole aktuelle Werte aus der Hauptschleife (globalen Variablen)
-                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
-                t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
-                t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])
-                t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
-
-                url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id}"
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
                 async with session.get(url) as response:
-                    data = await response.json()
-                    if data["ok"]:
-                        updates = data["result"]
+                    if response.status == 200:
+                        data = await response.json()
+                        updates = data.get("result", [])
                         if updates:
                             last_update_id = await process_telegram_messages_async(
-                                session,
-                                t_boiler_oben,
-                                t_boiler_hinten,
-                                t_boiler_mittig,
-                                t_verd,
-                                updates,
-                                last_update_id,
-                                kompressor_ein,
-                                str(current_runtime).split('.')[0] if kompressor_ein and current_runtime else "0:00:00",
-                                str(total_runtime_today).split('.')[0],
+                                session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id,
+                                kompressor_ein, str(current_runtime).split('.')[0] if kompressor_ein else "0",
+                                str(total_runtime_today).split('.')[0], str(last_runtime).split('.')[0]
                             )
+                    else:
+                        logging.error(f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}")
             except Exception as e:
-                logging.error(f"Fehler im Telegram-Task: {e}", exc_info=True)
-                await asyncio.sleep(30)  # Wartezeit bei Fehler
-            await asyncio.sleep(5)  # Normale Wartezeit zwischen Abfragen
+                logging.error(f"Fehler in telegram_task: {e}", exc_info=True)
+            await asyncio.sleep(2)
 
 
 # Asynchrone Task für Display-Updates
@@ -1672,7 +1660,7 @@ async def main_loop(session):
         raise
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, letzte_laufzeit):
     """Verarbeitet eingehende Telegram-Nachrichten und gibt die aktualisierte last_update_id zurück."""
     if updates:
         for update in updates:
@@ -1694,6 +1682,8 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                         )
                     else:
                         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen des Status.")
+                elif message_text == "⏱️ laufzeiten" or message_text == "laufzeiten":
+                    await get_runtime_bar_chart(session, days=7)  # Aufruf mit 7 Tagen
                 elif message_text == "📈 verlauf 24h" or message_text == "verlauf 24h":
                     await get_boiler_temperature_history(session, 24)
                 elif message_text == "📈 verlauf 12h" or message_text == "verlauf 12h":
