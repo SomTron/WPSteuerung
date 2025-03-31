@@ -1311,37 +1311,39 @@ def is_data_old(timestamp):
 
 # Asynchrone Task für Telegram-Updates
 async def telegram_task():
-    """Separate Task für schnelle Telegram-Update-Verarbeitung."""
-    global last_update_id
-    max_retries = 3
-    async with aiohttp.ClientSession() as session:  # Eigene Session für telegram_task
+    """Task für Telegram-Interaktionen."""
+    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, last_runtime, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
+    async with aiohttp.ClientSession() as session:
         while True:
-            for attempt in range(max_retries):
-                try:
-                    updates = await get_telegram_updates(session, last_update_id)
-                    if updates is not None:
-                        last_update_id = await process_telegram_messages_async(
-                            session,
-                            await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"]),
-                            await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"]),
-                            await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"]),
-                            updates,
-                            last_update_id,
-                            kompressor_ein,
-                            str(current_runtime).split('.')[0],
-                            str(total_runtime_today).split('.')[0]
-                        )
-                        break  # Erfolgreich, Schleife verlassen
-                    else:
-                        logging.warning(f"Telegram-Updates waren None, Versuch {attempt + 1}/{max_retries}")
-                except Exception as e:
-                    logging.error(f"Fehler in telegram_task (Versuch {attempt + 1}/{max_retries}): {e}", exc_info=True)
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(10)  # 10 Sekunden warten vor erneutem Versuch
-                    else:
-                        logging.error("Maximale Wiederholungen erreicht, warte 5 Minuten")
-                        await asyncio.sleep(300)  # 5 Minuten warten nach Fehlschlag
-            await asyncio.sleep(0.1)  # Schnelles Polling bei Erfolg
+            try:
+                # Hole aktuelle Werte aus der Hauptschleife (globalen Variablen)
+                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
+                t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
+                t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])
+                t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
+
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id}"
+                async with session.get(url) as response:
+                    data = await response.json()
+                    if data["ok"]:
+                        updates = data["result"]
+                        if updates:
+                            last_update_id = await process_telegram_messages_async(
+                                session,
+                                t_boiler_oben,
+                                t_boiler_hinten,
+                                t_boiler_mittig,
+                                t_verd,
+                                updates,
+                                last_update_id,
+                                kompressor_ein,
+                                str(current_runtime).split('.')[0] if kompressor_ein and current_runtime else "0:00:00",
+                                str(total_runtime_today).split('.')[0],
+                            )
+            except Exception as e:
+                logging.error(f"Fehler im Telegram-Task: {e}", exc_info=True)
+                await asyncio.sleep(30)  # Wartezeit bei Fehler
+            await asyncio.sleep(5)  # Normale Wartezeit zwischen Abfragen
 
 
 # Asynchrone Task für Display-Updates
@@ -1479,7 +1481,7 @@ async def main_loop(session):
     Raises:
         asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
     """
-    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler, last_pressure_error_time
+    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler, last_pressure_error_time, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd
 
     if not await initialize_gpio():
         logging.critical("Programm wird aufgrund fehlender GPIO-Initialisierung beendet.")
@@ -1671,6 +1673,7 @@ async def main_loop(session):
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
+    """Verarbeitet eingehende Telegram-Nachrichten und gibt die aktualisierte last_update_id zurück."""
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
@@ -1685,48 +1688,37 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Temperaturen.")
                 elif message_text == "📊 status" or message_text == "status":
                     if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_boiler_mittig != "Fehler" and t_verd != "Fehler":
-                        await send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
-                                                   aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt,
-                                                   aktueller_ausschaltpunkt)
+                        await send_status_telegram(
+                            session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
+                            aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
+                        )
                     else:
                         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen des Status.")
-                elif message_text == "🆘 hilfe" or message_text == "hilfe":
-                    await send_help_message(session)
-                elif message_text == "🌴 urlaub" or message_text == "urlaub":
-                    if urlaubsmodus_aktiv:
-                        await send_telegram_message(session, CHAT_ID, "🌴 Urlaubsmodus ist bereits aktiviert.")
-                        logging.info("Urlaubsmodus bereits aktiv, keine Änderung")
-                    else:
-                        await aktivere_urlaubsmodus(session)
-                elif message_text == "🏠 urlaub aus" or message_text == "urlaub aus":
-                    if not urlaubsmodus_aktiv:
-                        await send_telegram_message(session, CHAT_ID, "🏠 Urlaubsmodus ist bereits deaktiviert.")
-                        logging.info("Urlaubsmodus bereits deaktiviert, keine Änderung")
-                    else:
-                        await deaktivere_urlaubsmodus(session)
+                elif message_text == "📈 verlauf 24h" or message_text == "verlauf 24h":
+                    await get_boiler_temperature_history(session, 24)
+                elif message_text == "📈 verlauf 12h" or message_text == "verlauf 12h":
+                    await get_boiler_temperature_history(session, 12)
                 elif message_text == "📈 verlauf 6h" or message_text == "verlauf 6h":
                     await get_boiler_temperature_history(session, 6)
-                elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
-                    await get_boiler_temperature_history(session, 24)
-                elif message_text.startswith("⏱️ laufzeiten") or message_text.startswith("laufzeiten"):
-                    parts = message_text.split()
-                    days = 7  # Standardwert
-                    if len(parts) > 1:
-                        try:
-                            days = int(parts[1])
-                            if days < 1 or days > 900:  # Begrenzung auf 1-30 Tage
-                                days = 7
-                                logging.warning(f"Ungültige Tagesanzahl '{parts[1]}', muss zwischen 1 und 900 liegen. Verwende Standardwert 7.")
-                        except ValueError:
-                            days = 7
-                            logging.warning(f"Ungültige Zahl '{parts[1]}', verwende Standardwert 7.")
-                    logging.info(f"Laufzeiten-Diagramm wird für {days} Tage erstellt.")
-                    await get_runtime_bar_chart(session, days=days)
-                else:
-                    await send_unknown_command_message(session, chat_id)
+                elif message_text == "📈 verlauf 1h" or message_text == "verlauf 1h":
+                    await get_boiler_temperature_history(session, 1)
+                elif message_text == "🔛 kompressor ein":
+                    await asyncio.to_thread(set_kompressor_status, True, force_on=True)
+                    await send_telegram_message(session, CHAT_ID, "Kompressor wird angeschaltet.")
+                elif message_text == "🔴 kompressor aus":
+                    await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                    await send_telegram_message(session, CHAT_ID, "Kompressor wird ausgeschaltet.")
+                elif message_text == "🏖️ urlaubsmodus ein":
+                    global urlaubsmodus_aktiv
+                    urlaubsmodus_aktiv = True
+                    await send_telegram_message(session, CHAT_ID, "Urlaubsmodus aktiviert.")
+                elif message_text == "🏠 urlaubsmodus aus":
+                    urlaubsmodus_aktiv = False
+                    await send_telegram_message(session, CHAT_ID, "Urlaubsmodus deaktiviert.")
                 last_update_id = update['update_id'] + 1
                 logging.debug(f"last_update_id aktualisiert: {last_update_id}")
-            return last_update_id
+        return last_update_id
+    return last_update_id
 
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
