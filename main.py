@@ -423,7 +423,7 @@ async def get_runtime_bar_chart(session, days=7):
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
             "Strom vom Netz": "red",
-            "PV + Netzstrom": "orange",  # Neue Kategorie
+            "PV + Netzstrom": "orange",
             "Unbekannt": "gray"
         }
         valid_power_sources = set(color_map.keys())
@@ -466,7 +466,7 @@ async def get_runtime_bar_chart(session, days=7):
             await send_telegram_message(session, CHAT_ID, "Keine Daten in der CSV-Datei vorhanden.")
             return
 
-        lines = lines[1:]
+        lines = lines[1:]  # Header überspringen
         logging.debug(f"Anzahl CSV-Zeilen (ohne Header): {len(lines)}")
 
         last_timestamp = None
@@ -476,13 +476,14 @@ async def get_runtime_bar_chart(session, days=7):
 
         for line in lines:
             parts = line.strip().split(',')
-            if len(parts) < 18:
-                parts.extend(["N/A"] * (18 - len(parts)))
-                logging.debug(f"Zeile aufgefüllt: {line.strip()}")
+            # Fülle die Zeile mit "N/A" auf 19 Spalten auf, bevor wir darauf zugreifen
+            if len(parts) < 19:
+                parts.extend(["N/A"] * (19 - len(parts)))
+                logging.debug(f"Zeile aufgefüllt: {line.strip()} -> {','.join(parts)}")
 
             timestamp_str = parts[0].strip()
-            kompressor = parts[6].strip()  # Anpassung: Index 6 statt 5, da T_Mittig hinzugefügt wurde
-            power_source = parts[18].strip()  # Anpassung: Index 18 statt 17, da T_Mittig hinzugefügt wurde
+            kompressor = parts[6].strip()  # Kompressor-Status
+            power_source = parts[18].strip()  # PowerSource
 
             if not power_source or power_source not in valid_power_sources:
                 if power_source and power_source not in seen_invalid_sources:
@@ -509,7 +510,7 @@ async def get_runtime_bar_chart(session, days=7):
                         "Direkter PV-Strom": 0,
                         "Strom aus der Batterie": 0,
                         "Strom vom Netz": 0,
-                        "PV + Netzstrom": 0,  # Neue Kategorie
+                        "PV + Netzstrom": 0,
                         "Unbekannt": 0
                     }
 
@@ -539,8 +540,7 @@ async def get_runtime_bar_chart(session, days=7):
         pv_times = [runtime_per_period.get(p, {"Direkter PV-Strom": 0})["Direkter PV-Strom"] for p in all_periods]
         battery_times = [runtime_per_period.get(p, {"Strom aus der Batterie": 0})["Strom aus der Batterie"] for p in
                          all_periods]
-        mixed_times = [runtime_per_period.get(p, {"PV + Netzstrom": 0})["PV + Netzstrom"] for p in
-                       all_periods]  # Neue Kategorie
+        mixed_times = [runtime_per_period.get(p, {"PV + Netzstrom": 0})["PV + Netzstrom"] for p in all_periods]
         grid_times = [runtime_per_period.get(p, {"Strom vom Netz": 0})["Strom vom Netz"] for p in all_periods]
         unknown_times = [runtime_per_period.get(p, {"Unbekannt": 0})["Unbekannt"] for p in all_periods]
 
@@ -549,7 +549,7 @@ async def get_runtime_bar_chart(session, days=7):
         plt.bar(all_periods, battery_times, bottom=pv_times, label="Batterie",
                 color=color_map["Strom aus der Batterie"])
         plt.bar(all_periods, mixed_times, bottom=[pv + bat for pv, bat in zip(pv_times, battery_times)],
-                label="PV + Netz", color=color_map["PV + Netzstrom"])  # Neue Kategorie
+                label="PV + Netz", color=color_map["PV + Netzstrom"])
         plt.bar(all_periods, grid_times,
                 bottom=[pv + bat + mix for pv, bat, mix in zip(pv_times, battery_times, mixed_times)],
                 label="Netz", color=color_map["Strom vom Netz"])
