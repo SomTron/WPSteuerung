@@ -10,3 +10,7 @@ sudo systemctl restart my_script.service
 
 source myenv/bin/activate
 Venv: myenv starten
+
+Logik:
+
+Bei PV soll so lange geheizt werden bis einer der Fühler 50 Grad erreicht, fällt einer der Fühler unter 45 Grad soll der Kompressor heizen. Ohne PV: der mittlere und obere Fühler sollen über 42 Grad gehalten werden.
