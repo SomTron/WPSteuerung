@@ -1566,6 +1566,8 @@ async def main_loop(session):
                     if t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None
                     else "Fehler"
                 )
+
+                # Sicherheitsprüfungen (Druck, Verdampfer, Sensorfehler)
                 pressure_ok = await asyncio.to_thread(check_pressure)
                 now = datetime.now()
 
@@ -1599,24 +1601,48 @@ async def main_loop(session):
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     remaining_time = (PRESSURE_ERROR_DELAY - (now - last_pressure_error_time)).total_seconds()
                     ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
-                elif t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
+                    await asyncio.sleep(2)
+                    continue
+
+                if t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
                     ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
-                elif t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None:
+                    await asyncio.sleep(2)
+                    continue
+
+                # Neue Regelungslogik
+                if t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None:
+                    # PV-Überschuss-Modus
                     if solar_ueberschuss_aktiv:
-                        if t_boiler_hinten < UNTERER_FUEHLER_MIN and t_boiler_oben < aktueller_ausschaltpunkt:
-                            if not kompressor_ein:
-                                await asyncio.to_thread(set_kompressor_status, True)
-                        elif t_boiler_oben >= aktueller_ausschaltpunkt or t_boiler_hinten >= UNTERER_FUEHLER_MAX:
+                        # Ausschalten, wenn ein Fühler 50°C erreicht
+                        if t_boiler_oben >= 50 or t_boiler_mittig >= 50 or t_boiler_hinten >= 50:
                             if kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
-                    else:
-                        if t_boiler_oben < aktueller_einschaltpunkt and not kompressor_ein:
-                            await asyncio.to_thread(set_kompressor_status, True)
-                        elif t_boiler_oben >= aktueller_ausschaltpunkt and kompressor_ein:
-                            await asyncio.to_thread(set_kompressor_status, False)
+                                logging.info("Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= 50°C")
+                            ausschluss_grund = "Max. Temperatur erreicht (50°C)"
+                        # Einschalten, wenn ein Fühler unter 45°C fällt
+                        elif t_boiler_oben < 45 or t_boiler_mittig < 45 or t_boiler_hinten < 40:
+                            if not kompressor_ein:
+                                await asyncio.to_thread(set_kompressor_status, True)
+                                logging.info("Kompressor eingeschaltet: PV-Überschuss, ein Fühler < 45°C")
 
+                    # Normaler Modus (ohne PV-Überschuss)
+                    else:
+                        # Einschalten, wenn mittlerer oder oberer Fühler unter 42°C fällt
+                        if t_boiler_oben < 42 or t_boiler_mittig < 42:
+                            if not kompressor_ein:
+                                await asyncio.to_thread(set_kompressor_status, True)
+                                logging.info(
+                                    "Kompressor eingeschaltet: Normalmodus, t_boiler_oben oder t_boiler_mittig < 42°C")
+                        # Ausschalten, wenn beide Fühler über 42°C sind (mit Puffer)
+                        elif t_boiler_oben >= 45 and t_boiler_mittig >= 45:
+                            if kompressor_ein:
+                                await asyncio.to_thread(set_kompressor_status, False)
+                                logging.info(
+                                    "Kompressor ausgeschaltet: Normalmodus, t_boiler_oben und t_boiler_mittig >= 45°C")
+
+                # Laufzeit aktualisieren
                 if kompressor_ein and start_time:
                     current_runtime = datetime.now() - start_time
 
