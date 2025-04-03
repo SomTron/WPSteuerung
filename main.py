@@ -71,7 +71,7 @@ last_shutdown_time = datetime.now()
 last_config_hash = None
 last_log_time = datetime.now() - timedelta(minutes=1)
 last_kompressor_status = None
-last_update_id = None
+last_update_id = 0
 urlaubsmodus_aktiv = False
 pressure_error_sent = False
 aktueller_ausschaltpunkt = AUSSCHALTPUNKT
@@ -1318,20 +1318,28 @@ def is_data_old(timestamp):
 
 # Asynchrone Task für Telegram-Updates
 async def telegram_task():
-    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, last_runtime
+    global last_update_id
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                updates = await get_telegram_updates(session, last_update_id)
+                updates = await get_telegram_updates(session, last_update_id or 0)
                 if updates:
-                    last_update_id = await process_telegram_messages_async(
-                        session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id,
-                        kompressor_ein, current_runtime, total_runtime_today, last_runtime
+                    new_update_id = await process_telegram_messages_async(
+                        session, t_boiler_oben, t_boiler_hinten,
+                        t_boiler_mittig, t_verd, updates,
+                        last_update_id or 0,
+                        kompressor_ein, current_runtime,
+                        total_runtime_today, last_runtime
                     )
+
+                    # Sicherstellen, dass new_update_id eine gültige Zahl ist
+                    valid_new_id = max(int(new_update_id or 0), (last_update_id or 0) + 1)
+                    if valid_new_id > (last_update_id or 0):
+                        last_update_id = valid_new_id
+
             except Exception as e:
                 logging.error(f"Fehler in telegram_task: {e}", exc_info=True)
             await asyncio.sleep(2)
-
 
 # Asynchrone Task für Display-Updates
 async def display_task():
@@ -1720,31 +1728,99 @@ def format_timedelta(td):
     seconds = total_seconds % 60
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, letzte_laufzeit):
-    if updates:
+
+def safe_float(value):
+    """Sichere Umwandlung in Float mit Fallback."""
+    try:
+        return float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+def format_timedelta(td):
+    """Formatiert timedelta als HH:MM:SS."""
+    try:
+        total_seconds = int(td.total_seconds())
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    except:
+        return "00:00:00"
+
+async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates,
+                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
+                                          letzte_laufzeit):
+    """
+    Verarbeitet Telegram-Updates und gibt die nächste erwartete Update-ID zurück.
+
+    Args:
+        session: aiohttp ClientSession
+        t_boiler_oben: Temperatur oben
+        t_boiler_hinten: Temperatur hinten
+        t_boiler_mittig: Temperatur mittig
+        t_verd: Verdampfer-Temperatur
+        updates: Liste der empfangenen Updates
+        last_update_id: Letzte verarbeitete Update-ID
+        kompressor_status: Aktueller Kompressor-Status
+        aktuelle_laufzeit: Aktuelle Laufzeit des Kompressors
+        gesamtlaufzeit: Gesamtlaufzeit heute
+        letzte_laufzeit: Letzte Laufzeit
+
+    Returns:
+        int: Nächste erwartete Update-ID (immer >= 1)
+    """
+    try:
+        # Initialisiere mit sicheren Standardwerten
+        last_update_id = last_update_id or 0
+        highest_update_id = last_update_id
+
+        if not updates:
+            logging.debug("Keine neuen Updates erhalten")
+            return last_update_id + 1 if last_update_id else 1
+
+        logging.debug(f"Verarbeite {len(updates)} Updates, letzte ID war {last_update_id}")
+
         for update in updates:
-            message_text = update.get('message', {}).get('text')
-            chat_id = update.get('message', {}).get('chat', {}).get('id')
-            if message_text and chat_id:
-                message_text = message_text.strip().lower()
-                if message_text == "📊 status" or message_text == "status":
-                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else ("Nacht" if is_nighttime(config) else "Normal")
-                    # Formatiere die Laufzeiten
-                    formatted_aktuelle_laufzeit = format_timedelta(timedelta(seconds=0) if not kompressor_status else aktuelle_laufzeit)
-                    formatted_gesamtlaufzeit = format_timedelta(gesamtlaufzeit)
-                    formatted_letzte_laufzeit = format_timedelta(letzte_laufzeit)
+            try:
+                # Extrahiere und validiere Update-ID
+                current_update_id = int(update.get('update_id', 0))
+                if current_update_id <= 0:
+                    logging.warning(f"Ungültige Update-ID: {current_update_id}")
+                    continue
+
+                # Überspringe bereits verarbeitete Updates
+                if current_update_id <= last_update_id:
+                    logging.debug(f"Überspringe bereits verarbeitetes Update ID {current_update_id}")
+                    continue
+
+                # Aktualisiere höchste ID
+                highest_update_id = max(highest_update_id, current_update_id)
+
+                # Extrahiere Nachrichtendetails
+                message = update.get('message', {})
+                message_text = message.get('text', '').strip().lower()
+                chat_id = message.get('chat', {}).get('id')
+
+                if not message_text or not chat_id:
+                    continue
+
+                # Verarbeite spezifische Befehle
+                if message_text in ["📊 status", "status"]:
+                    # Erstelle Statusnachricht
+                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else (
+                        "Nacht" if is_nighttime(config) else "Normal")
 
                     status_msg = (
-                        f"📊 Status\n"
-                        f"Modus: {mode}\n\n"
+                        f"📊 Status\nModus: {mode}\n\n"
                         f"🔧 Kompressor: {'🟢 EIN' if kompressor_status else '🔴 AUS'}\n"
                         f"🌡️ Temperaturen:\n"
-                        f"  - Oben: {t_boiler_oben:.1f}°C\n"
-                        f"  - Mitte: {t_boiler_mittig:.1f}°C\n"
-                        f"  - Hinten: {t_boiler_hinten:.1f}°C\n"
-                        f"  - Verdampfer: {t_verd:.1f}°C\n\n"
+                        f"  - Oben: {safe_float(t_boiler_oben)}°C\n"
+                        f"  - Mitte: {safe_float(t_boiler_mittig)}°C\n"
+                        f"  - Hinten: {safe_float(t_boiler_hinten)}°C\n"
+                        f"  - Verdampfer: {safe_float(t_verd)}°C\n\n"
                         f"⚙️ Regelung:\n"
                     )
+
                     if solar_ueberschuss_aktiv:
                         status_msg += (
                             f"  - 🟢 Einschalten: Ein Fühler < {EINSCHALTPUNKT}°C\n"
@@ -1755,13 +1831,34 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                             f"  - 🟢 Einschalten: Oben < {aktueller_einschaltpunkt}°C oder Mitte < {aktueller_einschaltpunkt}°C\n"
                             f"  - 🔴 Ausschalten: Oben ≥ {aktueller_ausschaltpunkt}°C und Mitte ≥ {aktueller_ausschaltpunkt}°C\n"
                         )
+
                     status_msg += (
                         f"\n⏱️ Laufzeiten:\n"
-                        f"  - Aktuell: {formatted_aktuelle_laufzeit}\n"
-                        f"  - Heute: {formatted_gesamtlaufzeit}\n"
-                        f"  - Letzte: {formatted_letzte_laufzeit}"
+                        f"  - Aktuell: {format_timedelta(aktuelle_laufzeit if kompressor_status else timedelta(0))}\n"
+                        f"  - Heute: {format_timedelta(gesamtlaufzeit)}\n"
+                        f"  - Letzte: {format_timedelta(letzte_laufzeit)}"
                     )
-                    await send_telegram_message(session, chat_id, status_msg)
+
+                    # Sende Nachricht mit Fehlerbehandlung
+                    try:
+                        await send_telegram_message(session, chat_id, status_msg)
+                        logging.info(f"Statusnachricht an Chat {chat_id} gesendet")
+                    except Exception as e:
+                        logging.error(f"Fehler beim Senden der Statusnachricht: {e}")
+
+            except Exception as e:
+                logging.error(f"Fehler bei der Verarbeitung eines Updates: {e}", exc_info=True)
+                continue
+
+        # Berechne nächste erwartete ID (mindestens 1)
+        next_update_id = max(highest_update_id, last_update_id) + 1
+        logging.debug(f"Nächste erwartete Update-ID: {next_update_id}")
+        return next_update_id
+
+    except Exception as e:
+        logging.critical(f"Kritischer Fehler in process_telegram_messages_async: {e}", exc_info=True)
+        return (last_update_id or 0) + 1  # Garantiere eine gültige ID
+
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
     """Aktiviert den Urlaubsmodus und passt Sollwerte an."""
