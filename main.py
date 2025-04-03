@@ -1472,8 +1472,7 @@ async def read_all_sensors():
     return temps
 
 async def control_compressor(t_oben, t_mittig, t_hinten, t_verd, solar_active, urlaub, config):
-    """Steuere den Kompressor basierend auf Temperaturen und Bedingungen."""
-    global kompressor_ein, ausschluss_grund
+    global kompressor_ein, ausschluss_grund, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
 
     if t_oben is None or t_mittig is None or t_hinten is None:
         ausschluss_grund = "Sensorfehler"
@@ -1486,28 +1485,27 @@ async def control_compressor(t_oben, t_mittig, t_hinten, t_verd, solar_active, u
         ausschluss_grund = "Urlaubsmodus aktiv"
         logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
     elif solar_active:
-        if t_oben >= 50 or t_mittig >= 50 or t_hinten >= 50:
+        if t_oben >= AUSSCHALTPUNKT_ERHOEHT or t_mittig >= AUSSCHALTPUNKT_ERHOEHT or t_hinten >= AUSSCHALTPUNKT_ERHOEHT:
             if kompressor_ein:
                 await asyncio.to_thread(set_kompressor_status, False)
-                logging.info("Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= 50°C")
-            ausschluss_grund = "Max. Temperatur erreicht (50°C)"
-        elif (t_oben < 45 or t_mittig < 45 or t_hinten < 45) and not kompressor_ein:
-            logging.debug("Einschalten: Ein Fühler < 45°C und Kompressor aus")
+                logging.info(f"Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= {AUSSCHALTPUNKT_ERHOEHT}°C")
+            ausschluss_grund = f"Max. Temperatur erreicht ({AUSSCHALTPUNKT_ERHOEHT}°C)"
+        elif (t_oben < EINSCHALTPUNKT or t_mittig < EINSCHALTPUNKT or t_hinten < EINSCHALTPUNKT) and not kompressor_ein:
+            logging.debug(f"Einschalten: Ein Fühler < {EINSCHALTPUNKT}°C und Kompressor aus")
             await set_kompressor_status(True)
             if not kompressor_ein and ausschluss_grund:
                 logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-    else:  # Normalmodus
-        if t_oben < 42 or t_mittig < 42:
+    else:  # Normal- oder Nachtmodus
+        if t_oben < aktueller_einschaltpunkt or t_mittig < aktueller_einschaltpunkt:
             if not kompressor_ein:
-                logging.debug("Einschalten: t_oben oder t_mittig < 42°C")
+                logging.debug(f"Einschalten: t_oben oder t_mittig < {aktueller_einschaltpunkt}°C")
                 await asyncio.to_thread(set_kompressor_status, True)
                 if not kompressor_ein and ausschluss_grund:
                     logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-        elif t_oben >= 45 and t_mittig >= 45:
+        elif t_oben >= aktueller_ausschaltpunkt and t_mittig >= aktueller_ausschaltpunkt:
             if kompressor_ein:
                 await asyncio.to_thread(set_kompressor_status, False)
-                logging.info("Kompressor ausgeschaltet: Normalmodus, t_oben und t_mittig >= 45°C")
-
+                logging.info(f"Kompressor ausgeschaltet: t_oben und t_mittig >= {aktueller_ausschaltpunkt}°C")
 async def main_loop(session):
     """
     Hauptschleife des Programms, die Steuerung und Überwachung asynchron ausführt.
@@ -1733,13 +1731,8 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
 
                 # Statusabfrage
                 if message_text == "📊 status" or message_text == "status":
-                    global solar_ueberschuss_aktiv
-                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else "Normal"
-                    if aktuelle_laufzeit == "0" or not aktuelle_laufzeit:
-                        formatted_aktuelle_laufzeit = "00:00:00"
-                    else:
-                        formatted_aktuelle_laufzeit = aktuelle_laufzeit
-
+                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else (
+                        "Nacht" if is_nighttime(config) else "Normal")
                     status_msg = (
                         f"📊 Status\n"
                         f"Modus: {mode}\n\n"
@@ -1753,17 +1746,17 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                     )
                     if solar_ueberschuss_aktiv:
                         status_msg += (
-                            f"  - 🟢 Einschalten: Ein Fühler < 45°C\n"
-                            f"  - 🔴 Ausschalten: Ein Fühler ≥ 50°C\n"
+                            f"  - 🟢 Einschalten: Ein Fühler < {EINSCHALTPUNKT}°C\n"
+                            f"  - 🔴 Ausschalten: Ein Fühler ≥ {AUSSCHALTPUNKT_ERHOEHT}°C\n"
                         )
                     else:
                         status_msg += (
-                            f"  - 🟢 Einschalten: Oben < 42°C oder Mitte < 42°C\n"
-                            f"  - 🔴 Ausschalten: Oben ≥ 45°C und Mitte ≥ 45°C\n"
+                            f"  - 🟢 Einschalten: Oben < {aktueller_einschaltpunkt}°C oder Mitte < {aktueller_einschaltpunkt}°C\n"
+                            f"  - 🔴 Ausschalten: Oben ≥ {aktueller_ausschaltpunkt}°C und Mitte ≥ {aktueller_ausschaltpunkt}°C\n"
                         )
                     status_msg += (
                         f"\n⏱️ Laufzeiten:\n"
-                        f"  - Aktuell: {formatted_aktuelle_laufzeit}\n"
+                        f"  - Aktuell: {aktuelle_laufzeit}\n"
                         f"  - Heute: {gesamtlaufzeit}\n"
                         f"  - Letzte: {letzte_laufzeit}"
                     )
