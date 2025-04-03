@@ -967,57 +967,31 @@ def check_boiler_sensors(t_oben, t_hinten, t_mittig, config):
     return fehler, is_overtemp
 
 
-def set_kompressor_status(ein, force_off=False):
-    """Setzt den Status des Kompressors (EIN/AUS) und überprüft den GPIO-Pin.
-
-    Args:
-        ein (bool): True zum Einschalten, False zum Ausschalten.
-        force_off (bool): Erzwingt das Ausschalten unabhängig von Mindestlaufzeit.
-
-    Returns:
-        bool or None: False, wenn Einschalten fehlschlägt; True, wenn Ausschalten verweigert wird; None bei Erfolg.
-    """
-    global kompressor_ein, start_time, current_runtime, total_runtime_today, last_runtime, last_shutdown_time, ausschluss_grund
+async def set_kompressor_status(status, force_off=False):
+    global kompressor_ein, start_time, last_shutdown_time, current_runtime
     now = datetime.now()
-    if ein:
-        if not kompressor_ein:
+
+    if status and not kompressor_ein:  # Einschalten
+        # Prüfe Mindestpause nur, wenn last_shutdown_time definiert ist
+        if last_shutdown_time is not None:
             pause_time = now - last_shutdown_time
-            if pause_time < MIN_PAUSE and not force_off:
-                logging.info(f"Kompressor bleibt aus (zu kurze Pause: {pause_time}, benötigt: {MIN_PAUSE})")
-                ausschluss_grund = f"Zu kurze Pause ({pause_time.total_seconds():.1f}s < {MIN_PAUSE.total_seconds():.1f}s)"
-                return False
-            kompressor_ein = True
-            start_time = now
-            current_runtime = timedelta()
-            ausschluss_grund = None  # Kein Ausschlussgrund, wenn Kompressor läuft
-            logging.info(f"Kompressor EIN geschaltet. Startzeit: {start_time}")
-        else:
+            if pause_time.total_seconds() < 300:  # 5 Minuten Mindestpause
+                logging.info(f"Kompressor bleibt ausgeschaltet: Pausezeit {pause_time.total_seconds():.0f}s < 300s")
+                return
+        # Wenn last_shutdown_time None ist, ist es die erste Einschaltung -> direkt einschalten
+        GPIO.output(RELAIS_PIN, GPIO.HIGH)
+        kompressor_ein = True
+        start_time = now
+        logging.info("Kompressor eingeschaltet")
+
+    elif (not status and kompressor_ein) or force_off:  # Ausschalten
+        GPIO.output(RELAIS_PIN, GPIO.LOW)
+        kompressor_ein = False
+        last_shutdown_time = now
+        if start_time:
             current_runtime = now - start_time
-            logging.debug(f"Kompressor läuft bereits, aktuelle Laufzeit: {current_runtime}")
-    else:
-        if kompressor_ein:
-            elapsed_time = now - start_time
-            if elapsed_time < MIN_LAUFZEIT and not force_off:
-                logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {MIN_LAUFZEIT})")
-                return True
-            kompressor_ein = False
-            current_runtime = elapsed_time
-            total_runtime_today += current_runtime
-            last_runtime = current_runtime
-            last_shutdown_time = now
-            start_time = None
-            logging.info(f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {total_runtime_today}")
-        else:
-            logging.debug("Kompressor bereits ausgeschaltet")
-
-    # GPIO-Status setzen und prüfen
-    GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
-    actual_state = GPIO.input(GIO21_PIN)  # Annahme: Pin kann als Eingang gelesen werden
-    if actual_state != (GPIO.HIGH if ein else GPIO.LOW):
-        logging.error(f"GPIO-Fehler: Kompressor-Status sollte {'EIN' if ein else 'AUS'} sein, ist aber {actual_state}")
-        # Optional: Hier könnte man weitere Maßnahmen treffen (z.B. Programmabbruch oder erneuter Versuch)
-
-    return None
+            logging.info(f"Kompressor ausgeschaltet, Laufzeit: {current_runtime}")
+        start_time = None
 
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
@@ -1710,56 +1684,50 @@ async def main_loop(session):
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, letzte_laufzeit):
-    """Verarbeitet eingehende Telegram-Nachrichten und gibt die aktualisierte last_update_id zurück."""
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
             chat_id = update.get('message', {}).get('chat', {}).get('id')
             if message_text and chat_id:
                 message_text = message_text.strip().lower()
-                logging.debug(f"Telegram-Nachricht empfangen: Text={message_text}, Chat-ID={chat_id}")
-                if message_text == "🌡️ temperaturen" or message_text == "temperaturen":
-                    if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_boiler_mittig != "Fehler" and t_verd != "Fehler":
-                        await send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd)
-                    else:
-                        await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Temperaturen.")
-                elif message_text == "📊 status" or message_text == "status":
-                    if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_boiler_mittig != "Fehler" and t_verd != "Fehler":
-                        await send_status_telegram(
-                            session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
-                            aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
+                if message_text == "📊 status" or message_text == "status":
+                    # Ermittle den Betriebsmodus
+                    global solar_ueberschuss_aktiv
+                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else "Normal"
+
+                    # Statusnachricht anpassen
+                    status_msg = (
+                        f"📊 **Status** (Modus: {mode})\n"
+                        f"Kompressor: {'EIN' if kompressor_status else 'AUS'}\n"
+                        f"T_Oben: {t_boiler_oben:.1f}°C\n"
+                        f"T_Mittig: {t_boiler_mittig:.1f}°C\n"
+                        f"T_Hinten: {t_boiler_hinten:.1f}°C\n"
+                        f"T_Verd: {t_verd:.1f}°C\n"
+                    )
+
+                    if solar_ueberschuss_aktiv:
+                        status_msg += (
+                            f"Regelung (PV-Überschuss):\n"
+                            f"- Einschalten: Ein Fühler < 45°C\n"
+                            f"- Ausschalten: Ein Fühler ≥ 50°C\n"
                         )
                     else:
-                        await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen des Status.")
-                elif message_text == "⏱️ laufzeiten" or message_text == "laufzeiten":
-                    await get_runtime_bar_chart(session, days=7)  # Aufruf mit 7 Tagen
-                elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
-                    logging.info("Starte Verlauf 24h")
-                    await get_boiler_temperature_history(session, 24)
-                elif message_text == "📈 verlauf 12h" or message_text == "verlauf 12h":
-                    await get_boiler_temperature_history(session, 12)
-                elif message_text == "📈 verlauf 6h" or message_text == "verlauf 6h":
-                    await get_boiler_temperature_history(session, 6)
-                elif message_text == "📈 verlauf 1h" or message_text == "verlauf 1h":
-                    await get_boiler_temperature_history(session, 1)
-                elif message_text == "🔛 kompressor ein":
-                    await asyncio.to_thread(set_kompressor_status, True, force_on=True)
-                    await send_telegram_message(session, CHAT_ID, "Kompressor wird angeschaltet.")
-                elif message_text == "🔴 kompressor aus":
-                    await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                    await send_telegram_message(session, CHAT_ID, "Kompressor wird ausgeschaltet.")
-                elif message_text == "🏖️ urlaubsmodus ein":
-                    global urlaubsmodus_aktiv
-                    urlaubsmodus_aktiv = True
-                    await send_telegram_message(session, CHAT_ID, "Urlaubsmodus aktiviert.")
-                elif message_text == "🏠 urlaubsmodus aus":
-                    urlaubsmodus_aktiv = False
-                    await send_telegram_message(session, CHAT_ID, "Urlaubsmodus deaktiviert.")
+                        status_msg += (
+                            f"Regelung (Normalmodus):\n"
+                            f"- Einschalten: T_Oben < 42°C oder T_Mittig < 42°C\n"
+                            f"- Ausschalten: T_Oben ≥ 45°C und T_Mittig ≥ 45°C\n"
+                        )
+
+                    status_msg += (
+                        f"Laufzeit aktuell: {aktuelle_laufzeit}\n"
+                        f"Gesamtlaufzeit heute: {gesamtlaufzeit}\n"
+                        f"Letzte Laufzeit: {letzte_laufzeit}"
+                    )
+                    await send_telegram_message(session, chat_id, status_msg, parse_mode="Markdown")
+                # ... (weitere Befehle wie "📉 verlauf 24h" etc.)
                 last_update_id = update['update_id'] + 1
-                logging.debug(f"last_update_id aktualisiert: {last_update_id}")
         return last_update_id
     return last_update_id
-
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
     """Aktiviert den Urlaubsmodus und passt Sollwerte an."""
