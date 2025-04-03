@@ -1691,39 +1691,48 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
             if message_text and chat_id:
                 message_text = message_text.strip().lower()
                 if message_text == "📊 status" or message_text == "status":
-                    # Ermittle den Betriebsmodus
+                    # Betriebsmodus
                     global solar_ueberschuss_aktiv
                     mode = "PV-Überschuss" if solar_ueberschuss_aktiv else "Normal"
 
-                    # Statusnachricht anpassen
+                    # Aktuelle Laufzeit formatieren (0 -> 00:00:00)
+                    if aktuelle_laufzeit == "0" or not aktuelle_laufzeit:
+                        formatted_aktuelle_laufzeit = "00:00:00"
+                    else:
+                        formatted_aktuelle_laufzeit = aktuelle_laufzeit
+
+                    # Statusmeldung ohne Sternchen
                     status_msg = (
-                        f"📊 **Status** (Modus: {mode})\n"
-                        f"Kompressor: {'EIN' if kompressor_status else 'AUS'}\n"
-                        f"T_Oben: {t_boiler_oben:.1f}°C\n"
-                        f"T_Mittig: {t_boiler_mittig:.1f}°C\n"
-                        f"T_Hinten: {t_boiler_hinten:.1f}°C\n"
-                        f"T_Verd: {t_verd:.1f}°C\n"
+                        f"📊 Status\n"
+                        f"Modus: {mode}\n\n"
+                        f"🔧 Kompressor: {'🟢 EIN' if kompressor_status else '🔴 AUS'}\n"
+                        f"🌡️ Temperaturen:\n"
+                        f"  - Oben: {t_boiler_oben:.1f}°C\n"
+                        f"  - Mitte: {t_boiler_mittig:.1f}°C\n"
+                        f"  - Hinten: {t_boiler_hinten:.1f}°C\n"
+                        f"  - Verdampfer: {t_verd:.1f}°C\n\n"
+                        f"⚙️ Regelung:\n"
                     )
 
                     if solar_ueberschuss_aktiv:
                         status_msg += (
-                            f"Regelung (PV-Überschuss):\n"
-                            f"- Einschalten: Ein Fühler < 45°C\n"
-                            f"- Ausschalten: Ein Fühler ≥ 50°C\n"
+                            f"  - 🟢 Einschalten: Ein Fühler < 45°C\n"
+                            f"  - 🔴 Ausschalten: Ein Fühler ≥ 50°C\n"
                         )
                     else:
                         status_msg += (
-                            f"Regelung (Normalmodus):\n"
-                            f"- Einschalten: T_Oben < 42°C oder T_Mittig < 42°C\n"
-                            f"- Ausschalten: T_Oben ≥ 45°C und T_Mittig ≥ 45°C\n"
+                            f"  - 🟢 Einschalten: Oben < 42°C oder Mitte < 42°C\n"
+                            f"  - 🔴 Ausschalten: Oben ≥ 45°C und Mitte ≥ 45°C\n"
                         )
 
                     status_msg += (
-                        f"Laufzeit aktuell: {aktuelle_laufzeit}\n"
-                        f"Gesamtlaufzeit heute: {gesamtlaufzeit}\n"
-                        f"Letzte Laufzeit: {letzte_laufzeit}"
+                        f"\n⏱️ Laufzeiten:\n"
+                        f"  - Aktuell: {formatted_aktuelle_laufzeit}\n"
+                        f"  - Heute: {gesamtlaufzeit}\n"
+                        f"  - Letzte: {letzte_laufzeit}"
                     )
-                    await send_telegram_message(session, chat_id, status_msg, parse_mode="Markdown")
+
+                    await send_telegram_message(session, chat_id, status_msg)
                 # ... (weitere Befehle wie "📉 verlauf 24h" etc.)
                 last_update_id = update['update_id'] + 1
         return last_update_id
