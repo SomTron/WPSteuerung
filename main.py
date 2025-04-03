@@ -1173,11 +1173,9 @@ def calculate_file_hash(file_path):
         return None
 
 
-def load_config():
-    """Lädt die Konfigurationsdatei synchron."""
+async def load_config():
     config = configparser.ConfigParser()
-    config.read("config.ini")
-    logging.debug(f"Konfiguration geladen: {dict(config['Heizungssteuerung'])}")
+    await asyncio.to_thread(config.read, "config.ini")
     return config
 
 
