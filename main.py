@@ -1458,7 +1458,6 @@ async def initialize_gpio():
     return False
 
 
-# Asynchrone Hauptschleife
 async def read_all_sensors():
     """Lese alle Temperatursensoren und gebe sie als Dictionary zurück."""
     sensors = {
@@ -1472,7 +1471,60 @@ async def read_all_sensors():
         temps[name] = await asyncio.to_thread(read_temperature, sensor_id)
     return temps
 
+async def control_compressor(t_oben, t_mittig, t_hinten, t_verd, solar_active, urlaub, config):
+    """Steuere den Kompressor basierend auf Temperaturen und Bedingungen."""
+    global kompressor_ein, ausschluss_grund
+
+    if t_oben is None or t_mittig is None or t_hinten is None:
+        ausschluss_grund = "Sensorfehler"
+        logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+        return
+
+    if urlaub:
+        if kompressor_ein:
+            await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+        ausschluss_grund = "Urlaubsmodus aktiv"
+        logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+    elif solar_active:
+        if t_oben >= 50 or t_mittig >= 50 or t_hinten >= 50:
+            if kompressor_ein:
+                await asyncio.to_thread(set_kompressor_status, False)
+                logging.info("Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= 50°C")
+            ausschluss_grund = "Max. Temperatur erreicht (50°C)"
+        elif (t_oben < 45 or t_mittig < 45 or t_hinten < 45) and not kompressor_ein:
+            logging.debug("Einschalten: Ein Fühler < 45°C und Kompressor aus")
+            await set_kompressor_status(True)
+            if not kompressor_ein and ausschluss_grund:
+                logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+    else:  # Normalmodus
+        if t_oben < 42 or t_mittig < 42:
+            if not kompressor_ein:
+                logging.debug("Einschalten: t_oben oder t_mittig < 42°C")
+                await asyncio.to_thread(set_kompressor_status, True)
+                if not kompressor_ein and ausschluss_grund:
+                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+        elif t_oben >= 45 and t_mittig >= 45:
+            if kompressor_ein:
+                await asyncio.to_thread(set_kompressor_status, False)
+                logging.info("Kompressor ausgeschaltet: Normalmodus, t_oben und t_mittig >= 45°C")
+
 async def main_loop(session):
+    """
+    Hauptschleife des Programms, die Steuerung und Überwachung asynchron ausführt.
+
+    Initialisiert die Hardware, startet asynchrone Tasks für Telegram und Display,
+    und steuert den Kompressor basierend auf Temperatur- und Drucksensorwerten.
+    Überwacht die Konfigurationsdatei auf Änderungen und speichert regelmäßig Daten in eine CSV-Datei.
+
+    Verwendet globale Variablen:
+        last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today,
+        last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time,
+        last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT,
+        original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
+
+    Raises:
+        asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
+    """
     global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler, last_pressure_error_time, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd
 
     if not await initialize_gpio():
@@ -1527,6 +1579,7 @@ async def main_loop(session):
                         logging.error("API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
 
                 power_source = get_power_source(solax_data)
+
                 acpower = solax_data.get("acpower", "N/A")
                 feedinpower = solax_data.get("feedinpower", "N/A")
                 batPower = solax_data.get("batPower", "N/A")
@@ -1539,7 +1592,6 @@ async def main_loop(session):
                 nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
                 aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
 
-                # Sensoren ausgelagert
                 temps = await read_all_sensors()
                 t_boiler_oben = temps["oben"]
                 t_boiler_mittig = temps["mittig"]
@@ -1551,10 +1603,8 @@ async def main_loop(session):
                     else "Fehler"
                 )
 
-                # Sicherheitsprüfungen
                 pressure_ok = await asyncio.to_thread(check_pressure)
-                logging.info(
-                    f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
+                logging.info(f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
                 logging.info(f"Solarüberschuss: {solar_ueberschuss_aktiv} | Drucksensor: {pressure_ok}")
 
                 now = datetime.now()
@@ -1604,47 +1654,8 @@ async def main_loop(session):
                     await asyncio.sleep(2)
                     continue
 
-                # Regelungslogik
-                if t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None:
-                    logging.debug(
-                        f"Steuerlogik: urlaubsmodus={urlaubsmodus_aktiv}, solar_ueberschuss={solar_ueberschuss_aktiv}, "
-                        f"t_oben={t_boiler_oben}, t_mittig={t_boiler_mittig}, t_hinten={t_boiler_hinten}, "
-                        f"kompressor_ein={kompressor_ein}")
-                    if urlaubsmodus_aktiv:
-                        if kompressor_ein:
-                            await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                        ausschluss_grund = "Urlaubsmodus aktiv"
-                        logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-                    elif solar_ueberschuss_aktiv:
-                        if t_boiler_oben >= 50 or t_boiler_mittig >= 50 or t_boiler_hinten >= 50:
-                            if kompressor_ein:
-                                await asyncio.to_thread(set_kompressor_status, False)
-                                logging.info("Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= 50°C")
-                            ausschluss_grund = "Max. Temperatur erreicht (50°C)"
-                            logging.debug("Ausschalten: Ein Fühler >= 50°C")
-                        elif (
-                                t_boiler_oben < 45 or t_boiler_mittig < 45 or t_boiler_hinten < 45) and not kompressor_ein:
-                            logging.debug("Einschalten: Ein Fühler < 45°C und Kompressor aus")
-                            await set_kompressor_status(True)
-                            if not kompressor_ein and ausschluss_grund:  # Prüfe, ob Einschalten blockiert wurde
-                                logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-                        else:
-                            logging.debug("Keine Änderung: Zwischen 45°C und 50°C")
-                    else:  # Normalmodus
-                        if t_boiler_oben < 42 or t_boiler_mittig < 42:
-                            if not kompressor_ein:
-                                logging.debug("Einschalten: t_oben oder t_mittig < 42°C")
-                                await asyncio.to_thread(set_kompressor_status, True)
-                                if not kompressor_ein and ausschluss_grund:  # Prüfe, ob Einschalten blockiert wurde
-                                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-                        elif t_boiler_oben >= 45 and t_boiler_mittig >= 45:
-                            if kompressor_ein:
-                                await asyncio.to_thread(set_kompressor_status, False)
-                                logging.info(
-                                    "Kompressor ausgeschaltet: Normalmodus, t_boiler_oben und t_boiler_mittig >= 45°C")
-                            logging.debug("Ausschalten: t_oben und t_mittig >= 45°C")
-                        else:
-                            logging.debug("Keine Änderung: Normalmodus, zwischen Einschalten und Ausschalten")
+                # Steuerlogik ausgelagert
+                await control_compressor(t_boiler_oben, t_boiler_mittig, t_boiler_hinten, t_verd, solar_ueberschuss_aktiv, urlaubsmodus_aktiv, config)
 
                 # Laufzeit aktualisieren
                 if kompressor_ein and start_time:
