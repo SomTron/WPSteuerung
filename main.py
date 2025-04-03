@@ -86,12 +86,18 @@ last_pressure_error_time = None  # Zeitpunkt des letzten Druckfehlers
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 last_pressure_state = None
 csv_lock = asyncio.Lock()
+# Globale Variablen für Temperaturwerte
+t_boiler_oben = 0
+t_boiler_hinten = 0
+t_boiler_mittig = 0
+t_verd = 0
+t_boiler = 0
 
 
 # Logging einrichten
 logging.basicConfig(
     filename="heizungssteuerung.log",
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -142,13 +148,19 @@ async def setup_logging(session):
 # Funktion zur LCD-Initialisierung (angepasst)
 async def initialize_lcd(session):
     global lcd
-    try:
-        lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
-        lcd.clear()
-        logging.info("LCD erfolgreich initialisiert")
-    except Exception as e:
-        logging.error(f"Fehler bei der LCD-Initialisierung: {e}")
-        lcd = None
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            lcd = CharLCD('PCF8574', I2C_ADDR, port=I2C_BUS, cols=20, rows=4)
+            lcd.clear()
+            logging.info("LCD erfolgreich initialisiert")
+            return
+        except Exception as e:
+            logging.error(f"Fehler bei der LCD-Initialisierung (Versuch {attempt + 1}/{max_attempts}): {e}")
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(1)
+    logging.warning("LCD-Initialisierung fehlgeschlagen, fahre ohne LCD fort.")
+    lcd = None
 
 
 # Asynchrone Funktion zum Senden von Telegram-Nachrichten
@@ -872,7 +884,8 @@ async def shutdown(session):
     await send_telegram_message(session, CHAT_ID, message)
     GPIO.output(GIO21_PIN, GPIO.LOW)  # Kompressor ausschalten
     GPIO.cleanup()  # GPIO-Pins bereinigen
-    lcd.close()  # LCD schließen
+    if lcd is not None:  # Nur schließen, wenn lcd initialisiert wurde
+        lcd.close()  # LCD schließen
     logging.info("Heizungssteuerung sicher beendet, Hardware in sicherem Zustand.")
 
 # Hauptprogrammstart
@@ -968,29 +981,46 @@ def check_boiler_sensors(t_oben, t_hinten, t_mittig, config):
 
 
 async def set_kompressor_status(status, force_off=False):
-    global kompressor_ein, start_time, last_shutdown_time, current_runtime, GIO21_PIN
-    now = datetime.now()
-
-    if status and not kompressor_ein:  # Einschalten
-        if last_shutdown_time is not None:
-            pause_time = now - last_shutdown_time
-            if pause_time.total_seconds() < 300:  # 5 Minuten Mindestpause
-                logging.info(f"Kompressor bleibt ausgeschaltet: Pausezeit {pause_time.total_seconds():.0f}s < 300s")
+    global kompressor_ein, start_time, last_shutdown_time, current_runtime, ausschluss_grund
+    try:
+        now = datetime.now()
+        current_state = GPIO.input(GIO21_PIN)
+        if status and not kompressor_ein:
+            if not force_off and last_shutdown_time:
+                pause_time = now - last_shutdown_time
+                if pause_time < MIN_PAUSE:
+                    ausschluss_grund = f"Zu kurze Pause ({pause_time.total_seconds():.0f}s < {MIN_PAUSE.total_seconds()}s)"
+                    logging.warning(f"Einschaltblockade: {ausschluss_grund}")
+                    return
+            GPIO.output(GIO21_PIN, GPIO.HIGH)
+            new_state = GPIO.input(GIO21_PIN)
+            if new_state != GPIO.HIGH:
+                logging.error("GPIO konnte nicht auf HIGH gesetzt werden!")
                 return
-        GPIO.output(GIO21_PIN, GPIO.HIGH)  # Verwende GIO21_PIN statt RELAIS_PIN
-        kompressor_ein = True
-        start_time = now
-        logging.info("Kompressor eingeschaltet")
-
-    elif (not status and kompressor_ein) or force_off:  # Ausschalten
-        GPIO.output(GIO21_PIN, GPIO.LOW)  # Verwende GIO21_PIN statt RELAIS_PIN
-        kompressor_ein = False
-        last_shutdown_time = now
-        if start_time:
-            current_runtime = now - start_time
-            logging.info(f"Kompressor ausgeschaltet, Laufzeit: {current_runtime}")
-        start_time = None
-
+            kompressor_ein = True
+            start_time = now
+            ausschluss_grund = None
+            logging.info("Kompressor EINGESCHALTET")  # Nur bei Erfolg loggen
+        elif (not status and kompressor_ein) or force_off:
+            GPIO.output(GIO21_PIN, GPIO.LOW)
+            new_state = GPIO.input(GIO21_PIN)
+            if new_state != GPIO.LOW:
+                logging.error("GPIO konnte nicht auf LOW gesetzt werden!")
+                return
+            kompressor_ein = False
+            last_shutdown_time = now
+            if start_time:
+                current_runtime = now - start_time
+                logging.info(f"Kompressor AUSGESCHALTET. Laufzeit: {current_runtime}")
+            start_time = None
+    except Exception as e:
+        logging.error(f"KRITISCHER FEHLER in set_kompressor_status: {e}", exc_info=True)
+        ausschluss_grund = f"Interner Fehler: {str(e)}"
+        try:
+            GPIO.output(GIO21_PIN, GPIO.LOW)
+            kompressor_ein = False
+        except:
+            logging.critical("Notabschaltung fehlgeschlagen!")
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session):
@@ -1448,35 +1478,11 @@ async def main_loop(session):
 
     await initialize_lcd(session)
 
-    # Initialisiere globale Variablen vor dem Start von Tasks
-    t_boiler_oben = 0
-    t_boiler_hinten = 0
-    t_boiler_mittig = 0
-    t_verd = 0
-    t_boiler = "N/A"
-    kompressor_ein = False
-    start_time = None
-    current_runtime = timedelta(seconds=0)
-    total_runtime_today = timedelta(seconds=0)
-    last_runtime = timedelta(seconds=0)
-    last_day = datetime.now().date()
-    last_shutdown_time = None
-    last_config_hash = None
-    last_log_time = None
-    last_kompressor_status = False
-    urlaubsmodus_aktiv = False
-    pressure_error_sent = False
-    aktueller_einschaltpunkt = None
-    aktueller_ausschaltpunkt = None
-    ausschluss_grund = ""
-    last_pressure_error_time = None
-
     now = datetime.now()
     message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
     await send_telegram_message(session, CHAT_ID, message)
     await send_welcome_message(session, CHAT_ID)
 
-    # Starte Tasks
     telegram_task_handle = asyncio.create_task(telegram_task())
     display_task_handle = asyncio.create_task(display_task())
 
@@ -1486,6 +1492,11 @@ async def main_loop(session):
 
     try:
         while True:
+            # Definiere pressure_ok VOR dem Logging
+            pressure_ok = await asyncio.to_thread(check_pressure)
+            logging.info(
+                f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
+            logging.info(f"Solarüberschuss: {solar_ueberschuss_aktiv} | Drucksensor: {pressure_ok}")
             try:
                 now = datetime.now()
                 should_check_day = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1))
@@ -1541,6 +1552,10 @@ async def main_loop(session):
 
                 # Sicherheitsprüfungen (Druck, Verdampfer, Sensorfehler)
                 pressure_ok = await asyncio.to_thread(check_pressure)
+                logging.info(
+                    f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
+                logging.info(f"Solarüberschuss: {solar_ueberschuss_aktiv} | Drucksensor: {pressure_ok}")
+
                 now = datetime.now()
 
                 if not pressure_ok:
@@ -1583,36 +1598,42 @@ async def main_loop(session):
                     await asyncio.sleep(2)
                     continue
 
-                # Neue Regelungslogik
+                    # Regelungslogik
                 if t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None:
-                    # PV-Überschuss-Modus
-                    if solar_ueberschuss_aktiv:
-                        # Ausschalten, wenn ein Fühler 50°C erreicht
+                    logging.debug(
+                        f"Steuerlogik: urlaubsmodus={urlaubsmodus_aktiv}, solar_ueberschuss={solar_ueberschuss_aktiv}, "
+                        f"t_oben={t_boiler_oben}, t_mittig={t_boiler_mittig}, t_hinten={t_boiler_hinten}, "
+                        f"kompressor_ein={kompressor_ein}")
+                    if urlaubsmodus_aktiv:
+                        if kompressor_ein:
+                            await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                        ausschluss_grund = "Urlaubsmodus aktiv"
+                        logging.debug("Urlaubsmodus aktiv, Kompressor bleibt aus")
+                    elif solar_ueberschuss_aktiv:
                         if t_boiler_oben >= 50 or t_boiler_mittig >= 50 or t_boiler_hinten >= 50:
                             if kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
                                 logging.info("Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= 50°C")
                             ausschluss_grund = "Max. Temperatur erreicht (50°C)"
-                        # Einschalten, wenn ein Fühler unter 45°C fällt
-                        elif t_boiler_oben < 45 or t_boiler_mittig < 45 or t_boiler_hinten < 40:
-                            if not kompressor_ein:
-                                await asyncio.to_thread(set_kompressor_status, True)
-                                logging.info("Kompressor eingeschaltet: PV-Überschuss, ein Fühler < 45°C")
-
-                    # Normaler Modus (ohne PV-Überschuss)
-                    else:
-                        # Einschalten, wenn mittlerer oder oberer Fühler unter 42°C fällt
+                            logging.debug("Ausschalten: Ein Fühler >= 50°C")
+                        elif (t_boiler_oben < 45 or t_boiler_mittig < 45 or t_boiler_hinten < 45) and not kompressor_ein:
+                            logging.debug("Einschalten: Ein Fühler < 45°C und Kompressor aus")
+                            await set_kompressor_status(True)
+                        else:
+                            logging.debug("Keine Änderung: Zwischen 45°C und 50°C")
+                    else:  # Normalmodus
                         if t_boiler_oben < 42 or t_boiler_mittig < 42:
                             if not kompressor_ein:
+                                logging.debug("Einschalten: t_oben oder t_mittig < 42°C")
                                 await asyncio.to_thread(set_kompressor_status, True)
-                                logging.info(
-                                    "Kompressor eingeschaltet: Normalmodus, t_boiler_oben oder t_boiler_mittig < 42°C")
-                        # Ausschalten, wenn beide Fühler über 42°C sind (mit Puffer)
                         elif t_boiler_oben >= 45 and t_boiler_mittig >= 45:
                             if kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
                                 logging.info(
                                     "Kompressor ausgeschaltet: Normalmodus, t_boiler_oben und t_boiler_mittig >= 45°C")
+                            logging.debug("Ausschalten: t_oben und t_mittig >= 45°C")
+                        else:
+                            logging.debug("Keine Änderung: Normalmodus, zwischen Einschalten und Ausschalten")
 
                 # Laufzeit aktualisieren
                 if kompressor_ein and start_time:
@@ -1673,8 +1694,8 @@ async def main_loop(session):
                 logging.error(f"Fehler in der Hauptschleife: {e}", exc_info=True)
                 await asyncio.sleep(30)
 
-    except asyncio.CancelledError:
-        logging.info("Hauptschleife abgebrochen, Tasks werden beendet.")
+    except Exception as e:
+        logging.error(f"Fehler in main_loop: {e}", exc_info=True)
         telegram_task_handle.cancel()
         display_task_handle.cancel()
         await asyncio.gather(telegram_task_handle, display_task_handle, return_exceptions=True)
@@ -1832,4 +1853,16 @@ async def deaktivere_urlaubsmodus(session):
 
 # Programmstart
 if __name__ == "__main__":
-    asyncio.run(run_program())
+    try:
+        asyncio.run(run_program())
+    except KeyboardInterrupt:
+        logging.info("Programm durch Benutzer abgebrochen")
+    except Exception as e:
+        logging.critical(f"Kritischer Fehler beim Programmstart: {e}", exc_info=True)
+    finally:
+        try:
+            GPIO.cleanup()
+            if lcd is not None:
+                lcd.close()
+        except Exception as e:
+            logging.error(f"Fehler bei der Bereinigung der Ressourcen: {e}")
