@@ -1,23 +1,15 @@
 import os
 import smbus2
 from datetime import datetime, timedelta
-from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
 import logging
 import configparser
 import aiohttp
-import hashlib
-from telegram import ReplyKeyboardMarkup
 import asyncio
 import aiofiles
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import io
-from aiohttp import FormData
-import pandas as pd
-from dateutil.relativedelta import relativedelta
-
+from telegram_handler import send_telegram_message, telegram_task, send_welcome_message
+from config_loader import BOT_TOKEN, CHAT_ID, config
+import hashlib
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -37,13 +29,28 @@ API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
 GIO21_PIN = 21  # Ausgang für Kompressor
 PRESSURE_SENSOR_PIN = 17  # Eingang für Druckschalter
 
-# Konfigurationsdatei einlesen
+# Globale Konfiguration
 config = configparser.ConfigParser()
-config.read("config.ini")
+if not config.read("config.ini") or "Telegram" not in config:
+    logging.critical("config.ini nicht gefunden oder fehlerhaft. Programm wird beendet.")
+    exit(1)
+
+try:
+    BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
+    CHAT_ID = config["Telegram"]["CHAT_ID"]
+except KeyError as e:
+    logging.critical(f"Fehler in config.ini: {e} fehlt. Programm wird beendet.")
+    exit(1)
+
+if not BOT_TOKEN or not CHAT_ID:
+    logging.critical("BOT_TOKEN oder CHAT_ID ist leer. Programm wird beendet.")
+    exit(1)
+
+last_update_id = None
 
 # Globale Variablen initialisieren
-BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
-CHAT_ID = config["Telegram"]["CHAT_ID"]
+BOT_TOKEN = None  # Wird aus config geladen
+CHAT_ID = None   # Wird aus config geladen
 AUSSCHALTPUNKT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
 AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 52))
 EINSCHALTPUNKT = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
@@ -71,7 +78,6 @@ last_shutdown_time = datetime.now()
 last_config_hash = None
 last_log_time = datetime.now() - timedelta(minutes=1)
 last_kompressor_status = None
-last_update_id = None
 urlaubsmodus_aktiv = False
 pressure_error_sent = False
 aktueller_ausschaltpunkt = AUSSCHALTPUNKT
@@ -162,51 +168,6 @@ async def initialize_lcd(session):
     logging.warning("LCD-Initialisierung fehlgeschlagen, fahre ohne LCD fort.")
     lcd = None
 
-
-# Asynchrone Funktion zum Senden von Telegram-Nachrichten
-async def send_telegram_message(session, chat_id, message, reply_markup=None, parse_mode=None):
-    """
-    Sendet eine Nachricht über die Telegram-API.
-
-    Args:
-        session (aiohttp.ClientSession): Die HTTP-Sitzung für die API-Anfrage.
-        chat_id (str): Die ID des Chatrooms, an den die Nachricht gesendet wird.
-        message (str): Der Text der zu sendenden Nachricht.
-        reply_markup (telegram.ReplyKeyboardMarkup, optional): Tastaturmarkup für interaktive Antworten.
-        parse_mode (str, optional): Formatierungsmodus der Nachricht (z.B. "Markdown").
-
-    Returns:
-        bool: True bei Erfolg, False bei Fehler.
-    """
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": chat_id, "text": message}
-        if reply_markup:
-            data["reply_markup"] = reply_markup.to_json()
-        if parse_mode:
-            data["parse_mode"] = parse_mode
-        async with session.post(url, json=data) as response:
-            response.raise_for_status()
-            logging.info(f"Telegram-Nachricht gesendet: {message}")
-            return True
-    except aiohttp.ClientError as e:
-        logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}, Nachricht={message}")
-        return False
-
-
-# Asynchrone Funktion zum Abrufen von Telegram-Updates
-async def get_telegram_updates(session, offset=None):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-        params = {"offset": offset, "timeout": 20} if offset else {"timeout": 20}
-        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=35)) as response:
-            response.raise_for_status()
-            updates = await response.json()
-            logging.debug(f"Telegram-Updates empfangen: {updates}")
-            return updates.get('result', [])
-    except aiohttp.ClientError as e:
-        logging.error(f"Fehler bei der Telegram-API-Abfrage: {e}")
-        return None
 
 async def update_csv_header_if_needed():
     """Prüft und aktualisiert den CSV-Header, falls T_Mittig fehlt."""
@@ -663,18 +624,6 @@ def get_power_source(solax_data):
     else:
         return "Unbekannt"
 
-# Funktion für die benutzerdefinierte Telegram-Tastatur
-def get_custom_keyboard():
-    """Erstellt eine benutzerdefinierte Tastatur mit verfügbaren Befehlen."""
-    keyboard = [
-        ["🌡️ Temperaturen", "📊 Status"],
-        ["📈 Verlauf 6h", "📉 Verlauf 24h"],
-        ["🌴 Urlaub", "🏠 Urlaub aus"],
-        ["🆘 Hilfe", "⏱️ Laufzeiten"]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-
-
 # Asynchrone Hilfsfunktionen für Telegram
 async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd):
     """Sendet die aktuellen Temperaturen über Telegram."""
@@ -844,13 +793,6 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
 
     return await send_telegram_message(session, CHAT_ID, message)
 
-async def send_welcome_message(session, chat_id):
-    """Sendet eine Willkommensnachricht mit Tastatur."""
-    message = (
-        "🤖 Willkommen beim Heizungssteuerungs-Bot!\n\n"
-        "Verwende die Tastatur, um Befehle auszuwählen."
-    )
-    return await send_telegram_message(session, chat_id, message, reply_markup=get_custom_keyboard())
 
 
 async def send_unknown_command_message(session, chat_id):
@@ -1316,23 +1258,6 @@ def is_data_old(timestamp):
     return is_old
 
 
-# Asynchrone Task für Telegram-Updates
-async def telegram_task():
-    global last_update_id, kompressor_ein, current_runtime, total_runtime_today, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, last_runtime
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                updates = await get_telegram_updates(session, last_update_id)
-                if updates:
-                    last_update_id = await process_telegram_messages_async(
-                        session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id,
-                        kompressor_ein, current_runtime, total_runtime_today, last_runtime
-                    )
-            except Exception as e:
-                logging.error(f"Fehler in telegram_task: {e}", exc_info=True)
-            await asyncio.sleep(2)
-
-
 # Asynchrone Task für Display-Updates
 async def display_task():
     """Separate Task für Display-Updates, entkoppelt von der Hauptschleife."""
@@ -1521,15 +1446,14 @@ async def main_loop(session):
         logging.critical("Programm wird aufgrund fehlender GPIO-Initialisierung beendet.")
         exit(1)
 
-    await initialize_lcd(session)
-
     now = datetime.now()
     message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
     await send_telegram_message(session, CHAT_ID, message)
     await send_welcome_message(session, CHAT_ID)
 
-    telegram_task_handle = asyncio.create_task(telegram_task())
-    display_task_handle = asyncio.create_task(display_task())
+    config = validate_config(load_config())
+
+
 
     last_cycle_time = datetime.now()
     watchdog_warning_count = 0
@@ -1644,6 +1568,16 @@ async def main_loop(session):
                     await asyncio.sleep(2)
                     continue
 
+                # Telegram-Task starten
+                telegram_task_handle = asyncio.create_task(
+                    telegram_task(
+                        session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd,
+                        kompressor_ein, current_runtime, total_runtime_today, last_runtime,
+                        solar_ueberschuss_aktiv, aktueller_einschaltpunkt, aktueller_ausschaltpunkt,
+                        is_nighttime, config, set_kompressor_status, urlaubsmodus_aktiv, last_update_id
+                    )
+                )
+
                 # Steuerlogik ausgelagert
                 await control_compressor(t_boiler_oben, t_boiler_mittig, t_boiler_hinten, t_verd, solar_ueberschuss_aktiv, urlaubsmodus_aktiv, config)
 
@@ -1720,48 +1654,6 @@ def format_timedelta(td):
     seconds = total_seconds % 60
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, letzte_laufzeit):
-    if updates:
-        for update in updates:
-            message_text = update.get('message', {}).get('text')
-            chat_id = update.get('message', {}).get('chat', {}).get('id')
-            if message_text and chat_id:
-                message_text = message_text.strip().lower()
-                if message_text == "📊 status" or message_text == "status":
-                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else ("Nacht" if is_nighttime(config) else "Normal")
-                    # Formatiere die Laufzeiten
-                    formatted_aktuelle_laufzeit = format_timedelta(timedelta(seconds=0) if not kompressor_status else aktuelle_laufzeit)
-                    formatted_gesamtlaufzeit = format_timedelta(gesamtlaufzeit)
-                    formatted_letzte_laufzeit = format_timedelta(letzte_laufzeit)
-
-                    status_msg = (
-                        f"📊 Status\n"
-                        f"Modus: {mode}\n\n"
-                        f"🔧 Kompressor: {'🟢 EIN' if kompressor_status else '🔴 AUS'}\n"
-                        f"🌡️ Temperaturen:\n"
-                        f"  - Oben: {t_boiler_oben:.1f}°C\n"
-                        f"  - Mitte: {t_boiler_mittig:.1f}°C\n"
-                        f"  - Hinten: {t_boiler_hinten:.1f}°C\n"
-                        f"  - Verdampfer: {t_verd:.1f}°C\n\n"
-                        f"⚙️ Regelung:\n"
-                    )
-                    if solar_ueberschuss_aktiv:
-                        status_msg += (
-                            f"  - 🟢 Einschalten: Ein Fühler < {EINSCHALTPUNKT}°C\n"
-                            f"  - 🔴 Ausschalten: Ein Fühler ≥ {AUSSCHALTPUNKT_ERHOEHT}°C\n"
-                        )
-                    else:
-                        status_msg += (
-                            f"  - 🟢 Einschalten: Oben < {aktueller_einschaltpunkt}°C oder Mitte < {aktueller_einschaltpunkt}°C\n"
-                            f"  - 🔴 Ausschalten: Oben ≥ {aktueller_ausschaltpunkt}°C und Mitte ≥ {aktueller_ausschaltpunkt}°C\n"
-                        )
-                    status_msg += (
-                        f"\n⏱️ Laufzeiten:\n"
-                        f"  - Aktuell: {formatted_aktuelle_laufzeit}\n"
-                        f"  - Heute: {formatted_gesamtlaufzeit}\n"
-                        f"  - Letzte: {formatted_letzte_laufzeit}"
-                    )
-                    await send_telegram_message(session, chat_id, status_msg)
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
     """Aktiviert den Urlaubsmodus und passt Sollwerte an."""
