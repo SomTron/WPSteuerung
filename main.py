@@ -980,32 +980,42 @@ def check_boiler_sensors(t_oben, t_hinten, t_mittig, config):
     return fehler, is_overtemp
 
 
+def set_gpio_state(pin, state):
+    """Setze den GPIO-Pin auf den gewünschten Zustand und überprüfe ihn."""
+    try:
+        GPIO.output(pin, state)
+        actual_state = GPIO.input(pin)
+        if actual_state != state:
+            logging.error(f"GPIO {pin} konnte nicht auf {'HIGH' if state else 'LOW'} gesetzt werden!")
+            return False
+        return True
+    except Exception as e:
+        logging.error(f"Fehler beim Setzen von GPIO {pin}: {e}", exc_info=True)
+        return False
+
 async def set_kompressor_status(status, force_off=False):
     global kompressor_ein, start_time, last_shutdown_time, current_runtime, ausschluss_grund
     try:
         now = datetime.now()
-        current_state = GPIO.input(GIO21_PIN)
         if status and not kompressor_ein:
             if not force_off and last_shutdown_time:
                 pause_time = now - last_shutdown_time
                 if pause_time < MIN_PAUSE:
                     ausschluss_grund = f"Zu kurze Pause ({pause_time.total_seconds():.0f}s < {MIN_PAUSE.total_seconds()}s)"
-                    logging.warning(f"Einschaltblockade: {ausschluss_grund}")
+                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                     return
-            GPIO.output(GIO21_PIN, GPIO.HIGH)
-            new_state = GPIO.input(GIO21_PIN)
-            if new_state != GPIO.HIGH:
-                logging.error("GPIO konnte nicht auf HIGH gesetzt werden!")
+            if not set_gpio_state(GIO21_PIN, GPIO.HIGH):
+                ausschluss_grund = "GPIO-Fehler beim Einschalten"
+                logging.error(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                 return
             kompressor_ein = True
             start_time = now
             ausschluss_grund = None
-            logging.info("Kompressor EINGESCHALTET")  # Nur bei Erfolg loggen
+            logging.info("Kompressor EINGESCHALTET")
         elif (not status and kompressor_ein) or force_off:
-            GPIO.output(GIO21_PIN, GPIO.LOW)
-            new_state = GPIO.input(GIO21_PIN)
-            if new_state != GPIO.LOW:
-                logging.error("GPIO konnte nicht auf LOW gesetzt werden!")
+            if not set_gpio_state(GIO21_PIN, GPIO.LOW):
+                ausschluss_grund = "GPIO-Fehler beim Ausschalten"
+                logging.error(f"Kompressor nicht ausgeschaltet: {ausschluss_grund}")
                 return
             kompressor_ein = False
             last_shutdown_time = now
@@ -1014,13 +1024,10 @@ async def set_kompressor_status(status, force_off=False):
                 logging.info(f"Kompressor AUSGESCHALTET. Laufzeit: {current_runtime}")
             start_time = None
     except Exception as e:
-        logging.error(f"KRITISCHER FEHLER in set_kompressor_status: {e}", exc_info=True)
         ausschluss_grund = f"Interner Fehler: {str(e)}"
-        try:
-            GPIO.output(GIO21_PIN, GPIO.LOW)
-            kompressor_ein = False
-        except:
-            logging.critical("Notabschaltung fehlgeschlagen!")
+        logging.error(f"KRITISCHER FEHLER in set_kompressor_status: {ausschluss_grund}", exc_info=True)
+        set_gpio_state(GIO21_PIN, GPIO.LOW)
+        kompressor_ein = False
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session):
@@ -1452,24 +1459,20 @@ async def initialize_gpio():
 
 
 # Asynchrone Hauptschleife
+async def read_all_sensors():
+    """Lese alle Temperatursensoren und gebe sie als Dictionary zurück."""
+    sensors = {
+        "oben": SENSOR_IDS["oben"],
+        "mittig": SENSOR_IDS["mittig"],
+        "hinten": SENSOR_IDS["hinten"],
+        "verd": SENSOR_IDS["verd"]
+    }
+    temps = {}
+    for name, sensor_id in sensors.items():
+        temps[name] = await asyncio.to_thread(read_temperature, sensor_id)
+    return temps
+
 async def main_loop(session):
-    """
-    Hauptschleife des Programms, die Steuerung und Überwachung asynchron ausführt.
-
-    Initialisiert die Hardware, startet asynchrone Tasks für Telegram und Display,
-    und steuert den Kompressor basierend auf Temperatur- und Drucksensorwerten.
-    Überwacht die Konfigurationsdatei auf Änderungen und speichert regelmäßig Daten in eine CSV-Datei.
-
-    Verwendet globale Variablen:
-        last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today,
-        last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time,
-        last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT,
-        original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
-
-    Raises:
-        asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
-    """
-
     global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler, last_pressure_error_time, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd
 
     if not await initialize_gpio():
@@ -1492,11 +1495,10 @@ async def main_loop(session):
 
     try:
         while True:
-            # Definiere pressure_ok VOR dem Logging
             pressure_ok = await asyncio.to_thread(check_pressure)
-            logging.info(
-                f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
+            logging.info(f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
             logging.info(f"Solarüberschuss: {solar_ueberschuss_aktiv} | Drucksensor: {pressure_ok}")
+
             try:
                 now = datetime.now()
                 should_check_day = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1))
@@ -1522,11 +1524,9 @@ async def main_loop(session):
                         solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                       "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
                                       "api_fehler": True}
-                        logging.error(
-                            "API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
+                        logging.error("API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
 
                 power_source = get_power_source(solax_data)
-
                 acpower = solax_data.get("acpower", "N/A")
                 feedinpower = solax_data.get("feedinpower", "N/A")
                 batPower = solax_data.get("batPower", "N/A")
@@ -1537,20 +1537,21 @@ async def main_loop(session):
 
                 is_night = is_nighttime(config)
                 nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night,
-                                                                                              solax_data)
+                aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
 
-                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
-                t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
-                t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])
-                t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
+                # Sensoren ausgelagert
+                temps = await read_all_sensors()
+                t_boiler_oben = temps["oben"]
+                t_boiler_mittig = temps["mittig"]
+                t_boiler_hinten = temps["hinten"]
+                t_verd = temps["verd"]
                 t_boiler = (
                     (t_boiler_oben + t_boiler_hinten + t_boiler_mittig) / 3
-                    if t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None
+                    if all(t is not None for t in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig])
                     else "Fehler"
                 )
 
-                # Sicherheitsprüfungen (Druck, Verdampfer, Sensorfehler)
+                # Sicherheitsprüfungen
                 pressure_ok = await asyncio.to_thread(check_pressure)
                 logging.info(
                     f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
@@ -1567,6 +1568,7 @@ async def main_loop(session):
                         await send_telegram_message(session, CHAT_ID, error_msg)
                         pressure_error_sent = True
                     ausschluss_grund = "Druckschalter offen"
+                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                     await asyncio.sleep(2)
                     continue
 
@@ -1581,6 +1583,8 @@ async def main_loop(session):
                 if fehler:
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     ausschluss_grund = fehler
+                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+                    await asyncio.sleep(2)
                     continue
 
                 if last_pressure_error_time and (now - last_pressure_error_time) < PRESSURE_ERROR_DELAY:
@@ -1588,6 +1592,7 @@ async def main_loop(session):
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     remaining_time = (PRESSURE_ERROR_DELAY - (now - last_pressure_error_time)).total_seconds()
                     ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
+                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                     await asyncio.sleep(2)
                     continue
 
@@ -1595,10 +1600,11 @@ async def main_loop(session):
                     if kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
                     ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
+                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                     await asyncio.sleep(2)
                     continue
 
-                    # Regelungslogik
+                # Regelungslogik
                 if t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None:
                     logging.debug(
                         f"Steuerlogik: urlaubsmodus={urlaubsmodus_aktiv}, solar_ueberschuss={solar_ueberschuss_aktiv}, "
@@ -1608,7 +1614,7 @@ async def main_loop(session):
                         if kompressor_ein:
                             await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                         ausschluss_grund = "Urlaubsmodus aktiv"
-                        logging.debug("Urlaubsmodus aktiv, Kompressor bleibt aus")
+                        logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                     elif solar_ueberschuss_aktiv:
                         if t_boiler_oben >= 50 or t_boiler_mittig >= 50 or t_boiler_hinten >= 50:
                             if kompressor_ein:
@@ -1616,9 +1622,12 @@ async def main_loop(session):
                                 logging.info("Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= 50°C")
                             ausschluss_grund = "Max. Temperatur erreicht (50°C)"
                             logging.debug("Ausschalten: Ein Fühler >= 50°C")
-                        elif (t_boiler_oben < 45 or t_boiler_mittig < 45 or t_boiler_hinten < 45) and not kompressor_ein:
+                        elif (
+                                t_boiler_oben < 45 or t_boiler_mittig < 45 or t_boiler_hinten < 45) and not kompressor_ein:
                             logging.debug("Einschalten: Ein Fühler < 45°C und Kompressor aus")
                             await set_kompressor_status(True)
+                            if not kompressor_ein and ausschluss_grund:  # Prüfe, ob Einschalten blockiert wurde
+                                logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                         else:
                             logging.debug("Keine Änderung: Zwischen 45°C und 50°C")
                     else:  # Normalmodus
@@ -1626,6 +1635,8 @@ async def main_loop(session):
                             if not kompressor_ein:
                                 logging.debug("Einschalten: t_oben oder t_mittig < 42°C")
                                 await asyncio.to_thread(set_kompressor_status, True)
+                                if not kompressor_ein and ausschluss_grund:  # Prüfe, ob Einschalten blockiert wurde
+                                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
                         elif t_boiler_oben >= 45 and t_boiler_mittig >= 45:
                             if kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
@@ -1645,12 +1656,9 @@ async def main_loop(session):
                 if should_log:
                     async with csv_lock:
                         async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                            einschaltpunkt_str = str(
-                                aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
-                            ausschaltpunkt_str = str(
-                                aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
-                            solar_ueberschuss_str = str(
-                                int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
+                            einschaltpunkt_str = str(aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
+                            ausschaltpunkt_str = str(aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
+                            solar_ueberschuss_str = str(int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
                             nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
                             power_source_str = power_source if power_source else "N/A"
 
@@ -1674,8 +1682,7 @@ async def main_loop(session):
                 cycle_duration = (datetime.now() - last_cycle_time).total_seconds()
                 if cycle_duration > 30:
                     watchdog_warning_count += 1
-                    logging.error(
-                        f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
+                    logging.error(f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
                     if watchdog_warning_count >= WATCHDOG_MAX_WARNINGS:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                         logging.critical("Maximale Watchdog-Warnungen erreicht, Hardware wird heruntergefahren.")
