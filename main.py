@@ -1799,6 +1799,11 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                     else:
                         await send_telegram_message(session, chat_id, "ℹ️ Kompressor ist bereits aus.")
 
+                # Laufzeiten-Abfrage
+                elif message_text == "⏱️ laufzeiten" or message_text == "laufzeiten":
+                    logging.debug("Starte Laufzeiten-Abfrage")  # Debugging
+                    await send_runtimes_telegram(session)
+
                 # Urlaubsmodus
                 elif message_text == "🏖️ urlaubsmodus an" or message_text == "urlaubsmodus an":
                     logging.debug("Aktiviere Urlaubsmodus")  # Debugging
