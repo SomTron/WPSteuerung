@@ -1720,144 +1720,111 @@ async def main_loop(session):
         raise
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
-def format_timedelta(td):
-    """Formatiert eine timedelta in HH:MM:SS."""
-    total_seconds = int(td.total_seconds())
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def safe_float(value):
-    """Sichere Umwandlung in Float mit Fallback."""
-    try:
-        return float(value) if value is not None else 0.0
-    except (TypeError, ValueError):
-        return 0.0
-
-def format_timedelta(td):
-    """Formatiert timedelta als HH:MM:SS."""
-    try:
-        total_seconds = int(td.total_seconds())
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        seconds = total_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    except:
-        return "00:00:00"
-
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates,
-                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
-                                          letzte_laufzeit):
-    """
-    Verarbeitet Telegram-Updates und gibt die nächste erwartete Update-ID zurück.
-
-    Args:
-        session: aiohttp ClientSession
-        t_boiler_oben: Temperatur oben
-        t_boiler_hinten: Temperatur hinten
-        t_boiler_mittig: Temperatur mittig
-        t_verd: Verdampfer-Temperatur
-        updates: Liste der empfangenen Updates
-        last_update_id: Letzte verarbeitete Update-ID
-        kompressor_status: Aktueller Kompressor-Status
-        aktuelle_laufzeit: Aktuelle Laufzeit des Kompressors
-        gesamtlaufzeit: Gesamtlaufzeit heute
-        letzte_laufzeit: Letzte Laufzeit
-
-    Returns:
-        int: Nächste erwartete Update-ID (immer >= 1)
-    """
-    try:
-        # Initialisiere mit sicheren Standardwerten
-        last_update_id = last_update_id or 0
-        highest_update_id = last_update_id
-
-        if not updates:
-            logging.debug("Keine neuen Updates erhalten")
-            return last_update_id + 1 if last_update_id else 1
-
-        logging.debug(f"Verarbeite {len(updates)} Updates, letzte ID war {last_update_id}")
-
+async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, letzte_laufzeit):
+    """Verarbeitet eingehende Telegram-Nachrichten und führt entsprechende Aktionen aus."""
+    global urlaubsmodus_aktiv, kompressor_ein
+    if updates:
         for update in updates:
-            try:
-                # Extrahiere und validiere Update-ID
-                current_update_id = int(update.get('update_id', 0))
-                if current_update_id <= 0:
-                    logging.warning(f"Ungültige Update-ID: {current_update_id}")
-                    continue
+            message_text = update.get('message', {}).get('text')
+            chat_id = update.get('message', {}).get('chat', {}).get('id')
+            if message_text and chat_id:
+                message_text = message_text.strip().lower()
+                logging.debug(f"Empfangene Nachricht: '{message_text}'")  # Debugging
 
-                # Überspringe bereits verarbeitete Updates
-                if current_update_id <= last_update_id:
-                    logging.debug(f"Überspringe bereits verarbeitetes Update ID {current_update_id}")
-                    continue
-
-                # Aktualisiere höchste ID
-                highest_update_id = max(highest_update_id, current_update_id)
-
-                # Extrahiere Nachrichtendetails
-                message = update.get('message', {})
-                message_text = message.get('text', '').strip().lower()
-                chat_id = message.get('chat', {}).get('id')
-
-                if not message_text or not chat_id:
-                    continue
-
-                # Verarbeite spezifische Befehle
-                if message_text in ["📊 status", "status"]:
-                    # Erstelle Statusnachricht
-                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else (
-                        "Nacht" if is_nighttime(config) else "Normal")
+                # Statusabfrage
+                if message_text == "📊 status" or message_text == "status":
+                    global solar_ueberschuss_aktiv
+                    mode = "PV-Überschuss" if solar_ueberschuss_aktiv else "Normal"
+                    if aktuelle_laufzeit == "0" or not aktuelle_laufzeit:
+                        formatted_aktuelle_laufzeit = "00:00:00"
+                    else:
+                        formatted_aktuelle_laufzeit = aktuelle_laufzeit
 
                     status_msg = (
-                        f"📊 Status\nModus: {mode}\n\n"
+                        f"📊 Status\n"
+                        f"Modus: {mode}\n\n"
                         f"🔧 Kompressor: {'🟢 EIN' if kompressor_status else '🔴 AUS'}\n"
                         f"🌡️ Temperaturen:\n"
-                        f"  - Oben: {safe_float(t_boiler_oben)}°C\n"
-                        f"  - Mitte: {safe_float(t_boiler_mittig)}°C\n"
-                        f"  - Hinten: {safe_float(t_boiler_hinten)}°C\n"
-                        f"  - Verdampfer: {safe_float(t_verd)}°C\n\n"
+                        f"  - Oben: {t_boiler_oben:.1f}°C\n"
+                        f"  - Mitte: {t_boiler_mittig:.1f}°C\n"
+                        f"  - Hinten: {t_boiler_hinten:.1f}°C\n"
+                        f"  - Verdampfer: {t_verd:.1f}°C\n\n"
                         f"⚙️ Regelung:\n"
                     )
-
                     if solar_ueberschuss_aktiv:
                         status_msg += (
-                            f"  - 🟢 Einschalten: Ein Fühler < {EINSCHALTPUNKT}°C\n"
-                            f"  - 🔴 Ausschalten: Ein Fühler ≥ {AUSSCHALTPUNKT_ERHOEHT}°C\n"
+                            f"  - 🟢 Einschalten: Ein Fühler < 45°C\n"
+                            f"  - 🔴 Ausschalten: Ein Fühler ≥ 50°C\n"
                         )
                     else:
                         status_msg += (
-                            f"  - 🟢 Einschalten: Oben < {aktueller_einschaltpunkt}°C oder Mitte < {aktueller_einschaltpunkt}°C\n"
-                            f"  - 🔴 Ausschalten: Oben ≥ {aktueller_ausschaltpunkt}°C und Mitte ≥ {aktueller_ausschaltpunkt}°C\n"
+                            f"  - 🟢 Einschalten: Oben < 42°C oder Mitte < 42°C\n"
+                            f"  - 🔴 Ausschalten: Oben ≥ 45°C und Mitte ≥ 45°C\n"
                         )
-
                     status_msg += (
                         f"\n⏱️ Laufzeiten:\n"
-                        f"  - Aktuell: {format_timedelta(aktuelle_laufzeit if kompressor_status else timedelta(0))}\n"
-                        f"  - Heute: {format_timedelta(gesamtlaufzeit)}\n"
-                        f"  - Letzte: {format_timedelta(letzte_laufzeit)}"
+                        f"  - Aktuell: {formatted_aktuelle_laufzeit}\n"
+                        f"  - Heute: {gesamtlaufzeit}\n"
+                        f"  - Letzte: {letzte_laufzeit}"
                     )
+                    await send_telegram_message(session, chat_id, status_msg)
 
-                    # Sende Nachricht mit Fehlerbehandlung
-                    try:
-                        await send_telegram_message(session, chat_id, status_msg)
-                        logging.info(f"Statusnachricht an Chat {chat_id} gesendet")
-                    except Exception as e:
-                        logging.error(f"Fehler beim Senden der Statusnachricht: {e}")
+                # Verlaufsbefehle
+                elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
+                    logging.debug("Starte Verlauf 24h")  # Debugging
+                    await get_boiler_temperature_history(session, 24)
+                elif message_text == "📈 verlauf 12h" or message_text == "verlauf 12h":
+                    logging.debug("Starte Verlauf 12h")  # Debugging
+                    await get_boiler_temperature_history(session, 12)
+                elif message_text == "📈 verlauf 6h" or message_text == "verlauf 6h":
+                    logging.debug("Starte Verlauf 6h")  # Debugging
+                    await get_boiler_temperature_history(session, 6)
+                elif message_text == "📈 verlauf 1h" or message_text == "verlauf 1h":
+                    logging.debug("Starte Verlauf 1h")  # Debugging
+                    await get_boiler_temperature_history(session, 1)
 
-            except Exception as e:
-                logging.error(f"Fehler bei der Verarbeitung eines Updates: {e}", exc_info=True)
-                continue
+                # Manuelle Steuerung
+                elif message_text == "🔛 manuell ein" or message_text == "manuell ein":
+                    logging.debug("Manuelles Einschalten des Kompressors")  # Debugging
+                    if not kompressor_ein:
+                        await asyncio.to_thread(set_kompressor_status, True)
+                        await send_telegram_message(session, chat_id, "✅ Kompressor manuell eingeschaltet.")
+                    else:
+                        await send_telegram_message(session, chat_id, "ℹ️ Kompressor läuft bereits.")
+                elif message_text == "🔴 manuell aus" or message_text == "manuell aus":
+                    logging.debug("Manuelles Ausschalten des Kompressors")  # Debugging
+                    if kompressor_ein:
+                        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                        await send_telegram_message(session, chat_id, "✅ Kompressor manuell ausgeschaltet.")
+                    else:
+                        await send_telegram_message(session, chat_id, "ℹ️ Kompressor ist bereits aus.")
 
-        # Berechne nächste erwartete ID (mindestens 1)
-        next_update_id = max(highest_update_id, last_update_id) + 1
-        logging.debug(f"Nächste erwartete Update-ID: {next_update_id}")
-        return next_update_id
+                # Urlaubsmodus
+                elif message_text == "🏖️ urlaubsmodus an" or message_text == "urlaubsmodus an":
+                    logging.debug("Aktiviere Urlaubsmodus")  # Debugging
+                    if not urlaubsmodus_aktiv:
+                        urlaubsmodus_aktiv = True
+                        if kompressor_ein:
+                            await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+                        await send_telegram_message(session, chat_id, "🏖️ Urlaubsmodus aktiviert. Kompressor bleibt aus.")
+                    else:
+                        await send_telegram_message(session, chat_id, "ℹ️ Urlaubsmodus ist bereits aktiv.")
+                elif message_text == "🏠 urlaubsmodus aus" or message_text == "urlaubsmodus aus":
+                    logging.debug("Deaktiviere Urlaubsmodus")  # Debugging
+                    if urlaubsmodus_aktiv:
+                        urlaubsmodus_aktiv = False
+                        await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus deaktiviert. Normalbetrieb wird fortgesetzt.")
+                    else:
+                        await send_telegram_message(session, chat_id, "ℹ️ Urlaubsmodus ist bereits aus.")
 
-    except Exception as e:
-        logging.critical(f"Kritischer Fehler in process_telegram_messages_async: {e}", exc_info=True)
-        return (last_update_id or 0) + 1  # Garantiere eine gültige ID
+                # Unbekannter Befehl
+                else:
+                    logging.debug(f"Unbekannter Befehl: '{message_text}'")  # Debugging
+                    await send_telegram_message(session, chat_id, "❓ Unbekannter Befehl. Verwende 'status', 'verlauf 6h', etc.")
+
+                last_update_id = update['update_id'] + 1
+        return last_update_id
+    return last_update_id
 
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
