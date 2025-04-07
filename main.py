@@ -296,7 +296,8 @@ async def get_boiler_temperature_history(session, hours):
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
                     except ValueError as e:
-                        logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Zeitstempel: '{timestamp_str}', Fehler: {e}")
+                        logging.error(f"Fehler beim Parsen der Zeile: {line.strip()},"
+                                      f" Zeitstempel: '{timestamp_str}', Fehler: {e}")
                         continue
 
         if not temp_oben or not temp_hinten:
@@ -332,9 +333,11 @@ async def get_boiler_temperature_history(session, hours):
         sampled_ausschalt = sample_data(ausschaltpunkte, target_interval, target_points)
         sampled_kompressor = sample_data(kompressor_status, target_interval, target_points)
         sampled_solar_min = sample_data(
-            [(ts, val) for ts, val in solar_ueberschuss_periods if val == UNTERER_FUEHLER_MIN], target_interval, target_points)
+            [(ts, val) for ts, val in solar_ueberschuss_periods
+             if val == UNTERER_FUEHLER_MIN], target_interval, target_points)
         sampled_solar_max = sample_data(
-            [(ts, val) for ts, val in solar_ueberschuss_periods if val == UNTERER_FUEHLER_MAX], target_interval, target_points)
+            [(ts, val) for ts, val in solar_ueberschuss_periods
+             if val == UNTERER_FUEHLER_MAX], target_interval, target_points)
 
         if not sampled_oben or not sampled_hinten:
             logging.error(f"Sampling ergab keine Daten für {hours}h!")
@@ -364,7 +367,8 @@ async def get_boiler_temperature_history(session, hours):
                     color = color_map.get(power_sources[current_start_idx], "gray")
                     plt.fill_between(segment_timestamps, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
                                      where=[val == 1 for val in segment_vals], color=color, alpha=0.2,
-                                     label=f"Kompressor EIN ({power_sources[current_start_idx]})" if current_start_idx == 0 else None)
+                                     label=f"Kompressor EIN ({power_sources[current_start_idx]})"
+                                     if current_start_idx == 0 else None)
                     current_start_idx = i
 
             handles, labels = plt.gca().get_legend_handles_labels()
@@ -382,16 +386,20 @@ async def get_boiler_temperature_history(session, hours):
             plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="s", color="purple")
         if sampled_einschalt:
             timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
-            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--', color="green")
+            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)",
+                     linestyle='--', color="green")
         if sampled_ausschalt:
             timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
-            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--', color="orange")
+            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)",
+                     linestyle='--', color="orange")
         if sampled_solar_min:
             timestamps_min, min_vals = zip(*sampled_solar_min)
-            plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.', label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
+            plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.',
+                     label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
         if sampled_solar_max:
             timestamps_max, max_vals = zip(*sampled_solar_max)
-            plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.', label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+            plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.',
+                     label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
 
         plt.xlim(time_ago, now)
         plt.ylim(0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5)
@@ -413,7 +421,8 @@ async def get_boiler_temperature_history(session, hours):
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
         form.add_field("caption",
-                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
+                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, T_Mittig = lila,"
+                       f" Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
