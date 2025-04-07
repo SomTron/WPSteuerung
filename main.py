@@ -293,8 +293,10 @@ async def get_boiler_temperature_history(session, hours):
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
                         kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0, power_source))
                         if int(solar_ueberschuss) == 1:
-                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
-                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
+                            solar_ueberschuss_periods.append(
+                                (timestamp, SOLAR_EIN))  # Unterer Grenzwert (Einschaltpunkt)
+                            solar_ueberschuss_periods.append(
+                                (timestamp, SOLAR_AUS))  # Oberer Grenzwert (Ausschaltpunkt)
                     except ValueError as e:
                         logging.error(f"Fehler beim Parsen der Zeile: {line.strip()},"
                                       f" Zeitstempel: '{timestamp_str}', Fehler: {e}")
@@ -395,14 +397,14 @@ async def get_boiler_temperature_history(session, hours):
         if sampled_solar_min:
             timestamps_min, min_vals = zip(*sampled_solar_min)
             plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.',
-                     label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
+                     label=f'Solar Einschaltpunkt ({SOLAR_EIN}°C)')
         if sampled_solar_max:
             timestamps_max, max_vals = zip(*sampled_solar_max)
             plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.',
-                     label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+                     label=f'Solar Ausschaltpunkt ({SOLAR_AUS}°C)')
 
         plt.xlim(time_ago, now)
-        plt.ylim(0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5)
+        plt.ylim(0, max(SOLAR_AUS, NORMAL_AUS) + 5)
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
         plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
