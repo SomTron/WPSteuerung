@@ -19,6 +19,7 @@ import pandas as pd
 from dateutil.relativedelta import relativedelta
 
 
+
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
 SENSOR_IDS = {
@@ -86,6 +87,8 @@ last_pressure_error_time = None  # Zeitpunkt des letzten Druckfehlers
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 last_pressure_state = None
 csv_lock = asyncio.Lock()
+aktuelle_laufzeit = timedelta(seconds=0)
+gesamtlaufzeit = timedelta(seconds=0)
 # Globale Variablen für Temperaturwerte
 t_boiler_oben = 0
 t_boiler_hinten = 0
@@ -1586,6 +1589,13 @@ async def main_loop(session):
     watchdog_warning_count = 0
     WATCHDOG_MAX_WARNINGS = 3
 
+    # Initialisierung der Laufzeitvariablen als timedelta
+    current_runtime = timedelta(seconds=0)
+    total_runtime_today = timedelta(seconds=0)
+    last_kompressor_status = False  # Initialisierung hinzugefügt
+    kompressor_ein = False          # Sicherstellen, dass der Status definiert ist
+    start_time = None
+
     try:
         while True:
             pressure_ok = await asyncio.to_thread(check_pressure)
@@ -1600,7 +1610,7 @@ async def main_loop(session):
                     current_day = now.date()
                     if current_day != last_day:
                         logging.info(f"Neuer Tag erkannt: {current_day}. Setze Gesamtlaufzeit zurück.")
-                        total_runtime_today = timedelta()
+                        total_runtime_today = timedelta(seconds=0)  # Reset als timedelta
                         last_day = current_day
 
                 config = validate_config(load_config())
@@ -1632,7 +1642,6 @@ async def main_loop(session):
                 consumeenergy = solax_data.get("consumeenergy", "N/A")
 
                 is_night = is_nighttime(config)
-                # Sollwerte nur aktualisieren, wenn Urlaubsmodus nicht aktiv ist
                 if not urlaubsmodus_aktiv:
                     aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night,
                                                                                                   solax_data)
@@ -1701,13 +1710,26 @@ async def main_loop(session):
 
                 # Steuerlogik ausgelagert
                 await control_compressor(t_boiler_oben, t_boiler_mittig, t_boiler_hinten, t_verd,
-                                         solar_ueberschuss_aktiv, urlaubsmodus_aktiv, config)
+                                        solar_ueberschuss_aktiv, urlaubsmodus_aktiv, config)
 
                 # Laufzeit aktualisieren
                 if kompressor_ein and start_time:
-                    current_runtime = datetime.now() - start_time
+                    current_runtime = datetime.now() - start_time  # Bleibt timedelta
                 else:
-                    current_runtime = timedelta(seconds=0)
+                    current_runtime = timedelta(seconds=0)  # Reset als timedelta
+
+                # Laufzeitlogik: Gesamtlaufzeit aktualisieren bei Statuswechsel
+                if kompressor_ein != last_kompressor_status:
+                    if kompressor_ein and not start_time:
+                        start_time = datetime.now()
+                        logging.info("Kompressor angeschaltet, Startzeit gesetzt.")
+                    elif not kompressor_ein and start_time:
+                        last_runtime = datetime.now() - start_time
+                        total_runtime_today += last_runtime
+                        start_time = None
+                        logging.info(f"Kompressor ausgeschaltet, Laufzeit hinzugefügt: {format_timedelta(last_runtime)}")
+
+                last_kompressor_status = kompressor_ein
 
                 # Logging in CSV
                 now = datetime.now()
@@ -1721,7 +1743,7 @@ async def main_loop(session):
                             ausschaltpunkt_str = str(
                                 aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
                             solar_ueberschuss_str = "1" if solar_ueberschuss_aktiv else "0"
-                            urlaubsmodus_str = "1" if urlaubsmodus_aktiv else "0"  # Neuer Eintrag für Urlaubsmodus
+                            urlaubsmodus_str = "1" if urlaubsmodus_aktiv else "0"
                             power_source_str = power_source if power_source else "N/A"
 
                             csv_line = (
@@ -1739,7 +1761,13 @@ async def main_loop(session):
                             await csvfile.write(csv_line)
                             logging.debug(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
                         last_log_time = now
-                        last_kompressor_status = kompressor_ein
+
+                # Telegram-Updates (angepasst an Ihre Struktur)
+                updates = await get_telegram_updates(session, last_update_id)
+                last_update_id = await process_telegram_messages_async(
+                    session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd,
+                    updates, last_update_id, kompressor_ein, current_runtime, total_runtime_today, last_runtime
+                )
 
                 cycle_duration = (datetime.now() - last_cycle_time).total_seconds()
                 if cycle_duration > 30:
@@ -1780,9 +1808,20 @@ def safe_float(value, default=0.0):
     except (ValueError, TypeError):
         return default
 
+
 def format_timedelta(td):
-    """Formatiert eine timedelta im Format hh:mm:ss."""
-    total_seconds = int(td.total_seconds())
+    """Formatiert eine timedelta oder einen String im Format hh:mm:ss."""
+    if isinstance(td, str):
+        try:
+            # Wenn es ein String ist, versuchen wir, ihn in Sekunden zu parsen
+            total_seconds = int(float(td))  # z. B. "0" oder "3600"
+        except ValueError:
+            return "00:00:00"  # Fallback für ungültige Strings
+    elif hasattr(td, 'total_seconds'):  # timedelta-Objekt
+        total_seconds = int(td.total_seconds())
+    else:
+        return "00:00:00"  # Fallback für andere Typen
+
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     seconds = total_seconds % 60
