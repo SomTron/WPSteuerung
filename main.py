@@ -793,7 +793,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
     nachtabsenkung = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 20))
     t_boiler = (t_boiler_oben + t_boiler_hinten + t_boiler_mittig) / 3 if all(isinstance(t, (int, float)) for t in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig]) else "N/A"
 
-    # Basisnachricht
+    # Basisnachricht ohne Anführungszeichen
     message = (
         "🌡️ *Temperaturen*\n"
         f"  Boiler oben: {t_boiler_oben:.2f} °C\n"
@@ -802,8 +802,8 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
         f"  Durchschnitt: {t_boiler:.2f} °C\n"
         f"  Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 *Kompressor*: {'🟢 EIN' if kompressor_status else '🔴 AUS'}\n"
-        f"⏱️ *Aktuelle Laufzeit*: {str(aktuelle_laufzeit).split('.')[0]}\n"
-        f"⏳ *Heute gesamt*: {str(gesamtlaufzeit).split('.')[0]}\n\n"
+        f"⏱️ *Aktuelle Laufzeit*: {format_timedelta(aktuelle_laufzeit)}\n"
+        f"⏳ *Heute gesamt*: {format_timedelta(gesamtlaufzeit)}\n\n"
     )
 
     # Sollwerte und Abstand
@@ -869,19 +869,8 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
             reason = "Unbekannter Grund (prüfe Sensoren)"
         message += f"⚠️ *Warum aus?*\n  {reason}"
 
-    # Optional: Solarinformationen (falls gewünscht)
-    solax_data = await get_solax_data(session) or {}
-    if solax_data.get("batPower") is not None:
-        message += (
-            "\n\n🔋 *Solarstatus*\n"
-            f"  Batterieleistung: {solax_data.get('batPower', 0)} W\n"
-            f"  Einspeisung: {solax_data.get('feedinpower', 0)} W\n"
-            f"  Ladestand: {solax_data.get('soc', 0)} %"
-        )
-
     await send_telegram_message(session, CHAT_ID, message)
     logging.info(f"Telegram-Nachricht gesendet: {message}")
-
 async def send_welcome_message(session, chat_id):
     """Sendet eine Willkommensnachricht mit Tastatur."""
     message = (
@@ -1782,32 +1771,22 @@ async def main_loop(session):
         raise
 
 # Asynchrone Verarbeitung von Telegram-Nachrichten
+
+
+def safe_float(value, default=0.0):
+    """Konvertiert einen Wert sicher in einen Float, mit Fallback."""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
 def format_timedelta(td):
-    """Formatiert eine timedelta in HH:MM:SS."""
+    """Formatiert eine timedelta im Format hh:mm:ss."""
     total_seconds = int(td.total_seconds())
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     seconds = total_seconds % 60
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def safe_float(value):
-    """Sichere Umwandlung in Float mit Fallback."""
-    try:
-        return float(value) if value is not None else 0.0
-    except (TypeError, ValueError):
-        return 0.0
-
-def format_timedelta(td):
-    """Formatiert timedelta als HH:MM:SS."""
-    try:
-        total_seconds = int(td.total_seconds())
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        seconds = total_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    except:
-        return "00:00:00"
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, letzte_laufzeit):
     """Verarbeitet eingehende Telegram-Nachrichten und gibt die aktualisierte last_update_id zurück."""
