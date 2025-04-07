@@ -209,32 +209,36 @@ async def get_telegram_updates(session, offset=None):
         return None
 
 async def update_csv_header_if_needed():
-    """Prüft und aktualisiert den CSV-Header, falls T_Mittig fehlt."""
+    """Prüft und aktualisiert den CSV-Header, falls nötig."""
     if os.path.exists("heizungsdaten.csv"):
         async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
             header = await csvfile.readline()
-            if "T_Mittig" not in header:
-                # Alter Header ohne T_Mittig
-                old_header = "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
-                new_header = "Zeitstempel,T_Oben,T_Hinten,T_Mittig,T_Boiler,T_Verd,Kompressor,ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
-                # Lese bestehende Daten
+            if "Urlaubsmodus" not in header:  # Prüfe neuen Header
+                old_header = (
+                    "Zeitstempel,T_Oben,T_Hinten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
+                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
+                )
+                new_header = (
+                    "Zeitstempel,T_Oben,T_Hinten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
+                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Urlaubsmodus,PowerSource\n"
+                )
                 lines = await csvfile.readlines()
-                # Schreibe neuen Header und alte Daten mit zusätzlicher "N/A"-Spalte für T_Mittig
                 async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile_new:
                     await csvfile_new.write(new_header)
                     for line in lines:
                         parts = line.strip().split(',')
-                        # Füge "N/A" nach T_Hinten (Index 2) ein
-                        updated_line = ','.join(parts[:3] + ["N/A"] + parts[3:]) + '\n'
-                        await csvfile_new.write(updated_line)
-                logging.info("CSV-Header aktualisiert: T_Mittig hinzugefügt.")
+                        if len(parts) >= 18:  # Mindestens bis Nachtabsenkung
+                            updated_line = ','.join(parts[:17] + [parts[17].replace("Nachtabsenkung", "0")] + parts[18:]) + '\n'
+                            await csvfile_new.write(updated_line)
+                logging.info("CSV-Header aktualisiert: Nachtabsenkung durch Urlaubsmodus ersetzt.")
     else:
-        # Neue Datei mit vollständigem Header erstellen
         async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
             header = (
                 "Zeitstempel,T_Oben,T_Hinten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
                 "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
-                "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
+                "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Urlaubsmodus,PowerSource\n"
             )
             await csvfile.write(header)
             logging.info("Neue CSV-Datei erstellt mit Header: " + header.strip())
@@ -1622,7 +1626,6 @@ async def main_loop(session):
                 if not urlaubsmodus_aktiv:
                     aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night,
                                                                                                   solax_data)
-                # Bei Urlaubsmodus bleiben die Sollwerte von aktivere_urlaubsmodus erhalten
 
                 temps = await read_all_sensors()
                 t_boiler_oben = temps["oben"]
@@ -1636,9 +1639,9 @@ async def main_loop(session):
                 )
 
                 pressure_ok = await asyncio.to_thread(check_pressure)
-                logging.info(f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
+                logging.info(
+                    f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
                 logging.info(f"Solarüberschuss: {solar_ueberschuss_aktiv} | Drucksensor: {pressure_ok}")
-
                 now = datetime.now()
 
                 if not pressure_ok:
@@ -1687,7 +1690,8 @@ async def main_loop(session):
                     continue
 
                 # Steuerlogik ausgelagert
-                await control_compressor(t_boiler_oben, t_boiler_mittig, t_boiler_hinten, t_verd, solar_ueberschuss_aktiv, urlaubsmodus_aktiv, config)
+                await control_compressor(t_boiler_oben, t_boiler_mittig, t_boiler_hinten, t_verd,
+                                         solar_ueberschuss_aktiv, urlaubsmodus_aktiv, config)
 
                 # Laufzeit aktualisieren
                 if kompressor_ein and start_time:
@@ -1695,16 +1699,19 @@ async def main_loop(session):
                 else:
                     current_runtime = timedelta(seconds=0)
 
+                # Logging in CSV
                 now = datetime.now()
                 should_log = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1)) or (
                         kompressor_ein != last_kompressor_status)
                 if should_log:
                     async with csv_lock:
                         async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                            einschaltpunkt_str = str(aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
-                            ausschaltpunkt_str = str(aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
-                            solar_ueberschuss_str = str(int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
-                            nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
+                            einschaltpunkt_str = str(
+                                aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
+                            ausschaltpunkt_str = str(
+                                aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
+                            solar_ueberschuss_str = "1" if solar_ueberschuss_aktiv else "0"
+                            urlaubsmodus_str = "1" if urlaubsmodus_aktiv else "0"  # Neuer Eintrag für Urlaubsmodus
                             power_source_str = power_source if power_source else "N/A"
 
                             csv_line = (
@@ -1716,7 +1723,7 @@ async def main_loop(session):
                                 f"{t_verd if t_verd is not None else 'N/A'},"
                                 f"{'EIN' if kompressor_ein else 'AUS'},"
                                 f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
-                                f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str},"
+                                f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{urlaubsmodus_str},"
                                 f"{power_source_str}\n"
                             )
                             await csvfile.write(csv_line)
