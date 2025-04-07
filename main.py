@@ -44,15 +44,15 @@ config.read("config.ini")
 # Globale Variablen initialisieren
 BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
 CHAT_ID = config["Telegram"]["CHAT_ID"]
-AUSSCHALTPUNKT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
-AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 52))
-EINSCHALTPUNKT = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
-TEMP_OFFSET = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
-VERDAMPFERTEMPERATUR = int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"])
-MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))
-MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
-UNTERER_FUEHLER_MIN = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 45))
-UNTERER_FUEHLER_MAX = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MAX", 50))
+MIN_LAUFZEIT = timedelta(minutes=min(max(int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]), 1), 60))
+MIN_PAUSE = timedelta(minutes=min(max(int(config["Heizungssteuerung"]["MIN_PAUSE"]), 1), 60))
+VERDAMPFERTEMPERATUR = min(max(int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]), -20), 20)
+SOLAR_AUS = min(max(int(config["Heizungssteuerung"]["SOLAR_AUS"]), 40), 60)
+SOLAR_EIN = min(max(int(config["Heizungssteuerung"]["SOLAR_EIN"]), 35), 55)
+NORMAL_AUS = min(max(int(config["Heizungssteuerung"]["NORMAL_AUS"]), 40), 60)
+NORMAL_EIN = min(max(int(config["Heizungssteuerung"]["NORMAL_EIN"]), 35), 55)
+NACHT_EIN = min(max(int(config["Heizungssteuerung"]["NACHT_EIN"]), 20), 40)
+SICHERHEITS_TEMP = min(max(int(config["Heizungssteuerung"]["SICHERHEITS_TEMP"]), 45), 70)
 TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
 SN = config["SolaxCloud"]["SN"]
 
@@ -74,10 +74,10 @@ last_kompressor_status = None
 last_update_id = 0
 urlaubsmodus_aktiv = False
 pressure_error_sent = False
-aktueller_ausschaltpunkt = AUSSCHALTPUNKT
-aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Einschaltpunkt basiert auf Offset
-original_ausschaltpunkt = AUSSCHALTPUNKT
-original_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET  # Konsistenz im Urlaubsmodus
+aktueller_ausschaltpunkt = NORMAL_AUS  # Standardwert für Normalbetrieb
+aktueller_einschaltpunkt = NORMAL_EIN  # Standardwert für Normalbetrieb
+original_ausschaltpunkt = NORMAL_AUS   # Ursprünglicher Wert für Wiederherstellung
+original_einschaltpunkt = NORMAL_EIN   # Ursprünglicher Wert für Wiederherstellung
 ausschluss_grund = None  # Grund, warum der Kompressor nicht läuft (z.B. "Zu kurze Pause")
 t_boiler = None
 solar_ueberschuss_aktiv = False
@@ -781,26 +781,22 @@ async def send_runtimes_telegram(session):
 
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    """Sendet den aktuellen Status über Telegram mit korrekten Einschalt- und Ausschaltpunkten sowie der Energiequelle."""
     global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
 
-    # Hole Solax-Daten, um die Energiequelle zu bestimmen
     solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                                    "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
                                                    "api_fehler": True}
     power_source = get_power_source(solax_data)
 
-    # Basisnachricht mit Temperaturen
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
         f"Boiler oben: {t_boiler_oben:.2f} °C\n"
-        f"Boiler mittig: {t_boiler_mittig:.2f} °C\n"  # Mittig hinzugefügt
+        f"Boiler mittig: {t_boiler_mittig:.2f} °C\n"
         f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
         f"Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
     )
 
-    # Wenn Kompressor läuft, füge Energiequelle und aktuelle Laufzeit hinzu
     if kompressor_status:
         message += f"⚡ Energiequelle: {power_source}\n"
         message += f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
@@ -809,45 +805,46 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
 
     message += f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
 
-    # Mehrere Sollwerte anzeigen
     message += "🎯 Sollwerte:\n"
-
     if solar_ueberschuss_aktiv:
         message += (
             f"- Mit PV-Überschuss:\n"
-            f"  Einschaltpunkt (oben): {EINSCHALTPUNKT} °C\n"
-            f"  Ausschaltpunkt (oben): {AUSSCHALTPUNKT_ERHOEHT} °C\n"
-            f"  Min. untere Temp: {UNTERER_FUEHLER_MIN} °C\n"
-            f"  Max. untere Temp: {UNTERER_FUEHLER_MAX} °C\n"
+            f"  Einschaltpunkt (hinten): {SOLAR_EIN} °C\n"
+            f"  Ausschaltpunkt (max): {SOLAR_AUS} °C\n"
         )
     else:
-        message += (
-            f"- Normalbetrieb:\n"
-            f"  Einschaltpunkt (oben): {einschaltpunkt} °C\n"
-            f"  Ausschaltpunkt (oben): {ausschaltpunkt} °C\n"
-        )
+        is_night = is_nighttime(config)
+        if is_night:
+            message += (
+                f"- Nachtbetrieb:\n"
+                f"  Einschaltpunkt (oben): {NACHT_EIN} °C\n"
+                f"  Ausschaltpunkt (oben/mittig): {NORMAL_AUS} °C\n"
+            )
+        else:
+            message += (
+                f"- Normalbetrieb:\n"
+                f"  Einschaltpunkt (oben/mittig): {NORMAL_EIN} °C\n"
+                f"  Ausschaltpunkt (oben/mittig): {NORMAL_AUS} °C\n"
+            )
 
+    message += f"- Sicherheitsgrenze: {SICHERHEITS_TEMP} °C\n"
     message += f"- Verdampfer Min: {VERDAMPFERTEMPERATUR} °C\n"
 
-    # Aktive Modi hinzufügen
     active_modes = []
     if is_nighttime(config):
         nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"])
         active_modes.append(f"Nachtabsenkung ({nacht_reduction} °C)")
     if urlaubsmodus_aktiv:
-        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
+        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 15))
         active_modes.append(f"Urlaubsmodus (-{urlaubsabsenkung} °C)")
     if solar_ueberschuss_aktiv:
-        erhoehung = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - int(
-            config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-        active_modes.append(f"PV-Überschuss (+{erhoehung} °C)")
+        active_modes.append("PV-Überschuss")
 
     if active_modes:
         message += "\n🔄 Aktive Modi:\n- " + "\n- ".join(active_modes)
     else:
         message += "\n🔄 Aktive Modi: Keine"
 
-    # Ausschlussgrund, falls vorhanden
     if not kompressor_status and ausschluss_grund:
         message += f"\n\n⚠️ Kompressor ausgeschaltet wegen: {ausschluss_grund}"
 
@@ -962,10 +959,11 @@ def check_pressure():
 def check_boiler_sensors(t_oben, t_hinten, t_mittig, config):
     """Prüft die Boiler-Sensoren (oben, hinten, mittig) auf Fehler."""
     try:
-        ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
+        # Verwende SICHERHEITS_TEMP statt eines dynamischen Ausschaltpunkts für Übertemperatur
+        sicherheits_temp = int(config["Heizungssteuerung"]["SICHERHEITS_TEMP"])
     except (KeyError, ValueError):
-        ausschaltpunkt = 50
-        logging.warning(f"Ausschaltpunkt nicht gefunden, verwende Standard: {ausschaltpunkt}")
+        sicherheits_temp = 51
+        logging.warning(f"SICHERHEITS_TEMP nicht gefunden, verwende Standard: {sicherheits_temp}")
 
     fehler = None
     is_overtemp = False
@@ -975,11 +973,11 @@ def check_boiler_sensors(t_oben, t_hinten, t_mittig, config):
         fehler = "Fühlerfehler!"
         logging.error(f"Fühlerfehler erkannt: oben={t_oben}, hinten={t_hinten}, mittig={t_mittig}")
     # Prüfe auf Übertemperatur für alle Sensoren
-    elif t_oben >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10) or t_mittig >= (ausschaltpunkt + 10):
+    elif t_oben >= sicherheits_temp or t_hinten >= sicherheits_temp or t_mittig >= sicherheits_temp:
         fehler = "Übertemperatur!"
         is_overtemp = True
         logging.error(
-            f"Übertemperatur erkannt: oben={t_oben}, hinten={t_hinten}, mittig={t_mittig}, Grenze={ausschaltpunkt + 10}")
+            f"Übertemperatur erkannt: oben={t_oben}, hinten={t_hinten}, mittig={t_mittig}, Grenze={sicherheits_temp}")
     # Prüfe auf unplausible Differenzen zwischen den Sensoren
     elif max(abs(t_oben - t_hinten), abs(t_oben - t_mittig), abs(t_hinten - t_mittig)) > 50:
         fehler = "Fühlerdifferenz!"
@@ -1043,97 +1041,42 @@ async def set_kompressor_status(status, force_off=False):
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session):
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, TEMP_OFFSET, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
-
-    config_file = "config.ini"
-    current_hash = calculate_file_hash(config_file)
-
-    if last_config_hash is not None and current_hash != last_config_hash:
-        logging.info(f"Konfigurationsdatei geändert. Alter Hash: {last_config_hash}, Neuer Hash: {current_hash}")
-        await send_telegram_message(session, CHAT_ID, "🔧 Konfigurationsdatei wurde geändert.")
+    """Lädt die Konfiguration neu und aktualisiert globale Variablen."""
+    global config, BOT_TOKEN, CHAT_ID, MIN_LAUFZEIT, MIN_PAUSE, VERDAMPFERTEMPERATUR, SOLAR_AUS, SOLAR_EIN, NORMAL_AUS, NORMAL_EIN, NACHT_EIN, SICHERHEITS_TEMP, TOKEN_ID, SN, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
 
     try:
-        async with aiofiles.open(config_file, mode='r') as f:
-            content = await f.read()
-            config = configparser.ConfigParser()
-            config.read_string(content)
+        config = load_config()
+        logging.info("Konfiguration erfolgreich neu geladen.")
 
-        if not urlaubsmodus_aktiv:
-            AUSSCHALTPUNKT = check_value(
-                int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
-                min_value=30, max_value=80, default_value=45,
-                parameter_name="AUSSCHALTPUNKT"
-            )
-            AUSSCHALTPUNKT_ERHOEHT = check_value(
-                int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
-                min_value=35, max_value=85, default_value=52,
-                parameter_name="AUSSCHALTPUNKT_ERHOEHT",
-                other_value=AUSSCHALTPUNKT, comparison=">="
-            )
-            TEMP_OFFSET = check_value(
-                int(config["Heizungssteuerung"]["TEMP_OFFSET"]),
-                min_value=3, max_value=20, default_value=3,
-                parameter_name="TEMP_OFFSET"
-            )
-            VERDAMPFERTEMPERATUR = check_value(
-                int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
-                min_value=4, max_value=40, default_value=6,
-                parameter_name="VERDAMPFERTEMPERATUR"
-            )
-
-        MIN_LAUFZEIT_MINUTEN = check_value(
-            int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
-            min_value=1, max_value=60, default_value=10,
-            parameter_name="MIN_LAUFZEIT"
-        )
-        MIN_PAUSE_MINUTEN = check_value(
-            int(config["Heizungssteuerung"]["MIN_PAUSE"]),
-            min_value=1, max_value=60, default_value=20,
-            parameter_name="MIN_PAUSE"
-        )
-
+        # Telegram
         BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
         CHAT_ID = config["Telegram"]["CHAT_ID"]
-        MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
-        MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
+
+        # Heizungssteuerung mit Min/Max-Grenzen
+        MIN_LAUFZEIT = timedelta(minutes=min(max(int(config["Heizungssteuerung"].get("MIN_LAUFZEIT", 5)), 1), 60))
+        MIN_PAUSE = timedelta(minutes=min(max(int(config["Heizungssteuerung"].get("MIN_PAUSE", 5)), 1), 60))
+        VERDAMPFERTEMPERATUR = min(max(int(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", 6)), -20), 20)
+        SOLAR_AUS = min(max(int(config["Heizungssteuerung"].get("SOLAR_AUS", 50)), 40), 60)
+        SOLAR_EIN = min(max(int(config["Heizungssteuerung"].get("SOLAR_EIN", 45)), 35), 55)
+        NORMAL_AUS = min(max(int(config["Heizungssteuerung"].get("NORMAL_AUS", 45)), 40), 60)
+        NORMAL_EIN = min(max(int(config["Heizungssteuerung"].get("NORMAL_EIN", 42)), 35), 55)
+        NACHT_EIN = min(max(int(config["Heizungssteuerung"].get("NACHT_EIN", 30)), 20), 40)
+        SICHERHEITS_TEMP = min(max(int(config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 51)), 45), 70)
+
+        # SolaxCloud
         TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
         SN = config["SolaxCloud"]["SN"]
 
-        # Alte Sollwerte speichern
-        old_einschaltpunkt = aktueller_einschaltpunkt
-        old_ausschaltpunkt = aktueller_ausschaltpunkt
+        # Aktualisiere aktuelle Sollwerte nur, wenn Urlaubsmodus nicht aktiv ist
+        if not urlaubsmodus_aktiv:
+            aktueller_ausschaltpunkt = NORMAL_AUS
+            aktueller_einschaltpunkt = NORMAL_EIN
+            logging.info(f"Aktuelle Sollwerte aktualisiert: Ausschaltpunkt={aktueller_ausschaltpunkt}, Einschaltpunkt={aktueller_einschaltpunkt}")
 
-        # Solax-Daten abrufen und sicherstellen, dass alle Werte definiert sind
-        solax_data = await get_solax_data(session) or {
-            "acpower": 0,
-            "feedinpower": 0,
-            "consumeenergy": 0,
-            "batPower": 0,
-            "soc": 0,
-            "powerdc1": 0,
-            "powerdc2": 0,
-            "api_fehler": True
-        }
-
-        # Sollwerte berechnen
-        aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(
-            config,
-            is_nighttime(config),
-            solax_data
-        )
-
-        logging.info(
-            f"Konfiguration neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, "
-            f"VERDAMPFERTEMPERATUR={VERDAMPFERTEMPERATUR}, Einschaltpunkt={aktueller_einschaltpunkt}, "
-            f"Ausschaltpunkt={aktueller_ausschaltpunkt}"
-        )
-        last_config_hash = current_hash
-
+        await send_telegram_message(session, CHAT_ID, "🔄 Konfiguration erfolgreich neu geladen.")
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
-        # Fallback-Werte setzen, falls das Laden fehlschlägt
-        aktueller_ausschaltpunkt = AUSSCHALTPUNKT
-        aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET
+        await send_telegram_message(session, CHAT_ID, f"⚠️ Fehler beim Neuladen der Konfiguration: {e}")
 
 
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
@@ -1485,38 +1428,71 @@ async def read_all_sensors():
 async def control_compressor(t_oben, t_mittig, t_hinten, t_verd, solar_active, urlaub, config):
     global kompressor_ein, ausschluss_grund, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
 
-    if t_oben is None or t_mittig is None or t_hinten is None:
+    # Prüfe auf Sensorfehler
+    if t_oben is None or t_mittig is None or t_hinten is None or t_verd is None:
         ausschluss_grund = "Sensorfehler"
         logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
         return
 
+    # Sicherheitsprüfung: Kein Heizen, wenn ein Fühler über SICHERHEITS_TEMP liegt
+    if t_oben > SICHERHEITS_TEMP or t_mittig > SICHERHEITS_TEMP or t_hinten > SICHERHEITS_TEMP:
+        ausschluss_grund = f"Sicherheitstemperatur überschritten ({SICHERHEITS_TEMP}°C)"
+        logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+        return
+
+    # Urlaubsmodus
     if urlaub:
-        if kompressor_ein:
-            await asyncio.to_thread(set_kompressor_status, False, force_off=True)
         ausschluss_grund = "Urlaubsmodus aktiv"
         logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-    elif solar_active:
-        if t_oben >= AUSSCHALTPUNKT_ERHOEHT or t_mittig >= AUSSCHALTPUNKT_ERHOEHT or t_hinten >= AUSSCHALTPUNKT_ERHOEHT:
+        await asyncio.to_thread(set_kompressor_status, False, force_off=True)
+        return
+
+    # PV-Strom vorhanden (Solarüberschuss)
+    if solar_active:
+        # Ausschalten, wenn ein Sensor SOLAR_AUS erreicht
+        if t_oben >= SOLAR_AUS or t_mittig >= SOLAR_AUS or t_hinten >= SOLAR_AUS:
             if kompressor_ein:
                 await asyncio.to_thread(set_kompressor_status, False)
-                logging.info(f"Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= {AUSSCHALTPUNKT_ERHOEHT}°C")
-                ausschluss_grund = f"Max. Temperatur erreicht ({AUSSCHALTPUNKT_ERHOEHT}°C)"
-            elif not kompressor_ein and (t_oben < EINSCHALTPUNKT or t_mittig < EINSCHALTPUNKT or t_hinten < EINSCHALTPUNKT):
-                logging.debug(f"Einschalten: Ein Fühler < {EINSCHALTPUNKT}°C und Kompressor aus")
-                await set_kompressor_status(True)
-            if not kompressor_ein and ausschluss_grund:
-                logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-    else:  # Normal- oder Nachtmodus
-        if t_oben < aktueller_einschaltpunkt or t_mittig < aktueller_einschaltpunkt:
+                logging.info(f"Kompressor ausgeschaltet: PV-Überschuss, ein Fühler >= {SOLAR_AUS}°C")
+                ausschluss_grund = f"Max. Temperatur erreicht ({SOLAR_AUS}°C)"
+        # Einschalten, wenn der untere Wert (t_hinten) unter SOLAR_EIN fällt
+        elif t_hinten < SOLAR_EIN:
             if not kompressor_ein:
-                logging.debug(f"Einschalten: t_oben oder t_mittig < {aktueller_einschaltpunkt}°C")
                 await asyncio.to_thread(set_kompressor_status, True)
-                if not kompressor_ein and ausschluss_grund:
+                logging.info(f"Kompressor eingeschaltet: PV-Überschuss, t_hinten < {SOLAR_EIN}°C")
+            elif not kompressor_ein and ausschluss_grund:
+                logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+
+    # Netzstrom oder Batterie
+    else:
+        is_night = is_nighttime(config)
+        if is_night:
+            # Nachtmodus: Oberer Fühler darf nicht unter NACHT_EIN fallen
+            if t_oben < NACHT_EIN:
+                if not kompressor_ein:
+                    await asyncio.to_thread(set_kompressor_status, True)
+                    logging.info(f"Kompressor eingeschaltet: Nachtmodus, t_oben < {NACHT_EIN}°C")
+                elif not kompressor_ein and ausschluss_grund:
                     logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
-        elif t_oben >= aktueller_ausschaltpunkt and t_mittig >= aktueller_ausschaltpunkt:
-            if kompressor_ein:
-                await asyncio.to_thread(set_kompressor_status, False)
-                logging.info(f"Kompressor ausgeschaltet: t_oben und t_mittig >= {aktueller_ausschaltpunkt}°C")
+            elif t_oben >= NORMAL_AUS and t_mittig >= NORMAL_AUS:
+                if kompressor_ein:
+                    await asyncio.to_thread(set_kompressor_status, False)
+                    logging.info(f"Kompressor ausgeschaltet: Nachtmodus, t_oben und t_mittig >= {NORMAL_AUS}°C")
+        else:
+            # Normalbetrieb: Kompressor ein, wenn t_oben oder t_mittig unter NORMAL_EIN fällt
+            if t_oben < NORMAL_EIN or t_mittig < NORMAL_EIN:
+                if not kompressor_ein:
+                    await asyncio.to_thread(set_kompressor_status, True)
+                    logging.info(f"Kompressor eingeschaltet: Normalbetrieb, t_oben oder t_mittig < {NORMAL_EIN}°C")
+                elif not kompressor_ein and ausschluss_grund:
+                    logging.info(f"Kompressor nicht eingeschaltet: {ausschluss_grund}")
+            # Ausschalten, wenn t_oben und t_mittig NORMAL_AUS erreichen
+            elif t_oben >= NORMAL_AUS and t_mittig >= NORMAL_AUS:
+                if kompressor_ein:
+                    await asyncio.to_thread(set_kompressor_status, False)
+                    logging.info(f"Kompressor ausgeschaltet: Normalbetrieb, t_oben und t_mittig >= {NORMAL_AUS}°C")
 async def main_loop(session):
     """
     Hauptschleife des Programms, die Steuerung und Überwachung asynchron ausführt.
@@ -1810,37 +1786,38 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
 
 # Asynchrone Urlaubsmodus-Funktionen
 async def aktivere_urlaubsmodus(session):
-    """Aktiviert den Urlaubsmodus und passt Sollwerte an."""
-    global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
+    global urlaubsmodus_aktiv, NORMAL_AUS, NORMAL_EIN, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     if not urlaubsmodus_aktiv:
         urlaubsmodus_aktiv = True
         # Speichere die aktuellen Sollwerte vor der Änderung
         original_einschaltpunkt = aktueller_einschaltpunkt
         original_ausschaltpunkt = aktueller_ausschaltpunkt
-        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-        # Alte Werte speichern
+        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 15))
+        # Alte Werte speichern für Logging
         old_einschaltpunkt = aktueller_einschaltpunkt
         old_ausschaltpunkt = aktueller_ausschaltpunkt
-        # Passe die Sollwerte an
-        aktueller_ausschaltpunkt = AUSSCHALTPUNKT - urlaubsabsenkung
-        aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
+        # Neue Sollwerte berechnen
+        aktueller_ausschaltpunkt = NORMAL_AUS - urlaubsabsenkung
+        aktueller_einschaltpunkt = NORMAL_EIN - urlaubsabsenkung
         logging.info(
             f"Urlaubsmodus aktiviert. Sollwerte geändert: "
             f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
             f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
         )
+        # Telegram-Nachricht senden
         await send_telegram_message(session, CHAT_ID,
-                                    f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
+                                    f"🌴 Urlaubsmodus aktiviert. Neue Werte:\n"
+                                    f"Einschaltpunkt: {aktueller_einschaltpunkt} °C\n"
+                                    f"Ausschaltpunkt: {aktueller_ausschaltpunkt} °C")
 
 async def deaktivere_urlaubsmodus(session):
-    """Deaktiviert den Urlaubsmodus und stellt ursprüngliche Werte wieder her."""
-    global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
+    global urlaubsmodus_aktiv, NORMAL_AUS, NORMAL_EIN, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
     if urlaubsmodus_aktiv:
         urlaubsmodus_aktiv = False
-        # Alte Werte speichern
+        # Alte Werte speichern für Logging
         old_einschaltpunkt = aktueller_einschaltpunkt
         old_ausschaltpunkt = aktueller_ausschaltpunkt
-        # Stelle die ursprünglichen Sollwerte wieder her
+        # Ursprüngliche Sollwerte wiederherstellen
         aktueller_einschaltpunkt = original_einschaltpunkt
         aktueller_ausschaltpunkt = original_ausschaltpunkt
         logging.info(
@@ -1848,8 +1825,11 @@ async def deaktivere_urlaubsmodus(session):
             f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
             f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
         )
+        # Telegram-Nachricht senden
         await send_telegram_message(session, CHAT_ID,
-                                    f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
+                                    f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\n"
+                                    f"Einschaltpunkt: {aktueller_einschaltpunkt} °C\n"
+                                    f"Ausschaltpunkt: {aktueller_ausschaltpunkt} °C")
 
 # Programmstart
 if __name__ == "__main__":
