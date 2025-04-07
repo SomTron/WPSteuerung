@@ -794,28 +794,28 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
     config = validate_config(load_config())
     is_night = is_nighttime(config)
     nachtabsenkung = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 20))
-    t_boiler = (t_boiler_oben + t_boiler_hinten + t_boiler_mittig) / 3 if all(isinstance(t, (int, float)) for t in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig]) else "N/A"
 
-    # Basisnachricht ohne Anführungszeichen
+    # Basisnachricht ohne Durchschnitt
     message = (
         "🌡️ *Temperaturen*\n"
         f"  Boiler oben: {t_boiler_oben:.2f} °C\n"
         f"  Boiler mittig: {t_boiler_mittig:.2f} °C\n"
         f"  Boiler hinten: {t_boiler_hinten:.2f} °C\n"
-        f"  Durchschnitt: {t_boiler:.2f} °C\n"
         f"  Verdampfer: {t_verd:.2f} °C\n\n"
         f"🔧 *Kompressor*: {'🟢 EIN' if kompressor_status else '🔴 AUS'}\n"
         f"⏱️ *Aktuelle Laufzeit*: {format_timedelta(aktuelle_laufzeit)}\n"
         f"⏳ *Heute gesamt*: {format_timedelta(gesamtlaufzeit)}\n\n"
     )
 
-    # Sollwerte und Abstand
-    temp_diff = aktueller_einschaltpunkt - t_boiler_oben if kompressor_status else t_boiler_oben - aktueller_ausschaltpunkt
-    temp_status = (
-        f"  Noch {abs(temp_diff):.2f} °C bis {'Einschalten' if temp_diff > 0 else 'Ausschalten'}\n"
-        if isinstance(t_boiler_oben, (int, float)) else ""
-    )
+    # Temperaturdifferenz zum relevanten Schaltpunkt
+    if kompressor_status:  # Kompressor EIN
+        temp_diff = t_boiler_oben - aktueller_ausschaltpunkt
+        temp_status = f"  {abs(temp_diff):.2f} °C {'über' if temp_diff > 0 else 'unter'} Ausschaltpunkt\n"
+    else:  # Kompressor AUS
+        temp_diff = aktueller_einschaltpunkt - t_boiler_oben
+        temp_status = f"  {abs(temp_diff):.2f} °C {'bis' if temp_diff > 0 else 'über'} Einschaltpunkt\n"
 
+    # Sollwerte
     if urlaubsmodus_aktiv:
         message += (
             "🎯 *Sollwerte (Urlaubsmodus)*\n"
@@ -874,6 +874,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
 
     await send_telegram_message(session, CHAT_ID, message)
     logging.info(f"Telegram-Nachricht gesendet: {message}")
+
 async def send_welcome_message(session, chat_id):
     """Sendet eine Willkommensnachricht mit Tastatur."""
     message = (
