@@ -680,7 +680,7 @@ def get_custom_keyboard():
     keyboard = [
         ["🌡️ Temperaturen", "📊 Status"],
         ["📈 Verlauf 6h", "📉 Verlauf 24h"],
-        ["🌴 Urlaub", "🏠 Urlaub aus"],
+        ["🌴 Urlaub", "🏠 Urlaub aus"],  # Angepasst
         ["🆘 Hilfe", "⏱️ Laufzeiten"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -1244,43 +1244,49 @@ def is_nighttime(config):
 
 
 def calculate_shutdown_point(config, is_night, solax_data):
-    global solar_ueberschuss_aktiv
+    global solar_ueberschuss_aktiv, urlaubsmodus_aktiv
     try:
-        nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
         bat_power = solax_data.get("batPower", 0)
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
+        # Solarüberschuss-Logik
         if solax_data.get("api_fehler", False):
             solar_ueberschuss_aktiv = False
         else:
             if bat_power > 600 or (soc > 95 and feedin_power > 600):
                 if not solar_ueberschuss_aktiv:
-                    solar_ueberschuss_activ = True
+                    solar_ueberschuss_aktiv = True
                     logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
             else:
                 if solar_ueberschuss_aktiv:
                     solar_ueberschuss_aktiv = False
                     logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
-        if solar_ueberschuss_aktiv:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["SOLAR_AUS"]) - nacht_reduction
-            einschaltpunkt = int(config["Heizungssteuerung"]["SOLAR_EIN"]) - nacht_reduction
+        # Sollwerte berechnen
+        if urlaubsmodus_aktiv:
+            urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 15))
+            ausschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_AUS"]) - urlaubsabsenkung
+            einschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_EIN"]) - urlaubsabsenkung
+        elif solar_ueberschuss_aktiv:
+            ausschaltpunkt = int(config["Heizungssteuerung"]["SOLAR_AUS"])
+            einschaltpunkt = int(config["Heizungssteuerung"]["SOLAR_EIN"])
         else:
             if is_night:
-                ausschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_AUS"]) - nacht_reduction
-                einschaltpunkt = int(config["Heizungssteuerung"]["NACHT_EIN"]) - nacht_reduction
+                ausschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_AUS"])
+                einschaltpunkt = int(config["Heizungssteuerung"]["NACHT_EIN"])
             else:
-                ausschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_AUS"]) - nacht_reduction
-                einschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_EIN"]) - nacht_reduction
+                ausschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_AUS"])
+                einschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_EIN"])
 
+        # Sicherstellen, dass Einschaltpunkt < Ausschaltpunkt
         if einschaltpunkt >= ausschaltpunkt:
             logging.error(f"Logikfehler: Einschaltpunkt ({einschaltpunkt}) >= Ausschaltpunkt ({ausschaltpunkt})")
-            temp_offset = 3  # Standard-Offset, falls nicht in der Konfiguration
+            temp_offset = 3
             ausschaltpunkt = einschaltpunkt + temp_offset
 
         logging.debug(f"Sollwerte berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, "
-                      f"Nachtreduktion={nacht_reduction}, Ausschaltpunkt={ausschaltpunkt}, "
+                      f"Urlaubsmodus_aktiv={urlaubsmodus_aktiv}, Ausschaltpunkt={ausschaltpunkt}, "
                       f"Einschaltpunkt={einschaltpunkt}")
         return ausschaltpunkt, einschaltpunkt
     except (KeyError, ValueError) as e:
@@ -1569,7 +1575,8 @@ async def main_loop(session):
     try:
         while True:
             pressure_ok = await asyncio.to_thread(check_pressure)
-            logging.info(f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
+            logging.info(
+                f"Regelungscheck: oben={t_boiler_oben} mittig={t_boiler_mittig} hinten={t_boiler_hinten} verd={t_verd}")
             logging.info(f"Solarüberschuss: {solar_ueberschuss_aktiv} | Drucksensor: {pressure_ok}")
 
             try:
@@ -1597,7 +1604,8 @@ async def main_loop(session):
                         solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                       "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
                                       "api_fehler": True}
-                        logging.error("API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
+                        logging.error(
+                            "API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
 
                 power_source = get_power_source(solax_data)
 
@@ -1610,8 +1618,11 @@ async def main_loop(session):
                 consumeenergy = solax_data.get("consumeenergy", "N/A")
 
                 is_night = is_nighttime(config)
-                nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data)
+                # Sollwerte nur aktualisieren, wenn Urlaubsmodus nicht aktiv ist
+                if not urlaubsmodus_aktiv:
+                    aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night,
+                                                                                                  solax_data)
+                # Bei Urlaubsmodus bleiben die Sollwerte von aktivere_urlaubsmodus erhalten
 
                 temps = await read_all_sensors()
                 t_boiler_oben = temps["oben"]
@@ -1772,19 +1783,20 @@ def format_timedelta(td):
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, letzte_laufzeit):
     """Verarbeitet eingehende Telegram-Nachrichten und gibt die aktualisierte last_update_id zurück."""
+    global urlaubsmodus_aktiv  # Zugriff auf die globale Variable
     if updates:
         for update in updates:
             message_text = update.get('message', {}).get('text')
             chat_id = update.get('message', {}).get('chat', {}).get('id')
             if message_text and chat_id:
-                message_text = message_text.strip().lower()
+                message_text_lower = message_text.strip().lower()
                 logging.debug(f"Telegram-Nachricht empfangen: Text={message_text}, Chat-ID={chat_id}")
-                if message_text == "🌡️ temperaturen" or message_text == "temperaturen":
+                if message_text_lower == "🌡️ temperaturen" or message_text_lower == "temperaturen":
                     if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_boiler_mittig != "Fehler" and t_verd != "Fehler":
                         await send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd)
                     else:
                         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Temperaturen.")
-                elif message_text == "📊 status" or message_text == "status":
+                elif message_text_lower == "📊 status" or message_text_lower == "status":
                     if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_boiler_mittig != "Fehler" and t_verd != "Fehler":
                         await send_status_telegram(
                             session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
@@ -1792,29 +1804,32 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                         )
                     else:
                         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen des Status.")
-                elif message_text == "⏱️ laufzeiten" or message_text == "laufzeiten":
-                    await get_runtime_bar_chart(session, days=7)  # Aufruf mit 7 Tagen
-                elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":  # Korrigierter Emoji
+                elif message_text_lower == "⏱️ laufzeiten" or message_text_lower == "laufzeiten":
+                    await get_runtime_bar_chart(session, days=7)
+                elif message_text_lower == "📉 verlauf 24h" or message_text_lower == "verlauf 24h":
                     await get_boiler_temperature_history(session, 24)
-                elif message_text == "📈 verlauf 12h" or message_text == "verlauf 12h":
+                elif message_text_lower == "📈 verlauf 12h" or message_text_lower == "verlauf 12h":
                     await get_boiler_temperature_history(session, 12)
-                elif message_text == "📈 verlauf 6h" or message_text == "verlauf 6h":
+                elif message_text_lower == "📈 verlauf 6h" or message_text_lower == "verlauf 6h":
                     await get_boiler_temperature_history(session, 6)
-                elif message_text == "📈 verlauf 1h" or message_text == "verlauf 1h":
+                elif message_text_lower == "📈 verlauf 1h" or message_text_lower == "verlauf 1h":
                     await get_boiler_temperature_history(session, 1)
-                elif message_text == "🔛 kompressor ein":
-                    await asyncio.to_thread(set_kompressor_status, True, force_on=True)
+                elif message_text_lower == "🔛 kompressor ein":
+                    await asyncio.to_thread(set_kompressor_status, True)
                     await send_telegram_message(session, CHAT_ID, "Kompressor wird angeschaltet.")
-                elif message_text == "🔴 kompressor aus":
+                elif message_text_lower == "🔴 kompressor aus":
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
                     await send_telegram_message(session, CHAT_ID, "Kompressor wird ausgeschaltet.")
-                elif message_text == "🏖️ urlaubsmodus ein":
-                    global urlaubsmodus_aktiv
-                    urlaubsmodus_aktiv = True
-                    await send_telegram_message(session, CHAT_ID, "Urlaubsmodus aktiviert.")
-                elif message_text == "🏠 urlaubsmodus aus":
-                    urlaubsmodus_aktiv = False
-                    await send_telegram_message(session, CHAT_ID, "Urlaubsmodus deaktiviert.")
+                elif "🌴 urlaub" in message_text_lower or message_text_lower == "urlaub":  # Neue Bedingung
+                    await aktivere_urlaubsmodus(session)
+                elif "🏠 urlaub aus" in message_text_lower or message_text_lower == "urlaub aus":  # Neue Bedingung
+                    await deaktivere_urlaubsmodus(session)
+                elif message_text_lower == "🏖️ urlaubsmodus ein":  # Alte Bedingung beibehalten
+                    await aktivere_urlaubsmodus(session)
+                elif message_text_lower == "🏠 urlaubsmodus aus":  # Alte Bedingung beibehalten
+                    await deaktivere_urlaubsmodus(session)
+                else:
+                    await send_unknown_command_message(session, CHAT_ID)
                 last_update_id = update['update_id'] + 1
                 logging.debug(f"last_update_id aktualisiert: {last_update_id}")
         return last_update_id
