@@ -829,9 +829,9 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
         urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
         active_modes.append(f"Urlaubsmodus (-{urlaubsabsenkung} °C)")
     if solar_ueberschuss_aktiv:
-        erhöhung = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - int(
+        erhoehung = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - int(
             config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-        active_modes.append(f"PV-Überschuss (+{erhöhung} °C)")
+        active_modes.append(f"PV-Überschuss (+{erhoehung} °C)")
 
     if active_modes:
         message += "\n🔄 Aktive Modi:\n- " + "\n- ".join(active_modes)
