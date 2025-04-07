@@ -336,10 +336,10 @@ async def get_boiler_temperature_history(session, hours):
         sampled_kompressor = sample_data(kompressor_status, target_interval, target_points)
         sampled_solar_min = sample_data(
             [(ts, val) for ts, val in solar_ueberschuss_periods
-             if val == UNTERER_FUEHLER_MIN], target_interval, target_points)
+             if val == SOLAR_EIN], target_interval, target_points)
         sampled_solar_max = sample_data(
             [(ts, val) for ts, val in solar_ueberschuss_periods
-             if val == UNTERER_FUEHLER_MAX], target_interval, target_points)
+             if val == SOLAR_AUS], target_interval, target_points)
 
         if not sampled_oben or not sampled_hinten:
             logging.error(f"Sampling ergab keine Daten für {hours}h!")
@@ -367,7 +367,7 @@ async def get_boiler_temperature_history(session, hours):
                     segment_timestamps = timestamps_komp[current_start_idx:i + 1]
                     segment_vals = komp_vals[current_start_idx:i + 1]
                     color = color_map.get(power_sources[current_start_idx], "gray")
-                    plt.fill_between(segment_timestamps, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
+                    plt.fill_between(segment_timestamps, 0, max(SOLAR_AUS, NORMAL_AUS) + 5,
                                      where=[val == 1 for val in segment_vals], color=color, alpha=0.2,
                                      label=f"Kompressor EIN ({power_sources[current_start_idx]})"
                                      if current_start_idx == 0 else None)
