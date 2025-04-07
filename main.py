@@ -786,80 +786,101 @@ async def send_runtimes_telegram(session):
         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Laufzeiten.")
 
 
-async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
-                               aktuelle_laufzeit,
-                               gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
+async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt, aktueller_ausschaltpunkt):
+    """Sendet eine schönere und informativere Statusmeldung per Telegram."""
+    config = validate_config(load_config())
+    is_night = is_nighttime(config)
+    nachtabsenkung = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 20))
+    t_boiler = (t_boiler_oben + t_boiler_hinten + t_boiler_mittig) / 3 if all(isinstance(t, (int, float)) for t in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig]) else "N/A"
 
-    # Sichere Abfrage der Nachtabsenkung mit Standardwert 0
-    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 20))
-
-    solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                                                   "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                                                   "api_fehler": True}
-    power_source = get_power_source(solax_data)
-
+    # Basisnachricht
     message = (
-        f"🌡️ Aktuelle Temperaturen:\n"
-        f"Boiler oben: {t_boiler_oben:.2f} °C\n"
-        f"Boiler mittig: {t_boiler_mittig:.2f} °C\n"
-        f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
-        f"Verdampfer: {t_verd:.2f} °C\n\n"
-        f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
+        "🌡️ *Temperaturen*\n"
+        f"  Boiler oben: {t_boiler_oben:.2f} °C\n"
+        f"  Boiler mittig: {t_boiler_mittig:.2f} °C\n"
+        f"  Boiler hinten: {t_boiler_hinten:.2f} °C\n"
+        f"  Durchschnitt: {t_boiler:.2f} °C\n"
+        f"  Verdampfer: {t_verd:.2f} °C\n\n"
+        f"🔧 *Kompressor*: {'🟢 EIN' if kompressor_status else '🔴 AUS'}\n"
+        f"⏱️ *Aktuelle Laufzeit*: {str(aktuelle_laufzeit).split('.')[0]}\n"
+        f"⏳ *Heute gesamt*: {str(gesamtlaufzeit).split('.')[0]}\n\n"
     )
 
-    if kompressor_status:
-        message += f"⚡ Energiequelle: {power_source}\n"
-        message += f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
-    else:
-        message += f"⏱️ Letzte Laufzeit: {str(last_runtime).split('.')[0]}\n"
+    # Sollwerte und Abstand
+    temp_diff = aktueller_einschaltpunkt - t_boiler_oben if kompressor_status else t_boiler_oben - aktueller_ausschaltpunkt
+    temp_status = (
+        f"  Noch {abs(temp_diff):.2f} °C bis {'Einschalten' if temp_diff > 0 else 'Ausschalten'}\n"
+        if isinstance(t_boiler_oben, (int, float)) else ""
+    )
 
-    message += f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
-
-    message += "🎯 Sollwerte:\n"
-    if solar_ueberschuss_aktiv:
+    if urlaubsmodus_aktiv:
         message += (
-            f"- Mit PV-Überschuss:\n"
-            f"  Einschaltpunkt (hinten): {SOLAR_EIN} °C\n"
-            f"  Ausschaltpunkt (max): {SOLAR_AUS} °C\n"
+            "🎯 *Sollwerte (Urlaubsmodus)*\n"
+            f"  Einschaltpunkt: {aktueller_einschaltpunkt} °C\n"
+            f"  Ausschaltpunkt: {aktueller_ausschaltpunkt} °C\n"
+            f"{temp_status}\n"
+        )
+    elif solar_ueberschuss_aktiv:
+        message += (
+            "🎯 *Sollwerte (Solarüberschuss)*\n"
+            f"  Einschaltpunkt: {aktueller_einschaltpunkt} °C\n"
+            f"  Ausschaltpunkt: {aktueller_ausschaltpunkt} °C\n"
+            f"{temp_status}\n"
         )
     else:
-        is_night = is_nighttime(config)
         if is_night:
             message += (
-                f"- Nachtbetrieb:\n"
-                f"  Einschaltpunkt (oben): {NACHT_EIN} °C\n"
-                f"  Ausschaltpunkt (oben/mittig): {NORMAL_AUS} °C\n"
-                f"  Nachtabsenkung: {nacht_reduction} °C\n"
+                "🎯 *Sollwerte (Nachtbetrieb)*\n"
+                f"  Einschaltpunkt: {aktueller_einschaltpunkt} °C\n"
+                f"  Ausschaltpunkt: {aktueller_ausschaltpunkt} °C\n"
+                f"  Nachtabsenkung: {nachtabsenkung} °C\n"
+                f"{temp_status}\n"
             )
         else:
             message += (
-                f"- Normalbetrieb:\n"
-                f"  Einschaltpunkt (oben/mittig): {NORMAL_EIN} °C\n"
-                f"  Ausschaltpunkt (oben/mittig): {NORMAL_AUS} °C\n"
+                "🎯 *Sollwerte (Normalbetrieb)*\n"
+                f"  Einschaltpunkt: {aktueller_einschaltpunkt} °C\n"
+                f"  Ausschaltpunkt: {aktueller_ausschaltpunkt} °C\n"
+                f"{temp_status}\n"
             )
 
-    message += f"- Sicherheitsgrenze: {SICHERHEITS_TEMP} °C\n"
-    message += f"- Verdampfer Min: {VERDAMPFERTEMPERATUR} °C\n"
-
+    # Aktive Modi
     active_modes = []
-    if is_nighttime(config):
-        active_modes.append(f"Nachtabsenkung ({nacht_reduction} °C)")
     if urlaubsmodus_aktiv:
-        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 15))
-        active_modes.append(f"Urlaubsmodus (-{urlaubsabsenkung} °C)")
+        active_modes.append("🏖️ Urlaubsmodus")
     if solar_ueberschuss_aktiv:
-        active_modes.append("PV-Überschuss")
+        active_modes.append("☀️ Solarüberschuss")
+    if is_night and not urlaubsmodus_aktiv and not solar_ueberschuss_aktiv:
+        active_modes.append(f"🌙 Nachtbetrieb ({config['Heizungssteuerung']['NACHTABSENKUNG_START']}–{config['Heizungssteuerung']['NACHTABSENKUNG_END']})")
+    message += "🔄 *Aktive Modi*\n  " + (", ".join(active_modes) if active_modes else "Keiner") + "\n\n"
 
-    if active_modes:
-        message += "\n🔄 Aktive Modi:\n- " + "\n- ".join(active_modes)
-    else:
-        message += "\n🔄 Aktive Modi: Keine"
+    # Grund für Kompressor AUS
+    if not kompressor_status:
+        reason = ""
+        if urlaubsmodus_aktiv:
+            reason = "Urlaubsmodus aktiv"
+        elif t_boiler_oben >= float(config["Heizungssteuerung"]["SICHERHEITS_TEMP"]):
+            reason = f"Sicherheitsgrenze überschritten ({t_boiler_oben:.2f} °C > {config['Heizungssteuerung']['SICHERHEITS_TEMP']} °C)"
+        elif t_verd <= float(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]):
+            reason = f"Verdampfer zu kalt ({t_verd:.2f} °C < {config['Heizungssteuerung']['VERDAMPFERTEMPERATUR']} °C)"
+        elif t_boiler_oben >= aktueller_ausschaltpunkt or t_boiler_mittig >= aktueller_ausschaltpunkt:
+            reason = f"Boiler warm genug ({t_boiler_oben:.2f} °C ≥ {aktueller_ausschaltpunkt} °C)"
+        else:
+            reason = "Unbekannter Grund (prüfe Sensoren)"
+        message += f"⚠️ *Warum aus?*\n  {reason}"
 
-    if not kompressor_status and ausschluss_grund:
-        message += f"\n\n⚠️ Kompressor ausgeschaltet wegen: {ausschluss_grund}"
+    # Optional: Solarinformationen (falls gewünscht)
+    solax_data = await get_solax_data(session) or {}
+    if solax_data.get("batPower") is not None:
+        message += (
+            "\n\n🔋 *Solarstatus*\n"
+            f"  Batterieleistung: {solax_data.get('batPower', 0)} W\n"
+            f"  Einspeisung: {solax_data.get('feedinpower', 0)} W\n"
+            f"  Ladestand: {solax_data.get('soc', 0)} %"
+        )
 
-    return await send_telegram_message(session, CHAT_ID, message)
+    await send_telegram_message(session, CHAT_ID, message)
+    logging.info(f"Telegram-Nachricht gesendet: {message}")
 
 async def send_welcome_message(session, chat_id):
     """Sendet eine Willkommensnachricht mit Tastatur."""
