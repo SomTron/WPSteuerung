@@ -781,9 +781,14 @@ async def send_runtimes_telegram(session):
     else:
         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Laufzeiten.")
 
-async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit,
+
+async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
+                               aktuelle_laufzeit,
                                gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
     global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
+
+    # Sichere Abfrage der Nachtabsenkung mit Standardwert 0
+    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 20))
 
     solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                                    "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
@@ -821,6 +826,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
                 f"- Nachtbetrieb:\n"
                 f"  Einschaltpunkt (oben): {NACHT_EIN} °C\n"
                 f"  Ausschaltpunkt (oben/mittig): {NORMAL_AUS} °C\n"
+                f"  Nachtabsenkung: {nacht_reduction} °C\n"
             )
         else:
             message += (
@@ -834,7 +840,6 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
 
     active_modes = []
     if is_nighttime(config):
-        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"])
         active_modes.append(f"Nachtabsenkung ({nacht_reduction} °C)")
     if urlaubsmodus_aktiv:
         urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 15))
@@ -1149,41 +1154,65 @@ def validate_config(config):
     """Validiert die Konfigurationswerte und setzt Fallbacks bei Fehlern."""
     defaults = {
         "Heizungssteuerung": {
-            "AUSSCHALTPUNKT": "50",
-            "AUSSCHALTPUNKT_ERHOEHT": "55",
-            "TEMP_OFFSET": "10",  # Neuer Standardwert für Offset (z.B. 10°C)
-            "VERDAMPFERTEMPERATUR": "25",
-            "MIN_LAUFZEIT": "10",
-            "MIN_PAUSE": "20",
-            "NACHTABSENKUNG": "0"
+            "MIN_LAUFZEIT": "5",
+            "MIN_PAUSE": "5",
+            "NACHTABSENKUNG_START": "19:30",
+            "NACHTABSENKUNG_END": "8:00",
+            "VERDAMPFERTEMPERATUR": "6",
+            "SOLAR_AUS": "50",
+            "SOLAR_EIN": "45",
+            "NORMAL_AUS": "45",
+            "NORMAL_EIN": "42",
+            "NACHT_EIN": "30",
+            "SICHERHEITS_TEMP": "51",
+            "NACHTABSENKUNG": "20"  # Standardwert für Nachtabsenkung
         },
         "Telegram": {"BOT_TOKEN": "", "CHAT_ID": ""},
-        "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
+        "SolaxCloud": {"TOKEN_ID": "", "SN": ""},
+        "Urlaubsmodus": {"URLAUBSABSENKUNG": "15"}
     }
+
     for section in defaults:
         if section not in config:
             config[section] = {}
             logging.warning(f"Abschnitt {section} fehlt in config.ini, wird mit Standardwerten erstellt.")
+
         for key, default in defaults[section].items():
-            try:
-                if key in config[section]:
-                    if key not in ["BOT_TOKEN", "CHAT_ID", "TOKEN_ID", "SN"]:
-                        value = int(config[section][key])
-                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT"] else 20
-                        max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
-                        if not (min_val <= value <= max_val):
-                            logging.warning(f"Ungültiger Wert für {key} in {section}: {value}. Verwende Standardwert: {default}")
-                            config[section][key] = default
-                        else:
-                            config[section][key] = str(value)
-                    else:
-                        config[section][key] = config[section][key]
-                else:
-                    config[section][key] = default
-                    logging.warning(f"Schlüssel {key} in {section} fehlt, verwende Standardwert: {default}")
-            except ValueError as e:
+            if key not in config[section]:
                 config[section][key] = default
-                logging.error(f"Ungültiger Wert für {key} in {section}: {e}, verwende Standardwert: {default}")
+                logging.warning(f"Schlüssel {key} in {section} fehlt, verwende Standardwert: {default}")
+            else:
+                # Validierung numerischer Werte
+                if key in ["MIN_LAUFZEIT", "MIN_PAUSE", "VERDAMPFERTEMPERATUR",
+                           "SOLAR_AUS", "SOLAR_EIN", "NORMAL_AUS", "NORMAL_EIN",
+                           "NACHT_EIN", "SICHERHEITS_TEMP", "NACHTABSENKUNG",
+                           "URLAUBSABSENKUNG"]:
+                    try:
+                        val = int(config[section][key])
+                        min_val = 0
+                        max_val = 100
+                        # Spezifische Grenzen für bestimmte Parameter
+                        if key == "VERDAMPFERTEMPERATUR":
+                            min_val, max_val = -20, 20
+                        elif key in ["MIN_LAUFZEIT", "MIN_PAUSE"]:
+                            min_val, max_val = 1, 60
+                        elif key in ["SOLAR_AUS", "NORMAL_AUS"]:
+                            min_val, max_val = 40, 60
+                        elif key in ["SOLAR_EIN", "NORMAL_EIN"]:
+                            min_val, max_val = 35, 55
+                        elif key == "NACHT_EIN":
+                            min_val, max_val = 20, 40
+                        elif key == "SICHERHEITS_TEMP":
+                            min_val, max_val = 45, 70
+
+                        if not (min_val <= val <= max_val):
+                            logging.warning(
+                                f"Ungültiger Wert für {key} in {section}: {val}. Verwende Standardwert: {default}")
+                            config[section][key] = default
+                    except ValueError:
+                        logging.warning(f"Ungültiger Wert für {key} in {section}. Verwende Standardwert: {default}")
+                        config[section][key] = default
+
     logging.debug(f"Validierte Konfiguration: {dict(config['Heizungssteuerung'])}")
     return config
 
@@ -1219,7 +1248,7 @@ def calculate_shutdown_point(config, is_night, solax_data):
     try:
         nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
         bat_power = solax_data.get("batPower", 0)
-        feedin_power = solax_data.get("feedinpower", 0)  # Korrekt mit .get()
+        feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
         if solax_data.get("api_fehler", False):
@@ -1227,7 +1256,7 @@ def calculate_shutdown_point(config, is_night, solax_data):
         else:
             if bat_power > 600 or (soc > 95 and feedin_power > 600):
                 if not solar_ueberschuss_aktiv:
-                    solar_ueberschuss_aktiv = True
+                    solar_ueberschuss_activ = True
                     logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
             else:
                 if solar_ueberschuss_aktiv:
@@ -1235,15 +1264,20 @@ def calculate_shutdown_point(config, is_night, solax_data):
                     logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
         if solar_ueberschuss_aktiv:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
-            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
+            ausschaltpunkt = int(config["Heizungssteuerung"]["SOLAR_AUS"]) - nacht_reduction
+            einschaltpunkt = int(config["Heizungssteuerung"]["SOLAR_EIN"]) - nacht_reduction
         else:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
-            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
+            if is_night:
+                ausschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_AUS"]) - nacht_reduction
+                einschaltpunkt = int(config["Heizungssteuerung"]["NACHT_EIN"]) - nacht_reduction
+            else:
+                ausschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_AUS"]) - nacht_reduction
+                einschaltpunkt = int(config["Heizungssteuerung"]["NORMAL_EIN"]) - nacht_reduction
 
         if einschaltpunkt >= ausschaltpunkt:
             logging.error(f"Logikfehler: Einschaltpunkt ({einschaltpunkt}) >= Ausschaltpunkt ({ausschaltpunkt})")
-            ausschaltpunkt = einschaltpunkt + int(config["Heizungssteuerung"]["TEMP_OFFSET"])
+            temp_offset = 3  # Standard-Offset, falls nicht in der Konfiguration
+            ausschaltpunkt = einschaltpunkt + temp_offset
 
         logging.debug(f"Sollwerte berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, "
                       f"Nachtreduktion={nacht_reduction}, Ausschaltpunkt={ausschaltpunkt}, "
