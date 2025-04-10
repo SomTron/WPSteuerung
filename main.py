@@ -835,16 +835,14 @@ async def shutdown(session):
     logging.info("Heizungssteuerung sicher beendet, Hardware in sicherem Zustand.")
 
 
-# Hauptprogrammstart
 async def run_program():
     async with aiohttp.ClientSession() as session:
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
-                    "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
+                    "Zeitstempel,T_Oben,T_Hinten,T_Mittig,T_Boiler,T_Verd,Kompressor,"  # T_Mittig hinzugefügt
                     "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
                     "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
-                # PowerSource hinzugefügt
                 )
                 await csvfile.write(header)
                 logging.info("CSV-Header geschrieben: " + header.strip())
