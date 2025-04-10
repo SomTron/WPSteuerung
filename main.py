@@ -1263,6 +1263,7 @@ async def main_loop(session, config, state):
                     t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
                 pressure_ok = await asyncio.to_thread(check_pressure)
 
+
                 if not pressure_ok:
                     if state.kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
