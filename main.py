@@ -17,6 +17,7 @@ import io
 from aiohttp import FormData
 import pandas as pd
 from dateutil.relativedelta import relativedelta
+from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task)
 
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
@@ -124,6 +125,28 @@ class TelegramHandler(logging.Handler):
         except Exception as e:
             logging.error(f"Fehler in TelegramHandler.emit: {e}", exc_info=True)
 
+class State:
+    def __init__(self, config):
+        self.ausschluss_grund = None
+        self.last_config_hash = None
+        self.kompressor_ein = False
+        self.current_runtime = timedelta()
+        self.total_runtime_today = timedelta()
+        self.last_day = datetime.now().date()
+        self.last_shutdown_time = datetime.now()
+        self.last_log_time = datetime.now() - timedelta(minutes=1)
+        self.last_kompressor_status = None
+        self.urlaubsmodus_aktiv = False
+        self.solar_ueberschuss_aktiv = False
+        self.last_runtime = timedelta()
+        self.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
+        self.aktueller_einschaltpunkt = self.aktueller_ausschaltpunkt - int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
+        self.pressure_error_sent = False
+        self.last_pressure_error_time = None
+        self.t_boiler = None
+        self.start_time = None  # Neu hinzugefügt
+        self.last_pressure_state = None  # Neu hinzugefügt
+
 # Logging einrichten mit Telegram-Handler
 async def setup_logging(session):
     logging.basicConfig(
@@ -150,409 +173,6 @@ async def initialize_lcd(session):
         logging.error(f"Fehler bei der LCD-Initialisierung: {e}")
         lcd = None
 
-
-# Asynchrone Funktion zum Senden von Telegram-Nachrichten
-async def send_telegram_message(session, chat_id, message, reply_markup=None, parse_mode=None):
-    """
-    Sendet eine Nachricht über die Telegram-API.
-
-    Args:
-        session (aiohttp.ClientSession): Die HTTP-Sitzung für die API-Anfrage.
-        chat_id (str): Die ID des Chatrooms, an den die Nachricht gesendet wird.
-        message (str): Der Text der zu sendenden Nachricht.
-        reply_markup (telegram.ReplyKeyboardMarkup, optional): Tastaturmarkup für interaktive Antworten.
-        parse_mode (str, optional): Formatierungsmodus der Nachricht (z.B. "Markdown").
-
-    Returns:
-        bool: True bei Erfolg, False bei Fehler.
-    """
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": chat_id, "text": message}
-        if reply_markup:
-            data["reply_markup"] = reply_markup.to_json()
-        if parse_mode:
-            data["parse_mode"] = parse_mode
-        async with session.post(url, json=data) as response:
-            response.raise_for_status()
-            logging.info(f"Telegram-Nachricht gesendet: {message}")
-            return True
-    except aiohttp.ClientError as e:
-        logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}, Nachricht={message}")
-        return False
-
-
-# Asynchrone Funktion zum Abrufen von Telegram-Updates
-async def get_telegram_updates(session, offset=None):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-        params = {"offset": offset, "timeout": 20} if offset else {"timeout": 20}
-        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=35)) as response:
-            response.raise_for_status()
-            updates = await response.json()
-            logging.debug(f"Telegram-Updates empfangen: {updates}")
-            return updates.get('result', [])
-    except aiohttp.ClientError as e:
-        logging.error(f"Fehler bei der Telegram-API-Abfrage: {e}")
-        return None
-
-
-async def get_boiler_temperature_history(session, hours):
-    """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
-    global UNTERER_FUEHLER_MIN, UNTERER_FUEHLER_MAX
-    try:
-        # Listen für Daten
-        temp_oben = []
-        temp_hinten = []
-        temp_mittig = []  # Neue Liste für mittigen Sensor
-        einschaltpunkte = []
-        ausschaltpunkte = []
-        kompressor_status = []
-        solar_ueberschuss_periods = []
-
-        # CSV-Datei asynchron lesen
-        async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
-            lines = await csvfile.readlines()
-            lines = lines[1:][::-1]  # Header überspringen und umkehren (neueste zuerst)
-
-            for line in lines:
-                parts = line.strip().split(',')
-                # Akzeptiere Zeilen mit mindestens 13 Spalten (älteres Format) und fülle fehlende auf
-                if len(parts) >= 13:  # Mindestens bis ConsumeEnergy
-                    # Fülle fehlende Spalten mit Standardwerten auf
-                    while len(parts) < 19:  # Jetzt 19 Spalten wegen T_Mittig und PowerSource
-                        parts.append("N/A")
-
-                    timestamp_str = parts[0].strip()
-                    timestamp_str = ''.join(c for c in timestamp_str if c.isprintable())
-
-                    try:
-                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        t_oben, t_hinten, t_mittig = parts[1], parts[2], parts[3]  # T_Mittig ist jetzt Spalte 3
-                        kompressor = parts[6]
-                        einschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "42"
-                        ausschaltpunkt = parts[15] if parts[15].strip() and parts[15] not in ("N/A", "Fehler") else "45"
-                        solar_ueberschuss = parts[16] if parts[16].strip() and parts[16] not in (
-                        "N/A", "Fehler") else "0"
-                        power_source = parts[18] if parts[18].strip() and parts[18] not in (
-                        "N/A", "Fehler") else "Unbekannt"
-
-                        if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or \
-                           not (t_hinten.strip() and t_hinten not in ("N/A", "Fehler")) or \
-                           not (t_mittig.strip() and t_mittig not in ("N/A", "Fehler")):
-                            logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
-                            continue
-
-                        temp_oben.append((timestamp, float(t_oben)))
-                        temp_hinten.append((timestamp, float(t_hinten)))
-                        temp_mittig.append((timestamp, float(t_mittig)))  # Mittige Temperatur hinzufügen
-                        einschaltpunkte.append((timestamp, float(einschaltpunkt)))
-                        ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
-                        kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0, power_source))
-                        if int(solar_ueberschuss) == 1:
-                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
-                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
-                    except ValueError as e:
-                        logging.error(
-                            f"Fehler beim Parsen der Zeile: {line.strip()}, Zeitstempel: '{timestamp_str}', Fehler: {e}")
-                        continue
-                else:
-                    logging.warning(f"Zeile mit unzureichenden Spalten übersprungen: {line.strip()}")
-
-        # Zeitfenster definieren
-        now = datetime.now()
-        time_ago = now - timedelta(hours=hours)
-        target_points = 50
-        total_seconds = hours * 3600
-        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds
-
-        # Filtere Daten
-        filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
-        filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
-        filtered_mittig = [(ts, val) for ts, val in temp_mittig if ts >= time_ago]  # Filter für mittigen Sensor
-        filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
-        filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
-        filtered_kompressor = [(ts, val, ps) for ts, val, ps in kompressor_status if ts >= time_ago]
-        filtered_solar_ueberschuss = [(ts, val) for ts, val in solar_ueberschuss_periods if ts >= time_ago]
-
-        # Sampling-Funktion
-        def sample_data(data, interval, num_points):
-            if not data:
-                return []
-            if len(data) <= num_points:
-                return data[::-1]
-            sampled = []
-            last_added = None
-            for item in data:
-                ts = item[0]
-                if last_added is None or (last_added - ts).total_seconds() >= interval:
-                    sampled.append(item)
-                    last_added = ts
-                if len(sampled) >= num_points:
-                    break
-            return sampled[::-1]
-
-        sampled_oben = sample_data(filtered_oben, target_interval, target_points)
-        sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
-        sampled_mittig = sample_data(filtered_mittig, target_interval, target_points)  # Sampling für mittigen Sensor
-        sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
-        sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
-        sampled_kompressor = sample_data(filtered_kompressor, target_interval, target_points)
-        sampled_solar_min = sample_data(
-            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MIN], target_interval,
-            target_points)
-        sampled_solar_max = sample_data(
-            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MAX], target_interval,
-            target_points)
-
-        # Diagramm erstellen
-        plt.figure(figsize=(12, 6))
-
-        # Farben basierend auf PowerSource definieren
-        color_map = {
-            "Direkter PV-Strom": "green",
-            "Strom aus der Batterie": "yellow",
-            "Strom vom Netz": "red",
-            "Unbekannt": "gray"
-        }
-
-        # Kompressorstatus als Hintergrundfläche mit variablen Farben
-        if sampled_kompressor:
-            timestamps_komp = [item[0] for item in sampled_kompressor]
-            komp_vals = [item[1] for item in sampled_kompressor]
-            power_sources = [item[2] for item in sampled_kompressor]
-
-            current_start_idx = 0
-            for i in range(1, len(timestamps_komp)):
-                if power_sources[i] != power_sources[current_start_idx] or i == len(timestamps_komp) - 1:
-                    segment_timestamps = timestamps_komp[current_start_idx:i + 1]
-                    segment_vals = komp_vals[current_start_idx:i + 1]
-                    color = color_map.get(power_sources[current_start_idx], "gray")
-                    plt.fill_between(segment_timestamps, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
-                                     where=[val == 1 for val in segment_vals], color=color, alpha=0.2,
-                                     label=f"Kompressor EIN ({power_sources[current_start_idx]})" if current_start_idx == 0 else None)
-                    current_start_idx = i
-
-            handles, labels = plt.gca().get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            plt.legend(by_label.values(), by_label.keys(), loc="lower left")
-
-        # Temperaturen und Sollwerte plotten
-        if sampled_oben:
-            timestamps_oben, t_oben_vals = zip(*sampled_oben)
-            plt.plot(timestamps_oben, t_oben_vals, label="T_Oben", marker="o", color="blue")
-        if sampled_hinten:
-            timestamps_hinten, t_hinten_vals = zip(*sampled_hinten)
-            plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
-        if sampled_mittig:
-            timestamps_mittig, t_mittig_vals = zip(*sampled_mittig)
-            plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="^", color="purple")  # Neuer Plot
-        if sampled_einschalt:
-            timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
-            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--',
-                     color="green")
-        if sampled_ausschalt:
-            timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
-            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--',
-                     color="orange")
-
-        if sampled_solar_min:
-            timestamps_min, min_vals = zip(*sampled_solar_min)
-            plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.',
-                     label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
-        if sampled_solar_max:
-            timestamps_max, max_vals = zip(*sampled_solar_max)
-            plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.',
-                     label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
-
-        plt.xlim(time_ago, now)
-        plt.ylim(0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5)
-        plt.xlabel("Zeit")
-        plt.ylabel("Temperatur (°C)")
-        plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
-        plt.grid(True)
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=100)
-        buf.seek(0)
-        plt.close()
-
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        form = FormData()
-        form.add_field("chat_id", CHAT_ID)
-        form.add_field("caption",
-                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
-        form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
-
-        async with session.post(url, data=form) as response:
-            response.raise_for_status()
-            logging.info(f"Temperaturdiagramm für {hours}h mit Kompressorstatus gesendet.")
-
-        buf.close()
-
-    except Exception as e:
-        logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
-        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
-async def get_runtime_bar_chart(session, days=7):
-    logging.info(f"Funktion aufgerufen mit days={days}")
-    try:
-        runtime_per_period = {}
-        color_map = {
-            "Direkter PV-Strom": "green",
-            "Strom aus der Batterie": "yellow",
-            "Strom vom Netz": "red",
-            "Unbekannt": "gray"
-        }
-        valid_power_sources = set(color_map.keys())  # Gültige Stromquellen, außerhalb der Schleife definiert
-
-        now = datetime.now()
-        time_ago = now - timedelta(days=days)
-        logging.debug(f"Zeitfenster: {time_ago} bis {now}, days={days}")
-
-        if days <= 30:
-            period_type = "day"
-            max_periods = days
-            all_periods = [time_ago.date() + timedelta(days=i) for i in range(days)]
-        elif days <= 210:
-            period_type = "week"
-            max_periods = min(30, (days + 6) // 7)
-            all_periods = [time_ago.date() + timedelta(days=i*7 - time_ago.weekday())
-                          for i in range(max_periods)]
-        elif days <= 900:
-            period_type = "month"
-            max_periods = min(30, (days + 29) // 30)
-            start_month = time_ago.replace(day=1)
-            all_periods = [start_month + relativedelta(months=i) for i in range(max_periods)]
-        else:
-            period_type = "year"
-            max_periods = min(30, (days + 364) // 365)
-            start_year = time_ago.replace(month=1, day=1)
-            all_periods = [start_year + relativedelta(years=i) for i in range(max_periods)]
-        logging.info(f"Periodentyp: {period_type}, max_periods: {max_periods}")
-
-        try:
-            async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
-                lines = await csvfile.readlines()
-        except FileNotFoundError:
-            logging.warning("heizungsdaten.csv nicht gefunden.")
-            await send_telegram_message(session, CHAT_ID, "Keine Daten verfügbar: CSV-Datei fehlt.")
-            return
-
-        if len(lines) <= 1:
-            logging.warning("Keine Daten in heizungsdaten.csv vorhanden.")
-            await send_telegram_message(session, CHAT_ID, "Keine Daten in der CSV-Datei vorhanden.")
-            return
-
-        lines = lines[1:]
-        logging.debug(f"Anzahl CSV-Zeilen (ohne Header): {len(lines)}")
-
-        last_timestamp = None
-        last_status = None
-        last_power_source = None
-        seen_invalid_sources = set()  # Für einmaliges Logging
-
-        for line in lines:
-            parts = line.strip().split(',')
-            if len(parts) < 18:
-                parts.extend(["N/A"] * (18 - len(parts)))
-                logging.debug(f"Zeile aufgefüllt: {line.strip()}")
-
-            timestamp_str = parts[0].strip()
-            kompressor = parts[5].strip()
-            # Hier wird die neue Logik eingefügt:
-            valid_power_sources = {"Direkter PV-Strom", "Strom aus der Batterie", "Strom vom Netz", "Unbekannt"}
-            power_source = parts[17].strip()
-            if not power_source or power_source not in valid_power_sources:
-                if power_source and power_source not in seen_invalid_sources:
-                    logging.warning(f"Ungültige Stromquelle gefunden: '{power_source}', Zeile: {line.strip()}")
-                    seen_invalid_sources.add(power_source)
-                power_source = "Unbekannt"
-
-            try:
-                timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                if timestamp < time_ago:
-                    continue
-
-                if period_type == "day":
-                    period = timestamp.date()
-                elif period_type == "week":
-                    period = timestamp.date() - timedelta(days=timestamp.weekday())
-                elif period_type == "month":
-                    period = timestamp.date().replace(day=1)
-                else:
-                    period = timestamp.date().replace(month=1, day=1)
-
-                if period not in runtime_per_period:
-                    runtime_per_period[period] = {
-                        "Direkter PV-Strom": 0,
-                        "Strom aus der Batterie": 0,
-                        "Strom vom Netz": 0,
-                        "Unbekannt": 0
-                    }
-
-                if last_timestamp and last_status == "EIN":
-                    time_diff = (timestamp - last_timestamp).total_seconds() / 60
-                    if time_diff > 0:
-                        last_period = (last_timestamp.date() if period_type == "day" else
-                                      last_timestamp.date() - timedelta(days=last_timestamp.weekday()) if period_type == "week" else
-                                      last_timestamp.date().replace(day=1) if period_type == "month" else
-                                      last_timestamp.date().replace(month=1, day=1))
-                        runtime_per_period[last_period][last_power_source] += time_diff
-
-                last_timestamp = timestamp
-                last_status = kompressor
-                last_power_source = power_source
-
-            except ValueError as e:
-                logging.error(f"Ungültiger Zeitstempel in Zeile: {line.strip()}, Fehler: {e}")
-                continue
-            except Exception as e:
-                logging.error(f"Unerwarteter Fehler bei Zeile: {line.strip()}, Fehler: {e}, last_power_source: {last_power_source}")
-                continue
-
-        pv_times = [runtime_per_period.get(p, {"Direkter PV-Strom": 0})["Direkter PV-Strom"] for p in all_periods]
-        battery_times = [runtime_per_period.get(p, {"Strom aus der Batterie": 0})["Strom aus der Batterie"] for p in all_periods]
-        grid_times = [runtime_per_period.get(p, {"Strom vom Netz": 0})["Strom vom Netz"] for p in all_periods]
-        unknown_times = [runtime_per_period.get(p, {"Unbekannt": 0})["Unbekannt"] for p in all_periods]
-
-        plt.figure(figsize=(12, 6))
-        plt.bar(all_periods, pv_times, label="PV", color=color_map["Direkter PV-Strom"])
-        plt.bar(all_periods, battery_times, bottom=pv_times, label="Batterie", color=color_map["Strom aus der Batterie"])
-        plt.bar(all_periods, grid_times, bottom=[pv + bat for pv, bat in zip(pv_times, battery_times)],
-                label="Netz", color=color_map["Strom vom Netz"])
-        plt.bar(all_periods, unknown_times,
-                bottom=[pv + bat + grid for pv, bat, grid in zip(pv_times, battery_times, grid_times)],
-                label="Unbekannt", color=color_map["Unbekannt"])
-
-        plt.xlabel("Periode" if period_type == "day" else f"{period_type.capitalize()} (Startdatum)")
-        plt.ylabel("Laufzeit (Minuten)")
-        plt.title(f"Kompressor-Laufzeiten (letzte {days} Tage, {period_type})")
-        plt.legend(loc="upper left")
-        plt.xticks(all_periods, rotation=45)
-        plt.tight_layout()
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=100)
-        buf.seek(0)
-        plt.close()
-
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        form = FormData()
-        form.add_field("chat_id", CHAT_ID)
-        form.add_field("caption", f"📊 Laufzeiten der letzten {days} Tage ({period_type})")
-        form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
-
-        async with session.post(url, data=form) as response:
-            response.raise_for_status()
-            logging.info(f"Laufzeit-Diagramm für {days} Tage ({period_type}) gesendet.")
-
-        buf.close()
-
-    except Exception as e:
-        logging.error(f"Kritischer Fehler in get_runtime_bar_chart: {e}", exc_info=True)
-        await send_telegram_message(session, CHAT_ID, f"Kritischer Fehler beim Erstellen des Diagramms: {str(e)}")
 
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session):
@@ -617,23 +237,8 @@ def get_power_source(solax_data):
         return "Unbekannt"  # Fallback für edge cases wie batPower = 0, feedinpower = 0
 
 # Funktion für die benutzerdefinierte Telegram-Tastatur
-def get_custom_keyboard():
-    """Erstellt eine benutzerdefinierte Tastatur mit verfügbaren Befehlen."""
-    keyboard = [
-        ["🌡️ Temperaturen", "📊 Status"],
-        ["📈 Verlauf 6h", "📉 Verlauf 24h"],
-        ["🌴 Urlaub", "🏠 Urlaub aus"],
-        ["🆘 Hilfe", "⏱️ Laufzeiten"]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-
 
 # Asynchrone Hilfsfunktionen für Telegram
-async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd):
-    """Sendet die aktuellen Temperaturen über Telegram."""
-    message = f"🌡️ Aktuelle Temperaturen:\nKessel oben: {t_boiler_oben:.2f} °C\nKessel hinten: {t_boiler_hinten:.2f} °C\nVerdampfer: {t_verd:.2f} °C"
-    return await send_telegram_message(session, CHAT_ID, message)
-
 
 def calculate_runtimes():
     try:
@@ -723,88 +328,6 @@ async def send_runtimes_telegram(session):
     else:
         await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Laufzeiten.")
 
-async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, einschaltpunkt, ausschaltpunkt):
-    """Sendet den aktuellen Status über Telegram mit korrekten Einschalt- und Ausschaltpunkten sowie der Energiequelle."""
-    global ausschluss_grund, t_boiler, urlaubsmodus_aktiv, solar_ueberschuss_aktiv, config, last_runtime
-
-    # Hole Solax-Daten, um die Energiequelle zu bestimmen
-    solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                                                   "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                                                   "api_fehler": True}
-    power_source = get_power_source(solax_data)
-
-    # Basisnachricht mit Temperaturen
-    message = (
-        f"🌡️ Aktuelle Temperaturen:\n"
-        f"Boiler oben: {t_boiler_oben:.2f} °C\n"
-        f"Boiler mittig: {t_boiler_mittig:.2f} °C\n"  # Neue Zeile für mittigen Sensor
-        f"Boiler hinten: {t_boiler_hinten:.2f} °C\n"
-        f"Verdampfer: {t_verd:.2f} °C\n\n"
-        f"🔧 Kompressorstatus: {'EIN' if kompressor_status else 'AUS'}\n"
-    )
-
-    # Wenn Kompressor läuft, füge Energiequelle und aktuelle Laufzeit hinzu
-    if kompressor_status:
-        message += f"⚡ Energiequelle: {power_source}\n"
-        message += f"⏱️ Aktuelle Laufzeit: {aktuelle_laufzeit}\n"
-    else:
-        message += f"⏱️ Letzte Laufzeit: {str(last_runtime).split('.')[0]}\n"
-
-    message += f"⏳ Gesamtlaufzeit heute: {gesamtlaufzeit}\n\n"
-
-    # Mehrere Sollwerte anzeigen
-    message += "🎯 Sollwerte:\n"
-
-    if solar_ueberschuss_aktiv:
-        message += (
-            f"- Mit PV-Überschuss:\n"
-            f"  Einschaltpunkt (oben): {EINSCHALTPUNKT} °C\n"
-            f"  Ausschaltpunkt (oben): {AUSSCHALTPUNKT_ERHOEHT} °C\n"
-            f"  Min. untere Temp: {UNTERER_FUEHLER_MIN} °C\n"
-            f"  Max. untere Temp: {UNTERER_FUEHLER_MAX} °C\n"
-        )
-    else:
-        message += (
-            f"- Normalbetrieb:\n"
-            f"  Einschaltpunkt (oben): {einschaltpunkt} °C\n"
-            f"  Ausschaltpunkt (oben): {ausschaltpunkt} °C\n"
-        )
-
-    message += f"- Verdampfer Min: {VERDAMPFERTEMPERATUR} °C\n"
-
-    # Aktive Modi hinzufügen
-    active_modes = []
-    if is_nighttime(config):
-        nacht_reduction = int(config["Heizungssteuerung"]["NACHTABSENKUNG"])
-        active_modes.append(f"Nachtabsenkung ({nacht_reduction} °C)")
-    if urlaubsmodus_aktiv:
-        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-        active_modes.append(f"Urlaubsmodus (-{urlaubsabsenkung} °C)")
-    if solar_ueberschuss_aktiv:
-        erhöhung = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - int(
-            config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
-        active_modes.append(f"PV-Überschuss (+{erhöhung} °C)")
-
-    if active_modes:
-        message += "\n🔄 Aktive Modi:\n- " + "\n- ".join(active_modes)
-    else:
-        message += "\n🔄 Aktive Modi: Keine"
-
-    # Ausschlussgrund, falls vorhanden
-    if not kompressor_status and ausschluss_grund:
-        message += f"\n\n⚠️ Kompressor ausgeschaltet wegen: {ausschluss_grund}"
-
-    return await send_telegram_message(session, CHAT_ID, message)
-
-
-async def send_welcome_message(session, chat_id):
-    """Sendet eine Willkommensnachricht mit Tastatur."""
-    message = (
-        "🤖 Willkommen beim Heizungssteuerungs-Bot!\n\n"
-        "Verwende die Tastatur, um Befehle auszuwählen."
-    )
-    return await send_telegram_message(session, chat_id, message, reply_markup=get_custom_keyboard())
-
 
 async def send_unknown_command_message(session, chat_id):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
@@ -814,33 +337,45 @@ async def send_unknown_command_message(session, chat_id):
     )
     return await send_telegram_message(session, chat_id, message, reply_markup=get_custom_keyboard())
 
-
-async def send_help_message(session):
-    """Sendet eine Hilfenachricht mit verfügbaren Befehlen."""
-    message = (
-        "🤖 Verfügbare Befehle:\n\n"
-        "🌡️ *Temperaturen* – Sendet die aktuellen Temperaturen.\n"
-        "📊 *Status* – Sendet den aktuellen Status.\n"
-        "📈 *Verlauf 6h* – Zeigt den Temperaturverlauf der letzten 6 Stunden.\n"
-        "📉 *Verlauf 24h* – Zeigt den Temperaturverlauf der letzten 24 Stunden.\n"
-        "⏱️ *Laufzeiten* – Zeigt die Laufzeiten des Kompressors.\n"  # Neuer Befehl
-        "🌴 *Urlaub* – Aktiviert den Urlaubsmodus.\n"
-        "🏠 *Urlaub aus* – Deaktiviert den Urlaubsmodus.\n"
-        "🆘 *Hilfe* – Zeigt diese Nachricht an."
-    )
-    return await send_telegram_message(session, CHAT_ID, message, parse_mode="Markdown")
-
-
-async def shutdown(session):
-    """Sendet eine Telegram-Nachricht beim Programmende und bereinigt Ressourcen."""
+async def is_nighttime(config):
+    """Prüft, ob es Nacht ist basierend auf der Konfiguration."""
     now = datetime.now()
-    message = f"🛑 Programm beendet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
-    await send_telegram_message(session, CHAT_ID, message)
-    GPIO.output(GIO21_PIN, GPIO.LOW)  # Kompressor ausschalten
-    GPIO.cleanup()  # GPIO-Pins bereinigen
-    lcd.close()  # LCD schließen
-    logging.info("Heizungssteuerung sicher beendet, Hardware in sicherem Zustand.")
+    night_start = int(config["Heizungssteuerung"].get("NACHT_START", 22))
+    night_end = int(config["Heizungssteuerung"].get("NACHT_ENDE", 6))
+    return now.hour >= night_start or now.hour < night_end
 
+# test.py (angepasste shutdown-Funktion)
+async def shutdown(session):
+    """Führt die Abschaltprozedur durch und informiert über Telegram."""
+    try:
+        # Nur GPIO.output aufrufen, wenn GPIO noch initialisiert ist
+        if GPIO.getmode() is not None:  # Prüft, ob ein Modus (BCM oder BOARD) gesetzt ist
+            GPIO.output(GIO21_PIN, GPIO.LOW)
+            logging.info("Kompressor GPIO auf LOW gesetzt")
+        else:
+            logging.warning("GPIO-Modus nicht gesetzt, überspringe GPIO.output")
+
+        message = f"🛑 Programm beendet um {datetime.now().strftime('%d.%m.%Y um %H:%M:%S')}"
+        await send_telegram_message(session, CHAT_ID, message, BOT_TOKEN)
+
+        # LCD nur schließen, wenn es existiert
+        if lcd is not None:
+            lcd.clear()
+            lcd.write_string("System aus")
+            lcd.close()
+            logging.info("LCD heruntergefahren")
+
+        # GPIO nur bereinigen, wenn es initialisiert ist
+        if GPIO.getmode() is not None:
+            GPIO.cleanup()
+            logging.info("GPIO-Ressourcen bereinigt")
+        else:
+            logging.warning("GPIO bereits bereinigt, überspringe cleanup")
+
+    except Exception as e:
+        logging.error(f"Fehler beim Herunterfahren: {e}", exc_info=True)
+    finally:
+        logging.info("System heruntergefahren")
 
 async def run_program():
     async with aiohttp.ClientSession() as session:
@@ -1283,38 +818,6 @@ def is_data_old(timestamp):
 
 
 # Asynchrone Task für Telegram-Updates
-async def telegram_task():
-    """Separate Task für schnelle Telegram-Update-Verarbeitung."""
-    global last_update_id
-    max_retries = 3
-    async with aiohttp.ClientSession() as session:  # Eigene Session für telegram_task
-        while True:
-            for attempt in range(max_retries):
-                try:
-                    updates = await get_telegram_updates(session, last_update_id)
-                    if updates is not None:
-                        last_update_id = await process_telegram_messages_async(
-                            session,
-                            await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"]),
-                            await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"]),
-                            await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"]),
-                            updates,
-                            last_update_id,
-                            kompressor_ein,
-                            str(current_runtime).split('.')[0],
-                            str(total_runtime_today).split('.')[0]
-                        )
-                        break  # Erfolgreich, Schleife verlassen
-                    else:
-                        logging.warning(f"Telegram-Updates waren None, Versuch {attempt + 1}/{max_retries}")
-                except Exception as e:
-                    logging.error(f"Fehler in telegram_task (Versuch {attempt + 1}/{max_retries}): {e}", exc_info=True)
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(10)  # 10 Sekunden warten vor erneutem Versuch
-                    else:
-                        logging.error("Maximale Wiederholungen erreicht, warte 5 Minuten")
-                        await asyncio.sleep(300)  # 5 Minuten warten nach Fehlschlag
-            await asyncio.sleep(0.1)  # Schnelles Polling bei Erfolg
 
 
 # Asynchrone Task für Display-Updates
@@ -1404,6 +907,65 @@ async def display_task():
                 lcd = None  # Setze lcd auf None bei Fehler während der Nutzung
                 await asyncio.sleep(5)
 
+async def get_runtime_bar_chart(session, days=7):
+    """Erstellt ein Balkendiagramm der Kompressorlaufzeiten für die letzten X Tage."""
+    try:
+        runtime_per_day = {}
+        now = datetime.now()
+        start_date = now - timedelta(days=days)
+
+        async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
+            lines = await csvfile.readlines()
+            for line in lines[1:]:  # Header überspringen
+                parts = line.strip().split(',')
+                if len(parts) >= 7:  # Mindestens bis Kompressorstatus
+                    try:
+                        timestamp_str = parts[0].strip()
+                        # Entferne unerwartete Steuerzeichen oder Nullbytes
+                        timestamp_str = ''.join(c for c in timestamp_str if c.isprintable())
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        if timestamp >= start_date:
+                            date = timestamp.date()
+                            kompressor = parts[6]
+                            if kompressor == "EIN":
+                                runtime_per_day[date] = runtime_per_day.get(date, timedelta()) + timedelta(minutes=1)
+                    except ValueError as e:
+                        logging.warning(f"Ungültiger Zeitstempel in Zeile übersprungen: {line.strip()} - Fehler: {e}")
+                        continue
+
+        if not runtime_per_day:
+            await send_telegram_message(session, CHAT_ID, f"Keine Laufzeitdaten für die letzten {days} Tage verfügbar.", BOT_TOKEN)
+            return
+
+        dates = [start_date.date() + timedelta(days=i) for i in range(days)]
+        runtimes = [runtime_per_day.get(date, timedelta()).total_seconds() / 3600 for date in dates]
+
+        plt.figure(figsize=(10, 6))
+        plt.bar(dates, runtimes, color='blue')
+        plt.xlabel("Datum")
+        plt.ylabel("Laufzeit (Stunden)")
+        plt.title(f"Kompressorlaufzeiten der letzten {days} Tage")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=100)
+        buf.seek(0)
+        plt.close()
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        form = FormData()
+        form.add_field("chat_id", CHAT_ID)
+        form.add_field("caption", f"⏱️ Laufzeiten der letzten {days} Tage")
+        form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
+
+        async with session.post(url, data=form) as response:
+            response.raise_for_status()
+            logging.info(f"Laufzeitdiagramm für {days} Tage gesendet.")
+        buf.close()
+    except Exception as e:
+        logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {e}")
+        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", BOT_TOKEN)
 
 async def initialize_gpio():
     """
@@ -1431,79 +993,251 @@ async def initialize_gpio():
     return False
 
 
+
+async def get_boiler_temperature_history(session, hours):
+    """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
+    global UNTERER_FUEHLER_MIN, UNTERER_FUEHLER_MAX
+    try:
+        # Listen für Daten
+        temp_oben = []
+        temp_hinten = []
+        temp_mittig = []  # Neue Liste für mittigen Sensor
+        einschaltpunkte = []
+        ausschaltpunkte = []
+        kompressor_status = []
+        solar_ueberschuss_periods = []
+
+        # CSV-Datei asynchron lesen
+        async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
+            lines = await csvfile.readlines()
+            lines = lines[1:][::-1]  # Header überspringen und umkehren (neueste zuerst)
+
+            for line in lines:
+                parts = line.strip().split(',')
+                # Akzeptiere Zeilen mit mindestens 13 Spalten (älteres Format) und fülle fehlende auf
+                if len(parts) >= 13:  # Mindestens bis ConsumeEnergy
+                    # Fülle fehlende Spalten mit Standardwerten auf
+                    while len(parts) < 19:  # Jetzt 19 Spalten wegen T_Mittig und PowerSource
+                        parts.append("N/A")
+
+                    timestamp_str = parts[0].strip()
+                    timestamp_str = ''.join(c for c in timestamp_str if c.isprintable())
+
+                    try:
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        t_oben, t_hinten, t_mittig = parts[1], parts[2], parts[3]  # T_Mittig ist jetzt Spalte 3
+                        kompressor = parts[6]
+                        einschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "42"
+                        ausschaltpunkt = parts[15] if parts[15].strip() and parts[15] not in ("N/A", "Fehler") else "45"
+                        solar_ueberschuss = parts[16] if parts[16].strip() and parts[16] not in (
+                        "N/A", "Fehler") else "0"
+                        power_source = parts[18] if parts[18].strip() and parts[18] not in (
+                        "N/A", "Fehler") else "Unbekannt"
+
+                        if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or \
+                           not (t_hinten.strip() and t_hinten not in ("N/A", "Fehler")) or \
+                           not (t_mittig.strip() and t_mittig not in ("N/A", "Fehler")):
+                            logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
+                            continue
+
+                        temp_oben.append((timestamp, float(t_oben)))
+                        temp_hinten.append((timestamp, float(t_hinten)))
+                        temp_mittig.append((timestamp, float(t_mittig)))  # Mittige Temperatur hinzufügen
+                        einschaltpunkte.append((timestamp, float(einschaltpunkt)))
+                        ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
+                        kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0, power_source))
+                        if int(solar_ueberschuss) == 1:
+                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
+                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
+                    except ValueError as e:
+                        logging.error(
+                            f"Fehler beim Parsen der Zeile: {line.strip()}, Zeitstempel: '{timestamp_str}', Fehler: {e}")
+                        continue
+                else:
+                    logging.warning(f"Zeile mit unzureichenden Spalten übersprungen: {line.strip()}")
+
+        # Zeitfenster definieren
+        now = datetime.now()
+        time_ago = now - timedelta(hours=hours)
+        target_points = 50
+        total_seconds = hours * 3600
+        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds
+
+        # Filtere Daten
+        filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
+        filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
+        filtered_mittig = [(ts, val) for ts, val in temp_mittig if ts >= time_ago]  # Filter für mittigen Sensor
+        filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
+        filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
+        filtered_kompressor = [(ts, val, ps) for ts, val, ps in kompressor_status if ts >= time_ago]
+        filtered_solar_ueberschuss = [(ts, val) for ts, val in solar_ueberschuss_periods if ts >= time_ago]
+
+        # Sampling-Funktion
+        def sample_data(data, interval, num_points):
+            if not data:
+                return []
+            if len(data) <= num_points:
+                return data[::-1]
+            sampled = []
+            last_added = None
+            for item in data:
+                ts = item[0]
+                if last_added is None or (last_added - ts).total_seconds() >= interval:
+                    sampled.append(item)
+                    last_added = ts
+                if len(sampled) >= num_points:
+                    break
+            return sampled[::-1]
+
+        sampled_oben = sample_data(filtered_oben, target_interval, target_points)
+        sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
+        sampled_mittig = sample_data(filtered_mittig, target_interval, target_points)  # Sampling für mittigen Sensor
+        sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
+        sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
+        sampled_kompressor = sample_data(filtered_kompressor, target_interval, target_points)
+        sampled_solar_min = sample_data(
+            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MIN], target_interval,
+            target_points)
+        sampled_solar_max = sample_data(
+            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MAX], target_interval,
+            target_points)
+
+        # Diagramm erstellen
+        plt.figure(figsize=(12, 6))
+
+        # Farben basierend auf PowerSource definieren
+        color_map = {
+            "Direkter PV-Strom": "green",
+            "Strom aus der Batterie": "yellow",
+            "Strom vom Netz": "red",
+            "Unbekannt": "gray"
+        }
+
+        # Kompressorstatus als Hintergrundfläche mit variablen Farben
+        if sampled_kompressor:
+            timestamps_komp = [item[0] for item in sampled_kompressor]
+            komp_vals = [item[1] for item in sampled_kompressor]
+            power_sources = [item[2] for item in sampled_kompressor]
+
+            current_start_idx = 0
+            for i in range(1, len(timestamps_komp)):
+                if power_sources[i] != power_sources[current_start_idx] or i == len(timestamps_komp) - 1:
+                    segment_timestamps = timestamps_komp[current_start_idx:i + 1]
+                    segment_vals = komp_vals[current_start_idx:i + 1]
+                    color = color_map.get(power_sources[current_start_idx], "gray")
+                    plt.fill_between(segment_timestamps, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
+                                     where=[val == 1 for val in segment_vals], color=color, alpha=0.2,
+                                     label=f"Kompressor EIN ({power_sources[current_start_idx]})" if current_start_idx == 0 else None)
+                    current_start_idx = i
+
+            handles, labels = plt.gca().get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            plt.legend(by_label.values(), by_label.keys(), loc="lower left")
+
+        # Temperaturen und Sollwerte plotten
+        if sampled_oben:
+            timestamps_oben, t_oben_vals = zip(*sampled_oben)
+            plt.plot(timestamps_oben, t_oben_vals, label="T_Oben", marker="o", color="blue")
+        if sampled_hinten:
+            timestamps_hinten, t_hinten_vals = zip(*sampled_hinten)
+            plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
+        if sampled_mittig:
+            timestamps_mittig, t_mittig_vals = zip(*sampled_mittig)
+            plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="^", color="purple")  # Neuer Plot
+        if sampled_einschalt:
+            timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
+            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--',
+                     color="green")
+        if sampled_ausschalt:
+            timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
+            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--',
+                     color="orange")
+
+        if sampled_solar_min:
+            timestamps_min, min_vals = zip(*sampled_solar_min)
+            plt.plot(timestamps_min, min_vals, color='purple', linestyle='-.',
+                     label=f'Min. untere Temp ({UNTERER_FUEHLER_MIN}°C)')
+        if sampled_solar_max:
+            timestamps_max, max_vals = zip(*sampled_solar_max)
+            plt.plot(timestamps_max, max_vals, color='cyan', linestyle='-.',
+                     label=f'Max. untere Temp ({UNTERER_FUEHLER_MAX}°C)')
+
+        plt.xlim(time_ago, now)
+        plt.ylim(0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5)
+        plt.xlabel("Zeit")
+        plt.ylabel("Temperatur (°C)")
+        plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
+        plt.grid(True)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=100)
+        buf.seek(0)
+        plt.close()
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        form = FormData()
+        form.add_field("chat_id", CHAT_ID)
+        form.add_field("caption",
+                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
+        form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
+
+        async with session.post(url, data=form) as response:
+            response.raise_for_status()
+            logging.info(f"Temperaturdiagramm für {hours}h mit Kompressorstatus gesendet.")
+
+        buf.close()
+
+    except Exception as e:
+        logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
+        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
+
 # Asynchrone Hauptschleife
-async def main_loop(session):
-    """
-    Hauptschleife des Programms, die Steuerung und Überwachung asynchron ausführt.
-
-    Initialisiert die Hardware, startet asynchrone Tasks für Telegram und Display,
-    und steuert den Kompressor basierend auf Temperatur- und Drucksensorwerten.
-    Überwacht die Konfigurationsdatei auf Änderungen und speichert regelmäßig Daten in eine CSV-Datei.
-
-    Verwendet globale Variablen:
-        last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today,
-        last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time,
-        last_kompressor_status, urlaubsmodus_aktiv, EINSCHALTPUNKT, AUSSCHALTPUNKT,
-        original_einschaltpunkt, original_ausschaltpunkt, pressure_error_sent
-
-    Raises:
-        asyncio.CancelledError: Bei Programmabbruch (z.B. durch Ctrl+C), um Tasks sauber zu beenden.
-    """
-    global last_update_id, kompressor_ein, start_time, current_runtime, total_runtime_today, last_day, last_runtime, last_shutdown_time, last_config_hash, last_log_time, last_kompressor_status, urlaubsmodus_aktiv, pressure_error_sent, aktueller_einschaltpunkt, aktueller_ausschaltpunkt, ausschluss_grund, t_boiler, last_pressure_error_time
-
+async def main_loop(session, config, state):
+    """Hauptschleife des Programms mit State-Objekt."""
     if not await initialize_gpio():
         logging.critical("Programm wird aufgrund fehlender GPIO-Initialisierung beendet.")
         exit(1)
 
     await initialize_lcd(session)
-
     now = datetime.now()
-    message = f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}"
-    await send_telegram_message(session, CHAT_ID, message)
-    await send_welcome_message(session, CHAT_ID)
+    await send_telegram_message(session, CHAT_ID, f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
+                                BOT_TOKEN)
+    await send_welcome_message(session, CHAT_ID, BOT_TOKEN)
 
-    telegram_task_handle = asyncio.create_task(telegram_task())
+    telegram_task_handle = asyncio.create_task(
+        telegram_task(session, BOT_TOKEN, CHAT_ID, read_temperature, SENSOR_IDS, state.kompressor_ein,
+    str(state.current_runtime).split('.')[0], str(state.total_runtime_today).split('.')[0], config,
+    get_solax_data, state, get_boiler_temperature_history, get_runtime_bar_chart, is_nighttime)
+    )
     display_task_handle = asyncio.create_task(display_task())
 
     last_cycle_time = datetime.now()
     watchdog_warning_count = 0
     WATCHDOG_MAX_WARNINGS = 3
+    PRESSURE_ERROR_DELAY = timedelta(minutes=5)
 
     try:
         while True:
             try:
                 now = datetime.now()
-                # Prüfe Tageswechsel nur einmal pro Minute oder bei Statusänderung
-                should_check_day = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1))
-                if should_check_day:
-                    current_day = now.date()
-                    if current_day != last_day:
-                        logging.info(f"Neuer Tag erkannt: {current_day}. Setze Gesamtlaufzeit zurück.")
-                        total_runtime_today = timedelta()
-                        last_day = current_day
+                should_check_day = (state.last_log_time is None or (now - state.last_log_time) >= timedelta(minutes=1))
+                if should_check_day and now.date() != state.last_day:
+                    logging.info(f"Neuer Tag erkannt: {now.date()}. Setze Gesamtlaufzeit zurück.")
+                    state.total_runtime_today = timedelta()
+                    state.last_day = now.date()
 
                 config = validate_config(load_config())
                 current_hash = calculate_file_hash("config.ini")
-                if last_config_hash != current_hash:
+                if state.last_config_hash != current_hash:
                     await reload_config(session)
-                    last_config_hash = current_hash
+                    state.last_config_hash = current_hash
 
-                solax_data = await get_solax_data(session)
-                if solax_data is None:
-                    if last_api_data and not is_data_old(last_api_timestamp):
-                        solax_data = last_api_data
-                        logging.warning("API-Anfrage fehlgeschlagen, verwende zwischengespeicherte Daten.")
-                    else:
-                        solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                                      "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                                      "api_fehler": True}
-                        logging.error(
-                            "API-Anfrage fehlgeschlagen, keine gültigen zwischengespeicherten Daten verfügbar.")
-
-                # Energiequelle bestimmen
+                solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                                                               "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                                                               "api_fehler": True}
                 power_source = get_power_source(solax_data)
-
-                # Werte aus solax_data extrahieren mit Fallbacks
                 acpower = solax_data.get("acpower", "N/A")
                 feedinpower = solax_data.get("feedinpower", "N/A")
                 batPower = solax_data.get("batPower", "N/A")
@@ -1512,102 +1246,105 @@ async def main_loop(session):
                 powerdc2 = solax_data.get("powerdc2", "N/A")
                 consumeenergy = solax_data.get("consumeenergy", "N/A")
 
-                is_night = is_nighttime(config)
+                is_night = await asyncio.to_thread(is_nighttime, config)  # Asynchron ausgeführt
                 nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night,
-                                                                                              solax_data)
+                state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night,
+                                                                                                          solax_data)
 
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
-                t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])  # Neuer Sensor
+                t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
-                                   t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
+                    t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
                 pressure_ok = await asyncio.to_thread(check_pressure)
-                now = datetime.now()
 
                 if not pressure_ok:
-                    if kompressor_ein:
+                    if state.kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                    last_pressure_error_time = now
-                    if not pressure_error_sent:
-                        error_msg = "❌ Druckfehler: Kompressor läuft nicht aufgrund eines Problems mit dem Druckschalter! 5-Minuten-Sperre aktiviert."
-                        await send_telegram_message(session, CHAT_ID, error_msg)
-                        pressure_error_sent = True
-                    ausschluss_grund = "Druckschalter offen"
+                        state.kompressor_ein = False  # Status im state aktualisieren
+                    state.last_pressure_error_time = now
+                    if not state.pressure_error_sent:
+                        await send_telegram_message(session, CHAT_ID, "❌ Druckfehler: Kompressor läuft nicht!",
+                                                    BOT_TOKEN)
+                        state.pressure_error_sent = True
+                    state.ausschluss_grund = "Druckschalter offen"
                     await asyncio.sleep(2)
                     continue
 
-                if pressure_error_sent and (
-                        last_pressure_error_time is None or (now - last_pressure_error_time) >= PRESSURE_ERROR_DELAY):
-                    info_msg = "✅ Druckschalter wieder normal. Kompressor kann wieder laufen."
-                    await send_telegram_message(session, CHAT_ID, info_msg)
-                    pressure_error_sent = False
-                    last_pressure_error_time = None
+                if state.pressure_error_sent and (
+                        state.last_pressure_error_time is None or (now - state.last_pressure_error_time) >= PRESSURE_ERROR_DELAY):
+                    await send_telegram_message(session, CHAT_ID, "✅ Druckschalter wieder normal.", BOT_TOKEN)
+                    state.pressure_error_sent = False
+                    state.last_pressure_error_time = None
 
                 fehler, is_overtemp = check_boiler_sensors(t_boiler_oben, t_boiler_hinten, config)
                 if fehler:
                     await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                    ausschluss_grund = fehler
+                    state.kompressor_ein = False  # Status im state aktualisieren
+                    state.ausschluss_grund = fehler
                     continue
 
-                if last_pressure_error_time and (now - last_pressure_error_time) < PRESSURE_ERROR_DELAY:
-                    if kompressor_ein:
+                # Kompressorsteuerung
+                if state.last_pressure_error_time and (now - state.last_pressure_error_time) < PRESSURE_ERROR_DELAY:
+                    if state.kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                    remaining_time = (PRESSURE_ERROR_DELAY - (now - last_pressure_error_time)).total_seconds()
-                    ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
-                elif t_verd is not None and t_verd < VERDAMPFERTEMPERATUR:
-                    if kompressor_ein:
+                        state.kompressor_ein = False
+                    remaining_time = (PRESSURE_ERROR_DELAY - (now - state.last_pressure_error_time)).total_seconds()
+                    state.ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
+                elif t_verd is not None and t_verd < int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]):
+                    if state.kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False)
-                    ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {VERDAMPFERTEMPERATUR}°C)"
+                        state.kompressor_ein = False
+                    state.ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {config['Heizungssteuerung']['VERDAMPFERTEMPERATUR']}°C)"
                 elif t_boiler_oben is not None and t_boiler_hinten is not None:
-                    if solar_ueberschuss_aktiv:
-                        if t_boiler_hinten < UNTERER_FUEHLER_MIN and t_boiler_oben < aktueller_ausschaltpunkt:
-                            if not kompressor_ein:
+                    if state.solar_ueberschuss_aktiv:
+                        if t_boiler_hinten < int(config["Heizungssteuerung"]["UNTERER_FUEHLER_MIN"]) and t_boiler_oben < state.aktueller_ausschaltpunkt:
+                            if not state.kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, True)
-                        elif t_boiler_oben >= aktueller_ausschaltpunkt or t_boiler_hinten >= UNTERER_FUEHLER_MAX:
-                            if kompressor_ein:
+                                state.kompressor_ein = True
+                                start_time = datetime.now()  # Globale Variable aktualisieren
+                        elif t_boiler_oben >= state.aktueller_ausschaltpunkt or t_boiler_hinten >= int(
+                                config["Heizungssteuerung"]["UNTERER_FUEHLER_MAX"]):
+                            if state.kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
+                                state.kompressor_ein = False
+                                last_runtime = datetime.now() - start_time
+                                state.total_runtime_today += last_runtime
                     else:
-                        if t_boiler_oben < aktueller_einschaltpunkt and not kompressor_ein:
+                        if t_boiler_oben < state.aktueller_einschaltpunkt and not state.kompressor_ein:
                             await asyncio.to_thread(set_kompressor_status, True)
-                        elif t_boiler_oben >= aktueller_ausschaltpunkt and kompressor_ein:
+                            state.kompressor_ein = True
+                            start_time = datetime.now()
+                        elif t_boiler_oben >= state.aktueller_ausschaltpunkt and state.kompressor_ein:
                             await asyncio.to_thread(set_kompressor_status, False)
+                            state.kompressor_ein = False
+                            last_runtime = datetime.now() - start_time
+                            state.total_runtime_today += last_runtime
 
-                if kompressor_ein and start_time:
-                    current_runtime = datetime.now() - start_time
+                if state.kompressor_ein and start_time:
+                    state.current_runtime = datetime.now() - start_time
 
-                now = datetime.now()
-                should_log = (last_log_time is None or (now - last_log_time) >= timedelta(minutes=1)) or (
-                        kompressor_ein != last_kompressor_status)
+                should_log = (state.last_log_time is None or (now - state.last_log_time) >= timedelta(minutes=1)) or (
+                        state.kompressor_ein != state.last_kompressor_status)
                 if should_log:
-                    async with csv_lock:  # Sperre den Zugriff auf die Datei
+                    async with csv_lock:
                         async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                            einschaltpunkt_str = str(
-                                aktueller_einschaltpunkt) if aktueller_einschaltpunkt is not None else "N/A"
-                            ausschaltpunkt_str = str(
-                                aktueller_ausschaltpunkt) if aktueller_ausschaltpunkt is not None else "N/A"
-                            solar_ueberschuss_str = str(
-                                int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
-                            nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
-                            power_source_str = power_source if power_source else "N/A"
-
                             csv_line = (
                                 f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                                 f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
                                 f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
-                                f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"  # T_Mittig hinzugefügt
+                                f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"
                                 f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
                                 f"{t_verd if t_verd is not None else 'N/A'},"
-                                f"{'EIN' if kompressor_ein else 'AUS'},"
+                                f"{'EIN' if state.kompressor_ein else 'AUS'},"
                                 f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
-                                f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str},"
-                                f"{power_source_str}\n"
+                                f"{state.aktueller_einschaltpunkt},{state.aktueller_ausschaltpunkt},{int(state.solar_ueberschuss_aktiv)},{nacht_reduction},{power_source}\n"
                             )
                             await csvfile.write(csv_line)
                             logging.debug(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
-                        last_log_time = now
-                        last_kompressor_status = kompressor_ein
+                        state.last_log_time = now
+                        state.last_kompressor_status = state.kompressor_ein
 
                 cycle_duration = (datetime.now() - last_cycle_time).total_seconds()
                 if cycle_duration > 30:
@@ -1616,165 +1353,33 @@ async def main_loop(session):
                         f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
                     if watchdog_warning_count >= WATCHDOG_MAX_WARNINGS:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
-                        logging.critical("Maximale Watchdog-Warnungen erreicht, Hardware wird heruntergefahren.")
-
-                        # Telegram-Nachricht senden
-                        watchdog_message = (
-                            "🚨 **Kritischer Fehler**: Software wird aufgrund des Watchdogs beendet.\n"
-                            f"Grund: Maximale Warnungen ({WATCHDOG_MAX_WARNINGS}) erreicht, Zykluszeit > 30s.\n"
-                            f"Letzte Zykluszeit: {cycle_duration:.2f}s"
-                        )
-                        await send_telegram_message(session, CHAT_ID, watchdog_message, parse_mode="Markdown")
-
-                        # Programm beenden
-                        await shutdown(session)  # Bereinigt GPIO und sendet Abschalt-Nachricht
-                        raise SystemExit("Watchdog-Exit: Programm wird beendet.")
-
+                        await send_telegram_message(session, CHAT_ID, "🚨 Watchdog-Fehler: Programm beendet.", BOT_TOKEN)
+                        await shutdown(session)
+                        raise SystemExit("Watchdog-Exit")
                 last_cycle_time = datetime.now()
                 await asyncio.sleep(2)
             except Exception as e:
                 logging.error(f"Fehler in der Hauptschleife: {e}", exc_info=True)
-                await asyncio.sleep(30)  # Kurze Pause vor dem nächsten Versuch
-
+                await asyncio.sleep(30)
     except asyncio.CancelledError:
-        logging.info("Hauptschleife abgebrochen, Tasks werden beendet.")
         telegram_task_handle.cancel()
         display_task_handle.cancel()
         await asyncio.gather(telegram_task_handle, display_task_handle, return_exceptions=True)
         raise
-
+    finally:
+        await shutdown(session)
 
 async def run_program():
     async with aiohttp.ClientSession() as session:
-        if not os.path.exists("heizungsdaten.csv"):
-            async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
-                header = (
-                    "Zeitstempel,T_Oben,T_Hinten,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
-                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung\n"
-                )
-                await csvfile.write(header)
-                logging.info("CSV-Header geschrieben: " + header.strip())
+        config = configparser.ConfigParser()
+        config.read("config.ini")
+        state = State(config)
         try:
-            await main_loop(session)
+            await main_loop(session, config, state)
         except KeyboardInterrupt:
             logging.info("Programm durch Benutzer beendet.")
         finally:
             await shutdown(session)
 
-
-# Asynchrone Verarbeitung von Telegram-Nachrichten
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_verd, updates, last_update_id,
-                                          kompressor_status, aktuelle_laufzeit, gesamtlaufzeit):
-    """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
-    global AUSSCHALTPUNKT, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
-    if updates:
-        for update in updates:
-            message_text = update.get('message', {}).get('text')
-            chat_id = update.get('message', {}).get('chat', {}).get('id')
-            if message_text and chat_id:
-                message_text = message_text.strip().lower()
-                logging.debug(f"Telegram-Nachricht empfangen: Text={message_text}, Chat-ID={chat_id}")
-                if message_text == "🌡️ temperaturen" or message_text == "temperaturen":
-                    if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler":
-                        await send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_verd)
-                    else:
-                        await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Temperaturen.")
-                elif message_text == "📊 status" or message_text == "status":
-                    # Temperatur des mittigen Sensors auslesen
-                    t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])
-                    if t_boiler_oben != "Fehler" and t_boiler_hinten != "Fehler" and t_verd != "Fehler" and t_boiler_mittig != "Fehler":
-                        await send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd,
-                                                  kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
-                                                  aktueller_einschaltpunkt, aktueller_ausschaltpunkt)
-                    else:
-                        await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen des Status.")
-                elif message_text == "🆘 hilfe" or message_text == "hilfe":
-                    await send_help_message(session)
-                elif message_text == "🌴 urlaub" or message_text == "urlaub":
-                    if urlaubsmodus_aktiv:
-                        await send_telegram_message(session, CHAT_ID, "🌴 Urlaubsmodus ist bereits aktiviert.")
-                        logging.info("Urlaubsmodus bereits aktiv, keine Änderung")
-                    else:
-                        await aktivere_urlaubsmodus(session)
-                elif message_text == "🏠 urlaub aus" or message_text == "urlaub aus":
-                    if not urlaubsmodus_aktiv:
-                        await send_telegram_message(session, CHAT_ID, "🏠 Urlaubsmodus ist bereits deaktiviert.")
-                        logging.info("Urlaubsmodus bereits deaktiviert, keine Änderung")
-                    else:
-                        await deaktivere_urlaubsmodus(session)
-                elif message_text == "📈 verlauf 6h" or message_text == "verlauf 6h":
-                    await get_boiler_temperature_history(session, 6)
-                elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
-                    await get_boiler_temperature_history(session, 24)
-                elif message_text.startswith("⏱️ laufzeiten") or message_text.startswith("laufzeiten"):
-                    parts = message_text.split()
-                    days = 7  # Standardwert
-                    if len(parts) > 1:
-                        try:
-                            days = int(parts[1])
-                            if days < 1 or days > 900:  # Begrenzung auf 1-900 Tage
-                                days = 7
-                                logging.warning(
-                                    f"Ungültige Tagesanzahl '{parts[1]}', muss zwischen 1 und 900 liegen. Verwende Standardwert 7.")
-                        except ValueError:
-                            days = 7
-                            logging.warning(f"Ungültige Zahl '{parts[1]}', verwende Standardwert 7.")
-                    logging.info(f"Laufzeiten-Diagramm wird für {days} Tage erstellt.")
-                    await get_runtime_bar_chart(session, days=days)
-                else:
-                    await send_unknown_command_message(session, chat_id)
-                last_update_id = update['update_id'] + 1
-                logging.debug(f"last_update_id aktualisiert: {last_update_id}")
-            return last_update_id
-
-
-# Asynchrone Urlaubsmodus-Funktionen
-async def aktivere_urlaubsmodus(session):
-    """Aktiviert den Urlaubsmodus und passt Sollwerte an."""
-    global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
-    if not urlaubsmodus_aktiv:
-        urlaubsmodus_aktiv = True
-        # Speichere die aktuellen Sollwerte vor der Änderung
-        original_einschaltpunkt = aktueller_einschaltpunkt
-        original_ausschaltpunkt = aktueller_ausschaltpunkt
-        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-        # Alte Werte speichern
-        old_einschaltpunkt = aktueller_einschaltpunkt
-        old_ausschaltpunkt = aktueller_ausschaltpunkt
-        # Passe die Sollwerte an
-        aktueller_ausschaltpunkt = AUSSCHALTPUNKT - urlaubsabsenkung
-        aktueller_einschaltpunkt = aktueller_ausschaltpunkt - TEMP_OFFSET
-        logging.info(
-            f"Urlaubsmodus aktiviert. Sollwerte geändert: "
-            f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
-            f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
-        )
-        await send_telegram_message(session, CHAT_ID,
-                                    f"🌴 Urlaubsmodus aktiviert. Neue Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
-
-
-async def deaktivere_urlaubsmodus(session):
-    """Deaktiviert den Urlaubsmodus und stellt ursprüngliche Werte wieder her."""
-    global urlaubsmodus_aktiv, AUSSCHALTPUNKT, TEMP_OFFSET, original_einschaltpunkt, original_ausschaltpunkt, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
-    if urlaubsmodus_aktiv:
-        urlaubsmodus_aktiv = False
-        # Alte Werte speichern
-        old_einschaltpunkt = aktueller_einschaltpunkt
-        old_ausschaltpunkt = aktueller_ausschaltpunkt
-        # Stelle die ursprünglichen Sollwerte wieder her
-        aktueller_einschaltpunkt = original_einschaltpunkt
-        aktueller_ausschaltpunkt = original_ausschaltpunkt
-        logging.info(
-            f"Urlaubsmodus deaktiviert. Sollwerte wiederhergestellt: "
-            f"Ausschaltpunkt={old_ausschaltpunkt} -> {aktueller_ausschaltpunkt}, "
-            f"Einschaltpunkt={old_einschaltpunkt} -> {aktueller_einschaltpunkt}"
-        )
-        await send_telegram_message(session, CHAT_ID,
-                                    f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
-
-
-
-# Programmstart
 if __name__ == "__main__":
     asyncio.run(run_program())
