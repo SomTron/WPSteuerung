@@ -1,4 +1,5 @@
 import os
+import sys
 import smbus2
 from datetime import datetime, timedelta
 from RPLCD.i2c import CharLCD
@@ -1377,9 +1378,16 @@ async def run_program():
         try:
             await main_loop(session, config, state)
         except KeyboardInterrupt:
-            logging.info("Programm durch Benutzer beendet.")
+            logging.info("Programm durch Benutzer abgebrochen (Ctrl+C).")
+        except asyncio.CancelledError:
+            logging.info("Hauptschleife abgebrochen.")
         finally:
             await shutdown(session)
 
 if __name__ == "__main__":
-    asyncio.run(run_program())
+    try:
+        asyncio.run(run_program())
+    except KeyboardInterrupt:
+        # Verhindert, dass der KeyboardInterrupt-Traceback im Terminal erscheint
+        logging.info("Programm beendet.")
+        sys.exit(0)
