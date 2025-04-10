@@ -1238,7 +1238,10 @@ async def main_loop(session, config, state):
                 solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
                                                                "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
                                                                "api_fehler": True}
+                logging.debug(f"Solax-Daten: {solax_data}")
                 power_source = get_power_source(solax_data)
+                state.solar_ueberschuss_aktiv = (power_source == "Direkter PV-Strom")
+                logging.debug(f"Power Source: {power_source}, Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv}")
                 acpower = solax_data.get("acpower", "N/A")
                 feedinpower = solax_data.get("feedinpower", "N/A")
                 batPower = solax_data.get("batPower", "N/A")
