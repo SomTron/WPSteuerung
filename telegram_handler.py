@@ -90,42 +90,81 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_b
     await send_telegram_message(session, chat_id, message, bot_token)
 
 
+# telegram_handler.py (angepasste send_status_telegram)
 async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
                               aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt, aktueller_ausschaltpunkt,
                               chat_id, bot_token, config, get_solax_data_func, urlaubsmodus_aktiv, solar_ueberschuss_aktiv,
                               last_runtime, is_nighttime_func, ausschluss_grund):
-    """Sendet den aktuellen Status über Telegram."""
+    """Sendet den aktuellen Status über Telegram in einem übersichtlichen Format."""
     solax_data = await get_solax_data_func(session)
-    night_status = "Ja" if is_nighttime_func(config) else "Nein"  # Kein await, direkter Funktionsaufruf
-    message = (
-        f"📊 Status:\n"
-        f"Temperaturen: Oben={t_boiler_oben:.1f}°C, Hinten={t_boiler_hinten:.1f}°C, Mittig={t_boiler_mittig:.1f}°C, Verdampfer={t_verd:.1f}°C\n"
-        f"Kompressor: {'EIN' if kompressor_status else 'AUS'}\n"
-        f"Aktuelle Laufzeit: {aktuelle_laufzeit}s\n"
-        f"Gesamtlaufzeit heute: {gesamtlaufzeit}s\n"
-        f"Einschaltpunkt: {aktueller_einschaltpunkt}°C\n"
-        f"Ausschaltpunkt: {aktueller_ausschaltpunkt}°C\n"
-        f"Urlaubsmodus: {'Aktiv' if urlaubsmodus_aktiv else 'Inaktiv'}\n"
-        f"Solarüberschuss: {'Aktiv' if solar_ueberschuss_aktiv else 'Inaktiv'}\n"
-        f"Letzte Laufzeit: {last_runtime}\n"
-        f"Nachtzeit: {night_status}\n"
-        f"Ausschlussgrund: {ausschluss_grund if ausschluss_grund else 'Keiner'}\n"
-        f"Solax AC Power: {solax_data.get('acpower', 'N/A')}W"
-    )
-    await send_telegram_message(session, chat_id, message, bot_token)
+    is_night = is_nighttime_func(config)
 
-async def send_help_message(session, chat_id, bot_token):
-    """Sendet eine Hilfenachricht."""
+    # Laufzeiten in Stunden und Minuten umwandeln
+    def format_time(seconds_str):
+        try:
+            seconds = int(seconds_str)
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}min"
+        except (ValueError, TypeError):
+            return str(seconds_str)
+
+    # Temperaturen auf Fehler prüfen und formatieren
+    t_oben_str = f"{t_boiler_oben:.1f}°C" if t_boiler_oben is not None else "N/A"
+    t_hinten_str = f"{t_boiler_hinten:.1f}°C" if t_boiler_hinten is not None else "N/A"
+    t_mittig_str = f"{t_boiler_mittig:.1f}°C" if t_boiler_mittig is not None else "N/A"
+    t_verd_str = f"{t_verd:.1f}°C" if t_verd is not None else "N/A"
+
+    # Betriebsmodus bestimmen und Sollwertänderungen anzeigen
+    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+    if urlaubsmodus_aktiv:
+        mode_str = "Urlaub"
+    elif solar_ueberschuss_aktiv and is_night:
+        mode_str = f"Solarüberschuss + Nachtabsenkung (-{nacht_reduction}°C)"
+    elif solar_ueberschuss_aktiv:
+        mode_str = "Solarüberschuss"
+    elif is_night:
+        mode_str = f"Nachtabsenkung (-{nacht_reduction}°C)"
+    else:
+        mode_str = "Normal"
+
+    # Kompressor-Status mit "Laufzeit zu kurz" prüfen
+    MIN_RUNTIME_SECONDS = 300  # 5 Minuten als Schwelle, anpassbar
+    try:
+        current_seconds = int(aktuelle_laufzeit)
+        if kompressor_status and current_seconds < MIN_RUNTIME_SECONDS:
+            compressor_status_str = f"EIN (Laufzeit zu kurz: {format_time(aktuelle_laufzeit)})"
+        else:
+            compressor_status_str = "EIN" if kompressor_status else "AUS"
+    except (ValueError, TypeError):
+        compressor_status_str = "EIN" if kompressor_status else "AUS"
+
+    # Nachricht zusammenstellen
     message = (
-        "🆘 Hilfe:\n"
-        "🌡️ Temperaturen - Zeigt aktuelle Temperaturen\n"
-        "📊 Status - Zeigt den aktuellen Systemstatus\n"
-        "🌴 Urlaub - Aktiviert den Urlaubsmodus\n"
-        "🏠 Urlaub aus - Deaktiviert den Urlaubsmodus\n"
-        "📈 Verlauf 6h - Zeigt Temperaturverlauf (6h)\n"
-        "📉 Verlauf 24h - Zeigt Temperaturverlauf (24h)\n"
-        "⏱️ Laufzeiten [Tage] - Zeigt Laufzeiten (Standard: 7 Tage)"
+        "📊 **Systemstatus**\n\n"
+        "🌡️ **Temperaturen**\n"
+        f"  • Oben: {t_oben_str}\n"
+        f"  • Hinten: {t_hinten_str}\n"
+        f"  • Mittig: {t_mittig_str}\n"
+        f"  • Verdampfer: {t_verd_str}\n\n"
+        "🛠️ **Kompressor**\n"
+        f"  • Status: {compressor_status_str}\n"
+        f"  • Aktuelle Laufzeit: {format_time(aktuelle_laufzeit)}\n"
+        f"  • Gesamtlaufzeit heute: {format_time(gesamtlaufzeit)}\n"
+        f"  • Letzte Laufzeit: {format_time(last_runtime)}\n\n"
+        "🎯 **Sollwerte**\n"
+        f"  • Einschaltpunkt: {aktueller_einschaltpunkt}°C\n"
+        f"  • Ausschaltpunkt: {aktueller_ausschaltpunkt}°C\n\n"
+        "⚙️ **Betriebsmodus**\n"
+        f"  • {mode_str}\n\n"
+        "ℹ️ **Zusatzinfo**\n"
+        f"  • Solax AC Power: {solax_data.get('acpower', 'N/A')}W"
     )
+
+    # Ausschlussgrund nur hinzufügen, wenn vorhanden
+    if ausschluss_grund:
+        message += f"\n  • Ausschlussgrund: {ausschluss_grund}"
+
     await send_telegram_message(session, chat_id, message, bot_token)
 
 
@@ -136,10 +175,10 @@ async def send_unknown_command_message(session, chat_id, bot_token):
 
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates,
-                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
-                                          chat_id, bot_token, config, get_solax_data_func, state,
-                                          get_boiler_temperature_history_func, get_runtime_bar_chart_func,
-                                          is_nighttime_func):  # Neuer Parameter hinzugefügt
+                                         last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
+                                         chat_id, bot_token, config, get_solax_data_func, state,
+                                         get_boiler_temperature_history_func, get_runtime_bar_chart_func,
+                                         is_nighttime_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     try:
         if updates:
@@ -242,3 +281,18 @@ async def telegram_task(session, bot_token, chat_id, read_temperature_func, sens
                     logging.error("Maximale Wiederholungen erreicht, warte 5 Minuten")
                     await asyncio.sleep(300)
         await asyncio.sleep(0.1)
+
+async def send_help_message(session, chat_id, bot_token):
+    """Sendet eine Hilfenachricht mit verfügbaren Befehlen über Telegram."""
+    message = (
+        "ℹ️ **Hilfe - Verfügbare Befehle**\n\n"
+        "🌡️ **Temperaturen**: Zeigt die aktuellen Temperaturen an.\n"
+        "📊 **Status**: Zeigt den vollständigen Systemstatus an.\n"
+        "🆘 **Hilfe**: Zeigt diese Hilfenachricht an.\n"
+        "🌴 **Urlaub**: Aktiviert den Urlaubsmodus.\n"
+        "🏠 **Urlaub aus**: Deaktiviert den Urlaubsmodus.\n"
+        "📈 **Verlauf 6h**: Zeigt den Temperaturverlauf der letzten 6 Stunden.\n"
+        "📉 **Verlauf 24h**: Zeigt den Temperaturverlauf der letzten 24 Stunden.\n"
+        "⏱️ **Laufzeiten [Tage]**: Zeigt die Laufzeiten der letzten X Tage (Standard: 7).\n"
+    )
+    await send_telegram_message(session, chat_id, message, bot_token)
