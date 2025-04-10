@@ -1,8 +1,14 @@
 Download daten:
 Windows Powershell: scp -r patrik@192.168.0.210: /home/patrik/heizungsdaten.csv C:\Users\Patrik\Desktop\
 
+Windows Powershell: scp -r patrik@2001:4bb8:143:14fa:ec3:74ed:a6db:f15d: /home/patrik/heizungsdaten.csv C:\Users\Patrik\Desktop\
+
+scp -6 patrik@[2001:4bb8:143:14fa:ec3:74ed:a6db:f15d]:/home/patrik/heizungsdaten.csv C:\Users\Patrik\Desktop\
+
 tail -f heizungssteuerung.log
 letzte Logs anzeigen
+
+tail -n 200 heizungssteuerung.log
 
 wpsteuerung.ddns.net
 

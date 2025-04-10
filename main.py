@@ -1767,6 +1767,7 @@ async def deaktivere_urlaubsmodus(session):
                                     f"🏠 Urlaubsmodus deaktiviert. Ursprüngliche Werte:\nEinschaltpunkt: {aktueller_einschaltpunkt} °C\nAusschaltpunkt: {aktueller_ausschaltpunkt} °C")
 
 
+
 # Programmstart
 if __name__ == "__main__":
     asyncio.run(run_program())
