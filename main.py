@@ -204,6 +204,7 @@ async def get_boiler_temperature_history(session, hours):
         # Listen für Daten
         temp_oben = []
         temp_hinten = []
+        temp_mittig = []  # Neue Liste für mittigen Sensor
         einschaltpunkte = []
         ausschaltpunkte = []
         kompressor_status = []
@@ -219,7 +220,7 @@ async def get_boiler_temperature_history(session, hours):
                 # Akzeptiere Zeilen mit mindestens 13 Spalten (älteres Format) und fülle fehlende auf
                 if len(parts) >= 13:  # Mindestens bis ConsumeEnergy
                     # Fülle fehlende Spalten mit Standardwerten auf
-                    while len(parts) < 18:
+                    while len(parts) < 19:  # Jetzt 19 Spalten wegen T_Mittig und PowerSource
                         parts.append("N/A")
 
                     timestamp_str = parts[0].strip()
@@ -227,22 +228,24 @@ async def get_boiler_temperature_history(session, hours):
 
                     try:
                         timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        t_oben, t_hinten = parts[1], parts[2]
-                        kompressor = parts[5]
-                        einschaltpunkt = parts[13] if parts[13].strip() and parts[13] not in ("N/A", "Fehler") else "42"
-                        ausschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "45"
-                        solar_ueberschuss = parts[15] if parts[15].strip() and parts[15] not in (
+                        t_oben, t_hinten, t_mittig = parts[1], parts[2], parts[3]  # T_Mittig ist jetzt Spalte 3
+                        kompressor = parts[6]
+                        einschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "42"
+                        ausschaltpunkt = parts[15] if parts[15].strip() and parts[15] not in ("N/A", "Fehler") else "45"
+                        solar_ueberschuss = parts[16] if parts[16].strip() and parts[16] not in (
                         "N/A", "Fehler") else "0"
-                        power_source = parts[17] if parts[17].strip() and parts[17] not in (
+                        power_source = parts[18] if parts[18].strip() and parts[18] not in (
                         "N/A", "Fehler") else "Unbekannt"
 
-                        if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or not (
-                                t_hinten.strip() and t_hinten not in ("N/A", "Fehler")):
+                        if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or \
+                           not (t_hinten.strip() and t_hinten not in ("N/A", "Fehler")) or \
+                           not (t_mittig.strip() and t_mittig not in ("N/A", "Fehler")):
                             logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
                             continue
 
                         temp_oben.append((timestamp, float(t_oben)))
                         temp_hinten.append((timestamp, float(t_hinten)))
+                        temp_mittig.append((timestamp, float(t_mittig)))  # Mittige Temperatur hinzufügen
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
                         kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0, power_source))
@@ -266,6 +269,7 @@ async def get_boiler_temperature_history(session, hours):
         # Filtere Daten
         filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
         filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
+        filtered_mittig = [(ts, val) for ts, val in temp_mittig if ts >= time_ago]  # Filter für mittigen Sensor
         filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
         filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
         filtered_kompressor = [(ts, val, ps) for ts, val, ps in kompressor_status if ts >= time_ago]
@@ -290,6 +294,7 @@ async def get_boiler_temperature_history(session, hours):
 
         sampled_oben = sample_data(filtered_oben, target_interval, target_points)
         sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
+        sampled_mittig = sample_data(filtered_mittig, target_interval, target_points)  # Sampling für mittigen Sensor
         sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
         sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
         sampled_kompressor = sample_data(filtered_kompressor, target_interval, target_points)
@@ -339,6 +344,9 @@ async def get_boiler_temperature_history(session, hours):
         if sampled_hinten:
             timestamps_hinten, t_hinten_vals = zip(*sampled_hinten)
             plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
+        if sampled_mittig:
+            timestamps_mittig, t_mittig_vals = zip(*sampled_mittig)
+            plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="^", color="purple")  # Neuer Plot
         if sampled_einschalt:
             timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
             plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--',
@@ -375,7 +383,7 @@ async def get_boiler_temperature_history(session, hours):
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
         form.add_field("caption",
-                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
+                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
@@ -387,7 +395,6 @@ async def get_boiler_temperature_history(session, hours):
     except Exception as e:
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
-
 async def get_runtime_bar_chart(session, days=7):
     logging.info(f"Funktion aufgerufen mit days={days}")
     try:
@@ -1512,6 +1519,7 @@ async def main_loop(session):
 
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
+                t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])  # Neuer Sensor
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
                                    t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
@@ -1582,18 +1590,19 @@ async def main_loop(session):
                             solar_ueberschuss_str = str(
                                 int(solar_ueberschuss_aktiv)) if solar_ueberschuss_aktiv is not None else "0"
                             nacht_reduction_str = str(nacht_reduction) if nacht_reduction is not None else "0"
-                            power_source_str = power_source if power_source else "N/A"  # Energiequelle als String
+                            power_source_str = power_source if power_source else "N/A"
 
                             csv_line = (
                                 f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                                 f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
                                 f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
+                                f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"  # T_Mittig hinzugefügt
                                 f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
                                 f"{t_verd if t_verd is not None else 'N/A'},"
                                 f"{'EIN' if kompressor_ein else 'AUS'},"
                                 f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
                                 f"{einschaltpunkt_str},{ausschaltpunkt_str},{solar_ueberschuss_str},{nacht_reduction_str},"
-                                f"{power_source_str}\n"  # PowerSource hinzugefügt
+                                f"{power_source_str}\n"
                             )
                             await csvfile.write(csv_line)
                             logging.debug(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
