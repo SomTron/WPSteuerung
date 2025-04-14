@@ -129,7 +129,7 @@ class TelegramHandler(logging.Handler):
 class State:
     def __init__(self, config):
         self.ausschluss_grund = None
-        self.last_config_hash = None
+        self.last_config_hash = calculate_file_hash("config.ini")
         self.kompressor_ein = False
         self.current_runtime = timedelta()
         self.total_runtime_today = timedelta()
@@ -145,8 +145,16 @@ class State:
         self.pressure_error_sent = False
         self.last_pressure_error_time = None
         self.t_boiler = None
-        self.start_time = None  # Neu hinzugefügt
-        self.last_pressure_state = None  # Neu hinzugefügt
+        self.start_time = None
+        self.last_pressure_state = None
+        # Neue Attribute
+        self.bot_token = config["Telegram"]["BOT_TOKEN"]
+        self.chat_id = config["Telegram"]["CHAT_ID"]
+        self.token_id = config["SolaxCloud"]["TOKEN_ID"]
+        self.sn = config["SolaxCloud"]["SN"]
+        self.min_laufzeit = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_LAUFZEIT", 10)))
+        self.min_pause = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
+        self.verdampfertemperatur = int(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", 6))
 
 # Logging einrichten mit Telegram-Handler
 async def setup_logging(session):
@@ -237,9 +245,6 @@ def get_power_source(solax_data):
     else:
         return "Unbekannt"  # Fallback für edge cases wie batPower = 0, feedinpower = 0
 
-# Funktion für die benutzerdefinierte Telegram-Tastatur
-
-# Asynchrone Hilfsfunktionen für Telegram
 
 def calculate_runtimes():
     try:
@@ -526,98 +531,55 @@ def set_kompressor_status(ein, force_off=False):
 
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
-async def reload_config(session):
-    global AUSSCHALTPUNKT, AUSSCHALTPUNKT_ERHOEHT, TEMP_OFFSET, MIN_LAUFZEIT, MIN_PAUSE, TOKEN_ID, SN, VERDAMPFERTEMPERATUR, BOT_TOKEN, CHAT_ID, last_config_hash, urlaubsmodus_aktiv, aktueller_einschaltpunkt, aktueller_ausschaltpunkt
-
+async def reload_config(session, state, config):
+    """Lädt die Konfiguration neu und aktualisiert das State-Objekt."""
     config_file = "config.ini"
     current_hash = calculate_file_hash(config_file)
 
-    if last_config_hash is not None and current_hash != last_config_hash:
-        logging.info(f"Konfigurationsdatei geändert. Alter Hash: {last_config_hash}, Neuer Hash: {current_hash}")
-        await send_telegram_message(session, CHAT_ID, "🔧 Konfigurationsdatei wurde geändert.")
+    if state.last_config_hash is None:
+        state.last_config_hash = current_hash
+        logging.info("Initialer Config-Hash gesetzt.")
 
-    try:
-        async with aiofiles.open(config_file, mode='r') as f:
-            content = await f.read()
-            config = configparser.ConfigParser()
-            config.read_string(content)
+    if current_hash != state.last_config_hash:
+        logging.info(f"Konfigurationsdatei geändert. Alter Hash: {state.last_config_hash}, Neuer Hash: {current_hash}")
+        await send_telegram_message(session, state.chat_id, "🔧 Konfigurationsdatei wurde geändert.", state.bot_token)
 
-        if not urlaubsmodus_aktiv:
-            AUSSCHALTPUNKT = check_value(
-                int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]),
-                min_value=30, max_value=80, default_value=45,
-                parameter_name="AUSSCHALTPUNKT"
-            )
-            AUSSCHALTPUNKT_ERHOEHT = check_value(
-                int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]),
-                min_value=35, max_value=85, default_value=52,
-                parameter_name="AUSSCHALTPUNKT_ERHOEHT",
-                other_value=AUSSCHALTPUNKT, comparison=">="
-            )
-            TEMP_OFFSET = check_value(
-                int(config["Heizungssteuerung"]["TEMP_OFFSET"]),
-                min_value=3, max_value=20, default_value=3,
-                parameter_name="TEMP_OFFSET"
-            )
-            VERDAMPFERTEMPERATUR = check_value(
-                int(config["Heizungssteuerung"]["VERDAMPFERTEMPERATUR"]),
-                min_value=4, max_value=40, default_value=6,
-                parameter_name="VERDAMPFERTEMPERATUR"
-            )
+        try:
+            async with aiofiles.open(config_file, mode='r') as f:
+                content = await f.read()
+                new_config = configparser.ConfigParser()
+                new_config.read_string(content)
 
-        MIN_LAUFZEIT_MINUTEN = check_value(
-            int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]),
-            min_value=1, max_value=60, default_value=10,
-            parameter_name="MIN_LAUFZEIT"
-        )
-        MIN_PAUSE_MINUTEN = check_value(
-            int(config["Heizungssteuerung"]["MIN_PAUSE"]),
-            min_value=1, max_value=60, default_value=20,
-            parameter_name="MIN_PAUSE"
-        )
+            validated_config = validate_config(new_config)
 
-        BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
-        CHAT_ID = config["Telegram"]["CHAT_ID"]
-        MIN_LAUFZEIT = timedelta(minutes=MIN_LAUFZEIT_MINUTEN)
-        MIN_PAUSE = timedelta(minutes=MIN_PAUSE_MINUTEN)
-        TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
-        SN = config["SolaxCloud"]["SN"]
+            if not state.urlaubsmodus_aktiv:
+                state.aktueller_ausschaltpunkt = int(validated_config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
+                state.aktueller_einschaltpunkt = state.aktueller_ausschaltpunkt - int(validated_config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
 
-        # Alte Sollwerte speichern
-        old_einschaltpunkt = aktueller_einschaltpunkt
-        old_ausschaltpunkt = aktueller_ausschaltpunkt
+            state.min_laufzeit = timedelta(minutes=int(validated_config["Heizungssteuerung"].get("MIN_LAUFZEIT", 10)))
+            state.min_pause = timedelta(minutes=int(validated_config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
+            state.verdampfertemperatur = int(validated_config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", 6))
+            state.token_id = validated_config["SolaxCloud"]["TOKEN_ID"]
+            state.sn = validated_config["SolaxCloud"]["SN"]
+            state.bot_token = validated_config["Telegram"]["BOT_TOKEN"]
+            state.chat_id = validated_config["Telegram"]["CHAT_ID"]
 
-        # Solax-Daten abrufen und sicherstellen, dass alle Werte definiert sind
-        solax_data = await get_solax_data(session) or {
-            "acpower": 0,
-            "feedinpower": 0,
-            "consumeenergy": 0,
-            "batPower": 0,
-            "soc": 0,
-            "powerdc1": 0,
-            "powerdc2": 0,
-            "api_fehler": True
-        }
+            solax_data = await get_solax_data(session) or {
+                "acpower": 0, "feedinpower": 0, "consumeenergy": 0, "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0, "api_fehler": True
+            }
+            state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(validated_config, await asyncio.to_thread(is_nighttime, validated_config), solax_data)
 
-        # Sollwerte berechnen
-        aktueller_ausschaltpunkt, aktueller_einschaltpunkt = calculate_shutdown_point(
-            config,
-            is_nighttime(config),
-            solax_data
-        )
+            logging.info(f"Konfiguration neu geladen: Ausschaltpunkt={state.aktueller_ausschaltpunkt}, Einschaltpunkt={state.aktueller_einschaltpunkt}")
+            state.last_config_hash = current_hash
 
-        logging.info(
-            f"Konfiguration neu geladen: AUSSCHALTPUNKT={AUSSCHALTPUNKT}, TEMP_OFFSET={TEMP_OFFSET}, "
-            f"VERDAMPFERTEMPERATUR={VERDAMPFERTEMPERATUR}, Einschaltpunkt={aktueller_einschaltpunkt}, "
-            f"Ausschaltpunkt={aktueller_ausschaltpunkt}"
-        )
-        last_config_hash = current_hash
+        except Exception as e:
+            logging.error(f"Fehler beim Neuladen der Konfiguration: {e}", exc_info=True)
+            await send_telegram_message(session, state.chat_id, f"⚠️ Fehler beim Neuladen der Konfiguration: {e}", state.bot_token)
+            state.aktueller_ausschaltpunkt = state.aktueller_ausschaltpunkt or 45
+            state.aktueller_einschaltpunkt = state.aktueller_einschaltpunkt or 42
 
-    except Exception as e:
-        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}")
-        # Fallback-Werte setzen, falls das Laden fehlschlägt
-        aktueller_ausschaltpunkt = AUSSCHALTPUNKT
-        aktueller_einschaltpunkt = AUSSCHALTPUNKT - TEMP_OFFSET
+    else:
+        logging.debug("Keine Änderung der Konfiguration erkannt.")
 
 
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
@@ -697,7 +659,7 @@ def validate_config(config):
             "MIN_PAUSE": "20",
             "NACHTABSENKUNG": "0"
         },
-        "Telegram": {"BOT_TOKEN": "", "CHAT_ID": ""},
+        "Telegram": {"state.bot_token": "", "CHAT_ID": ""},
         "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
     }
     for section in defaults:
@@ -707,7 +669,7 @@ def validate_config(config):
         for key, default in defaults[section].items():
             try:
                 if key in config[section]:
-                    if key not in ["BOT_TOKEN", "CHAT_ID", "TOKEN_ID", "SN"]:
+                    if key not in ["state.bot_token", "CHAT_ID", "TOKEN_ID", "SN"]:
                         value = int(config[section][key])
                         min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT"] else 20
                         max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
@@ -758,44 +720,29 @@ def is_nighttime(config):
 
 def calculate_shutdown_point(config, is_night, solax_data):
     global solar_ueberschuss_aktiv
-    try:
-        nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-        bat_power = solax_data.get("batPower", 0)
-        feedin_power = solax_data.get("feedinpower", 0)  # Korrekt mit .get()
-        soc = solax_data.get("soc", 0)
+    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+    bat_power = solax_data.get("batPower", 0)
+    feedin_power = solax_data.get("feedinpower", 0)
+    soc = solax_data.get("soc", 0)
 
-        if solax_data.get("api_fehler", False):
-            solar_ueberschuss_aktiv = False
-        else:
-            if bat_power > 600 or (soc > 95 and feedin_power > 600):
-                if not solar_ueberschuss_aktiv:
-                    solar_ueberschuss_aktiv = True
-                    logging.info(
-                        f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
-            else:
-                if solar_ueberschuss_aktiv:
-                    solar_ueberschuss_aktiv = False
-                    logging.info(
-                        f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
-
+    if bat_power > 600 or (soc > 95 and feedin_power > 600):
+        if not solar_ueberschuss_aktiv:
+            solar_ueberschuss_aktiv = True
+            logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+    else:
         if solar_ueberschuss_aktiv:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"]) - nacht_reduction
-            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
-        else:
-            ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"]) - nacht_reduction
-            einschaltpunkt = int(config["Heizungssteuerung"]["EINSCHALTPUNKT"]) - nacht_reduction
+            solar_ueberschuss_aktiv = False
+            logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
-        if einschaltpunkt >= ausschaltpunkt:
-            logging.error(f"Logikfehler: Einschaltpunkt ({einschaltpunkt}) >= Ausschaltpunkt ({ausschaltpunkt})")
-            ausschaltpunkt = einschaltpunkt + int(config["Heizungssteuerung"]["TEMP_OFFSET"])
+    if solar_ueberschuss_aktiv:
+        ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 52)) - nacht_reduction
+        einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - nacht_reduction
+    else:
+        ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - nacht_reduction
+        einschaltpunkt = ausschaltpunkt - int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
 
-        logging.debug(f"Sollwerte berechnet: Solarüberschuss_aktiv={solar_ueberschuss_aktiv}, "
-                      f"Nachtreduktion={nacht_reduction}, Ausschaltpunkt={ausschaltpunkt}, "
-                      f"Einschaltpunkt={einschaltpunkt}")
-        return ausschaltpunkt, einschaltpunkt
-    except (KeyError, ValueError) as e:
-        logging.error(f"Fehler beim Berechnen der Sollwerte: {e}, Solax-Daten={solax_data}")
-        return 45, 42  # Fallback-Werte
+    logging.debug(f"Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}")
+    return ausschaltpunkt, einschaltpunkt
 
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
@@ -816,9 +763,6 @@ def is_data_old(timestamp):
     is_old = timestamp and (datetime.now() - timestamp) > timedelta(minutes=15)
     logging.debug(f"Prüfe Solax-Datenalter: Zeitstempel={timestamp}, Ist alt={is_old}")
     return is_old
-
-
-# Asynchrone Task für Telegram-Updates
 
 
 # Asynchrone Task für Display-Updates
@@ -935,7 +879,7 @@ async def get_runtime_bar_chart(session, days=7):
                         continue
 
         if not runtime_per_day:
-            await send_telegram_message(session, CHAT_ID, f"Keine Laufzeitdaten für die letzten {days} Tage verfügbar.", BOT_TOKEN)
+            await send_telegram_message(session, CHAT_ID, f"Keine Laufzeitdaten für die letzten {days} Tage verfügbar.", state.bot_token)
             return
 
         dates = [start_date.date() + timedelta(days=i) for i in range(days)]
@@ -954,7 +898,7 @@ async def get_runtime_bar_chart(session, days=7):
         buf.seek(0)
         plt.close()
 
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
         form.add_field("caption", f"⏱️ Laufzeiten der letzten {days} Tage")
@@ -966,7 +910,7 @@ async def get_runtime_bar_chart(session, days=7):
         buf.close()
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {e}")
-        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", BOT_TOKEN)
+        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token)
 
 async def initialize_gpio():
     """
@@ -995,14 +939,15 @@ async def initialize_gpio():
 
 
 
-async def get_boiler_temperature_history(session, hours):
+async def get_boiler_temperature_history(session, hours, state):
+    logging.debug(f"get_boiler_temperature_history aufgerufen mit hours={hours}, state.bot_token={state.bot_token}")
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
     global UNTERER_FUEHLER_MIN, UNTERER_FUEHLER_MAX
     try:
         # Listen für Daten
         temp_oben = []
         temp_hinten = []
-        temp_mittig = []  # Neue Liste für mittigen Sensor
+        temp_mittig = []
         einschaltpunkte = []
         ausschaltpunkte = []
         kompressor_status = []
@@ -1015,10 +960,8 @@ async def get_boiler_temperature_history(session, hours):
 
             for line in lines:
                 parts = line.strip().split(',')
-                # Akzeptiere Zeilen mit mindestens 13 Spalten (älteres Format) und fülle fehlende auf
                 if len(parts) >= 13:  # Mindestens bis ConsumeEnergy
-                    # Fülle fehlende Spalten mit Standardwerten auf
-                    while len(parts) < 19:  # Jetzt 19 Spalten wegen T_Mittig und PowerSource
+                    while len(parts) < 19:
                         parts.append("N/A")
 
                     timestamp_str = parts[0].strip()
@@ -1026,14 +969,12 @@ async def get_boiler_temperature_history(session, hours):
 
                     try:
                         timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        t_oben, t_hinten, t_mittig = parts[1], parts[2], parts[3]  # T_Mittig ist jetzt Spalte 3
+                        t_oben, t_hinten, t_mittig = parts[1], parts[2], parts[3]
                         kompressor = parts[6]
                         einschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "42"
                         ausschaltpunkt = parts[15] if parts[15].strip() and parts[15] not in ("N/A", "Fehler") else "45"
-                        solar_ueberschuss = parts[16] if parts[16].strip() and parts[16] not in (
-                        "N/A", "Fehler") else "0"
-                        power_source = parts[18] if parts[18].strip() and parts[18] not in (
-                        "N/A", "Fehler") else "Unbekannt"
+                        solar_ueberschuss = parts[16] if parts[16].strip() and parts[16] not in ("N/A", "Fehler") else "0"
+                        power_source = parts[18] if parts[18].strip() and parts[18] not in ("N/A", "Fehler") else "Unbekannt"
 
                         if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or \
                            not (t_hinten.strip() and t_hinten not in ("N/A", "Fehler")) or \
@@ -1043,7 +984,7 @@ async def get_boiler_temperature_history(session, hours):
 
                         temp_oben.append((timestamp, float(t_oben)))
                         temp_hinten.append((timestamp, float(t_hinten)))
-                        temp_mittig.append((timestamp, float(t_mittig)))  # Mittige Temperatur hinzufügen
+                        temp_mittig.append((timestamp, float(t_mittig)))
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
                         kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0, power_source))
@@ -1051,8 +992,7 @@ async def get_boiler_temperature_history(session, hours):
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
                             solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
                     except ValueError as e:
-                        logging.error(
-                            f"Fehler beim Parsen der Zeile: {line.strip()}, Zeitstempel: '{timestamp_str}', Fehler: {e}")
+                        logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Zeitstempel: '{timestamp_str}', Fehler: {e}")
                         continue
                 else:
                     logging.warning(f"Zeile mit unzureichenden Spalten übersprungen: {line.strip()}")
@@ -1067,7 +1007,7 @@ async def get_boiler_temperature_history(session, hours):
         # Filtere Daten
         filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
         filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
-        filtered_mittig = [(ts, val) for ts, val in temp_mittig if ts >= time_ago]  # Filter für mittigen Sensor
+        filtered_mittig = [(ts, val) for ts, val in temp_mittig if ts >= time_ago]
         filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
         filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
         filtered_kompressor = [(ts, val, ps) for ts, val, ps in kompressor_status if ts >= time_ago]
@@ -1092,7 +1032,7 @@ async def get_boiler_temperature_history(session, hours):
 
         sampled_oben = sample_data(filtered_oben, target_interval, target_points)
         sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
-        sampled_mittig = sample_data(filtered_mittig, target_interval, target_points)  # Sampling für mittigen Sensor
+        sampled_mittig = sample_data(filtered_mittig, target_interval, target_points)
         sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
         sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
         sampled_kompressor = sample_data(filtered_kompressor, target_interval, target_points)
@@ -1144,7 +1084,7 @@ async def get_boiler_temperature_history(session, hours):
             plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
         if sampled_mittig:
             timestamps_mittig, t_mittig_vals = zip(*sampled_mittig)
-            plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="^", color="purple")  # Neuer Plot
+            plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="^", color="purple")
         if sampled_einschalt:
             timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
             plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--',
@@ -1177,7 +1117,7 @@ async def get_boiler_temperature_history(session, hours):
         buf.seek(0)
         plt.close()
 
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
         form.add_field("caption",
@@ -1192,7 +1132,7 @@ async def get_boiler_temperature_history(session, hours):
 
     except Exception as e:
         logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
-        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}")
+        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}", state.bot_token)
 
 # Asynchrone Hauptschleife
 async def main_loop(session, config, state):
@@ -1204,14 +1144,20 @@ async def main_loop(session, config, state):
     await initialize_lcd(session)
     now = datetime.now()
     await send_telegram_message(session, CHAT_ID, f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
-                                BOT_TOKEN)
-    await send_welcome_message(session, CHAT_ID, BOT_TOKEN)
+                                state.bot_token)
+    await send_welcome_message(session, CHAT_ID, state.bot_token)
 
-    telegram_task_handle = asyncio.create_task(
-        telegram_task(session, BOT_TOKEN, CHAT_ID, read_temperature, SENSOR_IDS, state.kompressor_ein,
-    str(state.current_runtime).split('.')[0], str(state.total_runtime_today).split('.')[0], config,
-    get_solax_data, state, get_boiler_temperature_history, get_runtime_bar_chart, is_nighttime)
-    )
+    try:
+        telegram_task_handle = asyncio.create_task(
+            telegram_task(session, BOT_TOKEN, CHAT_ID, read_temperature, SENSOR_IDS, state.kompressor_ein,
+                          str(state.current_runtime).split('.')[0], str(state.total_runtime_today).split('.')[0],
+                          config,
+                          get_solax_data, state, get_boiler_temperature_history, get_runtime_bar_chart, is_nighttime)
+        )
+    except TypeError as e:
+        logging.error(f"TypeError beim Starten von telegram_task: {e}", exc_info=True)
+        raise
+
     display_task_handle = asyncio.create_task(display_task())
 
     last_cycle_time = datetime.now()
@@ -1229,10 +1175,9 @@ async def main_loop(session, config, state):
                     state.total_runtime_today = timedelta()
                     state.last_day = now.date()
 
-                config = validate_config(load_config())
                 current_hash = calculate_file_hash("config.ini")
                 if state.last_config_hash != current_hash:
-                    await reload_config(session)
+                    await reload_config(session, state, config)
                     state.last_config_hash = current_hash
 
                 solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
@@ -1304,11 +1249,20 @@ async def main_loop(session, config, state):
                     state.ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {config['Heizungssteuerung']['VERDAMPFERTEMPERATUR']}°C)"
                 elif t_boiler_oben is not None and t_boiler_hinten is not None:
                     if state.solar_ueberschuss_aktiv:
-                        if t_boiler_hinten < int(config["Heizungssteuerung"]["UNTERER_FUEHLER_MIN"]) and t_boiler_oben < state.aktueller_ausschaltpunkt:
+                        logging.debug(
+                            f"Solarüberschuss aktiv, prüfe Einschaltbedingungen: T_Hinten={t_boiler_hinten}, T_Oben={t_boiler_oben}, "
+                            f"UNTERER_FUEHLER_MIN={int(config['Heizungssteuerung']['UNTERER_FUEHLER_MIN'])}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}")
+                        if t_boiler_hinten < int(config["Heizungssteuerung"][
+                                                     "UNTERER_FUEHLER_MIN"]) and t_boiler_oben < state.aktueller_ausschaltpunkt:
                             if not state.kompressor_ein:
-                                await asyncio.to_thread(set_kompressor_status, True)
-                                state.kompressor_ein = True
-                                start_time = datetime.now()  # Globale Variable aktualisieren
+                                logging.info("Versuche, Kompressor einzuschalten.")
+                                result = await asyncio.to_thread(set_kompressor_status, True)
+                                if result is False:
+                                    logging.warning(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
+                                else:
+                                    state.kompressor_ein = True
+                                    start_time = datetime.now()
+                                    logging.info("Kompressor erfolgreich eingeschaltet.")
                         elif t_boiler_oben >= state.aktueller_ausschaltpunkt or t_boiler_hinten >= int(
                                 config["Heizungssteuerung"]["UNTERER_FUEHLER_MAX"]):
                             if state.kompressor_ein:
