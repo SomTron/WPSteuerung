@@ -223,9 +223,9 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                         else:
                             await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
                     elif message_text == "📈 verlauf 6h" or message_text == "verlauf 6h":
-                        await get_boiler_temperature_history_func(session, 6)
+                        await get_boiler_temperature_history_func(session, 6, state)
                     elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
-                        await get_boiler_temperature_history_func(session, 24)
+                        await get_boiler_temperature_history_func(session, 24, state)
                     elif message_text.startswith("⏱️ laufzeiten") or message_text.startswith("laufzeiten"):
                         parts = message_text.split()
                         days = 7
@@ -251,8 +251,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
 async def telegram_task(session, bot_token, chat_id, read_temperature_func, sensor_ids, kompressor_status,
                         aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, state,
                         get_boiler_temperature_history_func, get_runtime_bar_chart_func,
-                        is_nighttime_func):  # Neuer Parameter
-    """Separate Task für schnelle Telegram-Update-Verarbeitung."""
+                        is_nighttime_func):
     last_update_id = None
     max_retries = 3
     while True:
@@ -269,7 +268,7 @@ async def telegram_task(session, bot_token, chat_id, read_temperature_func, sens
                         session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id,
                         kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config,
                         get_solax_data_func, state, get_boiler_temperature_history_func, get_runtime_bar_chart_func,
-                        is_nighttime_func)  # Funktion weitergeben
+                        is_nighttime_func)
                     break
                 else:
                     logging.warning(f"Telegram-Updates waren None, Versuch {attempt + 1}/{max_retries}")
