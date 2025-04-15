@@ -17,28 +17,27 @@ async def send_telegram_message(session, chat_id, message, bot_token):
 
 
 async def send_welcome_message(session, chat_id, bot_token):
-    """Sendet eine Willkommensnachricht mit Tastatur."""
-    keyboard = [
-        ["🌡️ Temperaturen", "📊 Status"],
-        ["🌴 Urlaub", "🏠 Urlaub aus"],
-        ["📈 Verlauf 6h", "📉 Verlauf 24h"],
-        ["⏱️ Laufzeiten", "🆘 Hilfe"]
-    ]
+    """Sendet die Willkommensnachricht mit benutzerdefiniertem Keyboard."""
+    message = "Willkommen! Verwende die Schaltflächen unten, um das System zu steuern."
+    keyboard = {
+        "keyboard": [
+            ["🌡️ Temperaturen", "📊 Status"],
+            ["📈 Verlauf 6h", "📉 Verlauf 24h"],
+            ["🌴 Urlaub", "🏠 Urlaub aus"],
+            ["🆘 Hilfe", "⏱️ Laufzeiten"]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": False
+    }
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "🤖 Willkommen beim Heizungssteuerungs-Bot!\n\nVerwende die Tastatur, um Befehle auszuwählen.",
-        "reply_markup": {
-            "keyboard": keyboard,
-            "resize_keyboard": True,
-            "one_time_keyboard": False
-        }
+        "text": message,
+        "reply_markup": keyboard
     }
     async with session.post(url, json=payload) as response:
-        if response.status == 200:
-            logging.info("Willkommensnachricht gesendet")
-        else:
-            logging.error(f"Fehler beim Senden der Willkommensnachricht: {response.status}")
+        response.raise_for_status()
+        logging.info("Willkommensnachricht mit Keyboard gesendet.")
 
 
 async def get_telegram_updates(session, bot_token, offset=None):
@@ -180,51 +179,51 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                 message_text = update.get('message', {}).get('text')
                 chat_id_from_update = update.get('message', {}).get('chat', {}).get('id')
                 if message_text and chat_id_from_update:
-                    message_text = message_text.strip().lower()
-                    logging.debug(f"Telegram-Nachricht empfangen: Text={message_text}, Chat-ID={chat_id_from_update}")
-
-                    if message_text == "🌡️ temperaturen" or message_text == "temperaturen":
+                    message_text = message_text.strip()
+                    logging.debug(f"Empfangener Telegram-Befehl: '{message_text}'")  # Log des rohen Befehls
+                    message_text_lower = message_text.lower()
+                    if message_text_lower == "🌡️ temperaturen" or message_text_lower == "temperaturen":
                         if all(x is not None for x in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd]):
                             await send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig,
-                                                            t_verd, chat_id, bot_token)
+                                                           t_verd, chat_id, bot_token)
                         else:
                             await send_telegram_message(session, chat_id, "Fehler beim Abrufen der Temperaturen.",
-                                                        bot_token)
-                    elif message_text == "📊 status" or message_text == "status":
+                                                       bot_token)
+                    elif message_text_lower == "📊 status" or message_text_lower == "status":
                         if all(x is not None for x in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd]):
                             await send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd,
-                                                       kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
-                                                       state.aktueller_einschaltpunkt, state.aktueller_ausschaltpunkt,
-                                                       chat_id, bot_token,
-                                                       config, get_solax_data_func, state.urlaubsmodus_aktiv,
-                                                       state.solar_ueberschuss_aktiv,
-                                                       state.last_runtime, is_nighttime_func,
-                                                       state.ausschluss_grund)  # Funktion übergeben
+                                                      kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
+                                                      state.aktueller_einschaltpunkt, state.aktueller_ausschaltpunkt,
+                                                      chat_id, bot_token,
+                                                      config, get_solax_data_func, state.urlaubsmodus_aktiv,
+                                                      state.solar_ueberschuss_aktiv,
+                                                      state.last_runtime, is_nighttime_func,
+                                                      state.ausschluss_grund)
                         else:
                             await send_telegram_message(session, chat_id, "Fehler beim Abrufen des Status.", bot_token)
-                    elif message_text == "🆘 hilfe" or message_text == "hilfe":
+                    elif message_text_lower == "🆘 hilfe" or message_text_lower == "hilfe":
                         await send_help_message(session, chat_id, bot_token)
-                    elif message_text == "🌴 urlaub" or message_text == "urlaub":
+                    elif message_text_lower == "🌴 urlaub" or message_text_lower == "urlaub":
                         if state.urlaubsmodus_aktiv:
                             await send_telegram_message(session, chat_id, "🌴 Urlaubsmodus ist bereits aktiviert.",
-                                                        bot_token)
+                                                       bot_token)
                         else:
                             await aktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
-                    elif message_text == "🏠 urlaub aus" or message_text == "urlaub aus":
+                    elif message_text_lower == "🏠 urlaub aus" or message_text_lower == "urlaub aus":
                         if not state.urlaubsmodus_aktiv:
                             await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus ist bereits deaktiviert.",
-                                                        bot_token)
+                                                       bot_token)
                         else:
                             await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
-                    elif message_text == "📈 verlauf 6h" or message_text == "verlauf 6h":
+                    elif message_text_lower == "📈 verlauf 6h" or message_text_lower == "verlauf 6h":
                         await get_boiler_temperature_history_func(session, 6, state)
-                    elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
+                    elif message_text_lower == "📉 verlauf 24h" or message_text_lower == "verlauf 24h":
                         await get_boiler_temperature_history_func(session, 24, state)
-                    elif message_text.lower().startswith(("laufzeiten", "📊 laufzeiten")):
-                        days = 7  # Standardwert
+                    elif "laufzeiten" in message_text_lower:  # Flexiblere Bedingung
+                        days = 7
                         try:
-                            if len(message_text.split()) > 1:
-                                days = int(message_text.split()[1])
+                            if len(message_text_lower.split()) > 1:
+                                days = int(message_text_lower.split()[1])
                                 if days <= 0:
                                     days = 7
                                     logging.warning(f"Ungültige Zahl '{message_text}', verwende Standardwert 7.")
@@ -238,7 +237,6 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
     except Exception as e:
         logging.error(f"Fehler in process_telegram_messages_async: {e}", exc_info=True)
         return last_update_id
-
 
 async def telegram_task(session, bot_token, chat_id, read_temperature_func, sensor_ids, kompressor_status,
                         aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, state,

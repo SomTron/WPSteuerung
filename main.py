@@ -872,12 +872,18 @@ async def get_runtime_bar_chart(session, days=7, state=None):
 
             for line in lines:
                 parts = line.strip().split(',')
-                if len(parts) >= 7:  # Mindestens bis Kompressorstatus
+                if len(parts) >= 18:  # Mindestens bis nacht_reduction
                     timestamp_str = parts[0].strip()
                     try:
                         timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                         date = timestamp.date()
-                        runtime_str = parts[5].strip() if parts[5].strip() else "0:00:00"
+                        kompressor_status = parts[6].strip()
+                        # Laufzeit nur berechnen, wenn Kompressor EIN war
+                        runtime_str = "0:00:00"  # Standard, wenn AUS
+                        if kompressor_status == "EIN":
+                            # Hier könnten wir die tatsächliche Laufzeit berechnen, z. B. Zeitdifferenz
+                            # Für jetzt: Annahme 1 Minute pro EIN-Eintrag (anpassen nach Bedarf)
+                            runtime_str = "0:01:00"
                         if date >= start_date and date <= today:
                             if date not in dates:
                                 dates.append(date)
@@ -885,7 +891,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
                             runtime_index = dates.index(date)
                             h, m, s = map(int, runtime_str.split(':'))
                             runtime_data[runtime_index] += timedelta(hours=h, minutes=m, seconds=s)
-                    except ValueError as e:
+                    except (ValueError, IndexError) as e:
                         logging.warning(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
                         continue
 
@@ -925,7 +931,6 @@ async def get_runtime_bar_chart(session, days=7, state=None):
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {str(e)}")
         await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token)
-
 
 async def initialize_gpio():
     """
@@ -1196,21 +1201,34 @@ async def main_loop(session, config, state):
                     await reload_config(session, state, config)
                     state.last_config_hash = current_hash
 
-                solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                                                              "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                                                              "api_fehler": True}
-                logging.debug(f"Solax-Daten: {solax_data}")
-                acpower = solax_data.get("acpower", "N/A")
-                feedinpower = solax_data.get("feedinpower", "N/A")
-                batPower = solax_data.get("batPower", "N/A")
-                soc = solax_data.get("soc", "N/A")
-                powerdc1 = solax_data.get("powerdc1", "N/A")
-                powerdc2 = solax_data.get("powerdc2", "N/A")
-                consumeenergy = solax_data.get("consumeenergy", "N/A")
+                try:
+                    solax_data = await get_solax_data(session) or {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                                                                  "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                                                                  "api_fehler": True}
+                    logging.debug(f"Solax-Daten: {solax_data}")
+                    acpower = solax_data.get("acpower", "N/A")
+                    feedinpower = solax_data.get("feedinpower", "N/A")
+                    batPower = solax_data.get("batPower", "N/A")
+                    soc = solax_data.get("soc", "N/A")
+                    powerdc1 = solax_data.get("powerdc1", "N/A")
+                    powerdc2 = solax_data.get("powerdc2", "N/A")
+                    consumeenergy = solax_data.get("consumeenergy", "N/A")
+                except Exception as e:
+                    logging.error(f"Fehler beim Abrufen von Solax-Daten: {e}", exc_info=True)
+                    solax_data = {"acpower": 0, "feedinpower": 0, "consumeenergy": 0,
+                                  "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
+                                  "api_fehler": True}
+                    acpower = feedinpower = batPower = soc = powerdc1 = powerdc2 = consumeenergy = "N/A"
 
-                is_night = await asyncio.to_thread(is_nighttime, config)
-                nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data, state)
+                try:
+                    is_night = await asyncio.to_thread(is_nighttime, config)
+                    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+                    state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data, state)
+                except Exception as e:
+                    logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
+                    nacht_reduction = 0
+                    state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 50))
+                    state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46))
 
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
                 t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
@@ -1263,10 +1281,9 @@ async def main_loop(session, config, state):
                             f"Solarüberschuss aktiv, prüfe Einschaltbedingungen: "
                             f"T_Oben={t_boiler_oben}, T_Hinten={t_boiler_hinten}, T_Mittig={t_boiler_mittig}, "
                             f"Einschaltpunkt={state.aktueller_einschaltpunkt}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}")
-                        # Prüfe, ob irgendein Fühler unter Einschaltpunkt ist
                         if (t_boiler_oben is not None and t_boiler_oben < state.aktueller_einschaltpunkt) or \
-                           (t_boiler_hinten is not None and t_boiler_hinten < state.aktueller_einschaltpunkt) or \
-                           (t_boiler_mittig is not None and t_boiler_mittig < state.aktueller_einschaltpunkt):
+                                (t_boiler_hinten is not None and t_boiler_hinten < state.aktueller_einschaltpunkt) or \
+                                (t_boiler_mittig is not None and t_boiler_mittig < state.aktueller_einschaltpunkt):
                             if not state.kompressor_ein:
                                 logging.info(
                                     f"Versuche, Kompressor einzuschalten (ein Fühler < {state.aktueller_einschaltpunkt} °C).")
@@ -1277,10 +1294,9 @@ async def main_loop(session, config, state):
                                     state.kompressor_ein = True
                                     start_time = datetime.now()
                                     logging.info("Kompressor erfolgreich eingeschaltet.")
-                        # Prüfe, ob irgendein Fühler ≥ Ausschaltpunkt ist
                         elif (t_boiler_oben is not None and t_boiler_oben >= state.aktueller_ausschaltpunkt) or \
-                             (t_boiler_hinten is not None and t_boiler_hinten >= state.aktueller_ausschaltpunkt) or \
-                             (t_boiler_mittig is not None and t_boiler_mittig >= state.aktueller_ausschaltpunkt):
+                                (t_boiler_hinten is not None and t_boiler_hinten >= state.aktueller_ausschaltpunkt) or \
+                                (t_boiler_mittig is not None and t_boiler_mittig >= state.aktueller_ausschaltpunkt):
                             if state.kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
                                 state.kompressor_ein = False
@@ -1289,15 +1305,24 @@ async def main_loop(session, config, state):
                                 logging.info(
                                     f"Kompressor ausgeschaltet (ein Fühler ≥ {state.aktueller_ausschaltpunkt} °C).")
                     else:
+                        logging.debug(
+                            f"Normalmodus, prüfe Einschaltbedingungen: T_Oben={t_boiler_oben}, Einschaltpunkt={state.aktueller_einschaltpunkt}")
                         if t_boiler_oben < state.aktueller_einschaltpunkt and not state.kompressor_ein:
-                            await asyncio.to_thread(set_kompressor_status, True)
-                            state.kompressor_ein = True
-                            start_time = datetime.now()
+                            logging.info(
+                                f"Versuche, Kompressor einzuschalten (T_Oben < {state.aktueller_einschaltpunkt} °C).")
+                            result = await asyncio.to_thread(set_kompressor_status, True)
+                            if result is False:
+                                logging.warning(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
+                            else:
+                                state.kompressor_ein = True
+                                start_time = datetime.now()
+                                logging.info("Kompressor erfolgreich eingeschaltet.")
                         elif t_boiler_oben >= state.aktueller_ausschaltpunkt and state.kompressor_ein:
                             await asyncio.to_thread(set_kompressor_status, False)
                             state.kompressor_ein = False
                             last_runtime = datetime.now() - start_time
                             state.total_runtime_today += last_runtime
+                            logging.info(f"Kompressor ausgeschaltet (T_Oben ≥ {state.aktueller_ausschaltpunkt} °C).")
 
                 if state.kompressor_ein and start_time:
                     state.current_runtime = datetime.now() - start_time
