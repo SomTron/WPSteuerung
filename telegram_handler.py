@@ -57,22 +57,16 @@ async def get_telegram_updates(session, bot_token, offset=None):
 
 
 async def aktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
-    """Aktiviert den Urlaubsmodus und passt die Sollwerte an."""
+    """Aktiviert den Urlaubsmodus."""
     state.urlaubsmodus_aktiv = True
     urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-    state.aktueller_ausschaltpunkt -= urlaubsabsenkung
-    state.aktueller_einschaltpunkt -= urlaubsabsenkung
     await send_telegram_message(session, chat_id, f"🌴 Urlaubsmodus aktiviert (-{urlaubsabsenkung}°C).", bot_token)
     logging.info("Urlaubsmodus aktiviert")
 
 
 async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
-    """Deaktiviert den Urlaubsmodus und stellt die ursprünglichen Sollwerte wieder her."""
+    """Deaktiviert den Urlaubsmodus."""
     state.urlaubsmodus_aktiv = False
-    ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
-    temp_offset = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
-    state.aktueller_ausschaltpunkt = ausschaltpunkt
-    state.aktueller_einschaltpunkt = ausschaltpunkt - temp_offset
     await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus deaktiviert.", bot_token)
     logging.info("Urlaubsmodus deaktiviert")
 
@@ -226,19 +220,17 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                         await get_boiler_temperature_history_func(session, 6, state)
                     elif message_text == "📉 verlauf 24h" or message_text == "verlauf 24h":
                         await get_boiler_temperature_history_func(session, 24, state)
-                    elif message_text.startswith("⏱️ laufzeiten") or message_text.startswith("laufzeiten"):
-                        parts = message_text.split()
-                        days = 7
-                        if len(parts) > 1:
-                            try:
-                                days = int(parts[1])
-                                if days < 1 or days > 900:
+                    elif message_text.lower().startswith(("laufzeiten", "📊 laufzeiten")):
+                        days = 7  # Standardwert
+                        try:
+                            if len(message_text.split()) > 1:
+                                days = int(message_text.split()[1])
+                                if days <= 0:
                                     days = 7
-                                    logging.warning(f"Ungültige Tagesanzahl '{parts[1]}', verwende Standardwert 7.")
-                            except ValueError:
-                                days = 7
-                                logging.warning(f"Ungültige Zahl '{parts[1]}', verwende Standardwert 7.")
-                        await get_runtime_bar_chart_func(session, days=days)
+                                    logging.warning(f"Ungültige Zahl '{message_text}', verwende Standardwert 7.")
+                        except ValueError:
+                            logging.warning(f"Ungültige Zahl '{message_text}', verwende Standardwert 7.")
+                        await get_runtime_bar_chart_func(session, days=days, state=state)
                     else:
                         await send_unknown_command_message(session, chat_id, bot_token)
                     return update['update_id'] + 1
