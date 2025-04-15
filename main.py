@@ -1209,6 +1209,7 @@ async def main_loop(session, config, state):
                 consumeenergy = solax_data.get("consumeenergy", "N/A")
 
                 is_night = await asyncio.to_thread(is_nighttime, config)
+                nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
                 state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(config, is_night, solax_data, state)
 
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
