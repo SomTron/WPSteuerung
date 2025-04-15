@@ -25,8 +25,8 @@ from telegram_handler import (send_telegram_message, send_welcome_message, teleg
 BASE_DIR = "/sys/bus/w1/devices/"
 SENSOR_IDS = {
     "oben": "28-0bd6d4461d84",
-    "hinten": "28-445bd44686f4",
     "mittig": "28-6977d446424a",
+    "unten": "28-445bd44686f4",
     "verd": "28-213bd4460d65"
 }
 
@@ -388,7 +388,7 @@ async def run_program():
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
-                    "Zeitstempel,T_Oben,T_Hinten,T_Mittig,T_Boiler,T_Verd,Kompressor,"  # T_Mittig hinzugefügt
+                    "Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor," 
                     "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
                     "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
                 )
@@ -453,7 +453,7 @@ def check_pressure():
     return pressure_ok
 
 
-def check_boiler_sensors(t_oben, t_hinten, config):
+def check_boiler_sensors(t_oben, t_unten, config):
     """Prüft die Boiler-Sensoren auf Fehler."""
     try:
         ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
@@ -462,17 +462,17 @@ def check_boiler_sensors(t_oben, t_hinten, config):
         logging.warning(f"Ausschaltpunkt nicht gefunden, verwende Standard: {ausschaltpunkt}")
     fehler = None
     is_overtemp = False
-    if t_oben is None or t_hinten is None:
+    if t_oben is None or t_unten is None:
         fehler = "Fühlerfehler!"
-        logging.error(f"Fühlerfehler erkannt: oben={t_oben}, hinten={t_hinten}")
-    elif t_oben >= (ausschaltpunkt + 10) or t_hinten >= (ausschaltpunkt + 10):
+        logging.error(f"Fühlerfehler erkannt: oben={t_oben}, unten={t_unten}")
+    elif t_oben >= (ausschaltpunkt + 10) or t_unten >= (ausschaltpunkt + 10):
         fehler = "Übertemperatur!"
         is_overtemp = True
-        logging.error(f"Übertemperatur erkannt: oben={t_oben}, hinten={t_hinten}, Grenze={ausschaltpunkt + 10}")
-    elif abs(t_oben - t_hinten) > 50:
+        logging.error(f"Übertemperatur erkannt: oben={t_oben}, unten={t_unten}, Grenze={ausschaltpunkt + 10}")
+    elif abs(t_oben - t_unten) > 50:
         fehler = "Fühlerdifferenz!"
         logging.warning(
-            f"Fühlerdifferenz erkannt: oben={t_oben}, hinten={t_hinten}, Differenz={abs(t_oben - t_hinten)}")
+            f"Fühlerdifferenz erkannt: oben={t_oben}, unten={t_unten}, Differenz={abs(t_oben - t_unten)}")
     return fehler, is_overtemp
 
 
@@ -787,10 +787,10 @@ async def display_task():
             try:
                 # Seite 1: Temperaturen
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
-                t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
+                t_boiler_unten = await asyncio.to_thread(read_temperature, SENSOR_IDS["unten"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
-                                   t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
+                                   t_boiler_oben + t_boiler_unten) / 2 if t_boiler_oben is not None and t_boiler_unten is not None else "Fehler"
                 pressure_ok = await asyncio.to_thread(check_pressure)
 
                 lcd.clear()
@@ -800,19 +800,19 @@ async def display_task():
                 else:
                     # Prüfe Typ und formatiere entsprechend
                     oben_str = f"{t_boiler_oben:.2f}" if isinstance(t_boiler_oben, (int, float)) else "Fehler"
-                    hinten_str = f"{t_boiler_hinten:.2f}" if isinstance(t_boiler_hinten, (int, float)) else "Fehler"
+                    unten_str = f"{t_boiler_unten:.2f}" if isinstance(t_boiler_unten, (int, float)) else "Fehler"
                     boiler_str = f"{t_boiler:.2f}" if isinstance(t_boiler, (int, float)) else "Fehler"
                     verd_str = f"{t_verd:.2f}" if isinstance(t_verd, (int, float)) else "Fehler"
 
                     lcd.write_string(f"T-Oben: {oben_str} C")
                     lcd.cursor_pos = (1, 0)
-                    lcd.write_string(f"T-Hinten: {hinten_str} C")
+                    lcd.write_string(f"T-Unten: {unten_str} C")
                     lcd.cursor_pos = (2, 0)
                     lcd.write_string(f"T-Boiler: {boiler_str} C")
                     lcd.cursor_pos = (3, 0)
                     lcd.write_string(f"T-Verd: {verd_str} C")
                     logging.debug(
-                        f"Display-Seite 1 aktualisiert: oben={oben_str}, hinten={hinten_str}, boiler={boiler_str}, verd={verd_str}")
+                        f"Display-Seite 1 aktualisiert: oben={oben_str}, unten={unten_str}, boiler={boiler_str}, verd={verd_str}")
                 await asyncio.sleep(5)
 
                 # Seite 2: Kompressorstatus
@@ -972,7 +972,7 @@ async def get_boiler_temperature_history(session, hours, state):
     try:
         # Listen für Daten
         temp_oben = []
-        temp_hinten = []
+        temp_unten = []
         temp_mittig = []
         einschaltpunkte = []
         ausschaltpunkte = []
@@ -995,7 +995,7 @@ async def get_boiler_temperature_history(session, hours, state):
 
                     try:
                         timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        t_oben, t_hinten, t_mittig = parts[1], parts[2], parts[3]
+                        t_oben, t_unten, t_mittig = parts[1], parts[2], parts[3]
                         kompressor = parts[6]
                         einschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "42"
                         ausschaltpunkt = parts[15] if parts[15].strip() and parts[15] not in ("N/A", "Fehler") else "45"
@@ -1003,13 +1003,13 @@ async def get_boiler_temperature_history(session, hours, state):
                         power_source = parts[18] if parts[18].strip() and parts[18] not in ("N/A", "Fehler") else "Unbekannt"
 
                         if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or \
-                           not (t_hinten.strip() and t_hinten not in ("N/A", "Fehler")) or \
+                           not (t_unten.strip() and t_unten not in ("N/A", "Fehler")) or \
                            not (t_mittig.strip() and t_mittig not in ("N/A", "Fehler")):
                             logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
                             continue
 
                         temp_oben.append((timestamp, float(t_oben)))
-                        temp_hinten.append((timestamp, float(t_hinten)))
+                        temp_unten.append((timestamp, float(t_unten)))
                         temp_mittig.append((timestamp, float(t_mittig)))
                         einschaltpunkte.append((timestamp, float(einschaltpunkt)))
                         ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
@@ -1032,7 +1032,7 @@ async def get_boiler_temperature_history(session, hours, state):
 
         # Filtere Daten
         filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
-        filtered_hinten = [(ts, val) for ts, val in temp_hinten if ts >= time_ago]
+        filtered_unten = [(ts, val) for ts, val in temp_unten if ts >= time_ago]
         filtered_mittig = [(ts, val) for ts, val in temp_mittig if ts >= time_ago]
         filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
         filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
@@ -1057,7 +1057,7 @@ async def get_boiler_temperature_history(session, hours, state):
             return sampled[::-1]
 
         sampled_oben = sample_data(filtered_oben, target_interval, target_points)
-        sampled_hinten = sample_data(filtered_hinten, target_interval, target_points)
+        sampled_unten = sample_data(filtered_unten, target_interval, target_points)
         sampled_mittig = sample_data(filtered_mittig, target_interval, target_points)
         sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
         sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
@@ -1105,9 +1105,9 @@ async def get_boiler_temperature_history(session, hours, state):
         if sampled_oben:
             timestamps_oben, t_oben_vals = zip(*sampled_oben)
             plt.plot(timestamps_oben, t_oben_vals, label="T_Oben", marker="o", color="blue")
-        if sampled_hinten:
-            timestamps_hinten, t_hinten_vals = zip(*sampled_hinten)
-            plt.plot(timestamps_hinten, t_hinten_vals, label="T_Hinten", marker="x", color="red")
+        if sampled_unten:
+            timestamps_unten, t_unten_vals = zip(*sampled_unten)
+            plt.plot(timestamps_unten, t_unten_vals, label="T_Unten", marker="x", color="red")
         if sampled_mittig:
             timestamps_mittig, t_mittig_vals = zip(*sampled_mittig)
             plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="^", color="purple")
@@ -1149,7 +1149,7 @@ async def get_boiler_temperature_history(session, hours, state):
         form = FormData()
         form.add_field("chat_id", CHAT_ID)
         form.add_field("caption",
-                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Hinten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
+                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Unten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz)")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
@@ -1245,11 +1245,11 @@ async def main_loop(session, config, state):
                     state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
 
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
-                t_boiler_hinten = await asyncio.to_thread(read_temperature, SENSOR_IDS["hinten"])
+                t_boiler_unten = await asyncio.to_thread(read_temperature, SENSOR_IDS["unten"])
                 t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])
                 t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
                 t_boiler = (
-                    t_boiler_oben + t_boiler_hinten) / 2 if t_boiler_oben is not None and t_boiler_hinten is not None else "Fehler"
+                    t_boiler_oben + t_boiler_unten) / 2 if t_boiler_oben is not None and t_boiler_unten is not None else "Fehler"
                 pressure_ok = await asyncio.to_thread(check_pressure)
 
                 if not pressure_ok:
@@ -1269,7 +1269,7 @@ async def main_loop(session, config, state):
                     state.pressure_error_sent = False
                     state.last_pressure_error_time = None
 
-                fehler, is_overtemp = check_boiler_sensors(t_boiler_oben, t_boiler_hinten, config)
+                fehler, is_overtemp = check_boiler_sensors(t_boiler_oben, t_boiler_unten, config)
                 if fehler:
                     if state.kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, False, force_off=True)
@@ -1301,15 +1301,15 @@ async def main_loop(session, config, state):
                     await asyncio.sleep(2)
                     continue
 
-                if t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None:
+                if t_boiler_oben is not None and t_boiler_unten is not None and t_boiler_mittig is not None:
                     if state.solar_ueberschuss_aktiv:
                         logging.debug(
                             f"Solarüberschuss aktiv, prüfe Einschaltbedingungen: "
-                            f"T_Oben={t_boiler_oben:.1f}, T_Hinten={t_boiler_hinten:.1f}, T_Mittig={t_boiler_mittig:.1f}, "
+                            f"T_Oben={t_boiler_oben:.1f}, T_Unten={t_boiler_unten:.1f}, T_Mittig={t_boiler_mittig:.1f}, "
                             f"Einschaltpunkt={state.aktueller_einschaltpunkt}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}"
                         )
                         if (t_boiler_oben < state.aktueller_einschaltpunkt or
-                            t_boiler_hinten < state.aktueller_einschaltpunkt or
+                            t_boiler_unten < state.aktueller_einschaltpunkt or
                             t_boiler_mittig < state.aktueller_einschaltpunkt):
                             if not state.kompressor_ein:
                                 min_pause_seconds = int(config["Heizungssteuerung"].get("MIN_PAUSE", 5)) * 60
@@ -1334,7 +1334,7 @@ async def main_loop(session, config, state):
                                         state.ausschluss_grund = None
                                         logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
                         elif (t_boiler_oben >= state.aktueller_ausschaltpunkt or
-                              t_boiler_hinten >= state.aktueller_ausschaltpunkt or
+                              t_boiler_unten >= state.aktueller_ausschaltpunkt or
                               t_boiler_mittig >= state.aktueller_ausschaltpunkt):
                             if state.kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
@@ -1403,7 +1403,7 @@ async def main_loop(session, config, state):
                             csv_line = (
                                 f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
                                 f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
-                                f"{t_boiler_hinten if t_boiler_hinten is not None else 'N/A'},"
+                                f"{t_boiler_unten if t_boiler_unten is not None else 'N/A'},"
                                 f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"
                                 f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
                                 f"{t_verd if t_verd is not None else 'N/A'},"
@@ -1440,7 +1440,6 @@ async def main_loop(session, config, state):
         raise
     finally:
         await shutdown(session)
-
 
 async def run_program():
     async with aiohttp.ClientSession() as session:

@@ -1,7 +1,6 @@
 import aiohttp
 import asyncio
 import logging
-from telegram import ReplyKeyboardMarkup
 from datetime import datetime, timedelta
 
 
@@ -70,21 +69,24 @@ async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     logging.info("Urlaubsmodus deaktiviert")
 
 
-async def send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, chat_id,
+async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id,
                                     bot_token):
     """Sendet die aktuellen Temperaturen über Telegram."""
+    t_oben_str = f"{t_boiler_oben:.1f}°C" if t_boiler_oben is not None else "N/A"
+    t_unten_str = f"{t_boiler_unten:.1f}°C" if t_boiler_unten is not None else "N/A"
+    t_mittig_str = f"{t_boiler_mittig:.1f}°C" if t_boiler_mittig is not None else "N/A"
+    t_verd_str = f"{t_verd:.1f}°C" if t_verd is not None else "N/A"
     message = (
         f"🌡️ Aktuelle Temperaturen:\n"
-        f"Boiler oben: {t_boiler_oben:.1f}°C\n"
-        f"Boiler hinten: {t_boiler_hinten:.1f}°C\n"
-        f"Boiler mittig: {t_boiler_mittig:.1f}°C\n"
-        f"Verdampfer: {t_verd:.1f}°C"
+        f"Boiler oben: {t_oben_str}\n"
+        f"Boiler mittig: {t_mittig_str}\n"
+        f"Boiler unten: {t_unten_str}\n"
+        f"Verdampfer: {t_verd_str}"
     )
     await send_telegram_message(session, chat_id, message, bot_token)
 
 
-# telegram_handler.py (angepasste send_status_telegram)
-async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, kompressor_status,
+async def send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status,
                               aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt, aktueller_ausschaltpunkt,
                               chat_id, bot_token, config, get_solax_data_func, urlaubsmodus_aktiv, solar_ueberschuss_aktiv,
                               last_runtime, is_nighttime_func, ausschluss_grund):
@@ -107,7 +109,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
 
     # Temperaturen auf Fehler prüfen und formatieren
     t_oben_str = f"{t_boiler_oben:.1f}°C" if t_boiler_oben is not None else "N/A"
-    t_hinten_str = f"{t_boiler_hinten:.1f}°C" if t_boiler_hinten is not None else "N/A"
+    t_unten_str = f"{t_boiler_unten:.1f}°C" if t_boiler_unten is not None else "N/A"
     t_mittig_str = f"{t_boiler_mittig:.1f}°C" if t_boiler_mittig is not None else "N/A"
     t_verd_str = f"{t_verd:.1f}°C" if t_verd is not None else "N/A"
 
@@ -132,8 +134,8 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
         "📊 **Systemstatus**\n\n"
         "🌡️ **Temperaturen**\n"
         f"  • Oben: {t_oben_str}\n"
-        f"  • Hinten: {t_hinten_str}\n"
         f"  • Mittig: {t_mittig_str}\n"
+        f"  • Unten: {t_unten_str}\n"
         f"  • Verdampfer: {t_verd_str}\n\n"
         "🛠️ **Kompressor**\n"
         f"  • Status: {compressor_status_str}\n"
@@ -143,7 +145,7 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
         "🎯 **Sollwerte**\n"
         f"  • Einschaltpunkt: {aktueller_einschaltpunkt}°C\n"
         f"  • Ausschaltpunkt: {aktueller_ausschaltpunkt}°C\n"
-        f"  • Gilt für: {'Oben, Mitte, Hinten' if solar_ueberschuss_aktiv else 'Oben, Mitte'}\n\n"
+        f"  • Gilt für: {'Oben, Mitte, Unten' if solar_ueberschuss_aktiv else 'Oben, Mitte'}\n\n"
         "⚙️ **Betriebsmodus**\n"
         f"  • {mode_str}\n\n"
         "ℹ️ **Zusatzinfo**\n"
@@ -156,13 +158,14 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
 
     await send_telegram_message(session, chat_id, message, bot_token)
 
+
 async def send_unknown_command_message(session, chat_id, bot_token):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
     await send_telegram_message(session, chat_id, "❓ Unbekannter Befehl. Verwende 'Hilfe' für eine Liste der Befehle.",
                                 bot_token)
 
 
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates,
+async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates,
                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
                                          chat_id, bot_token, config, get_solax_data_func, state,
                                          get_boiler_temperature_history_func, get_runtime_bar_chart_func,
@@ -178,15 +181,15 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
                     logging.debug(f"Empfangener Telegram-Befehl: '{message_text}'")  # Log des rohen Befehls
                     message_text_lower = message_text.lower()
                     if message_text_lower == "🌡️ temperaturen" or message_text_lower == "temperaturen":
-                        if all(x is not None for x in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd]):
-                            await send_temperature_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig,
+                        if all(x is not None for x in [t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd]):
+                            await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig,
                                                            t_verd, chat_id, bot_token)
                         else:
                             await send_telegram_message(session, chat_id, "Fehler beim Abrufen der Temperaturen.",
                                                        bot_token)
                     elif message_text_lower == "📊 status" or message_text_lower == "status":
-                        if all(x is not None for x in [t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd]):
-                            await send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd,
+                        if all(x is not None for x in [t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd]):
+                            await send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd,
                                                       kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
                                                       state.aktueller_einschaltpunkt, state.aktueller_ausschaltpunkt,
                                                       chat_id, bot_token,
@@ -233,10 +236,12 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_hinte
         logging.error(f"Fehler in process_telegram_messages_async: {e}", exc_info=True)
         return last_update_id
 
+
 async def telegram_task(session, bot_token, chat_id, read_temperature_func, sensor_ids, kompressor_status,
                         aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, state,
                         get_boiler_temperature_history_func, get_runtime_bar_chart_func,
                         is_nighttime_func):
+    """Verarbeitet eingehende Telegram-Nachrichten und führt entsprechende Aktionen aus."""
     last_update_id = None
     max_retries = 3
     while True:
@@ -245,12 +250,12 @@ async def telegram_task(session, bot_token, chat_id, read_temperature_func, sens
                 updates = await get_telegram_updates(session, bot_token, last_update_id)
                 if updates is not None:
                     t_boiler_oben = await asyncio.to_thread(read_temperature_func, sensor_ids["oben"])
-                    t_boiler_hinten = await asyncio.to_thread(read_temperature_func, sensor_ids["hinten"])
+                    t_boiler_unten = await asyncio.to_thread(read_temperature_func, sensor_ids["unten"])
                     t_boiler_mittig = await asyncio.to_thread(read_temperature_func, sensor_ids["mittig"])
                     t_verd = await asyncio.to_thread(read_temperature_func, sensor_ids["verd"])
 
                     last_update_id = await process_telegram_messages_async(
-                        session, t_boiler_oben, t_boiler_hinten, t_boiler_mittig, t_verd, updates, last_update_id,
+                        session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id,
                         kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config,
                         get_solax_data_func, state, get_boiler_temperature_history_func, get_runtime_bar_chart_func,
                         is_nighttime_func)
@@ -265,6 +270,7 @@ async def telegram_task(session, bot_token, chat_id, read_temperature_func, sens
                     logging.error("Maximale Wiederholungen erreicht, warte 5 Minuten")
                     await asyncio.sleep(300)
         await asyncio.sleep(0.1)
+
 
 async def send_help_message(session, chat_id, bot_token):
     """Sendet eine Hilfenachricht mit verfügbaren Befehlen über Telegram."""
