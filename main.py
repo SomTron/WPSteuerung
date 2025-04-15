@@ -964,115 +964,106 @@ async def initialize_gpio():
     return False
 
 
-
 async def get_boiler_temperature_history(session, hours, state):
     logging.debug(f"get_boiler_temperature_history aufgerufen mit hours={hours}, state.bot_token={state.bot_token}")
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
-    global UNTERER_FUEHLER_MIN, UNTERER_FUEHLER_MAX
+    global UNTERER_FUEHLER_MIN, UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT
     try:
-        # Listen für Daten
-        temp_oben = []
-        temp_unten = []
-        temp_mittig = []
-        einschaltpunkte = []
-        ausschaltpunkte = []
-        kompressor_status = []
-        solar_ueberschuss_periods = []
-
-        # CSV-Datei asynchron lesen
-        async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
-            lines = await csvfile.readlines()
-            lines = lines[1:][::-1]  # Header überspringen und umkehren (neueste zuerst)
-
-            for line in lines:
-                parts = line.strip().split(',')
-                if len(parts) >= 13:  # Mindestens bis ConsumeEnergy
-                    while len(parts) < 19:
-                        parts.append("N/A")
-
-                    timestamp_str = parts[0].strip()
-                    timestamp_str = ''.join(c for c in timestamp_str if c.isprintable())
-
-                    try:
-                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        t_oben, t_unten, t_mittig = parts[1], parts[2], parts[3]
-                        kompressor = parts[6]
-                        einschaltpunkt = parts[14] if parts[14].strip() and parts[14] not in ("N/A", "Fehler") else "42"
-                        ausschaltpunkt = parts[15] if parts[15].strip() and parts[15] not in ("N/A", "Fehler") else "45"
-                        solar_ueberschuss = parts[16] if parts[16].strip() and parts[16] not in ("N/A", "Fehler") else "0"
-                        power_source = parts[18] if parts[18].strip() and parts[18] not in ("N/A", "Fehler") else "Unbekannt"
-
-                        if not (t_oben.strip() and t_oben not in ("N/A", "Fehler")) or \
-                           not (t_unten.strip() and t_unten not in ("N/A", "Fehler")) or \
-                           not (t_mittig.strip() and t_mittig not in ("N/A", "Fehler")):
-                            logging.warning(f"Übersprungene Zeile wegen fehlender Temperaturen: {line.strip()}")
-                            continue
-
-                        temp_oben.append((timestamp, float(t_oben)))
-                        temp_unten.append((timestamp, float(t_unten)))
-                        temp_mittig.append((timestamp, float(t_mittig)))
-                        einschaltpunkte.append((timestamp, float(einschaltpunkt)))
-                        ausschaltpunkte.append((timestamp, float(ausschaltpunkt)))
-                        kompressor_status.append((timestamp, 1 if kompressor == "EIN" else 0, power_source))
-                        if int(solar_ueberschuss) == 1:
-                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MIN))
-                            solar_ueberschuss_periods.append((timestamp, UNTERER_FUEHLER_MAX))
-                    except ValueError as e:
-                        logging.error(f"Fehler beim Parsen der Zeile: {line.strip()}, Zeitstempel: '{timestamp_str}', Fehler: {e}")
-                        continue
-                else:
-                    logging.warning(f"Zeile mit unzureichenden Spalten übersprungen: {line.strip()}")
-
         # Zeitfenster definieren
         now = datetime.now()
         time_ago = now - timedelta(hours=hours)
+
+        # Verfügbare Spalten dynamisch ermitteln
+        expected_columns = [
+            "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "Kompressor",
+            "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "PowerSource"
+        ]
+        try:
+            # Lade CSV ohne usecols, um Header zu prüfen
+            df = pd.read_csv("heizungsdaten.csv", parse_dates=["Zeitstempel"], nrows=1)
+            available_columns = [col for col in expected_columns if col in df.columns]
+            if not available_columns:
+                raise ValueError("Keine der erwarteten Spalten in der CSV gefunden.")
+
+            # Lade CSV mit verfügbaren Spalten
+            df = pd.read_csv(
+                "heizungsdaten.csv",
+                parse_dates=["Zeitstempel"],
+                usecols=available_columns
+            )
+            # Filtere Daten im gewünschten Zeitfenster
+            df = df[df["Zeitstempel"] >= time_ago]
+        except Exception as e:
+            logging.error(f"Fehler beim Laden der CSV: {e}")
+            await send_telegram_message(session, CHAT_ID, f"Fehler beim Laden der Daten: {str(e)}", state.bot_token)
+            return
+
+        if df.empty:
+            logging.warning(f"Keine Daten im Zeitfenster ({hours}h) gefunden.")
+            await send_telegram_message(session, CHAT_ID, "Keine Daten für den Verlauf verfügbar.", state.bot_token)
+            return
+
+        # Fehlerbehandlung für Temperaturen
+        temp_columns = [col for col in ["T_Oben", "T_Unten", "T_Mittig"] if col in df.columns]
+        if not temp_columns:
+            logging.error("Keine Temperaturspalten (T_Oben, T_Unten, T_Mittig) verfügbar.")
+            await send_telegram_message(session, CHAT_ID, "Keine Temperaturdaten verfügbar.", state.bot_token)
+            return
+
+        df = df.dropna(subset=temp_columns)  # Entferne Zeilen mit fehlenden Temperaturen
+        for col in temp_columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=temp_columns)  # Entferne Zeilen mit ungültigen Temperaturen
+
+        # Fehlerbehandlung für andere Spalten
+        if "Einschaltpunkt" in df.columns:
+            df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").fillna(42)
+        else:
+            df["Einschaltpunkt"] = 42
+            logging.warning("Spalte 'Einschaltpunkt' fehlt, verwende Standardwert 42.")
+
+        if "Ausschaltpunkt" in df.columns:
+            df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").fillna(45)
+        else:
+            df["Ausschaltpunkt"] = 45
+            logging.warning("Spalte 'Ausschaltpunkt' fehlt, verwende Standardwert 45.")
+
+        if "Solarüberschuss" in df.columns:
+            df["Solarüberschuss"] = pd.to_numeric(df["Solarüberschuss"], errors="coerce").fillna(0).astype(int)
+        else:
+            df["Solarüberschuss"] = 0
+            logging.warning("Spalte 'Solarüberschuss' fehlt, verwende Standardwert 0.")
+
+        if "PowerSource" in df.columns:
+            df["PowerSource"] = df["PowerSource"].fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
+        else:
+            df["PowerSource"] = "Unbekannt"
+            logging.warning("Spalte 'PowerSource' fehlt, verwende Standardwert 'Unbekannt'.")
+
+        if "Kompressor" in df.columns:
+            df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0)
+        else:
+            df["Kompressor"] = 0
+            logging.warning("Spalte 'Kompressor' fehlt, verwende Standardwert 0.")
+
+        # Sampling für gleichmäßige Datenpunkte
         target_points = 50
-        total_seconds = hours * 3600
-        target_interval = total_seconds / (target_points - 1) if target_points > 1 else total_seconds
+        if len(df) > target_points:
+            df = df.iloc[::len(df) // target_points].head(target_points)
 
-        # Filtere Daten
-        filtered_oben = [(ts, val) for ts, val in temp_oben if ts >= time_ago]
-        filtered_unten = [(ts, val) for ts, val in temp_unten if ts >= time_ago]
-        filtered_mittig = [(ts, val) for ts, val in temp_mittig if ts >= time_ago]
-        filtered_einschalt = [(ts, val) for ts, val in einschaltpunkte if ts >= time_ago]
-        filtered_ausschalt = [(ts, val) for ts, val in ausschaltpunkte if ts >= time_ago]
-        filtered_kompressor = [(ts, val, ps) for ts, val, ps in kompressor_status if ts >= time_ago]
-        filtered_solar_ueberschuss = [(ts, val) for ts, val in solar_ueberschuss_periods if ts >= time_ago]
-
-        # Sampling-Funktion
-        def sample_data(data, interval, num_points):
-            if not data:
-                return []
-            if len(data) <= num_points:
-                return data[::-1]
-            sampled = []
-            last_added = None
-            for item in data:
-                ts = item[0]
-                if last_added is None or (last_added - ts).total_seconds() >= interval:
-                    sampled.append(item)
-                    last_added = ts
-                if len(sampled) >= num_points:
-                    break
-            return sampled[::-1]
-
-        sampled_oben = sample_data(filtered_oben, target_interval, target_points)
-        sampled_unten = sample_data(filtered_unten, target_interval, target_points)
-        sampled_mittig = sample_data(filtered_mittig, target_interval, target_points)
-        sampled_einschalt = sample_data(filtered_einschalt, target_interval, target_points)
-        sampled_ausschalt = sample_data(filtered_ausschalt, target_interval, target_points)
-        sampled_kompressor = sample_data(filtered_kompressor, target_interval, target_points)
-        sampled_solar_min = sample_data(
-            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MIN], target_interval,
-            target_points)
-        sampled_solar_max = sample_data(
-            [(ts, val) for ts, val in filtered_solar_ueberschuss if val == UNTERER_FUEHLER_MAX], target_interval,
-            target_points)
+        # Daten für Plot vorbereiten
+        timestamps = df["Zeitstempel"]
+        t_oben = df["T_Oben"] if "T_Oben" in df.columns else None
+        t_unten = df["T_Unten"] if "T_Unten" in df.columns else None
+        t_mittig = df["T_Mittig"] if "T_Mittig" in df.columns else None
+        einschaltpunkte = df["Einschaltpunkt"]
+        ausschaltpunkte = df["Ausschaltpunkt"]
+        kompressor_status = df["Kompressor"]
+        power_sources = df["PowerSource"]
+        solar_ueberschuss = df["Solarüberschuss"]
 
         # Diagramm erstellen
         plt.figure(figsize=(12, 6))
-
-        # Farben basierend auf PowerSource definieren
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
@@ -1080,56 +1071,31 @@ async def get_boiler_temperature_history(session, hours, state):
             "Unbekannt": "gray"
         }
 
-        # Kompressorstatus als Hintergrundfläche mit variablen Farben
-        if sampled_kompressor:
-            timestamps_komp = [item[0] for item in sampled_kompressor]
-            komp_vals = [item[1] for item in sampled_kompressor]
-            power_sources = [item[2] for item in sampled_kompressor]
+        # Kompressorstatus als Hintergrund
+        for source in color_map:
+            mask = (power_sources == source) & (kompressor_status == 1)
+            if mask.any():
+                plt.fill_between(timestamps[mask], 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
+                                 color=color_map[source], alpha=0.2, label=f"Kompressor EIN ({source})")
 
-            current_start_idx = 0
-            for i in range(1, len(timestamps_komp)):
-                if power_sources[i] != power_sources[current_start_idx] or i == len(timestamps_komp) - 1:
-                    segment_timestamps = timestamps_komp[current_start_idx:i + 1]
-                    segment_vals = komp_vals[current_start_idx:i + 1]
-                    color = color_map.get(power_sources[current_start_idx], "gray")
-                    plt.fill_between(segment_timestamps, 0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5,
-                                     where=[val == 1 for val in segment_vals], color=color, alpha=0.2,
-                                     label=f"Kompressor EIN ({power_sources[current_start_idx]})" if current_start_idx == 0 else None)
-                    current_start_idx = i
+        # Temperaturen plotten, falls verfügbar
+        if t_oben is not None:
+            plt.plot(timestamps, t_oben, label="T_Oben", marker="o", color="blue")
+        if t_unten is not None:
+            plt.plot(timestamps, t_unten, label="T_Unten", marker="x", color="red")
+        if t_mittig is not None:
+            plt.plot(timestamps, t_mittig, label="T_Mittig", marker="^", color="purple")
 
-            handles, labels = plt.gca().get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            plt.legend(by_label.values(), by_label.keys(), loc="lower left")
+        # Sollwerte plotten
+        plt.plot(timestamps, einschaltpunkte, label="Einschaltpunkt (historisch)", linestyle="--", color="green")
+        plt.plot(timestamps, ausschaltpunkte, label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
 
-        # Temperaturen und Sollwerte plotten
-        if sampled_oben:
-            timestamps_oben, t_oben_vals = zip(*sampled_oben)
-            plt.plot(timestamps_oben, t_oben_vals, label="T_Oben", marker="o", color="blue")
-        if sampled_unten:
-            timestamps_unten, t_unten_vals = zip(*sampled_unten)
-            plt.plot(timestamps_unten, t_unten_vals, label="T_Unten", marker="x", color="red")
-        if sampled_mittig:
-            timestamps_mittig, t_mittig_vals = zip(*sampled_mittig)
-            plt.plot(timestamps_mittig, t_mittig_vals, label="T_Mittig", marker="^", color="purple")
-        if sampled_einschalt:
-            timestamps_einschalt, einschalt_vals = zip(*sampled_einschalt)
-            plt.plot(timestamps_einschalt, einschalt_vals, label="Einschaltpunkt (historisch)", linestyle='--',
-                     color="green")
-        if sampled_ausschalt:
-            timestamps_ausschalt, ausschalt_vals = zip(*sampled_ausschalt)
-            plt.plot(timestamps_ausschalt, ausschalt_vals, label="Ausschaltpunkt (historisch)", linestyle='--',
-                     color="orange")
-
-        if sampled_solar_min:
-            timestamps_min, min_vals = zip(*sampled_solar_min)
-            plt.plot(timestamps_min, [state.aktueller_einschaltpunkt] * len(timestamps_min),
-                     color='purple', linestyle='-.',
-                     label=f'Einschaltpunkt ({state.aktueller_einschaltpunkt}°C)')
-        if sampled_solar_max:
-            timestamps_max, max_vals = zip(*sampled_solar_max)
-            plt.plot(timestamps_max, [state.aktueller_ausschaltpunkt] * len(timestamps_max),
-                     color='cyan', linestyle='-.',
-                     label=f'Ausschaltpunkt ({state.aktueller_ausschaltpunkt}°C)')
+        # Aktuelle Sollwerte, wenn Solarüberschuss aktiv
+        if solar_ueberschuss.any():
+            plt.axhline(y=state.aktueller_einschaltpunkt, color="purple", linestyle="-.",
+                        label=f"Einschaltpunkt ({state.aktueller_einschaltpunkt}°C)")
+            plt.axhline(y=state.aktueller_ausschaltpunkt, color="cyan", linestyle="-.",
+                        label=f"Ausschaltpunkt ({state.aktueller_ausschaltpunkt}°C)")
 
         plt.xlim(time_ago, now)
         plt.ylim(0, max(UNTERER_FUEHLER_MAX, AUSSCHALTPUNKT_ERHOEHT) + 5)
@@ -1138,8 +1104,10 @@ async def get_boiler_temperature_history(session, hours, state):
         plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
         plt.grid(True)
         plt.xticks(rotation=45)
+        plt.legend(loc="lower left")
         plt.tight_layout()
 
+        # Diagramm speichern und senden
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
@@ -1154,13 +1122,14 @@ async def get_boiler_temperature_history(session, hours, state):
 
         async with session.post(url, data=form) as response:
             response.raise_for_status()
-            logging.info(f"Temperaturdiagramm für {hours}h mit Kompressorstatus gesendet.")
+            logging.info(f"Temperaturdiagramm für {hours}h gesendet.")
 
         buf.close()
 
     except Exception as e:
-        logging.error(f"Fehler beim Erstellen oder Senden des Temperaturverlaufs ({hours}h): {e}")
-        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}", state.bot_token)
+        logging.error(f"Fehler beim Erstellen des Temperaturverlaufs: {e}")
+        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}",
+                                    state.bot_token)
 
 # Asynchrone Hauptschleife
 async def main_loop(session, config, state):
