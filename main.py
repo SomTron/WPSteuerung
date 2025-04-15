@@ -741,7 +741,7 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46)) - total_reduction
     else:
         ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - total_reduction
-        einschaltpunkt = ausschaltpunkt - int(config["Heizungssteuerung"].get("TEMP_OFFSET", 30))
+        einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
 
     logging.debug(f"Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, Nachtabsenkung={nacht_reduction}, Urlaubsabsenkung={urlaubs_reduction}, Solarüberschuss={state.solar_ueberschuss_aktiv}")
     return ausschaltpunkt, einschaltpunkt
@@ -1275,15 +1275,15 @@ async def main_loop(session, config, state):
                         await asyncio.to_thread(set_kompressor_status, False)
                         state.kompressor_ein = False
                     state.ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C < {config['Heizungssteuerung']['VERDAMPFERTEMPERATUR']}°C)"
-                elif t_boiler_oben is not None and t_boiler_hinten is not None:
+                elif t_boiler_oben is not None and t_boiler_hinten is not None and t_boiler_mittig is not None:
                     if state.solar_ueberschuss_aktiv:
                         logging.debug(
                             f"Solarüberschuss aktiv, prüfe Einschaltbedingungen: "
                             f"T_Oben={t_boiler_oben}, T_Hinten={t_boiler_hinten}, T_Mittig={t_boiler_mittig}, "
                             f"Einschaltpunkt={state.aktueller_einschaltpunkt}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}")
-                        if (t_boiler_oben is not None and t_boiler_oben < state.aktueller_einschaltpunkt) or \
-                                (t_boiler_hinten is not None and t_boiler_hinten < state.aktueller_einschaltpunkt) or \
-                                (t_boiler_mittig is not None and t_boiler_mittig < state.aktueller_einschaltpunkt):
+                        if (t_boiler_oben < state.aktueller_einschaltpunkt) or \
+                           (t_boiler_hinten < state.aktueller_einschaltpunkt) or \
+                           (t_boiler_mittig < state.aktueller_einschaltpunkt):
                             if not state.kompressor_ein:
                                 logging.info(
                                     f"Versuche, Kompressor einzuschalten (ein Fühler < {state.aktueller_einschaltpunkt} °C).")
@@ -1294,9 +1294,9 @@ async def main_loop(session, config, state):
                                     state.kompressor_ein = True
                                     start_time = datetime.now()
                                     logging.info("Kompressor erfolgreich eingeschaltet.")
-                        elif (t_boiler_oben is not None and t_boiler_oben >= state.aktueller_ausschaltpunkt) or \
-                                (t_boiler_hinten is not None and t_boiler_hinten >= state.aktueller_ausschaltpunkt) or \
-                                (t_boiler_mittig is not None and t_boiler_mittig >= state.aktueller_ausschaltpunkt):
+                        elif (t_boiler_oben >= state.aktueller_ausschaltpunkt) or \
+                             (t_boiler_hinten >= state.aktueller_ausschaltpunkt) or \
+                             (t_boiler_mittig >= state.aktueller_ausschaltpunkt):
                             if state.kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
                                 state.kompressor_ein = False
@@ -1306,23 +1306,30 @@ async def main_loop(session, config, state):
                                     f"Kompressor ausgeschaltet (ein Fühler ≥ {state.aktueller_ausschaltpunkt} °C).")
                     else:
                         logging.debug(
-                            f"Normalmodus, prüfe Einschaltbedingungen: T_Oben={t_boiler_oben}, Einschaltpunkt={state.aktueller_einschaltpunkt}")
-                        if t_boiler_oben < state.aktueller_einschaltpunkt and not state.kompressor_ein:
-                            logging.info(
-                                f"Versuche, Kompressor einzuschalten (T_Oben < {state.aktueller_einschaltpunkt} °C).")
-                            result = await asyncio.to_thread(set_kompressor_status, True)
-                            if result is False:
-                                logging.warning(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
-                            else:
-                                state.kompressor_ein = True
-                                start_time = datetime.now()
-                                logging.info("Kompressor erfolgreich eingeschaltet.")
-                        elif t_boiler_oben >= state.aktueller_ausschaltpunkt and state.kompressor_ein:
-                            await asyncio.to_thread(set_kompressor_status, False)
-                            state.kompressor_ein = False
-                            last_runtime = datetime.now() - start_time
-                            state.total_runtime_today += last_runtime
-                            logging.info(f"Kompressor ausgeschaltet (T_Oben ≥ {state.aktueller_ausschaltpunkt} °C).")
+                            f"Normalmodus, prüfe Einschaltbedingungen: "
+                            f"T_Oben={t_boiler_oben}, T_Mittig={t_boiler_mittig}, "
+                            f"Einschaltpunkt={state.aktueller_einschaltpunkt}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}")
+                        if (t_boiler_oben < state.aktueller_einschaltpunkt) or \
+                           (t_boiler_mittig < state.aktueller_einschaltpunkt):
+                            if not state.kompressor_ein:
+                                logging.info(
+                                    f"Versuche, Kompressor einzuschalten (ein Fühler < {state.aktueller_einschaltpunkt} °C).")
+                                result = await asyncio.to_thread(set_kompressor_status, True)
+                                if result is False:
+                                    logging.warning(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
+                                else:
+                                    state.kompressor_ein = True
+                                    start_time = datetime.now()
+                                    logging.info("Kompressor erfolgreich eingeschaltet.")
+                        elif (t_boiler_oben >= state.aktueller_ausschaltpunkt) or \
+                             (t_boiler_mittig >= state.aktueller_ausschaltpunkt):
+                            if state.kompressor_ein:
+                                await asyncio.to_thread(set_kompressor_status, False)
+                                state.kompressor_ein = False
+                                last_runtime = datetime.now() - start_time
+                                state.total_runtime_today += last_runtime
+                                logging.info(
+                                    f"Kompressor ausgeschaltet (ein Fühler ≥ {state.aktueller_ausschaltpunkt} °C).")
 
                 if state.kompressor_ein and start_time:
                     state.current_runtime = datetime.now() - start_time
