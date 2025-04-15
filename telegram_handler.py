@@ -95,12 +95,15 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
     # Laufzeiten in Stunden und Minuten umwandeln
     def format_time(seconds_str):
         try:
-            seconds = int(seconds_str)
+            if isinstance(seconds_str, timedelta):
+                seconds = int(seconds_str.total_seconds())
+            else:
+                seconds = int(seconds_str)
             hours = seconds // 3600
             minutes = (seconds % 3600) // 60
             return f"{hours}h {minutes}min"
         except (ValueError, TypeError):
-            return str(seconds_str)
+            return "0h 0min"
 
     # Temperaturen auf Fehler prüfen und formatieren
     t_oben_str = f"{t_boiler_oben:.1f}°C" if t_boiler_oben is not None else "N/A"
@@ -121,16 +124,8 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
     else:
         mode_str = "Normal"
 
-    # Kompressor-Status mit "Laufzeit zu kurz" prüfen
-    MIN_RUNTIME_SECONDS = 300  # 5 Minuten als Schwelle, anpassbar
-    try:
-        current_seconds = int(aktuelle_laufzeit)
-        if kompressor_status and current_seconds < MIN_RUNTIME_SECONDS:
-            compressor_status_str = f"EIN (Laufzeit zu kurz: {format_time(aktuelle_laufzeit)})"
-        else:
-            compressor_status_str = "EIN" if kompressor_status else "AUS"
-    except (ValueError, TypeError):
-        compressor_status_str = "EIN" if kompressor_status else "AUS"
+    # Kompressor-Status
+    compressor_status_str = "EIN" if kompressor_status else "AUS"
 
     # Nachricht zusammenstellen
     message = (
@@ -147,7 +142,8 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
         f"  • Letzte Laufzeit: {format_time(last_runtime)}\n\n"
         "🎯 **Sollwerte**\n"
         f"  • Einschaltpunkt: {aktueller_einschaltpunkt}°C\n"
-        f"  • Ausschaltpunkt: {aktueller_ausschaltpunkt}°C\n\n"
+        f"  • Ausschaltpunkt: {aktueller_ausschaltpunkt}°C\n"
+        f"  • Gilt für: {'Oben, Mitte, Hinten' if solar_ueberschuss_aktiv else 'Oben, Mitte'}\n\n"
         "⚙️ **Betriebsmodus**\n"
         f"  • {mode_str}\n\n"
         "ℹ️ **Zusatzinfo**\n"
@@ -159,7 +155,6 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_hinten, t_boiler
         message += f"\n  • Ausschlussgrund: {ausschluss_grund}"
 
     await send_telegram_message(session, chat_id, message, bot_token)
-
 
 async def send_unknown_command_message(session, chat_id, bot_token):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
