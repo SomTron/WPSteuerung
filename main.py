@@ -1270,27 +1270,39 @@ async def main_loop(session, config, state):
                     await asyncio.sleep(2)
                     continue
 
+                    # Neue Solarregelung nach deiner Idee
                 if t_boiler_oben is not None and t_boiler_unten is not None and t_boiler_mittig is not None:
+                    # Parameter für Solarregelung
+                    EINSCHALTPOINT = state.aktueller_einschaltpunkt  # z. B. 46 °C
+                    AUSSCHALTPOINT = state.aktueller_ausschaltpunkt  # z. B. 50 °C
+                    TOLERANZ = 1.0  # 1-Grad-Puffer für T_Mittig und T_Oben
+                    AUSSCHALTPOINT_UNTEN = AUSSCHALTPOINT  # Optional: 48.0 für Hysterese, hier = AUSSCHALTPOINT
+
                     if state.solar_ueberschuss_aktiv:
                         logging.debug(
                             f"Solarüberschuss aktiv, prüfe Einschaltbedingungen: "
                             f"T_Oben={t_boiler_oben:.1f}, T_Unten={t_boiler_unten:.1f}, T_Mittig={t_boiler_mittig:.1f}, "
-                            f"Einschaltpunkt={state.aktueller_einschaltpunkt}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}"
+                            f"Einschaltpunkt={EINSCHALTPOINT}, Ausschaltpunkt={AUSSCHALTPOINT}"
                         )
-                        if (t_boiler_oben < state.aktueller_einschaltpunkt or
-                            t_boiler_unten < state.aktueller_einschaltpunkt or
-                            t_boiler_mittig < state.aktueller_einschaltpunkt):
+                        # Einschaltbedingung: T_Unten < EINSCHALTPOINT und T_Mittig/Oben <= AUSSCHALTPUNKT + 1
+                        if (t_boiler_unten < EINSCHALTPOINT and
+                                t_boiler_mittig <= AUSSCHALTPOINT + TOLERANZ and
+                                t_boiler_oben <= AUSSCHALTPOINT + TOLERANZ):
                             if not state.kompressor_ein:
                                 min_pause_seconds = int(config["Heizungssteuerung"].get("MIN_PAUSE", 5)) * 60
-                                if last_compressor_off_time and (now - last_compressor_off_time).total_seconds() < min_pause_seconds:
-                                    pause_remaining = min_pause_seconds - (now - last_compressor_off_time).total_seconds()
+                                if last_compressor_off_time and (
+                                        now - last_compressor_off_time).total_seconds() < min_pause_seconds:
+                                    pause_remaining = min_pause_seconds - (
+                                                now - last_compressor_off_time).total_seconds()
                                     state.ausschluss_grund = f"Zu kurze Pause ({pause_remaining:.1f}s verbleibend)"
                                     logging.info(
                                         f"Kompressor bleibt aus (zu kurze Pause: {(now - last_compressor_off_time)}, benötigt: {timedelta(seconds=min_pause_seconds)})"
                                     )
                                 else:
                                     logging.info(
-                                        f"Versuche, Kompressor einzuschalten (ein Fühler < {state.aktueller_einschaltpunkt} °C)."
+                                        f"Versuche, Kompressor einzuschalten "
+                                        f"(T_Unten < {EINSCHALTPOINT} °C, T_Mittig ≤ {AUSSCHALTPOINT + TOLERANZ} °C, "
+                                        f"T_Oben ≤ {AUSSCHALTPOINT + TOLERANZ} °C)."
                                     )
                                     result = await asyncio.to_thread(set_kompressor_status, True)
                                     if result is False:
@@ -1302,9 +1314,10 @@ async def main_loop(session, config, state):
                                         last_compressor_off_time = None
                                         state.ausschluss_grund = None
                                         logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
-                        elif (t_boiler_oben >= state.aktueller_ausschaltpunkt or
-                              t_boiler_unten >= state.aktueller_ausschaltpunkt or
-                              t_boiler_mittig >= state.aktueller_ausschaltpunkt):
+                        # Ausschaltbedingung: T_Unten >= AUSSCHALTPOINT oder T_Mittig/Oben > AUSSCHALTPUNKT + 1
+                        elif (t_boiler_unten >= AUSSCHALTPOINT_UNTEN or
+                              t_boiler_mittig > AUSSCHALTPOINT + TOLERANZ or
+                              t_boiler_oben > AUSSCHALTPOINT + TOLERANZ):
                             if state.kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, False)
                                 state.kompressor_ein = False
@@ -1313,20 +1326,26 @@ async def main_loop(session, config, state):
                                 state.total_runtime_today += last_runtime
                                 state.ausschluss_grund = None
                                 logging.info(
-                                    f"Kompressor ausgeschaltet (ein Fühler ≥ {state.aktueller_ausschaltpunkt} °C). Laufzeit: {last_runtime}"
+                                    f"Kompressor ausgeschaltet "
+                                    f"(T_Unten ≥ {AUSSCHALTPOINT_UNTEN} °C oder "
+                                    f"T_Mittig > {AUSSCHALTPOINT + TOLERANZ} °C oder "
+                                    f"T_Oben > {AUSSCHALTPOINT + TOLERANZ} °C). Laufzeit: {last_runtime}"
                                 )
                     else:
+                        # Normalmodus (wie aktuell)
                         logging.debug(
                             f"Normalmodus, prüfe Einschaltbedingungen: "
                             f"T_Oben={t_boiler_oben:.1f}, T_Mittig={t_boiler_mittig:.1f}, "
                             f"Einschaltpunkt={state.aktueller_einschaltpunkt}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}"
                         )
                         if (t_boiler_oben < state.aktueller_einschaltpunkt or
-                            t_boiler_mittig < state.aktueller_einschaltpunkt):
+                                t_boiler_mittig < state.aktueller_einschaltpunkt):
                             if not state.kompressor_ein:
                                 min_pause_seconds = int(config["Heizungssteuerung"].get("MIN_PAUSE", 5)) * 60
-                                if last_compressor_off_time and (now - last_compressor_off_time).total_seconds() < min_pause_seconds:
-                                    pause_remaining = min_pause_seconds - (now - last_compressor_off_time).total_seconds()
+                                if last_compressor_off_time and (
+                                        now - last_compressor_off_time).total_seconds() < min_pause_seconds:
+                                    pause_remaining = min_pause_seconds - (
+                                                now - last_compressor_off_time).total_seconds()
                                     state.ausschluss_grund = f"Zu kurze Pause ({pause_remaining:.1f}s verbleibend)"
                                     logging.info(
                                         f"Kompressor bleibt aus (zu kurze Pause: {(now - last_compressor_off_time)}, benötigt: {timedelta(seconds=min_pause_seconds)})"
