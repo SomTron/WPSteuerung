@@ -106,6 +106,7 @@ class TelegramHandler(logging.Handler):
         except Exception as e:
             logging.error(f"Fehler in TelegramHandler.emit: {e}", exc_info=True)
 
+
 class State:
     def __init__(self, config):
         self.current_runtime = timedelta()
@@ -120,14 +121,11 @@ class State:
         self.urlaubsmodus_aktiv = False
         self.solar_ueberschuss_aktiv = False
         self.last_runtime = timedelta()
-        self.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
-        self.aktueller_einschaltpunkt = self.aktueller_ausschaltpunkt - int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
         self.pressure_error_sent = False
         self.last_pressure_error_time = None
         self.t_boiler = None
         self.start_time = None
         self.last_pressure_state = None
-        # Neue Attribute
         self.bot_token = config["Telegram"]["BOT_TOKEN"]
         self.chat_id = config["Telegram"]["CHAT_ID"]
         self.token_id = config["SolaxCloud"]["TOKEN_ID"]
@@ -138,6 +136,19 @@ class State:
         self.last_api_call = None
         self.last_api_data = None
         self.last_api_timestamp = None
+
+        # Initiale Sollwerte
+        self.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
+        self.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
+
+        # Validierung der initialen Sollwerte
+        min_hysteresis = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
+        if self.aktueller_ausschaltpunkt <= self.aktueller_einschaltpunkt:
+            logging.warning(
+                f"Initialer Ausschaltpunkt ({self.aktueller_ausschaltpunkt}°C) <= Einschaltpunkt ({self.aktueller_einschaltpunkt}°C), "
+                f"setze Ausschaltpunkt auf Einschaltpunkt + {min_hysteresis}°C"
+            )
+            self.aktueller_ausschaltpunkt = self.aktueller_einschaltpunkt + min_hysteresis
 
 # Logging einrichten mit Telegram-Handler
 async def setup_logging(session):
@@ -636,11 +647,14 @@ def validate_config(config):
         "Heizungssteuerung": {
             "AUSSCHALTPUNKT": "50",
             "AUSSCHALTPUNKT_ERHOEHT": "55",
-            "TEMP_OFFSET": "10",  # Neuer Standardwert für Offset (z.B. 10°C)
+            "EINSCHALTPUNKT": "42",
+            "EINSCHALTPUNKT_ERHOEHT": "46",
+            "TEMP_OFFSET": "10",
             "VERDAMPFERTEMPERATUR": "25",
             "MIN_LAUFZEIT": "10",
             "MIN_PAUSE": "20",
-            "NACHTABSENKUNG": "0"
+            "NACHTABSENKUNG": "0",
+            "HYSTERESE_MIN": "2"  # Neuer Standardwert
         },
         "Telegram": {"state.bot_token": "", "CHAT_ID": ""},
         "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
@@ -654,7 +668,7 @@ def validate_config(config):
                 if key in config[section]:
                     if key not in ["state.bot_token", "CHAT_ID", "TOKEN_ID", "SN"]:
                         value = int(config[section][key])
-                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT"] else 20
+                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT", "EINSCHALTPUNKT", "EINSCHALTPUNKT_ERHOEHT"] else 20
                         max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
                         if not (min_val <= value <= max_val):
                             logging.warning(
@@ -670,6 +684,28 @@ def validate_config(config):
             except ValueError as e:
                 config[section][key] = default
                 logging.error(f"Ungültiger Wert für {key} in {section}: {e}, verwende Standardwert: {default}")
+
+    # Zusätzliche Validierung: AUSSCHALTPUNKT > EINSCHALTPUNKT
+    ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 50))
+    einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
+    hys_min = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))
+    if ausschaltpunkt <= einschaltpunkt:
+        logging.warning(
+            f"AUSSCHALTPUNKT ({ausschaltpunkt}) <= EINSCHALTPUNKT ({einschaltpunkt}), "
+            f"setze AUSSCHALTPUNKT auf EINSCHALTPUNKT + {hys_min}"
+        )
+        config["Heizungssteuerung"]["AUSSCHALTPUNKT"] = str(einschaltpunkt + hys_min)
+
+    # Validierung für erhöhte Sollwerte
+    ausschaltpunkt_erh = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
+    einschaltpunkt_erh = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46))
+    if ausschaltpunkt_erh <= einschaltpunkt_erh:
+        logging.warning(
+            f"AUSSCHALTPUNKT_ERHOEHT ({ausschaltpunkt_erh}) <= EINSCHALTPUNKT_ERHOEHT ({einschaltpunkt_erh}), "
+            f"setze AUSSCHALTPUNKT_ERHOEHT auf EINSCHALTPUNKT_ERHOEHT + {hys_min}"
+        )
+        config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"] = str(einschaltpunkt_erh + hys_min)
+
     logging.debug(f"Validierte Konfiguration: {dict(config['Heizungssteuerung'])}")
     return config
 
@@ -726,7 +762,20 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - total_reduction
         einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
 
-    logging.debug(f"Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, Nachtabsenkung={nacht_reduction}, Urlaubsabsenkung={urlaubs_reduction}, Solarüberschuss={state.solar_ueberschuss_aktiv}")
+    # Validierung: Stelle sicher, dass Ausschaltpunkt > Einschaltpunkt
+    HYSTERESE_MIN = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))  # Mindestabstand in °C
+    if ausschaltpunkt <= einschaltpunkt:
+        logging.warning(
+            f"Ausschaltpunkt ({ausschaltpunkt}°C) <= Einschaltpunkt ({einschaltpunkt}°C), "
+            f"setze Ausschaltpunkt auf Einschaltpunkt + {HYSTERESE_MIN}°C"
+        )
+        ausschaltpunkt = einschaltpunkt + HYSTERESE_MIN
+
+    logging.debug(
+        f"Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, "
+        f"Nachtabsenkung={nacht_reduction}, Urlaubsabsenkung={urlaubs_reduction}, "
+        f"Solarüberschuss={state.solar_ueberschuss_aktiv}"
+    )
     return ausschaltpunkt, einschaltpunkt
 
 
