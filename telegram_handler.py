@@ -87,12 +87,16 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_bo
 
 
 async def send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status,
-                              aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt, aktueller_ausschaltpunkt,
-                              chat_id, bot_token, config, get_solax_data_func, urlaubsmodus_aktiv, solar_ueberschuss_aktiv,
-                              last_runtime, is_nighttime_func, ausschluss_grund):
+                               aktuelle_laufzeit, gesamtlaufzeit, aktueller_einschaltpunkt, aktueller_ausschaltpunkt,
+                               chat_id, bot_token, config, get_solax_data_func, urlaubsmodus_aktiv,
+                               solar_ueberschuss_aktiv,
+                               last_runtime, is_nighttime_func, ausschluss_grund):
     """Sendet den aktuellen Status über Telegram in einem übersichtlichen Format."""
-    solax_data = await get_solax_data_func(session)
-    is_night = is_nighttime_func(config)
+    solax_data = await get_solax_data_func(session) or {
+        "feedinpower": 0, "batPower": 0, "soc": 0, "api_fehler": True
+    }
+    feedinpower = solax_data.get("feedinpower", 0)
+    bat_power = solax_data.get("batPower", 0)
 
     # Laufzeiten in Stunden und Minuten umwandeln
     def format_time(seconds_str):
@@ -114,44 +118,44 @@ async def send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_
     t_verd_str = f"{t_verd:.1f}°C" if t_verd is not None else "N/A"
 
     # Betriebsmodus bestimmen und Sollwertänderungen anzeigen
-    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func(config) else 0
     if urlaubsmodus_aktiv:
         mode_str = "Urlaub"
-    elif solar_ueberschuss_aktiv and is_night:
+    elif solar_ueberschuss_aktiv and is_nighttime_func(config):
         mode_str = f"Solarüberschuss + Nachtabsenkung (-{nacht_reduction}°C)"
     elif solar_ueberschuss_aktiv:
         mode_str = "Solarüberschuss"
-    elif is_night:
+    elif is_nighttime_func(config):
         mode_str = f"Nachtabsenkung (-{nacht_reduction}°C)"
     else:
         mode_str = "Normal"
 
-    # Kompressor-Status
+    # Verwende state.kompressor_ein statt separatem Parameter
     compressor_status_str = "EIN" if kompressor_status else "AUS"
 
-    # Nachricht zusammenstellen
     message = (
-        "📊 **Systemstatus**\n\n"
+        "📊 **Systemstatus**\n"
         "🌡️ **Temperaturen**\n"
         f"  • Oben: {t_oben_str}\n"
         f"  • Mittig: {t_mittig_str}\n"
         f"  • Unten: {t_unten_str}\n"
-        f"  • Verdampfer: {t_verd_str}\n\n"
+        f"  • Verdampfer: {t_verd_str}\n"
         "🛠️ **Kompressor**\n"
         f"  • Status: {compressor_status_str}\n"
         f"  • Aktuelle Laufzeit: {format_time(aktuelle_laufzeit)}\n"
         f"  • Gesamtlaufzeit heute: {format_time(gesamtlaufzeit)}\n"
-        f"  • Letzte Laufzeit: {format_time(last_runtime)}\n\n"
+        f"  • Letzte Laufzeit: {format_time(last_runtime)}\n"
         "🎯 **Sollwerte**\n"
         f"  • Einschaltpunkt: {aktueller_einschaltpunkt}°C\n"
         f"  • Ausschaltpunkt: {aktueller_ausschaltpunkt}°C\n"
-        f"  • Gilt für: {'Oben, Mitte, Unten' if solar_ueberschuss_aktiv else 'Oben, Mitte'}\n\n"
+        f"  • Gilt für: {'Oben, Mitte, Unten' if solar_ueberschuss_aktiv else 'Oben, Mitte'}\n"
         "⚙️ **Betriebsmodus**\n"
-        f"  • {mode_str}\n\n"
+        f"  • {mode_str}\n"
         "ℹ️ **Zusatzinfo**\n"
-        f"  • Solax AC Power: {solax_data.get('acpower', 'N/A')}W"
+        f"  • Solarüberschuss: {feedinpower:.1f} W\n"
+        f"  • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})\n"
+        f"  • Solarüberschuss aktiv: {'Ja' if solar_ueberschuss_aktiv else 'Nein'}\n"
     )
-
     # Ausschlussgrund nur hinzufügen, wenn vorhanden
     if ausschluss_grund:
         message += f"\n  • Ausschlussgrund: {ausschluss_grund}"
