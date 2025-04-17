@@ -442,31 +442,46 @@ def check_pressure(state):
     return pressure_ok
 
 
-def check_boiler_sensors(t_oben, t_unten, config):
-    """Prüft die Boiler-Sensoren auf Fehler."""
+async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config, session, state):
+    try:
+        SICHERHEITS_TEMP = int(config["Heizungssteuerung"]["SICHERHEITS_TEMP"])
+        logging.debug(f"SICHERHEITS_TEMP erfolgreich geladen: {SICHERHEITS_TEMP}")
+    except KeyError:
+        SICHERHEITS_TEMP = 52
+        logging.warning(
+            f"SICHERHEITS_TEMP nicht in config['Heizungssteuerung'] gefunden, verwende Standard: {SICHERHEITS_TEMP}")
+    except ValueError:
+        SICHERHEITS_TEMP = 52
+        logging.warning(
+            f"SICHERHEITS_TEMP ungültig (keine Ganzzahl: {config['Heizungssteuerung']['SICHERHEITS_TEMP']}), verwende Standard: {SICHERHEITS_TEMP}")
+
     try:
         ausschaltpunkt = int(config["Heizungssteuerung"]["AUSSCHALTPUNKT"])
     except (KeyError, ValueError):
         ausschaltpunkt = 50
-        logging.warning(f"Ausschaltpunkt nicht gefunden, verwende Standard: {ausschaltpunkt}")
+        logging.warning(f"Ausschaltpunkt nicht gefunden oder ungültig, verwende Standard: {ausschaltpunkt}")
+
     fehler = None
     is_overtemp = False
-    if t_oben is None or t_unten is None:
+    if t_boiler_oben is None or t_boiler_unten is None:
         fehler = "Fühlerfehler!"
-        logging.error(f"Fühlerfehler erkannt: oben={t_oben}, unten={t_unten}")
-    elif t_oben >= (ausschaltpunkt + 10) or t_unten >= (ausschaltpunkt + 10):
+        logging.error(f"Fühlerfehler erkannt: oben={t_boiler_oben}, unten={t_boiler_unten}")
+    elif t_boiler_oben >= SICHERHEITS_TEMP or t_boiler_unten >= SICHERHEITS_TEMP:
         fehler = "Übertemperatur!"
         is_overtemp = True
-        logging.error(f"Übertemperatur erkannt: oben={t_oben}, unten={t_unten}, Grenze={ausschaltpunkt + 10}")
-    elif abs(t_oben - t_unten) > 50:
+        logging.error(
+            f"Übertemperatur erkannt: oben={t_boiler_oben:.1f}°C, unten={t_boiler_unten:.1f}°C, Grenze={SICHERHEITS_TEMP}°C")
+    elif abs(t_boiler_oben - t_boiler_unten) > 50:
         fehler = "Fühlerdifferenz!"
         logging.warning(
-            f"Fühlerdifferenz erkannt: oben={t_oben}, unten={t_unten}, Differenz={abs(t_oben - t_unten)}")
+            f"Fühlerdifferenz erkannt: oben={t_boiler_oben:.1f}°C, unten={t_boiler_unten:.1f}°C, Differenz={abs(t_boiler_oben - t_boiler_unten):.1f}°C"
+        )
+    logging.debug(
+        f"Sensorprüfung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C, SICHERHEITS_TEMP={SICHERHEITS_TEMP}°C")
     return fehler, is_overtemp
 
 
-def set_kompressor_status(state, ein, force_off=False):
-    """Setzt den Status des Kompressors (EIN/AUS) und überprüft den GPIO-Pin."""
+def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None):
     now = datetime.now()
     if ein:
         if not state.kompressor_ein:
@@ -478,7 +493,7 @@ def set_kompressor_status(state, ein, force_off=False):
             state.kompressor_ein = True
             state.start_time = now
             state.current_runtime = timedelta()
-            state.ausschluss_grund = None  # Kein Ausschlussgrund, wenn Kompressor läuft
+            state.ausschluss_grund = None
             logging.info(f"Kompressor EIN geschaltet. Startzeit: {state.start_time}")
         else:
             state.current_runtime = now - state.start_time
@@ -486,7 +501,9 @@ def set_kompressor_status(state, ein, force_off=False):
     else:
         if state.kompressor_ein:
             elapsed_time = now - state.start_time
-            if elapsed_time < state.min_laufzeit and not force_off:
+            # Ignoriere MIN_LAUFZEIT, wenn Ausschaltpunkt überschritten oder force_off=True
+            if (elapsed_time < state.min_laufzeit and not force_off and
+                (t_boiler_oben is None or t_boiler_oben < state.aktueller_ausschaltpunkt)):
                 logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {state.min_laufzeit})")
                 return True
             state.kompressor_ein = False
@@ -499,9 +516,8 @@ def set_kompressor_status(state, ein, force_off=False):
                 f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {state.total_runtime_today}")
         else:
             logging.debug("Kompressor bereits ausgeschaltet")
-    # GPIO-Status setzen und prüfen
     GPIO.output(GIO21_PIN, GPIO.HIGH if ein else GPIO.LOW)
-    actual_state = GPIO.input(GIO21_PIN)  # Annahme: Pin kann als Eingang gelesen werden
+    actual_state = GPIO.input(GIO21_PIN)
     if actual_state != (GPIO.HIGH if ein else GPIO.LOW):
         logging.error(f"GPIO-Fehler: Kompressor-Status sollte {'EIN' if ein else 'AUS'} sein, ist aber {actual_state}")
     return None
@@ -642,7 +658,6 @@ def load_config():
 
 
 def validate_config(config):
-    """Validiert die Konfigurationswerte und setzt Fallbacks bei Fehlern."""
     defaults = {
         "Heizungssteuerung": {
             "AUSSCHALTPUNKT": "50",
@@ -654,7 +669,8 @@ def validate_config(config):
             "MIN_LAUFZEIT": "10",
             "MIN_PAUSE": "20",
             "NACHTABSENKUNG": "0",
-            "HYSTERESE_MIN": "2"  # Neuer Standardwert
+            "HYSTERESE_MIN": "2",
+            "SICHERHEITS_TEMP": "51"  # Neu hinzugefügt
         },
         "Telegram": {"state.bot_token": "", "CHAT_ID": ""},
         "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
@@ -668,7 +684,7 @@ def validate_config(config):
                 if key in config[section]:
                     if key not in ["state.bot_token", "CHAT_ID", "TOKEN_ID", "SN"]:
                         value = int(config[section][key])
-                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT", "EINSCHALTPUNKT", "EINSCHALTPUNKT_ERHOEHT"] else 20
+                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT", "EINSCHALTPUNKT", "EINSCHALTPUNKT_ERHOEHT", "SICHERHEITS_TEMP"] else 20
                         max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
                         if not (min_val <= value <= max_val):
                             logging.warning(
@@ -685,7 +701,6 @@ def validate_config(config):
                 config[section][key] = default
                 logging.error(f"Ungültiger Wert für {key} in {section}: {e}, verwende Standardwert: {default}")
 
-    # Zusätzliche Validierung: AUSSCHALTPUNKT > EINSCHALTPUNKT
     ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 50))
     einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
     hys_min = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))
@@ -696,7 +711,6 @@ def validate_config(config):
         )
         config["Heizungssteuerung"]["AUSSCHALTPUNKT"] = str(einschaltpunkt + hys_min)
 
-    # Validierung für erhöhte Sollwerte
     ausschaltpunkt_erh = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
     einschaltpunkt_erh = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46))
     if ausschaltpunkt_erh <= einschaltpunkt_erh:
@@ -1261,6 +1275,8 @@ async def main_loop(session, config, state):
                 t_boiler = (
                     (t_boiler_oben + t_boiler_unten) / 2 if t_boiler_oben is not None and t_boiler_unten is not None else "Fehler"
                 )
+
+
                 state.t_boiler = t_boiler  # Aktualisiere state.t_boiler
                 pressure_ok = await asyncio.to_thread(check_pressure, state)
 
@@ -1287,7 +1303,10 @@ async def main_loop(session, config, state):
                     state.pressure_error_sent = False
                     state.last_pressure_error_time = None
 
-                fehler, is_overtemp = check_boiler_sensors(t_boiler_oben, t_boiler_unten, config)
+                    # Sensorprüfung
+                fehler, is_overtemp = await check_boiler_sensors(t_boiler_oben, t_boiler_unten, config, session,
+                                                                     state)
+
                 if fehler:
                     if state.kompressor_ein:
                         await asyncio.to_thread(set_kompressor_status, state, False, force_off=True)
@@ -1295,17 +1314,32 @@ async def main_loop(session, config, state):
                         last_compressor_off_time = now
                         logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
                     state.ausschluss_grund = fehler
-                    await asyncio.sleep(2)
-                    continue
 
-                if state.last_pressure_error_time and (now - state.last_pressure_error_time) < PRESSURE_ERROR_DELAY:
-                    if state.kompressor_ein:
-                        await asyncio.to_thread(set_kompressor_status, state, False, force_off=True)
-                        state.kompressor_ein = False
-                        last_compressor_off_time = now
-                        logging.info("Kompressor ausgeschaltet (Druckfehler-Sperre).")
-                    remaining_time = (PRESSURE_ERROR_DELAY - (now - state.last_pressure_error_time)).total_seconds()
-                    state.ausschluss_grund = f"Druckfehler-Sperre ({remaining_time:.0f}s verbleibend)"
+                    # Telegram-Benachrichtigung nur bei Abschaltung
+                    if is_overtemp:
+                        try:
+                            SICHERHEITS_TEMP = int(config["Heizungssteuerung"]["SICHERHEITS_TEMP"])
+                            logging.debug(f"SICHERHEITS_TEMP erfolgreich geladen: {SICHERHEITS_TEMP}")
+                        except KeyError:
+                            SICHERHEITS_TEMP = 51
+                            logging.warning(
+                                f"SICHERHEITS_TEMP nicht in config['Heizungssteuerung'] gefunden, verwende Standard: {SICHERHEITS_TEMP}")
+                        except ValueError:
+                            SICHERHEITS_TEMP = 51
+                            logging.warning(
+                                f"SICHERHEITS_TEMP ungültig (keine Ganzzahl: {config['Heizungssteuerung']['SICHERHEITS_TEMP']}), verwende Standard: {SICHERHEITS_TEMP}")
+
+                        if (state.last_overtemp_notification is None or
+                                (now - state.last_overtemp_notification).total_seconds() >= NOTIFICATION_COOLDOWN):
+                            await send_telegram_message(
+                                session,
+                                config["Telegram"]["CHAT_ID"],
+                                f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C",
+                                state.bot_token
+                            )
+                            state.last_overtemp_notification = now
+                            logging.info("Telegram-Nachricht für Übertemperatur gesendet.")
+
                     await asyncio.sleep(2)
                     continue
 
@@ -1318,7 +1352,6 @@ async def main_loop(session, config, state):
                     state.ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C)"
                     await asyncio.sleep(2)
                     continue
-
                 if t_boiler_oben is not None and t_boiler_unten is not None and t_boiler_mittig is not None:
                     EINSCHALTPOINT = state.aktueller_einschaltpunkt
                     AUSSCHALTPOINT = state.aktueller_ausschaltpunkt
@@ -1332,6 +1365,35 @@ async def main_loop(session, config, state):
                             f"Einschaltpunkt={EINSCHALTPOINT}, Ausschaltpunkt={AUSSCHALTPOINT}"
                         )
 
+                        # Sicherheitsprüfung (bereits in check_boiler_sensors, aber hier für Konsistenz)
+                        try:
+                            SICHERHEITS_TEMP = int(config["Heizungssteuerung"]["SICHERHEITS_TEMP"])
+                        except (KeyError, ValueError):
+                            SICHERHEITS_TEMP = 51
+                            logging.warning(
+                                f"SICHERHEITS_TEMP nicht gefunden oder ungültig, verwende Standard: {SICHERHEITS_TEMP}")
+
+                        if t_boiler_oben >= SICHERHEITS_TEMP or t_boiler_unten >= SICHERHEITS_TEMP:
+                            if state.kompressor_ein:
+                                await asyncio.to_thread(set_kompressor_status, state, False, force_off=True)
+                                state.kompressor_ein = False
+                                last_compressor_off_time = now
+                                state.last_runtime = now - state.last_compressor_on_time
+                                state.total_runtime_today += state.last_runtime
+                                logging.error(
+                                    f"Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C"
+                                )
+                                await send_telegram_message(
+                                    session,
+                                    config["Telegram"]["CHAT_ID"],
+                                    f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C",
+                                    state.bot_token
+                                )
+                            state.ausschluss_grund = f"Übertemperatur (>= {SICHERHEITS_TEMP}°C)"
+                            await asyncio.sleep(2)
+                            continue
+
+                        # Bestehende Einschaltbedingung
                         if (t_boiler_unten < EINSCHALTPOINT and
                                 t_boiler_mittig <= AUSSCHALTPOINT + TOLERANZ and
                                 t_boiler_oben <= AUSSCHALTPOINT + TOLERANZ):
@@ -1347,8 +1409,8 @@ async def main_loop(session, config, state):
                                 else:
                                     logging.info(
                                         f"Versuche, Kompressor einzuschalten "
-                                        f"(T_Unten < {EINSCHALTPOINT} °C, T_Mittig ≤ {AUSSCHALTPOINT + TOLERANZ} °C, "
-                                        f"T_Oben ≤ {AUSSCHALTPOINT + TOLERANZ} °C)."
+                                        f"(T_Unten < {EINSCHALTPOINT}°C, T_Mittig ≤ {AUSSCHALTPOINT + TOLERANZ}°C, "
+                                        f"T_Oben ≤ {AUSSCHALTPOINT + TOLERANZ}°C)."
                                     )
                                     result = await asyncio.to_thread(set_kompressor_status, state, True)
                                     if result is False:
@@ -1361,11 +1423,13 @@ async def main_loop(session, config, state):
                                         state.ausschluss_grund = None
                                         logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
 
+                        # Bestehende Ausschaltbedingung
                         elif (t_boiler_unten >= AUSSCHALTPOINT_UNTEN or
                               t_boiler_mittig > AUSSCHALTPOINT + TOLERANZ or
                               t_boiler_oben > AUSSCHALTPOINT + TOLERANZ):
                             if state.kompressor_ein:
-                                await asyncio.to_thread(set_kompressor_status, state, False)
+                                await asyncio.to_thread(set_kompressor_status, state, False,
+                                                        t_boiler_oben=t_boiler_oben)
                                 state.kompressor_ein = False
                                 last_compressor_off_time = now
                                 state.last_runtime = now - state.last_compressor_on_time
@@ -1373,9 +1437,9 @@ async def main_loop(session, config, state):
                                 state.ausschluss_grund = None
                                 logging.info(
                                     f"Kompressor ausgeschaltet "
-                                    f"(T_Unten ≥ {AUSSCHALTPOINT_UNTEN} °C oder "
-                                    f"T_Mittig > {AUSSCHALTPOINT + TOLERANZ} °C oder "
-                                    f"T_Oben > {AUSSCHALTPOINT + TOLERANZ} °C). Laufzeit: {state.last_runtime}"
+                                    f"(T_Unten ≥ {AUSSCHALTPOINT_UNTEN}°C oder "
+                                    f"T_Mittig > {AUSSCHALTPOINT + TOLERANZ}°C oder "
+                                    f"T_Oben > {AUSSCHALTPOINT + TOLERANZ}°C). Laufzeit: {state.last_runtime}"
                                 )
                     else:
                         logging.debug(
