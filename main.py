@@ -1057,10 +1057,13 @@ async def get_runtime_bar_chart(session, days=7, state=None):
 
         plt.figure(figsize=(10, 6))
         plt.bar(dates, runtime_hours, color='skyblue')
-        plt.xlabel("Datum")
+        plt.xlabel("Datum")  # Wird später angepasst
         plt.ylabel("Laufzeit (Stunden)")
         plt.title(f"Kompressorlaufzeiten (letzte {days} Tage)")
-        plt.xticks(rotation=45)
+
+        # Formatieren der Datums-Ticks
+        date_labels = [date.strftime('%d-%m') for date in dates]  # Nur Tag und Monat
+        plt.xticks(dates, date_labels, rotation=45, ha='right')  # Setze die formatierten Labels
         plt.tight_layout()
 
         buf = io.BytesIO()
