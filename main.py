@@ -45,8 +45,7 @@ config = configparser.ConfigParser()
 config.read("config.ini")
 
 # Globale Variablen initialisieren
-BOT_TOKEN = config["Telegram"]["BOT_TOKEN"]
-CHAT_ID = config["Telegram"]["CHAT_ID"]
+
 AUSSCHALTPUNKT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
 AUSSCHALTPUNKT_ERHOEHT = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 52))
 EINSCHALTPUNKT = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
@@ -56,8 +55,7 @@ MIN_LAUFZEIT = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]
 MIN_PAUSE = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
 UNTERER_FUEHLER_MIN = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 45))
 UNTERER_FUEHLER_MAX = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MAX", 50))
-TOKEN_ID = config["SolaxCloud"]["TOKEN_ID"]
-SN = config["SolaxCloud"]["SN"]
+
 
 
 # Globale Variablen für den Programmstatus
@@ -130,10 +128,20 @@ class State:
         self.t_boiler = None
         self.start_time = None
         self.last_pressure_state = None
-        self.bot_token = config["Telegram"]["BOT_TOKEN"]
-        self.chat_id = config["Telegram"]["CHAT_ID"]
-        self.token_id = config["SolaxCloud"]["TOKEN_ID"]
-        self.sn = config["SolaxCloud"]["SN"]
+
+        # Telegram-Konfiguration mit Fehlerbehandlung
+        self.bot_token = config["Telegram"].get("BOT_TOKEN")
+        self.chat_id = config["Telegram"].get("CHAT_ID")
+        if not self.bot_token or not self.chat_id:
+            logging.warning(
+                "Telegram BOT_TOKEN oder CHAT_ID fehlt in der Konfiguration. Telegram-Nachrichten deaktiviert.")
+
+        # SolaxCloud-Konfiguration mit Fehlerbehandlung
+        self.token_id = config["SolaxCloud"].get("TOKEN_ID")
+        self.sn = config["SolaxCloud"].get("SN")
+        if not self.token_id or not self.sn:
+            logging.warning("SolaxCloud TOKEN_ID oder SN fehlt in der Konfiguration. Solax-Datenabruf eingeschränkt.")
+
         self.min_laufzeit = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_LAUFZEIT", 10)))
         self.min_pause = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
         self.verdampfertemperatur = int(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", 6))
@@ -158,17 +166,19 @@ class State:
         logging.debug(
             f"State initialisiert: last_day={self.last_day}, "
             f"last_shutdown_time={self.last_shutdown_time}, tzinfo={self.last_shutdown_time.tzinfo}, "
-            f"last_log_time={self.last_log_time}, tzinfo={self.last_log_time.tzinfo}"
+            f"last_log_time={self.last_log_time}, tzinfo={self.last_log_time.tzinfo}, "
+            f"bot_token={'<set>' if self.bot_token else '<unset>'}, chat_id={'<set>' if self.chat_id else '<unset>'}, "
+            f"token_id={'<set>' if self.token_id else '<unset>'}, sn={'<set>' if self.sn else '<unset>'}"
         )
 
 # Logging einrichten mit Telegram-Handler
-async def setup_logging(session):
+async def setup_logging(session, state):  # Nimm 'state' als Argument entgegen
     logging.basicConfig(
         filename="heizungssteuerung.log",
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    telegram_handler = TelegramHandler(BOT_TOKEN, CHAT_ID, session)
+    telegram_handler = TelegramHandler(state.bot_token, state.chat_id, session)  # Verwende state.bot_token und state.chat_id
     telegram_handler.setLevel(logging.WARNING)
     telegram_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logging.getLogger().addHandler(telegram_handler)
@@ -350,7 +360,7 @@ def calculate_runtime(df, start_date, end_date):
     return runtime_percentage, runtime_duration
 
 
-async def send_runtimes_telegram(session):
+async def send_runtimes_telegram(session, state):  # Nimm 'state' als Argument entgegen
     """Sendet die Laufzeiten über Telegram."""
     runtimes = calculate_runtimes()
     if runtimes:
@@ -361,9 +371,9 @@ async def send_runtimes_telegram(session):
             f"• Aktueller Monat: {runtimes['Aktueller Monat']['percentage']:.1f}% ({runtimes['Aktueller Monat']['duration']})\n"
             f"• Vorheriger Monat: {runtimes['Vorheriger Monat']['percentage']:.1f}% ({runtimes['Vorheriger Monat']['duration']})\n"
         )
-        await send_telegram_message(session, CHAT_ID, message)
+        await send_telegram_message(session, state.chat_id, message)  # Verwende state.chat_id
     else:
-        await send_telegram_message(session, CHAT_ID, "Fehler beim Abrufen der Laufzeiten.")
+        await send_telegram_message(session, state.chat_id, "Fehler beim Abrufen der Laufzeiten.")  # Verwende state.chat_id
 
 
 async def send_unknown_command_message(session, chat_id):
@@ -384,7 +394,7 @@ async def is_nighttime(config):
     return now.hour >= night_start or now.hour < night_end
 
 # test.py (angepasste shutdown-Funktion)
-async def shutdown(session):
+async def shutdown(session, state):  # Nimm 'state' als Argument entgegen
     """Führt die Abschaltprozedur durch und informiert über Telegram."""
     try:
         local_tz = pytz.timezone("Europe/Berlin")
@@ -399,7 +409,7 @@ async def shutdown(session):
             logging.warning("GPIO-Modus nicht gesetzt, überspringe GPIO.output")
 
         message = f"🛑 Programm beendet um {now.strftime('%d.%m.%Y um %H:%M:%S')}"
-        await send_telegram_message(session, CHAT_ID, message, BOT_TOKEN)
+        await send_telegram_message(session, state.chat_id, message, state.bot_token)  # Verwende state.chat_id und state.bot_token
 
         # LCD nur schließen, wenn es existiert
         if lcd is not None:
@@ -608,7 +618,7 @@ async def reload_config(session, state, config):
             },
             "Telegram": {
                 "CHAT_ID": new_config.get("Telegram", "CHAT_ID", fallback=""),
-                "TOKEN": new_config.get("Telegram", "TOKEN", fallback="")
+                "BOT_TOKEN": new_config.get("Telegram", "BOT_TOKEN", fallback="")  # Korrigiert von TOKEN
             }
         }
 
@@ -620,7 +630,7 @@ async def reload_config(session, state, config):
         config.update(validated_config)
 
         # Aktualisiere state.bot_token und state.chat_id
-        state.bot_token = validated_config["Telegram"]["TOKEN"]
+        state.bot_token = validated_config["Telegram"]["BOT_TOKEN"]
         state.chat_id = validated_config["Telegram"]["CHAT_ID"]
         if not state.bot_token or not state.chat_id:
             logging.warning("Kein gültiger Telegram-Token oder Chat-ID in der Konfiguration gefunden. Telegram-Nachrichten deaktiviert.")
@@ -1039,7 +1049,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
 
         if not dates:
             logging.warning("Keine Laufzeitdaten für die angegebenen Tage gefunden.")
-            await send_telegram_message(session, CHAT_ID, "Keine Laufzeitdaten verfügbar.", state.bot_token)
+            await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)  # Verwende state
             return
 
         dates = sorted(dates)
@@ -1060,7 +1070,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
 
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
-        form.add_field("chat_id", CHAT_ID)
+        form.add_field("chat_id", state.chat_id)  # Verwende state
         form.add_field("caption", f"📊 Kompressorlaufzeiten (letzte {days} Tage)")
         form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
 
@@ -1072,7 +1082,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
 
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {str(e)}")
-        await send_telegram_message(session, CHAT_ID, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token)
+        await send_telegram_message(session, state.chat_id, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token) # Verwende state
 
 async def initialize_gpio():
     """
@@ -1661,6 +1671,7 @@ async def run_program():
         config.read("config.ini")
         state = State(config)
         try:
+            await setup_logging(session, state)  # Hier wird state übergeben
             await main_loop(session, config, state)
         except KeyboardInterrupt:
             logging.info("Programm durch Benutzer abgebrochen (Ctrl+C).")
