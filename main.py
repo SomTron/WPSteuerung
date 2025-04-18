@@ -172,14 +172,14 @@ class State:
         )
 
 # Logging einrichten mit Telegram-Handler
-async def setup_logging(session, state):  # Nimm 'state' als Argument entgegen
+async def setup_logging(session, state):
     logging.basicConfig(
         filename="heizungssteuerung.log",
-        level=logging.INFO,
+        level=logging.INFO,  # Generelles Logging-Level (für die Datei)
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    telegram_handler = TelegramHandler(state.bot_token, state.chat_id, session)  # Verwende state.bot_token und state.chat_id
-    telegram_handler.setLevel(logging.WARNING)
+    telegram_handler = TelegramHandler(state.bot_token, state.chat_id, session)
+    telegram_handler.setLevel(logging.WARNING)  # TelegramHandler sendet nur WARNING und höher
     telegram_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logging.getLogger().addHandler(telegram_handler)
     logging.info("Logging mit Telegram-Handler initialisiert")
@@ -1000,92 +1000,123 @@ async def display_task(state):
                 await asyncio.sleep(5)
 
 async def get_runtime_bar_chart(session, days=7, state=None):
-    """Erstellt ein Balkendiagramm der Kompressorlaufzeiten für die letzten 'days' Tage."""
+    """Erstellt ein gestapeltes Balkendiagramm der Kompressorlaufzeiten nach Energiequelle."""
     if state is None:
         logging.error("State-Objekt nicht übergeben, kann Telegram-Nachricht nicht senden.")
         return
 
     try:
-        local_tz = pytz.timezone("Europe/Berlin")
-        now = datetime.now(local_tz)
-        today = now.date()
-        start_date = today - timedelta(days=days - 1)
-        runtime_data = []
-        dates = []
-
-        logging.debug(f"get_runtime_bar_chart: now={now}, tzinfo={now.tzinfo}, today={today}, start_date={start_date}")
-
         async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
             lines = await csvfile.readlines()
-            lines = lines[1:]  # Header überspringen
+            if not lines:
+                logging.warning("CSV-Datei ist leer.")
+                await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)
+                return
+
+            header = lines[0].strip().split(',')
+            logging.debug(f"CSV-Header: {header}")  # Logge den Header
+
+            try:
+                timestamp_col = header.index("Zeitstempel")  # Korrigiert: "Zeitstempel" statt "timestamp"
+                kompressor_col = header.index("Kompressor")  # Korrigiert: "Kompressor" statt "kompressor_status"
+                runtime_pv_col = header.index("PowerSource")  # Korrigiert: "PowerSource" (ggf. weitere Anpassung nötig)
+                runtime_battery_col = header.index("BatPower")  # Korrigiert: "BatPower"
+                runtime_grid_col = header.index(
+                    "ConsumeEnergy")  # Korrigiert: "ConsumeEnergy" (ggf. weitere Anpassung nötig)
+            except ValueError as e:
+                logging.error(f"Notwendige Spaltennamen nicht in CSV-Header gefunden: {e}")
+                await send_telegram_message(session, state.chat_id, "Fehler beim Lesen der CSV-Datei.", state.bot_token)
+                return
+
+            lines = lines[1:]
 
             for line in lines:
                 parts = line.strip().split(',')
-                if len(parts) >= 18:  # Mindestens bis nacht_reduction
-                    timestamp_str = parts[0].strip()
+                if len(parts) > max(timestamp_col, kompressor_col, runtime_pv_col, runtime_battery_col, runtime_grid_col):
                     try:
-                        # Parse Zeitstempel und lokalisiere mit Europe/Berlin
-                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        timestamp = local_tz.localize(timestamp)
+                        timestamp_str = parts[timestamp_col].strip()
+                        timestamp = local_tz.localize(datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S'))
                         date = timestamp.date()
-                        kompressor_status = parts[6].strip()
-                        # Laufzeit nur berechnen, wenn Kompressor EIN war
-                        runtime_str = "0:00:00"  # Standard, wenn AUS
-                        if kompressor_status == "EIN":
-                            # Hier könnten wir die tatsächliche Laufzeit berechnen, z. B. Zeitdifferenz
-                            # Für jetzt: Annahme 1 Minute pro EIN-Eintrag (anpassen nach Bedarf)
-                            runtime_str = "0:01:00"
+
                         if date >= start_date and date <= today:
                             if date not in dates:
                                 dates.append(date)
-                                runtime_data.append(timedelta())
+                                runtime_pv_data.append(timedelta())
+                                runtime_battery_data.append(timedelta())
+                                runtime_grid_data.append(timedelta())
+
                             runtime_index = dates.index(date)
-                            h, m, s = map(int, runtime_str.split(':'))
-                            runtime_data[runtime_index] += timedelta(hours=h, minutes=m, seconds=s)
-                        logging.debug(f"Verarbeitete Zeile: timestamp={timestamp}, tzinfo={timestamp.tzinfo}, date={date}, kompressor_status={kompressor_status}")
+
+                            def parse_timedelta(time_str):
+                                try:
+                                    h, m, s = map(int, time_str.split(':'))
+                                    return timedelta(hours=h, minutes=m, seconds=s)
+                                except ValueError as e:
+                                    logging.error(f"Fehler beim Parsen der Zeit '{time_str}': {e}")
+                                    return timedelta()
+
+                            try:
+                                runtime_pv_data[runtime_index] += parse_timedelta(parts[runtime_pv_col].strip())
+                            except (IndexError, ValueError):
+                                runtime_pv_data[runtime_index] += timedelta()
+
+                            try:
+                                runtime_battery_data[runtime_index] += parse_timedelta(parts[runtime_battery_col].strip())
+                            except (IndexError, ValueError):
+                                runtime_battery_data[runtime_index] += timedelta()
+
+                            try:
+                                runtime_grid_data[runtime_index] += parse_timedelta(parts[runtime_grid_col].strip())
+                            except (IndexError, ValueError):
+                                runtime_grid_data[runtime_index] += timedelta()
+
                     except (ValueError, IndexError) as e:
                         logging.warning(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
                         continue
 
-        if not dates:
-            logging.warning("Keine Laufzeitdaten für die angegebenen Tage gefunden.")
-            await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)  # Verwende state
-            return
+            if not dates:
+                logging.warning("Keine Laufzeitdaten für die angegebenen Tage gefunden.")
+                await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)
+                return
 
-        dates = sorted(dates)
-        runtime_hours = [td.total_seconds() / 3600 for td in runtime_data]
+            dates = sorted(dates)
+            runtime_pv_hours = [td.total_seconds() / 3600 for td in runtime_pv_data]
+            runtime_battery_hours = [td.total_seconds() / 3600 for td in runtime_battery_data]
+            runtime_grid_hours = [td.total_seconds() / 3600 for td in runtime_grid_data]
 
-        plt.figure(figsize=(10, 6))
-        plt.bar(dates, runtime_hours, color='skyblue')
-        plt.xlabel("Datum")  # Wird später angepasst
-        plt.ylabel("Laufzeit (Stunden)")
-        plt.title(f"Kompressorlaufzeiten (letzte {days} Tage)")
+            # **Gestapeltes Balkendiagramm erstellen**
+            plt.figure(figsize=(10, 6))
+            plt.bar(dates, runtime_pv_hours, label="PV", color="green")
+            plt.bar(dates, runtime_battery_hours, bottom=runtime_pv_hours, label="Batterie", color="orange")
+            plt.bar(dates, runtime_grid_hours, bottom=[sum(x) for x in zip(runtime_pv_hours, runtime_battery_hours)], label="Netz", color="blue")
 
-        # Formatieren der Datums-Ticks
-        date_labels = [date.strftime('%d-%m') for date in dates]  # Nur Tag und Monat
-        plt.xticks(dates, date_labels, rotation=45, ha='right')  # Setze die formatierten Labels
-        plt.tight_layout()
+            plt.xlabel("Datum")
+            plt.ylabel("Laufzeit (Stunden)")
+            plt.title(f"Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
+            plt.xticks(dates, [date.strftime('%d-%m') for date in dates], rotation=45, ha='right')
+            plt.legend()  # Legende hinzufügen
+            plt.tight_layout()
 
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=100)
-        buf.seek(0)
-        plt.close()
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png", dpi=100)
+            buf.seek(0)
+            plt.close()
 
-        url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
-        form = FormData()
-        form.add_field("chat_id", state.chat_id)  # Verwende state
-        form.add_field("caption", f"📊 Kompressorlaufzeiten (letzte {days} Tage)")
-        form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
+            url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
+            form = FormData()
+            form.add_field("chat_id", state.chat_id)
+            form.add_field("caption", f"📊 Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
+            form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
 
-        async with session.post(url, data=form) as response:
-            response.raise_for_status()
-            logging.info(f"Laufzeitdiagramm für {days} Tage gesendet.")
+            async with session.post(url, data=form) as response:
+                response.raise_for_status()
+                logging.info(f"Laufzeitdiagramm für {days} Tage gesendet.")
 
-        buf.close()
+            buf.close()
 
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {str(e)}")
-        await send_telegram_message(session, state.chat_id, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token) # Verwende state
+        await send_telegram_message(session, state.chat_id, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token)
 
 async def initialize_gpio():
     """
@@ -1538,7 +1569,7 @@ async def main_loop(session, config, state):
                                     result = await asyncio.to_thread(set_kompressor_status, state, True)
                                     if result is False:
                                         state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler"
-                                        logging.warning(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
+                                        logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
                                     else:
                                         state.kompressor_ein = True
                                         state.last_compressor_on_time = now
