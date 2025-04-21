@@ -873,44 +873,53 @@ def is_nighttime(config):
 
 def calculate_shutdown_point(config, is_night, solax_data, state):
     """Berechnet die Sollwerte basierend auf Modus und Absenkungen."""
-    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-    urlaubs_reduction = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
-    total_reduction = nacht_reduction + urlaubs_reduction
-    bat_power = solax_data.get("batPower", 0)
-    feedin_power = solax_data.get("feedinpower", 0)
-    soc = solax_data.get("soc", 0)
+    try:
+        nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+        urlaubs_reduction = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
+        total_reduction = nacht_reduction + urlaubs_reduction
+        bat_power = solax_data.get("batPower", 0)
+        feedin_power = solax_data.get("feedinpower", 0)
+        soc = solax_data.get("soc", 0)
 
-    # Solarüberschuss-Logik
-    was_active = state.solar_ueberschuss_aktiv
-    state.solar_ueberschuss_aktiv = bat_power > 600 or (soc > 95 and feedin_power > 600)
+        # Solarüberschuss-Logik
+        was_active = state.solar_ueberschuss_aktiv
+        state.solar_ueberschuss_aktiv = bat_power > 600 or (soc > 95 and feedin_power > 600)
 
-    if state.solar_ueberschuss_aktiv and not was_active:
-        logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
-    elif was_active and not state.solar_ueberschuss_aktiv:
-        logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+        if state.solar_ueberschuss_aktiv and not was_active:
+            logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+        elif was_active and not state.solar_ueberschuss_aktiv:
+            logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
-    if state.solar_ueberschuss_aktiv:
-        ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 50)) - total_reduction
-        einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46)) - total_reduction
-    else:
-        ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - total_reduction
-        einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
+        if state.solar_ueberschuss_aktiv:
+            ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 50)) - total_reduction
+            einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46)) - total_reduction
+        else:
+            ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - total_reduction
+            einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
 
-    # Validierung: Stelle sicher, dass Ausschaltpunkt > Einschaltpunkt
-    HYSTERESE_MIN = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))  # Mindestabstand in °C
-    if ausschaltpunkt <= einschaltpunkt:
-        logging.warning(
-            f"Ausschaltpunkt ({ausschaltpunkt}°C) <= Einschaltpunkt ({einschaltpunkt}°C), "
-            f"setze Ausschaltpunkt auf Einschaltpunkt + {HYSTERESE_MIN}°C"
+        # Validierung: Stelle sicher, dass Ausschaltpunkt > Einschaltpunkt
+        HYSTERESE_MIN = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))
+        if ausschaltpunkt <= einschaltpunkt:
+            logging.warning(
+                f"Ausschaltpunkt ({ausschaltpunkt}°C) <= Einschaltpunkt ({einschaltpunkt}°C), "
+                f"setze Ausschaltpunkt auf Einschaltpunkt + {HYSTERESE_MIN}°C"
+            )
+            ausschaltpunkt = einschaltpunkt + HYSTERESE_MIN
+
+        logging.debug(
+            f"Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, "
+            f"Nachtabsenkung={nacht_reduction}, Urlaubsabsenkung={urlaubs_reduction}, "
+            f"Solarüberschuss={state.solar_ueberschuss_aktiv}"
         )
-        ausschaltpunkt = einschaltpunkt + HYSTERESE_MIN
+        return ausschaltpunkt, einschaltpunkt
 
-    logging.debug(
-        f"Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, "
-        f"Nachtabsenkung={nacht_reduction}, Urlaubsabsenkung={urlaubs_reduction}, "
-        f"Solarüberschuss={state.solar_ueberschuss_aktiv}"
-    )
-    return ausschaltpunkt, einschaltpunkt
+    except (KeyError, ValueError) as e:
+        logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
+        # Standardwerte als Fallback
+        ausschaltpunkt = 45
+        einschaltpunkt = 42
+        logging.warning(f"Verwende Standard-Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}")
+        return ausschaltpunkt, einschaltpunkt
 
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
