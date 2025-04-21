@@ -234,35 +234,42 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         return last_update_id
 
 
-async def telegram_task(session, bot_token, chat_id, read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func):
-    """Verarbeitet eingehende Telegram-Nachrichten und führt entsprechende Aktionen aus."""
+async def telegram_task(session, read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func):
     last_update_id = None
     max_retries = 3
     while True:
         for attempt in range(max_retries):
             try:
-                updates = await get_telegram_updates(session, bot_token, last_update_id)
+                if not state.bot_token or not state.chat_id:
+                    logging.warning("Telegram bot_token oder chat_id fehlt. Überspringe telegram_task.")
+                    await asyncio.sleep(60)
+                    continue
+                updates = await get_telegram_updates(session, state.bot_token, last_update_id)
                 if updates is not None:
-                    t_boiler_oben = await asyncio.to_thread(read_temperature_func, sensor_ids["oben"])
-                    t_boiler_unten = await asyncio.to_thread(read_temperature_func, sensor_ids["unten"])
-                    t_boiler_mittig = await asyncio.to_thread(read_temperature_func, sensor_ids["mittig"])
-                    t_verd = await asyncio.to_thread(read_temperature_func, sensor_ids["verd"])
-
-                    # Rufe die Funktionen auf, um die aktuellen Werte zu erhalten
+                    # Parallele Sensorlesung
+                    sensor_tasks = [
+                        asyncio.to_thread(read_temperature_func, sensor_ids[key])
+                        for key in ["oben", "unten", "mittig", "verd"]
+                    ]
+                    t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
+                    # Prüfe auf Sensorfehler
+                    for temp, key in zip([t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd], ["oben", "unten", "mittig", "verd"]):
+                        if isinstance(temp, Exception) or temp is None:
+                            logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {temp or 'Kein Wert'}")
+                            temp = None
                     kompressor_status = kompressor_status_func()
                     aktuelle_laufzeit = current_runtime_func()
                     gesamtlaufzeit = total_runtime_func()
-
                     last_update_id = await process_telegram_messages_async(
                         session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id,
-                        kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config,
+                        kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, state.chat_id, state.bot_token, config,
                         get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func,
                         is_nighttime_func)
                     break
                 else:
                     logging.warning(f"Telegram-Updates waren None, Versuch {attempt + 1}/{max_retries}")
             except Exception as e:
-                logging.error(f"Fehler in telegram_task (Versuch {attempt + 1}/{max_retries}): {e}", exc_info=True)
+                logging.error(f"Fehler in telegram_task (Versuch {attempt + 1}/{max_retries}): {str(e)}", exc_info=True)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(10)
                 else:

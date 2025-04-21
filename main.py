@@ -3,6 +3,7 @@ import sys
 import smbus2
 import pytz
 from datetime import datetime, timedelta
+import time
 from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
 import logging
@@ -80,12 +81,28 @@ logging.info(f"Programm gestartet: {datetime.now(local_tz)}")
 
 # Neuer Telegram-Handler für Logging
 class TelegramHandler(logging.Handler):
-    def __init__(self, bot_token, chat_id, session):
+    def __init__(self, state):
         super().__init__()
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.session = session
-        self.setLevel(logging.WARNING)  # Nur Warnings und Errors senden
+        self.bot_token = state.bot_token
+        self.chat_id = state.chat_id
+        self.loop = asyncio.get_event_loop()
+        self.last_sent = 0
+        self.rate_limit = 10
+    def emit(self, record):
+        try:
+            now = time.time()
+            if now - self.last_sent < self.rate_limit:
+                return
+            msg = self.format(record)
+            self.loop.create_task(self.send_message(msg))
+            self.last_sent = now
+        except Exception as e:
+            print(f"Fehler in TelegramHandler.emit: {e}")
+    async def send_message(self, msg):
+        try:
+            await send_telegram_message(None, self.chat_id, msg, self.bot_token)
+        except Exception as e:
+            logging.error(f"Fehler beim Senden der Telegram-Nachricht: {e}")
 
     async def send_telegram(self, message):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
@@ -463,15 +480,14 @@ def read_temperature(sensor_id):
     try:
         with open(device_file, "r") as f:
             lines = f.readlines()
-            # Prüfe, ob der Sensor korrekt gelesen wurde (CRC-Check)
+            if len(lines) < 2:
+                logging.error(f"Sensor {sensor_id}: Zu wenige Zeilen in w1_slave ({len(lines)})")
+                return None
             if lines[0].strip()[-3:] == "YES":
-                # Extrahiere die Temperatur aus der zweiten Zeile (in Milligrad Celsius)
                 temp_data = lines[1].split("=")[-1]
                 temp = float(temp_data) / 1000.0
-                # Plausibilitätsprüfung: Temperaturen außerhalb -20°C bis 100°C sind unwahrscheinlich
                 if temp < -20 or temp > 100:
-                    logging.error(
-                        f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C. Sensor als fehlerhaft betrachtet.")
+                    logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                     return None
                 logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
                 return temp
@@ -482,7 +498,7 @@ def read_temperature(sensor_id):
         logging.error(f"Sensor-Datei nicht gefunden: {device_file}")
         return None
     except Exception as e:
-        logging.error(f"Fehler beim Lesen des Sensors {sensor_id}: {e}")
+        logging.error(f"Fehler beim Lesen des Sensors {sensor_id}: {str(e)}")
         return None
 
 
@@ -999,13 +1015,18 @@ async def display_task(state):
                 lcd = None  # Setze lcd auf None bei Fehler während der Nutzung
                 await asyncio.sleep(5)
 
+
 async def get_runtime_bar_chart(session, days=7, state=None):
-    """Erstellt ein gestapeltes Balkendiagramm der Kompressorlaufzeiten nach Energiequelle."""
+    """Erstellt ein gestapeltes Balkendiagramm der Kompressorlaufzeiten für die letzten 'days' Tage."""
     if state is None:
         logging.error("State-Objekt nicht übergeben, kann Telegram-Nachricht nicht senden.")
         return
 
     try:
+        local_tz = pytz.timezone("Europe/Berlin")
+        now = datetime.now(local_tz)
+        today = now.date()
+        start_date = today - timedelta(days=days - 1)  # Initialisiere start_date vor dem try-Block
         async with aiofiles.open("heizungsdaten.csv", 'r') as csvfile:
             lines = await csvfile.readlines()
             if not lines:
@@ -1326,10 +1347,10 @@ async def main_loop(session, config, state):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
     NOTIFICATION_COOLDOWN = 600
-    await send_telegram_message(session, config["Telegram"]["CHAT_ID"],
-                               f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
-                               state.bot_token)
-    await send_welcome_message(session, config["Telegram"]["CHAT_ID"], state.bot_token)
+    await send_telegram_message(session, state.chat_id,
+                                f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
+                                state.bot_token)
+    await send_welcome_message(session, state.chat_id, state.bot_token)
 
     # Initialisiere Zeitstempel mit Zeitzone
     state.last_log_time = None if not hasattr(state, 'last_log_time') else state.last_log_time
@@ -1348,13 +1369,15 @@ async def main_loop(session, config, state):
 
     try:
         telegram_task_handle = asyncio.create_task(
-            telegram_task(session, state.bot_token, config["Telegram"]["CHAT_ID"], read_temperature, SENSOR_IDS,
-                          lambda: state.kompressor_ein,
-                          lambda: str(state.current_runtime).split('.')[0],
-                          lambda: str(state.total_runtime_today).split('.')[0],
-                          config, get_solax_data, state,
-                          get_boiler_temperature_history, get_runtime_bar_chart,
-                          lambda cfg=config: is_nighttime(cfg))
+            telegram_task(
+                session, read_temperature, SENSOR_IDS,
+                lambda: state.kompressor_ein,
+                lambda: str(state.current_runtime).split('.')[0],
+                lambda: str(state.total_runtime_today).split('.')[0],
+                config, get_solax_data, state,
+                get_boiler_temperature_history, get_runtime_bar_chart,
+                lambda cfg=config: is_nighttime(cfg)
+            )
         )
     except TypeError as e:
         logging.error(f"TypeError beim Starten von telegram_task: {e}", exc_info=True)
@@ -1435,31 +1458,46 @@ async def main_loop(session, config, state):
 
                 if not pressure_ok:
                     if state.kompressor_ein:
+                        logging.debug("Versuche, Kompressor wegen Druckschalter auszuschalten")
                         await asyncio.to_thread(set_kompressor_status, state, False, force_off=True)
                         state.kompressor_ein = False
                         last_compressor_off_time = now
                         logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
                     state.ausschluss_grund = "Druckschalter offen"
                     if not state.pressure_error_sent:
-                        await send_telegram_message(session, config["Telegram"]["CHAT_ID"],
-                                                   "⚠️ Druckschalter offen!", state.bot_token)
-                        state.pressure_error_sent = True
-                        state.last_pressure_error_time = now
+                        if state.bot_token and state.chat_id:
+                            try:
+                                await send_telegram_message(session, state.chat_id,
+                                                            "⚠️ Druckschalter offen!", state.bot_token)
+                                state.pressure_error_sent = True
+                                state.last_pressure_error_time = now
+                                logging.debug("Telegram-Nachricht für Druckschalter gesendet")
+                            except Exception as e:
+                                logging.error(f"Fehler beim Senden der Druckschalter-Nachricht: {e}", exc_info=True)
+                        else:
+                            logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
                     await asyncio.sleep(2)
                     continue
 
-                if state.pressure_error_sent and (
-                        state.last_pressure_error_time is None or
-                        (now - state.last_pressure_error_time) >= PRESSURE_ERROR_DELAY):
-                    await send_telegram_message(session, config["Telegram"]["CHAT_ID"],
-                                               "✅ Druckschalter wieder normal.", state.bot_token)
-                    state.pressure_error_sent = False
-                    state.last_pressure_error_time = None
+                if state.pressure_error_sent and (now - state.last_pressure_error_time) >= PRESSURE_ERROR_DELAY:
+                    if state.bot_token and state.chat_id:
+                        try:
+                            await send_telegram_message(session, state.chat_id,
+                                                        "✅ Druckschalter wieder normal.", state.bot_token)
+                            state.pressure_error_sent = False
+                            state.last_pressure_error_time = None
+                            logging.debug("Telegram-Nachricht für Druckschalter-Wiederherstellung gesendet")
+                        except Exception as e:
+                            logging.error(f"Fehler beim Senden der Druckschalter-Wiederherstellungs-Nachricht: {e}",
+                                          exc_info=True)
+                    else:
+                        logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
 
                 fehler, is_overtemp = await check_boiler_sensors(t_boiler_oben, t_boiler_unten, config, session, state)
 
                 if fehler:
                     if state.kompressor_ein:
+                        logging.debug("Versuche, Kompressor wegen Sensorfehler auszuschalten")
                         await asyncio.to_thread(set_kompressor_status, state, False, force_off=True)
                         state.kompressor_ein = False
                         last_compressor_off_time = now
@@ -1476,30 +1514,25 @@ async def main_loop(session, config, state):
                                 f"SICHERHEITS_TEMP nicht in config['Heizungssteuerung'] gefunden, verwende Standard: {SICHERHEITS_TEMP}")
                         except ValueError:
                             SICHERHEITS_TEMP = 51
-                            logging.warning(
-                                f"SICHERHEITS_TEMP ungültig (keine Ganzzahl: {config['Heizungssteuerung']['SICHERHEITS_TEMP']}), verwende Standard: {SICHERHEITS_TEMP}")
+                            logging.warning(f"SICHERHEITS_TEMP ungültig, verwende Standard: {SICHERHEITS_TEMP}")
 
                         if (state.last_overtemp_notification is None or
                                 (now - state.last_overtemp_notification).total_seconds() >= NOTIFICATION_COOLDOWN):
-                            await send_telegram_message(
-                                session,
-                                config["Telegram"]["CHAT_ID"],
-                                f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C",
-                                state.bot_token
-                            )
-                            state.last_overtemp_notification = now
-                            logging.info("Telegram-Nachricht für Übertemperatur gesendet.")
+                            if state.bot_token and state.chat_id:
+                                try:
+                                    if t_boiler_oben is None or t_boiler_unten is None:
+                                        message = f"⚠️ Sicherheitsabschaltung: T_Oben={'N/A' if t_boiler_oben is None else t_boiler_oben:.1f}°C, T_Unten={'N/A' if t_boiler_unten is None else t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C"
+                                    else:
+                                        message = f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C"
+                                    await send_telegram_message(session, state.chat_id, message, state.bot_token)
+                                    state.last_overtemp_notification = now
+                                    logging.info("Telegram-Nachricht für Übertemperatur gesendet")
+                                except Exception as e:
+                                    logging.error(f"Fehler beim Senden der Übertemperatur-Nachricht: {e}",
+                                                  exc_info=True)
+                            else:
+                                logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
 
-                    await asyncio.sleep(2)
-                    continue
-
-                if t_verd is not None and t_verd < state.verdampfertemperatur:
-                    if state.kompressor_ein:
-                        await asyncio.to_thread(set_kompressor_status, state, False)
-                        state.kompressor_ein = False
-                        last_compressor_off_time = now
-                        logging.info(f"Kompressor ausgeschaltet (Verdampfer zu kalt: {t_verd:.1f}°C).")
-                    state.ausschluss_grund = f"Verdampfer zu kalt ({t_verd:.1f}°C)"
                     await asyncio.sleep(2)
                     continue
 
@@ -1528,8 +1561,10 @@ async def main_loop(session, config, state):
                             logging.warning(
                                 f"SICHERHEITS_TEMP nicht gefunden oder ungültig, verwende Standard: {SICHERHEITS_TEMP}")
 
-                        if t_boiler_oben >= SICHERHEITS_TEMP or t_boiler_unten >= SICHERHEITS_TEMP:
+                        if (t_boiler_oben is not None and t_boiler_unten is not None and
+                                (t_boiler_oben >= SICHERHEITS_TEMP or t_boiler_unten >= SICHERHEITS_TEMP)):
                             if state.kompressor_ein:
+                                logging.debug("Versuche, Kompressor wegen Übertemperatur auszuschalten")
                                 await asyncio.to_thread(set_kompressor_status, state, False, force_off=True)
                                 state.kompressor_ein = False
                                 last_compressor_off_time = now
@@ -1538,12 +1573,19 @@ async def main_loop(session, config, state):
                                 logging.error(
                                     f"Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C"
                                 )
-                                await send_telegram_message(
-                                    session,
-                                    config["Telegram"]["CHAT_ID"],
-                                    f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C",
-                                    state.bot_token
-                                )
+                                if state.bot_token and state.chat_id:
+                                    try:
+                                        await send_telegram_message(
+                                            session, state.chat_id,
+                                            f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C",
+                                            state.bot_token
+                                        )
+                                        logging.debug("Telegram-Nachricht für Sicherheitsabschaltung gesendet")
+                                    except Exception as e:
+                                        logging.error(f"Fehler beim Senden der Sicherheitsabschaltung-Nachricht: {e}",
+                                                      exc_info=True)
+                                else:
+                                    logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
                             state.ausschluss_grund = f"Übertemperatur (>= {SICHERHEITS_TEMP}°C)"
                             await asyncio.sleep(2)
                             continue
@@ -1678,8 +1720,8 @@ async def main_loop(session, config, state):
                         f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
                     if watchdog_warning_count >= WATCHDOG_MAX_WARNINGS:
                         await asyncio.to_thread(set_kompressor_status, state, False, force_off=True)
-                        await send_telegram_message(session, config["Telegram"]["CHAT_ID"],
-                                                   "🚨 Watchdog-Fehler: Programm beendet.", state.bot_token)
+                        await send_telegram_message(session, state.chat_id,
+                                                    "🚨 Watchdog-Fehler: Programm beendet.", state.bot_token)
                         await shutdown(session)
                         raise SystemExit("Watchdog-Exit")
 
