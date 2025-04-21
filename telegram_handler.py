@@ -5,14 +5,28 @@ from datetime import datetime, timedelta
 
 
 async def send_telegram_message(session, chat_id, message, bot_token):
-    """Sendet eine Nachricht über Telegram."""
+    """Sendet eine Nachricht über Telegram mit Fehlerbehandlung."""
+    # Prüfe Nachrichtenlänge (Telegram-Limit: 4096 Zeichen)
+    if len(message) > 4096:
+        message = message[:4093] + "..."
+        logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
+
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {"chat_id": chat_id, "text": message}
-    async with session.post(url, json=payload) as response:
-        if response.status == 200:
-            logging.info(f"Telegram-Nachricht gesendet: {message}")
-        else:
-            logging.error(f"Fehler beim Senden der Telegram-Nachricht: {response.status}")
+
+    try:
+        async with session.post(url, json=payload, timeout=10) as response:
+            if response.status == 200:
+                logging.info(f"Telegram-Nachricht gesendet: {message}")
+            else:
+                error_text = await response.text()
+                logging.error(f"Fehler beim Senden der Telegram-Nachricht: Status {response.status}, Details: {error_text}")
+    except aiohttp.ClientError as e:
+        logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht: {e}", exc_info=True)
+    except asyncio.TimeoutError:
+        logging.error("Timeout beim Senden der Telegram-Nachricht", exc_info=True)
+    except Exception as e:
+        logging.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}", exc_info=True)
 
 
 async def send_welcome_message(session, chat_id, bot_token):
