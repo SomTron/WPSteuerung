@@ -544,6 +544,7 @@ async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config):
 def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
+    SICHERHEITS_TEMP = 52  # Sicherheitsgrenze aus config.ini (Heizungssteuerung.SICHERHEITS_TEMP)
     logging.debug(f"set_kompressor_status: ein={ein}, force_off={force_off}, t_boiler_oben={t_boiler_oben}, "
                   f"kompressor_ein={state.kompressor_ein}, last_shutdown_time={state.last_shutdown_time}, "
                   f"start_time={state.start_time}")
@@ -586,9 +587,9 @@ def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None):
                 else:
                     elapsed_time = timedelta()
                     logging.warning("Kompressor wird ausgeschaltet, aber start_time ist None")
-                # Ignoriere MIN_LAUFZEIT, wenn Ausschaltpunkt überschritten oder force_off=True
+                # Ignoriere MIN_LAUFZEIT nur bei force_off=True oder wenn Sicherheitsgrenze erreicht ist
                 if (elapsed_time < state.min_laufzeit and not force_off and
-                    (t_boiler_oben is None or t_boiler_oben < state.aktueller_ausschaltpunkt)):
+                    (t_boiler_oben is None or t_boiler_oben < SICHERHEITS_TEMP)):
                     logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {state.min_laufzeit})")
                     return True
                 state.kompressor_ein = False
@@ -613,7 +614,6 @@ def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None):
     except Exception as e:
         logging.error(f"Fehler in set_kompressor_status: {e}", exc_info=True)
         return False
-
 
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session, state, config):
@@ -1359,6 +1359,7 @@ async def main_loop(config, state, session):
     NOTIFICATION_COOLDOWN = 600
     PRESSURE_ERROR_DELAY = timedelta(minutes=5)
     WATCHDOG_MAX_WARNINGS = 3
+    csv_lock = asyncio.Lock()
 
     try:
         # GPIO-Initialisierung
@@ -1377,7 +1378,7 @@ async def main_loop(config, state, session):
         )
         await send_welcome_message(session, state.chat_id, state.bot_token)
 
-        # Initialisiere Zeitstempel
+        # Initialisiere Zeitstempel und Zustandsvariablen
         state.last_log_time = None if not hasattr(state, 'last_log_time') else state.last_log_time
         if state.last_log_time and state.last_log_time.tzinfo is None:
             state.last_log_time = local_tz.localize(state.last_log_time)
@@ -1391,6 +1392,9 @@ async def main_loop(config, state, session):
         state.last_overtemp_notification = None if not hasattr(state, 'last_overtemp_notification') else state.last_overtemp_notification
         if state.last_overtemp_notification and state.last_overtemp_notification.tzinfo is None:
             state.last_overtemp_notification = local_tz.localize(state.last_overtemp_notification)
+        state.previous_ausschaltpunkt = None if not hasattr(state, 'previous_ausschaltpunkt') else state.previous_ausschaltpunkt
+        state.previous_einschaltpunkt = None if not hasattr(state, 'previous_einschaltpunkt') else state.previous_einschaltpunkt
+        state.previous_solar_ueberschuss_aktiv = state.solar_ueberschuss_aktiv if hasattr(state, 'solar_ueberschuss_aktiv') else False
 
         # Asynchrone Aufgaben
         telegram_task_handle = asyncio.create_task(
@@ -1467,6 +1471,12 @@ async def main_loop(config, state, session):
                     nacht_reduction = 0
                     state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
                     state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPOINT_ERHOEHT", 50))
+
+                # Moduswechsel speichern
+                if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv:
+                    state.previous_ausschaltpunkt = state.aktueller_ausschaltpunkt
+                    state.previous_einschaltpunkt = state.aktueller_einschaltpunkt
+                state.previous_solar_ueberschuss_aktiv = state.solar_ueberschuss_aktiv
 
                 # Sensorwerte lesen
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
@@ -1546,7 +1556,10 @@ async def main_loop(config, state, session):
 
                 # Kompressorsteuerung
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
-                state.solar_ueberschuss_aktiv = power_source == "Direkter PV-Strom"
+                state.solar_ueberschuss_aktiv = (
+                    power_source == "Direkter PV-Strom" or
+                    (state.kompressor_ein and state.current_runtime < state.min_laufzeit)
+                )
 
                 if t_boiler_oben is not None and t_boiler_unten is not None and t_boiler_mittig is not None:
                     EINSCHALTPOINT = state.aktueller_einschaltpunkt
@@ -1636,10 +1649,16 @@ async def main_loop(config, state, session):
                                     f"T_Oben > {AUSSCHALTPOINT + TOLERANZ}°C). Laufzeit: {state.last_runtime}"
                                 )
                     else:
+                        effective_ausschaltpunkt = (
+                            state.previous_ausschaltpunkt
+                            if state.kompressor_ein and state.previous_ausschaltpunkt is not None
+                            else state.aktueller_ausschaltpunkt
+                        )
                         logging.debug(
                             f"Normalmodus, prüfe Einschaltbedingungen: "
                             f"T_Oben={t_boiler_oben:.1f}, T_Mittig={t_boiler_mittig:.1f}, "
-                            f"Einschaltpunkt={state.aktueller_einschaltpunkt}, Ausschaltpunkt={state.aktueller_ausschaltpunkt}"
+                            f"Einschaltpunkt={state.aktueller_einschaltpunkt}, "
+                            f"Ausschaltpunkt={effective_ausschaltpunkt}"
                         )
                         if (t_boiler_oben < state.aktueller_einschaltpunkt or
                                 t_boiler_mittig < state.aktueller_einschaltpunkt):
@@ -1667,17 +1686,21 @@ async def main_loop(config, state, session):
                                         state.ausschluss_grund = None
                                         logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
 
-                        elif (t_boiler_oben >= state.aktueller_ausschaltpunkt or
-                              t_boiler_mittig >= state.aktueller_ausschaltpunkt):
+                        elif (t_boiler_oben >= effective_ausschaltpunkt or
+                              t_boiler_mittig >= effective_ausschaltpunkt):
                             if state.kompressor_ein:
-                                await asyncio.to_thread(set_kompressor_status, state, False)
+                                await asyncio.to_thread(set_kompressor_status, state, False,
+                                                        t_boiler_oben=t_boiler_oben)
                                 state.kompressor_ein = False
                                 last_compressor_off_time = now
                                 state.last_runtime = now - state.last_compressor_on_time
                                 state.total_runtime_today += state.last_runtime
                                 state.ausschluss_grund = None
                                 logging.info(
-                                    f"Kompressor ausgeschaltet (ein Fühler ≥ {state.aktueller_ausschaltpunkt} °C). Laufzeit: {state.last_runtime}"
+                                    f"Kompressor ausgeschaltet "
+                                    f"(T_Oben={t_boiler_oben:.1f}°C ≥ {effective_ausschaltpunkt}°C oder "
+                                    f"T_Mittig={t_boiler_mittig:.1f}°C ≥ {effective_ausschaltpunkt}°C). "
+                                    f"Laufzeit: {state.last_runtime}"
                                 )
 
                 # Laufzeit aktualisieren
@@ -1694,7 +1717,7 @@ async def main_loop(config, state, session):
                     async with csv_lock:
                         async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
                             csv_line = (
-                                f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
+                                f"{now.strftime('%Y-%m-%Y %H:%M:%S')},"
                                 f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
                                 f"{t_boiler_unten if t_boiler_unten is not None else 'N/A'},"
                                 f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"
