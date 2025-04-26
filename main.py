@@ -1039,13 +1039,18 @@ async def display_task(state):
                 lcd = None  # Setze lcd auf None bei Fehler während der Nutzung
                 await asyncio.sleep(5)
 
+def parse_timestamp(timestamp_str):
+    try:
+        return datetime.strptime(timestamp_str.strip(), '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        logging.warning(f"Fehlerhafter Zeitstempel: {timestamp_str}")
+        return None
 
 async def get_runtime_bar_chart(session, days=7, state=None):
     """Erstellt ein gestapeltes Balkendiagramm der Kompressorlaufzeiten für die letzten 'days' Tage."""
     if state is None:
         logging.error("State-Objekt nicht übergeben, kann Telegram-Nachricht nicht senden.")
         return
-
     try:
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
@@ -1057,10 +1062,8 @@ async def get_runtime_bar_chart(session, days=7, state=None):
                 logging.warning("CSV-Datei ist leer.")
                 await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)
                 return
-
             header = lines[0].strip().split(',')
             logging.debug(f"CSV-Header: {header}")  # Logge den Header
-
             try:
                 timestamp_col = header.index("Zeitstempel")  # Korrigiert: "Zeitstempel" statt "timestamp"
                 kompressor_col = header.index("Kompressor")  # Korrigiert: "Kompressor" statt "kompressor_status"
@@ -1072,9 +1075,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
                 logging.error(f"Notwendige Spaltennamen nicht in CSV-Header gefunden: {e}")
                 await send_telegram_message(session, state.chat_id, "Fehler beim Lesen der CSV-Datei.", state.bot_token)
                 return
-
             lines = lines[1:]
-
             for line in lines:
                 parts = line.strip().split(',')
                 if len(parts) > max(timestamp_col, kompressor_col, runtime_pv_col, runtime_battery_col, runtime_grid_col):
@@ -1082,16 +1083,13 @@ async def get_runtime_bar_chart(session, days=7, state=None):
                         timestamp_str = parts[timestamp_col].strip()
                         timestamp = local_tz.localize(datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S'))
                         date = timestamp.date()
-
                         if date >= start_date and date <= today:
                             if date not in dates:
                                 dates.append(date)
                                 runtime_pv_data.append(timedelta())
                                 runtime_battery_data.append(timedelta())
                                 runtime_grid_data.append(timedelta())
-
                             runtime_index = dates.index(date)
-
                             def parse_timedelta(time_str):
                                 try:
                                     h, m, s = map(int, time_str.split(':'))
@@ -1099,66 +1097,53 @@ async def get_runtime_bar_chart(session, days=7, state=None):
                                 except ValueError as e:
                                     logging.error(f"Fehler beim Parsen der Zeit '{time_str}': {e}")
                                     return timedelta()
-
                             try:
                                 runtime_pv_data[runtime_index] += parse_timedelta(parts[runtime_pv_col].strip())
                             except (IndexError, ValueError):
                                 runtime_pv_data[runtime_index] += timedelta()
-
                             try:
                                 runtime_battery_data[runtime_index] += parse_timedelta(parts[runtime_battery_col].strip())
                             except (IndexError, ValueError):
                                 runtime_battery_data[runtime_index] += timedelta()
-
                             try:
                                 runtime_grid_data[runtime_index] += parse_timedelta(parts[runtime_grid_col].strip())
                             except (IndexError, ValueError):
                                 runtime_grid_data[runtime_index] += timedelta()
-
                     except (ValueError, IndexError) as e:
                         logging.warning(f"Fehler beim Parsen der Zeile: {line.strip()}, Fehler: {e}")
                         continue
-
             if not dates:
                 logging.warning("Keine Laufzeitdaten für die angegebenen Tage gefunden.")
                 await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)
                 return
-
             dates = sorted(dates)
             runtime_pv_hours = [td.total_seconds() / 3600 for td in runtime_pv_data]
             runtime_battery_hours = [td.total_seconds() / 3600 for td in runtime_battery_data]
             runtime_grid_hours = [td.total_seconds() / 3600 for td in runtime_grid_data]
-
             # **Gestapeltes Balkendiagramm erstellen**
             plt.figure(figsize=(10, 6))
             plt.bar(dates, runtime_pv_hours, label="PV", color="green")
             plt.bar(dates, runtime_battery_hours, bottom=runtime_pv_hours, label="Batterie", color="orange")
             plt.bar(dates, runtime_grid_hours, bottom=[sum(x) for x in zip(runtime_pv_hours, runtime_battery_hours)], label="Netz", color="blue")
-
             plt.xlabel("Datum")
             plt.ylabel("Laufzeit (Stunden)")
             plt.title(f"Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
             plt.xticks(dates, [date.strftime('%d-%m') for date in dates], rotation=45, ha='right')
             plt.legend()  # Legende hinzufügen
             plt.tight_layout()
-
             buf = io.BytesIO()
             plt.savefig(buf, format="png", dpi=100)
             buf.seek(0)
             plt.close()
-
             url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
             form = FormData()
             form.add_field("chat_id", state.chat_id)
             form.add_field("caption", f"📊 Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
             form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
-
             async with session.post(url, data=form) as response:
                 response.raise_for_status()
                 logging.info(f"Laufzeitdiagramm für {days} Tage gesendet.")
-
             buf.close()
-
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {str(e)}")
         await send_telegram_message(session, state.chat_id, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token)
