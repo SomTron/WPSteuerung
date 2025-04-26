@@ -541,12 +541,12 @@ async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config):
     return fehler, is_overtemp
 
 
-def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None):
+def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None, t_boiler_mittig=None, TOLERANZ=1.0):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
     logging.debug(f"set_kompressor_status: ein={ein}, force_off={force_off}, t_boiler_oben={t_boiler_oben}, "
-                  f"kompressor_ein={state.kompressor_ein}, last_shutdown_time={state.last_shutdown_time}, "
-                  f"start_time={state.start_time}")
+                  f"t_boiler_mittig={t_boiler_mittig}, kompressor_ein={state.kompressor_ein}, "
+                  f"last_shutdown_time={state.last_shutdown_time}, start_time={state.start_time}")
 
     # Lokalisierung bestehender zeitzonenloser Zeitstempel
     if state.last_shutdown_time and state.last_shutdown_time.tzinfo is None:
@@ -558,6 +558,7 @@ def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None):
 
     try:
         if ein:
+            # Einschaltlogik bleibt unverändert
             if not state.kompressor_ein:
                 if not state.last_shutdown_time:
                     pause_time = timedelta()
@@ -580,25 +581,33 @@ def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None):
                     logging.warning("Kompressor läuft, aber start_time ist None")
                 logging.debug(f"Kompressor läuft bereits, aktuelle Laufzeit: {state.current_runtime}")
         else:
+            # Ausschaltlogik mit Priorisierung der Mindestlaufzeit
             if state.kompressor_ein:
                 if state.start_time:
                     elapsed_time = now - state.start_time
                 else:
                     elapsed_time = timedelta()
                     logging.warning("Kompressor wird ausgeschaltet, aber start_time ist None")
-                # Ignoriere MIN_LAUFZEIT, wenn Ausschaltpunkt überschritten oder force_off=True
-                if (elapsed_time < state.min_laufzeit and not force_off and
-                    (t_boiler_oben is None or t_boiler_oben < state.aktueller_ausschaltpunkt)):
+
+                # Prüfe Mindestlaufzeit
+                if elapsed_time < state.min_laufzeit and not force_off:
                     logging.info(f"Kompressor bleibt an (zu kurze Laufzeit: {elapsed_time}, benötigt: {state.min_laufzeit})")
                     return True
-                state.kompressor_ein = False
-                state.current_runtime = elapsed_time
-                state.total_runtime_today += state.current_runtime
-                state.last_runtime = state.current_runtime
-                state.last_shutdown_time = now
-                state.start_time = None
-                logging.info(
-                    f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {state.total_runtime_today}")
+
+                # Prüfe Ausschaltbedingungen erst nach Ablauf der Mindestlaufzeit
+                if (t_boiler_oben is not None and t_boiler_oben >= state.aktueller_ausschaltpunkt or
+                    t_boiler_mittig is not None and t_boiler_mittig > state.aktueller_ausschaltpunkt + TOLERANZ or
+                    t_boiler_oben is not None and t_boiler_oben > state.aktueller_ausschaltpunkt + TOLERANZ):
+                    state.kompressor_ein = False
+                    state.current_runtime = elapsed_time
+                    state.total_runtime_today += state.current_runtime
+                    state.last_runtime = state.current_runtime
+                    state.last_shutdown_time = now
+                    state.start_time = None
+                    logging.info(
+                        f"Kompressor AUS geschaltet. Laufzeit: {elapsed_time}, Gesamtlaufzeit heute: {state.total_runtime_today}")
+                else:
+                    logging.info("Ausschaltbedingungen nicht erfüllt, Kompressor bleibt an.")
             else:
                 logging.debug("Kompressor bereits ausgeschaltet")
 
@@ -1623,7 +1632,9 @@ async def main_loop(config, state, session):
                               t_boiler_oben > AUSSCHALTPOINT + TOLERANZ):
                             if state.kompressor_ein:
                                 await asyncio.to_thread(set_kompressor_status, state, False,
-                                                        t_boiler_oben=t_boiler_oben)
+                                                        t_boiler_oben=t_boiler_oben,
+                                                        t_boiler_mittig=t_boiler_mittig,
+                                                        TOLERANZ=TOLERANZ)
                                 state.kompressor_ein = False
                                 last_compressor_off_time = now
                                 state.last_runtime = now - state.last_compressor_on_time
