@@ -22,6 +22,7 @@ from aiohttp import FormData
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task)
+import numpy as np
 
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
@@ -1178,6 +1179,7 @@ async def initialize_gpio():
 
 async def get_boiler_temperature_history(session, hours, state, config):
     logging.debug(f"get_boiler_temperature_history aufgerufen mit hours={hours}")
+    start_time = time.time()  # Startzeit für Dauer messen
     try:
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
@@ -1198,36 +1200,43 @@ async def get_boiler_temperature_history(session, hours, state, config):
                 low_memory=False,
                 encoding='utf-8'
             )
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
+            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer',
+                                                                 nonexistent='shift_forward')
             df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now) & df["Zeitstempel"].notna()]
             logging.debug(f"CSV geladen: {len(df)} Einträge")
         except Exception as e:
             logging.error(f"Fehler beim Laden der CSV: {e}")
-            await send_telegram_message(session, state.chat_id, f"Fehler beim Laden der Daten: {str(e)}", state.bot_token)
+            await send_telegram_message(session, state.chat_id, f"Fehler beim Laden der Daten: {str(e)}",
+                                        state.bot_token)
             return
 
         if df.empty:
             logging.warning(f"Keine Daten im Zeitfenster ({hours}h) gefunden.")
-            await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.", state.bot_token)
+            await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.",
+                                        state.bot_token)
             return
 
         # Debugging: Schreibe Rohwerte in eine Datei
         with open("debug_raw_values.txt", "w", encoding="utf-8") as f:
             f.write("Roh-Kompressor-Werte:\n")
             f.write(str(df["Kompressor"].value_counts(dropna=False).to_dict()) + "\n")
+            f.write("Einzigartige Kompressor-Rohwerte:\n")
+            f.write(str(df["Kompressor"].unique().tolist()) + "\n")
             f.write("Roh-PowerSource-Werte:\n")
             f.write(str(df["PowerSource"].value_counts(dropna=False).to_dict()) + "\n")
         logging.debug(f"Roh-Kompressor-Werte: {df['Kompressor'].value_counts(dropna=False).to_dict()}")
+        logging.debug(f"Einzigartige Kompressor-Rohwerte: {df['Kompressor'].unique().tolist()}")
         logging.debug(f"Roh-PowerSource-Werte: {df['PowerSource'].value_counts(dropna=False).to_dict()}")
 
         # Bereinige Kompressor-Spalte
         df["Kompressor"] = df.get("Kompressor", "AUS").astype(str).str.strip().str.upper()
-        df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0, "": 0, pd.NA: 0}).fillna(0).astype(int)
+        df["Kompressor"] = df["Kompressor"].apply(lambda x: 1 if x == "EIN" else 0)
         logging.debug(f"Kompressor-Werte nach Bereinigung: {df['Kompressor'].value_counts().to_dict()}")
 
         # Bereinige PowerSource
         valid_sources = ["Direkter PV-Strom", "Strom aus der Batterie", "Strom vom Netz"]
-        df["PowerSource"] = df.get("PowerSource", "Unbekannt").astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+        df["PowerSource"] = df.get("PowerSource", "Unbekannt").astype(str).str.strip().str.replace(r'\s+', ' ',
+                                                                                                   regex=True)
         df["PowerSource"] = df["PowerSource"].apply(lambda x: x if x in valid_sources else "Unbekannt")
         df.loc[df["Kompressor"] == 0, "PowerSource"] = "Keine aktive Energiequelle"
         logging.debug(f"PowerSource-Werte nach Bereinigung: {df['PowerSource'].value_counts().to_dict()}")
@@ -1238,6 +1247,13 @@ async def get_boiler_temperature_history(session, hours, state, config):
             f.write(str(df["Kompressor"].value_counts().to_dict()) + "\n")
             f.write("PowerSource-Werte nach Bereinigung:\n")
             f.write(str(df["PowerSource"].value_counts().to_dict()) + "\n")
+
+        # Debugging: Schreibe alle Einträge mit Kompressor = 1
+        compressor_on = df[df["Kompressor"] == 1][["Zeitstempel", "Kompressor", "PowerSource"]]
+        with open("debug_compressor_on.txt", "w", encoding="utf-8") as f:
+            f.write("Datenpunkte mit Kompressor = 1:\n")
+            f.write(compressor_on.to_string(index=False))
+        logging.debug(f"Anzahl Datenpunkte mit Kompressor = 1: {len(compressor_on)}")
 
         # Verarbeite Temperaturspalten
         temp_columns = [col for col in ["T_Oben", "T_Unten", "T_Mittig"] if col in df.columns]
@@ -1276,19 +1292,55 @@ async def get_boiler_temperature_history(session, hours, state, config):
         untere_grenze = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 20))
         obere_grenze = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
 
-        # Hintergrundfarben plotten (nur bei Kompressor EIN)
+        # Hintergrundfarben plotten (nur bei Kompressor EIN, mit Lückenbehandlung)
         plotted_sources = set()
-        for idx in range(len(timestamps) - 1):
-            start_time = timestamps.iloc[idx]
-            end_time = timestamps.iloc[idx + 1]
-            source = power_sources.iloc[idx]
-            comp_status = kompressor_status.iloc[idx]
-            if comp_status == 1 and source in color_map:
-                label = source if source not in plotted_sources else ""
-                plt.fill_between([start_time, end_time], 0, max(untere_grenze, obere_grenze) + 5,
-                                 color=color_map[source], alpha=0.2, label=label)
-                plotted_sources.add(source)
-                logging.debug(f"Plotting {source} from {start_time} to {end_time} with comp_status={comp_status}")
+        gap_threshold = timedelta(minutes=5)  # Schwellenwert für Lücken
+        for source in color_map:
+            mask = (power_sources == source) & (kompressor_status == 1)
+            if mask.any():
+                # Extrahiere relevante Zeitstempel und Maske
+                segment_timestamps = timestamps[mask]
+                segment_indices = np.where(mask)[0]
+
+                # Erkenne Lücken
+                segments = []
+                current_segment = [segment_indices[0]]
+                for i in range(1, len(segment_indices)):
+                    current_idx = segment_indices[i]
+                    prev_idx = segment_indices[i - 1]
+                    time_diff = timestamps.iloc[current_idx] - timestamps.iloc[prev_idx]
+                    if time_diff > gap_threshold:
+                        segments.append(current_segment)
+                        current_segment = [current_idx]
+                    else:
+                        current_segment.append(current_idx)
+                segments.append(current_segment)
+
+                # Plotte jedes Segment
+                for segment in segments:
+                    segment_mask = np.zeros(len(timestamps), dtype=bool)
+                    segment_mask[segment] = True
+                    segment_mask = segment_mask & mask
+                    if segment_mask.any():
+                        plt.fill_between(timestamps[segment_mask], 0, max(untere_grenze, obere_grenze) + 5,
+                                         color=color_map[source], alpha=0.2,
+                                         label=source if source not in plotted_sources else "")
+                        plotted_sources.add(source)
+                        logging.debug(
+                            f"Plotting {source} with {segment_mask.sum()} points in segment {timestamps[segment_mask].min()} to {timestamps[segment_mask].max()}")
+
+        # Debugging: Schreibe erkannte Lücken
+        time_diffs = timestamps.diff().dt.total_seconds().fillna(0)
+        gaps = time_diffs[time_diffs > gap_threshold.total_seconds()]
+        with open("debug_gaps.txt", "w", encoding="utf-8") as f:
+            f.write("Erkannte Lücken (>5 Minuten):\n")
+            for idx in gaps.index:
+                if idx > 0:  # Ignoriere erste Differenz
+                    gap_start = timestamps.iloc[idx - 1]
+                    gap_end = timestamps.iloc[idx]
+                    f.write(
+                        f"Lücke von {gap_start} bis {gap_end} ({(gap_end - gap_start).total_seconds() / 60:.1f} Minuten)\n")
+        logging.debug(f"Anzahl erkannter Lücken (>5 Minuten): {len(gaps)}")
 
         # Stelle sicher, dass alle relevanten Farben in der Legende erscheinen
         for source, color in color_map.items():
@@ -1313,7 +1365,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
                         label=f"Ausschaltpunkt ({state.aktueller_ausschaltpunkt}°C)")
 
         plt.xlim(time_ago, now)
-        plt.ylim(0, max(untere_grenze, obere_grenze) + 5)
+        plt.ylim(5, max(untere_grenze, obere_grenze) + 5)
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
         plt.title(f"Verlauf ({hours}h)")
@@ -1338,6 +1390,10 @@ async def get_boiler_temperature_history(session, hours, state, config):
             logging.info(f"Temperaturdiagramm für {hours}h gesendet.")
 
         buf.close()
+
+        # Logge die Dauer
+        duration = time.time() - start_time
+        logging.info(f"Diagramm-Erstellung dauerte {duration:.2f} Sekunden")
 
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Temperaturverlaufs: {e}")
