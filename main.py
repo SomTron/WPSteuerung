@@ -1043,25 +1043,17 @@ async def display_task(state):
 def parse_timestamp(timestamp_str, local_tz=pytz.timezone("Europe/Berlin")):
     if not isinstance(timestamp_str, str) or not timestamp_str.strip():
         return pd.NaT
-
+    # Entferne Null-Bytes nur bei Bedarf
+    if '\x00' in timestamp_str:
+        timestamp_str = timestamp_str.replace('\x00', '')
     try:
-        # Entferne Null-Bytes nur, wenn nötig
-        cleaned_timestamp = timestamp_str.strip()
-        if '\x00' in cleaned_timestamp:
-            cleaned_timestamp = re.sub(r'\x00+', '', cleaned_timestamp)
-        if not cleaned_timestamp:
-            return pd.NaT
-
-        parsed_time = datetime.strptime(cleaned_timestamp, '%Y-%m-%d %H:%M:%S')
-        return local_tz.localize(parsed_time)
+        return pd.to_datetime(timestamp_str, format='%Y-%m-%d %H:%M:%S').tz_localize(local_tz)
     except ValueError:
         return pd.NaT
 
-
 async def get_runtime_bar_chart(session, days=7, state=None):
-    """Erstellt ein gestapeltes Balkendiagramm der Kompressorlaufzeiten für die letzten 'days' Tage."""
     if state is None:
-        logging.error("State-Objekt nicht übergeben, kann Telegram-Nachricht nicht senden.")
+        logging.error("State-Objekt nicht übergeben.")
         return
 
     logging.debug(f"get_runtime_bar_chart aufgerufen mit days={days}")
@@ -1078,11 +1070,12 @@ async def get_runtime_bar_chart(session, days=7, state=None):
                 "heizungsdaten.csv",
                 usecols=lambda col: col in required_columns,
                 parse_dates=["Zeitstempel"],
-                date_parser=lambda x: parse_timestamp(x, local_tz)
+                date_format='%Y-%m-%d %H:%M:%S',
+                na_values=['', 'NaN', 'null'],
+                low_memory=False
             )
-            df = df.dropna(subset=["Zeitstempel"])
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_convert(local_tz)
-            df = df[(df["Zeitstempel"].dt.date >= start_date) & (df["Zeitstempel"].dt.date <= today)]
+            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
+            df = df[(df["Zeitstempel"].dt.date >= start_date) & (df["Zeitstempel"].dt.date <= today) & df["Zeitstempel"].notna()]
         except Exception as e:
             logging.error(f"Fehler beim Laden der CSV: {e}")
             await send_telegram_message(session, state.chat_id, f"Fehler beim Laden der Daten: {str(e)}", state.bot_token)
@@ -1093,15 +1086,13 @@ async def get_runtime_bar_chart(session, days=7, state=None):
             await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)
             return
 
-        # Bereinige Kompressor-Status und PowerSource
+        # Bereinige Daten
         df["Kompressor"] = df.get("Kompressor", 0).replace({"EIN": 1, "AUS": 0}).fillna(0)
         df["PowerSource"] = df.get("PowerSource", "Unbekannt").fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
 
-        # Extrahiere Datum
+        # Berechne Laufzeiten
         df["Datum"] = df["Zeitstempel"].dt.date
         dates = sorted(df["Datum"].unique())
-
-        # Berechne Laufzeiten pro Tag und Energiequelle
         runtime_pv_data = []
         runtime_battery_data = []
         runtime_grid_data = []
@@ -1121,21 +1112,21 @@ async def get_runtime_bar_chart(session, days=7, state=None):
             runtime_grid_data.append(grid_hours)
 
         if not dates:
-            logging.warning("Keine Laufzeitdaten für die angegebenen Tage gefunden.")
+            logging.warning("Keine Laufzeitdaten gefunden.")
             await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)
             return
 
-        # Gestapeltes Balkendiagramm
+        # Visualisierung
         plt.figure(figsize=(8, 4))
         plt.bar(dates, runtime_pv_data, label="PV", color="green")
         plt.bar(dates, runtime_battery_data, bottom=runtime_pv_data, label="Batterie", color="yellow")
         plt.bar(dates, runtime_grid_data, bottom=[sum(x) for x in zip(runtime_pv_data, runtime_battery_data)], label="Netz", color="red")
 
         plt.xlabel("Datum")
-        plt.ylabel("Laufzeit (Stunden)")
-        plt.title(f"Laufzeiten ({days} Tage)")
+        plt.ylabel("Laufzeit (h)")
+        plt.title(f"Laufzeiten ({days}d)")
         plt.xticks(dates, [date.strftime('%d-%m') for date in dates], rotation=45, ha='right')
-        plt.legend(fontsize=8)
+        plt.legend(fontsize=7)
         plt.grid(True, axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
 
@@ -1147,7 +1138,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
-        form.add_field("caption", f"📊 Laufzeiten ({days} Tage)")
+        form.add_field("caption", f"📊 Laufzeiten ({days}d)")
         form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
@@ -1159,7 +1150,6 @@ async def get_runtime_bar_chart(session, days=7, state=None):
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {e}")
         await send_telegram_message(session, state.chat_id, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token)
-
 async def initialize_gpio():
     """
     Initialisiert GPIO-Pins mit Wiederholungslogik für Robustheit.
@@ -1188,30 +1178,30 @@ async def initialize_gpio():
 
 async def get_boiler_temperature_history(session, hours, state, config):
     logging.debug(f"get_boiler_temperature_history aufgerufen mit hours={hours}")
-    """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
     try:
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
         time_ago = now - timedelta(hours=hours)
 
         # Definiere benötigte Spalten
-        expected_columns = [
+        required_columns = [
             "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "Kompressor",
             "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "PowerSource"
         ]
         try:
-            # Lade nur benötigte Spalten und parse Zeitstempel
+            # Lade CSV mit minimalem Overhead
             df = pd.read_csv(
                 "heizungsdaten.csv",
-                usecols=lambda col: col in expected_columns,
+                usecols=lambda col: col in required_columns,
                 parse_dates=["Zeitstempel"],
-                date_parser=lambda x: parse_timestamp(x, local_tz)
+                date_format='%Y-%m-%d %H:%M:%S',  # Schnelleres Parsing
+                na_values=['', 'NaN', 'null'],
+                low_memory=False
             )
-            # Filtere ungültige Zeitstempel
-            df = df.dropna(subset=["Zeitstempel"])
+            # Konvertiere Zeitstempel zur lokalen Zeitzone
+            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
             # Filtere Zeitfenster frühzeitig
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_convert(local_tz)
-            df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
+            df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now) & df["Zeitstempel"].notna()]
             logging.debug(f"CSV geladen: {len(df)} Einträge")
         except Exception as e:
             logging.error(f"Fehler beim Laden der CSV: {e}")
@@ -1228,21 +1218,19 @@ async def get_boiler_temperature_history(session, hours, state, config):
         if len(df) > target_points:
             df = df.iloc[::len(df) // target_points].head(target_points)
 
-        # Fehlerbehandlung für Temperaturen
+        # Verarbeite Temperaturspalten
         temp_columns = [col for col in ["T_Oben", "T_Unten", "T_Mittig"] if col in df.columns]
         if not temp_columns:
             logging.error("Keine Temperaturspalten verfügbar.")
             await send_telegram_message(session, state.chat_id, "Keine Temperaturdaten verfügbar.", state.bot_token)
             return
 
-        df = df.dropna(subset=temp_columns)
-        for col in temp_columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[temp_columns] = df[temp_columns].apply(pd.to_numeric, errors='coerce')
         df = df.dropna(subset=temp_columns)
 
         # Setze Standardwerte für fehlende Spalten
-        df["Einschaltpunkt"] = pd.to_numeric(df.get("Einschaltpunkt", 42), errors="coerce").fillna(0)
-        df["Ausschaltpunkt"] = pd.to_numeric(df.get("Ausschaltpunkt", 45), errors="coerce").fillna(0)
+        df["Einschaltpunkt"] = pd.to_numeric(df.get("Einschaltpunkt", 42), errors="coerce").fillna(42)
+        df["Ausschaltpunkt"] = pd.to_numeric(df.get("Ausschaltpunkt", 45), errors="coerce").fillna(45)
         df["Solarüberschuss"] = pd.to_numeric(df.get("Solarüberschuss", 0), errors="coerce").fillna(0).astype(int)
         df["PowerSource"] = df.get("PowerSource", "Unbekannt").fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
         df["Kompressor"] = df.get("Kompressor", 0).replace({"EIN": 1, "AUS": 0}).fillna(0)
@@ -1261,41 +1249,32 @@ async def get_boiler_temperature_history(session, hours, state, config):
         solar_ueberschuss = df["Solarüberschuss"]
 
         # Visualisierung
-        plt.figure(figsize=(10, 5))  # Kleinere Figur für schnellere Renderzeit
+        plt.figure(figsize=(10, 5))  # Kleinere Figur
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
             "Strom vom Netz": "red",
             "Keine aktive Energiequelle": "blue",
-            "Unbekannt": "gray",
-            "Kompressor AUS": "white"
+            "Unbekannt": "gray"
         }
 
         untere_grenze = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 20))
         obere_grenze = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
 
-        # Hintergrund für Kompressor AUS
-        mask_aus = (kompressor_status == 0)
-        if mask_aus.any():
-            plt.fill_between(timestamps[mask_aus], 0, max(untere_grenze, obere_grenze) + 5,
-                             color=color_map["Kompressor AUS"], alpha=0.1, label="Kompressor AUS")
-
-        # Hintergrund für Kompressor EIN nach Energiequelle
+        # Hintergrund für Kompressor EIN/AUS
         for source in color_map:
-            if source == "Kompressor AUS":
-                continue
-            mask = (power_sources == source) & (kompressor_status == 1)
+            mask = (power_sources == source) & (kompressor_status == (1 if source != "Keine aktive Energiequelle" else 0))
             if mask.any():
                 plt.fill_between(timestamps[mask], 0, max(untere_grenze, obere_grenze) + 5,
-                                 color=color_map[source], alpha=0.2, label=f"Kompressor EIN ({source})")
+                                 color=color_map[source], alpha=0.2, label=f"{source}")
 
         # Plot-Temperaturen
         if t_oben is not None:
-            plt.plot(timestamps, t_oben, label="T_Oben", marker="o", color="blue", markersize=4)
+            plt.plot(timestamps, t_oben, label="T_Oben", color="blue", markersize=3)
         if t_unten is not None:
-            plt.plot(timestamps, t_unten, label="T_Unten", marker="x", color="red", markersize=4)
+            plt.plot(timestamps, t_unten, label="T_Unten", color="red", markersize=3)
         if t_mittig is not None:
-            plt.plot(timestamps, t_mittig, label="T_Mittig", marker="^", color="purple", markersize=4)
+            plt.plot(timestamps, t_mittig, label="T_Mittig", color="purple", markersize=3)
 
         plt.plot(timestamps, einschaltpunkte, label="Einschaltpunkt", linestyle="--", color="green")
         plt.plot(timestamps, ausschaltpunkte, label="Ausschaltpunkt", linestyle="--", color="orange")
@@ -1310,14 +1289,14 @@ async def get_boiler_temperature_history(session, hours, state, config):
         plt.ylim(0, max(untere_grenze, obere_grenze) + 5)
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
-        plt.title(f"Boiler-Temperaturverlauf ({hours}h)")
+        plt.title(f"Verlauf ({hours}h)")
         plt.grid(True, linestyle='--', alpha=0.7)
         plt.xticks(rotation=45)
-        plt.legend(loc="lower left", fontsize=8)
+        plt.legend(loc="lower left", fontsize=7)
         plt.tight_layout()
 
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=80)  # Niedrigere DPI für schnellere Speicherung
+        plt.savefig(buf, format="png", dpi=80)  # Noch niedrigere DPI
         buf.seek(0)
         plt.close()
 
