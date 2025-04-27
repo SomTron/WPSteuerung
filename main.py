@@ -1189,18 +1189,16 @@ async def get_boiler_temperature_history(session, hours, state, config):
             "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "PowerSource"
         ]
         try:
-            # Lade CSV mit minimalem Overhead
             df = pd.read_csv(
                 "heizungsdaten.csv",
                 usecols=lambda col: col in required_columns,
                 parse_dates=["Zeitstempel"],
-                date_format='%Y-%m-%d %H:%M:%S',  # Schnelleres Parsing
+                date_format='%Y-%m-%d %H:%M:%S',
                 na_values=['', 'NaN', 'null'],
-                low_memory=False
+                low_memory=False,
+                encoding='utf-8'
             )
-            # Konvertiere Zeitstempel zur lokalen Zeitzone
             df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
-            # Filtere Zeitfenster frühzeitig
             df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now) & df["Zeitstempel"].notna()]
             logging.debug(f"CSV geladen: {len(df)} Einträge")
         except Exception as e:
@@ -1213,10 +1211,33 @@ async def get_boiler_temperature_history(session, hours, state, config):
             await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.", state.bot_token)
             return
 
-        # Reduziere Datenmenge frühzeitig
-        target_points = 50
-        if len(df) > target_points:
-            df = df.iloc[::len(df) // target_points].head(target_points)
+        # Debugging: Schreibe Rohwerte in eine Datei
+        with open("debug_raw_values.txt", "w", encoding="utf-8") as f:
+            f.write("Roh-Kompressor-Werte:\n")
+            f.write(str(df["Kompressor"].value_counts(dropna=False).to_dict()) + "\n")
+            f.write("Roh-PowerSource-Werte:\n")
+            f.write(str(df["PowerSource"].value_counts(dropna=False).to_dict()) + "\n")
+        logging.debug(f"Roh-Kompressor-Werte: {df['Kompressor'].value_counts(dropna=False).to_dict()}")
+        logging.debug(f"Roh-PowerSource-Werte: {df['PowerSource'].value_counts(dropna=False).to_dict()}")
+
+        # Bereinige Kompressor-Spalte
+        df["Kompressor"] = df.get("Kompressor", "AUS").astype(str).str.strip().str.upper()
+        df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0, "": 0, pd.NA: 0}).fillna(0).astype(int)
+        logging.debug(f"Kompressor-Werte nach Bereinigung: {df['Kompressor'].value_counts().to_dict()}")
+
+        # Bereinige PowerSource
+        valid_sources = ["Direkter PV-Strom", "Strom aus der Batterie", "Strom vom Netz"]
+        df["PowerSource"] = df.get("PowerSource", "Unbekannt").astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+        df["PowerSource"] = df["PowerSource"].apply(lambda x: x if x in valid_sources else "Unbekannt")
+        df.loc[df["Kompressor"] == 0, "PowerSource"] = "Keine aktive Energiequelle"
+        logging.debug(f"PowerSource-Werte nach Bereinigung: {df['PowerSource'].value_counts().to_dict()}")
+
+        # Schreibe bereinigte Werte in Datei
+        with open("debug_cleaned_values.txt", "w", encoding="utf-8") as f:
+            f.write("Kompressor-Werte nach Bereinigung:\n")
+            f.write(str(df["Kompressor"].value_counts().to_dict()) + "\n")
+            f.write("PowerSource-Werte nach Bereinigung:\n")
+            f.write(str(df["PowerSource"].value_counts().to_dict()) + "\n")
 
         # Verarbeite Temperaturspalten
         temp_columns = [col for col in ["T_Oben", "T_Unten", "T_Mittig"] if col in df.columns]
@@ -1232,11 +1253,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
         df["Einschaltpunkt"] = pd.to_numeric(df.get("Einschaltpunkt", 42), errors="coerce").fillna(42)
         df["Ausschaltpunkt"] = pd.to_numeric(df.get("Ausschaltpunkt", 45), errors="coerce").fillna(45)
         df["Solarüberschuss"] = pd.to_numeric(df.get("Solarüberschuss", 0), errors="coerce").fillna(0).astype(int)
-        df["PowerSource"] = df.get("PowerSource", "Unbekannt").fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
-        df["Kompressor"] = df.get("Kompressor", 0).replace({"EIN": 1, "AUS": 0}).fillna(0)
-
-        # Setze PowerSource für Kompressor AUS
-        df.loc[df["Kompressor"] == 0, "PowerSource"] = "Keine aktive Energiequelle"
 
         timestamps = df["Zeitstempel"]
         t_oben = df["T_Oben"] if "T_Oben" in df.columns else None
@@ -1249,32 +1265,43 @@ async def get_boiler_temperature_history(session, hours, state, config):
         solar_ueberschuss = df["Solarüberschuss"]
 
         # Visualisierung
-        plt.figure(figsize=(10, 5))  # Kleinere Figur
+        plt.figure(figsize=(10, 5))
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
             "Strom vom Netz": "red",
-            "Keine aktive Energiequelle": "blue",
             "Unbekannt": "gray"
         }
 
         untere_grenze = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 20))
         obere_grenze = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
 
-        # Hintergrund für Kompressor EIN/AUS
-        for source in color_map:
-            mask = (power_sources == source) & (kompressor_status == (1 if source != "Keine aktive Energiequelle" else 0))
-            if mask.any():
-                plt.fill_between(timestamps[mask], 0, max(untere_grenze, obere_grenze) + 5,
-                                 color=color_map[source], alpha=0.2, label=f"{source}")
+        # Hintergrundfarben plotten (nur bei Kompressor EIN)
+        plotted_sources = set()
+        for idx in range(len(timestamps) - 1):
+            start_time = timestamps.iloc[idx]
+            end_time = timestamps.iloc[idx + 1]
+            source = power_sources.iloc[idx]
+            comp_status = kompressor_status.iloc[idx]
+            if comp_status == 1 and source in color_map:
+                label = source if source not in plotted_sources else ""
+                plt.fill_between([start_time, end_time], 0, max(untere_grenze, obere_grenze) + 5,
+                                 color=color_map[source], alpha=0.2, label=label)
+                plotted_sources.add(source)
+                logging.debug(f"Plotting {source} from {start_time} to {end_time} with comp_status={comp_status}")
+
+        # Stelle sicher, dass alle relevanten Farben in der Legende erscheinen
+        for source, color in color_map.items():
+            if source not in plotted_sources:
+                plt.fill_between([time_ago, time_ago], 0, 0, color=color, alpha=0.2, label=source)
 
         # Plot-Temperaturen
         if t_oben is not None:
-            plt.plot(timestamps, t_oben, label="T_Oben", color="blue", markersize=3)
+            plt.plot(timestamps, t_oben, label="T_Oben", color="blue")
         if t_unten is not None:
-            plt.plot(timestamps, t_unten, label="T_Unten", color="red", markersize=3)
+            plt.plot(timestamps, t_unten, label="T_Unten", color="red")
         if t_mittig is not None:
-            plt.plot(timestamps, t_mittig, label="T_Mittig", color="purple", markersize=3)
+            plt.plot(timestamps, t_mittig, label="T_Mittig", color="purple")
 
         plt.plot(timestamps, einschaltpunkte, label="Einschaltpunkt", linestyle="--", color="green")
         plt.plot(timestamps, ausschaltpunkte, label="Ausschaltpunkt", linestyle="--", color="orange")
@@ -1296,7 +1323,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
         plt.tight_layout()
 
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=80)  # Noch niedrigere DPI
+        plt.savefig(buf, format="png", dpi=80)
         buf.seek(0)
         plt.close()
 
@@ -1316,7 +1343,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
         logging.error(f"Fehler beim Erstellen des Temperaturverlaufs: {e}")
         await send_telegram_message(session, state.chat_id, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}",
                                     state.bot_token)
-
 
 # Asynchrone Hauptschleife
 
