@@ -1040,24 +1040,21 @@ async def display_task(state):
                 lcd = None  # Setze lcd auf None bei Fehler während der Nutzung
                 await asyncio.sleep(5)
 
-def parse_timestamp(timestamp_str, timezone="Europe/Berlin"):
-    # Prüfe, ob der Eingabewert ein String ist
+def parse_timestamp(timestamp_str, local_tz=pytz.timezone("Europe/Berlin")):
     if not isinstance(timestamp_str, str) or not timestamp_str.strip():
-        logging.warning(f"Ungültiger Zeitstempel: {timestamp_str} (kein String oder leer)")
         return pd.NaT
 
     try:
-        # Entferne Null-Bytes und andere nicht-druckbare Zeichen
-        cleaned_timestamp = re.sub(r'\x00+', '', timestamp_str).strip()
+        # Entferne Null-Bytes nur, wenn nötig
+        cleaned_timestamp = timestamp_str.strip()
+        if '\x00' in cleaned_timestamp:
+            cleaned_timestamp = re.sub(r'\x00+', '', cleaned_timestamp)
         if not cleaned_timestamp:
-            logging.warning(f"Zeitstempel nach Bereinigung leer: {timestamp_str}")
             return pd.NaT
 
         parsed_time = datetime.strptime(cleaned_timestamp, '%Y-%m-%d %H:%M:%S')
-        local_tz = pytz.timezone(timezone)
         return local_tz.localize(parsed_time)
-    except ValueError as e:
-        logging.warning(f"Fehler beim Parsen des Zeitstempels: {timestamp_str}, Fehler: {e}")
+    except ValueError:
         return pd.NaT
 
 
@@ -1067,19 +1064,21 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         logging.error("State-Objekt nicht übergeben, kann Telegram-Nachricht nicht senden.")
         return
 
-    logging.debug(f"get_runtime_bar_chart aufgerufen mit days={days}, state.bot_token={state.bot_token}")
+    logging.debug(f"get_runtime_bar_chart aufgerufen mit days={days}")
     try:
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
         today = now.date()
         start_date = today - timedelta(days=days - 1)
 
-        # Lade CSV mit pandas
+        # Lade nur benötigte Spalten
+        required_columns = ["Zeitstempel", "Kompressor", "PowerSource"]
         try:
             df = pd.read_csv(
                 "heizungsdaten.csv",
+                usecols=lambda col: col in required_columns,
                 parse_dates=["Zeitstempel"],
-                date_parser=lambda x: parse_timestamp(x)
+                date_parser=lambda x: parse_timestamp(x, local_tz)
             )
             df = df.dropna(subset=["Zeitstempel"])
             df["Zeitstempel"] = df["Zeitstempel"].dt.tz_convert(local_tz)
@@ -1095,21 +1094,12 @@ async def get_runtime_bar_chart(session, days=7, state=None):
             return
 
         # Bereinige Kompressor-Status und PowerSource
-        if "Kompressor" in df.columns:
-            df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0)
-        else:
-            df["Kompressor"] = 0
-            logging.warning("Spalte 'Kompressor' fehlt, verwende Standardwert 0.")
-
-        if "PowerSource" in df.columns:
-            df["PowerSource"] = df["PowerSource"].fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
-        else:
-            df["PowerSource"] = "Unbekannt"
-            logging.warning("Spalte 'PowerSource' fehlt, verwende Standardwert 'Unbekannt'.")
+        df["Kompressor"] = df.get("Kompressor", 0).replace({"EIN": 1, "AUS": 0}).fillna(0)
+        df["PowerSource"] = df.get("PowerSource", "Unbekannt").fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
 
         # Extrahiere Datum
         df["Datum"] = df["Zeitstempel"].dt.date
-        dates = sorted(df["Datum"].unique())  # Initialisiere 'dates'
+        dates = sorted(df["Datum"].unique())
 
         # Berechne Laufzeiten pro Tag und Energiequelle
         runtime_pv_data = []
@@ -1118,12 +1108,10 @@ async def get_runtime_bar_chart(session, days=7, state=None):
 
         for date in dates:
             daily_data = df[df["Datum"] == date]
-            # Annahme: Einträge sind minütlich, Laufzeit in Stunden
             pv_mask = (daily_data["Kompressor"] == 1) & (daily_data["PowerSource"] == "Direkter PV-Strom")
             battery_mask = (daily_data["Kompressor"] == 1) & (daily_data["PowerSource"] == "Strom aus der Batterie")
             grid_mask = (daily_data["Kompressor"] == 1) & (daily_data["PowerSource"] == "Strom vom Netz")
 
-            # Berechne Laufzeit in Stunden (Anzahl der Einträge / 60, da minütlich)
             pv_hours = pv_mask.sum() / 60.0
             battery_hours = battery_mask.sum() / 60.0
             grid_hours = grid_mask.sum() / 60.0
@@ -1137,29 +1125,29 @@ async def get_runtime_bar_chart(session, days=7, state=None):
             await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten verfügbar.", state.bot_token)
             return
 
-        # Gestapeltes Balkendiagramm erstellen
-        plt.figure(figsize=(10, 6))
+        # Gestapeltes Balkendiagramm
+        plt.figure(figsize=(8, 4))
         plt.bar(dates, runtime_pv_data, label="PV", color="green")
         plt.bar(dates, runtime_battery_data, bottom=runtime_pv_data, label="Batterie", color="yellow")
         plt.bar(dates, runtime_grid_data, bottom=[sum(x) for x in zip(runtime_pv_data, runtime_battery_data)], label="Netz", color="red")
 
         plt.xlabel("Datum")
         plt.ylabel("Laufzeit (Stunden)")
-        plt.title(f"Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
+        plt.title(f"Laufzeiten ({days} Tage)")
         plt.xticks(dates, [date.strftime('%d-%m') for date in dates], rotation=45, ha='right')
-        plt.legend()
+        plt.legend(fontsize=8)
         plt.grid(True, axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
 
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=100)
+        plt.savefig(buf, format="png", dpi=80)
         buf.seek(0)
         plt.close()
 
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
-        form.add_field("caption", f"📊 Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
+        form.add_field("caption", f"📊 Laufzeiten ({days} Tage)")
         form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
@@ -1199,59 +1187,51 @@ async def initialize_gpio():
 
 
 async def get_boiler_temperature_history(session, hours, state, config):
-    logging.debug(f"get_boiler_temperature_history aufgerufen mit hours={hours}, state.bot_token={state.bot_token}")
+    logging.debug(f"get_boiler_temperature_history aufgerufen mit hours={hours}")
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
     try:
-        # Zeitfenster definieren mit Zeitzone
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
         time_ago = now - timedelta(hours=hours)
 
-        # Verfügbare Spalten dynamisch ermitteln
+        # Definiere benötigte Spalten
         expected_columns = [
             "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "Kompressor",
             "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "PowerSource"
         ]
         try:
-            # Stelle sicher, dass die CSV-Datei synchronisiert ist
-            with open("heizungsdaten.csv", "r") as f:
-                os.fsync(f.fileno())
-
-            # Lade CSV ohne usecols, um Header zu prüfen
-            df = pd.read_csv("heizungsdaten.csv", parse_dates=["Zeitstempel"], date_parser=lambda x: parse_timestamp(x), nrows=1)
-            available_columns = [col for col in expected_columns if col in df.columns]
-            if not available_columns:
-                raise ValueError("Keine der erwarteten Spalten in der CSV gefunden.")
-
-            # Lade CSV mit verfügbaren Spalten
+            # Lade nur benötigte Spalten und parse Zeitstempel
             df = pd.read_csv(
                 "heizungsdaten.csv",
+                usecols=lambda col: col in expected_columns,
                 parse_dates=["Zeitstempel"],
-                date_parser=lambda x: parse_timestamp(x),
-                usecols=available_columns
+                date_parser=lambda x: parse_timestamp(x, local_tz)
             )
             # Filtere ungültige Zeitstempel
             df = df.dropna(subset=["Zeitstempel"])
-            # Setze Zeitzone
+            # Filtere Zeitfenster frühzeitig
             df["Zeitstempel"] = df["Zeitstempel"].dt.tz_convert(local_tz)
             df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
-            logging.debug(f"CSV gefiltert: {len(df)} Einträge, Zeitraum {time_ago} bis {now}")
+            logging.debug(f"CSV geladen: {len(df)} Einträge")
         except Exception as e:
             logging.error(f"Fehler beim Laden der CSV: {e}")
-            await send_telegram_message(session, state.chat_id, f"Fehler beim Laden der Daten: {str(e)}",
-                                        state.bot_token)
+            await send_telegram_message(session, state.chat_id, f"Fehler beim Laden der Daten: {str(e)}", state.bot_token)
             return
 
         if df.empty:
             logging.warning(f"Keine Daten im Zeitfenster ({hours}h) gefunden.")
-            await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.",
-                                        state.bot_token)
+            await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.", state.bot_token)
             return
+
+        # Reduziere Datenmenge frühzeitig
+        target_points = 50
+        if len(df) > target_points:
+            df = df.iloc[::len(df) // target_points].head(target_points)
 
         # Fehlerbehandlung für Temperaturen
         temp_columns = [col for col in ["T_Oben", "T_Unten", "T_Mittig"] if col in df.columns]
         if not temp_columns:
-            logging.error("Keine Temperaturspalten (T_Oben, T_Unten, T_Mittig) verfügbar.")
+            logging.error("Keine Temperaturspalten verfügbar.")
             await send_telegram_message(session, state.chat_id, "Keine Temperaturdaten verfügbar.", state.bot_token)
             return
 
@@ -1260,45 +1240,15 @@ async def get_boiler_temperature_history(session, hours, state, config):
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df = df.dropna(subset=temp_columns)
 
-        if "Einschaltpunkt" in df.columns:
-            df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").fillna(42)
-        else:
-            df["Einschaltpunkt"] = 42
-            logging.warning("Spalte 'Einschaltpunkt' fehlt, verwende Standardwert 42.")
+        # Setze Standardwerte für fehlende Spalten
+        df["Einschaltpunkt"] = pd.to_numeric(df.get("Einschaltpunkt", 42), errors="coerce").fillna(0)
+        df["Ausschaltpunkt"] = pd.to_numeric(df.get("Ausschaltpunkt", 45), errors="coerce").fillna(0)
+        df["Solarüberschuss"] = pd.to_numeric(df.get("Solarüberschuss", 0), errors="coerce").fillna(0).astype(int)
+        df["PowerSource"] = df.get("PowerSource", "Unbekannt").fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
+        df["Kompressor"] = df.get("Kompressor", 0).replace({"EIN": 1, "AUS": 0}).fillna(0)
 
-        if "Ausschaltpunkt" in df.columns:
-            df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").fillna(45)
-        else:
-            df["Ausschaltpunkt"] = 45
-            logging.warning("Spalte 'Ausschaltpunkt' fehlt, verwende Standardwert 45.")
-
-        if "Solarüberschuss" in df.columns:
-            df["Solarüberschuss"] = pd.to_numeric(df["Solarüberschuss"], errors="coerce").fillna(0).astype(int)
-        else:
-            df["Solarüberschuss"] = 0
-            logging.warning("Spalte 'Solarüberschuss' fehlt, verwende Standardwert 0.")
-
-        if "PowerSource" in df.columns:
-            df["PowerSource"] = df["PowerSource"].fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
-            # Setze PowerSource für Kompressor AUS
-            df.loc[df["Kompressor"] == "AUS", "PowerSource"] = "Keine aktive Energiequelle"
-        else:
-            df["PowerSource"] = "Unbekannt"
-            logging.warning("Spalte 'PowerSource' fehlt, verwende Standardwert 'Unbekannt'.")
-
-        if "Kompressor" in df.columns:
-            df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0)
-        else:
-            df["Kompressor"] = 0
-            logging.warning("Spalte 'Kompressor' fehlt, verwende Standardwert 0.")
-
-        # Validierung: Prüfe inkonsistente Daten
-        if ((df["Kompressor"] == 0) & (df["PowerSource"] != "Keine aktive Energiequelle")).any():
-            logging.warning("Inkonsistente Daten: PowerSource != 'Keine aktive Energiequelle' für Kompressor AUS")
-
-        target_points = 50
-        if len(df) > target_points:
-            df = df.iloc[::len(df) // target_points].head(target_points)
+        # Setze PowerSource für Kompressor AUS
+        df.loc[df["Kompressor"] == 0, "PowerSource"] = "Keine aktive Energiequelle"
 
         timestamps = df["Zeitstempel"]
         t_oben = df["T_Oben"] if "T_Oben" in df.columns else None
@@ -1311,7 +1261,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
         solar_ueberschuss = df["Solarüberschuss"]
 
         # Visualisierung
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(10, 5))  # Kleinere Figur für schnellere Renderzeit
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
@@ -1335,20 +1285,20 @@ async def get_boiler_temperature_history(session, hours, state, config):
             if source == "Kompressor AUS":
                 continue
             mask = (power_sources == source) & (kompressor_status == 1)
-            logging.debug(f"PowerSource: {source}, Mask count: {mask.sum()}, Kompressor EIN: {mask.any()}")
             if mask.any():
                 plt.fill_between(timestamps[mask], 0, max(untere_grenze, obere_grenze) + 5,
                                  color=color_map[source], alpha=0.2, label=f"Kompressor EIN ({source})")
 
+        # Plot-Temperaturen
         if t_oben is not None:
-            plt.plot(timestamps, t_oben, label="T_Oben", marker="o", color="blue")
+            plt.plot(timestamps, t_oben, label="T_Oben", marker="o", color="blue", markersize=4)
         if t_unten is not None:
-            plt.plot(timestamps, t_unten, label="T_Unten", marker="x", color="red")
+            plt.plot(timestamps, t_unten, label="T_Unten", marker="x", color="red", markersize=4)
         if t_mittig is not None:
-            plt.plot(timestamps, t_mittig, label="T_Mittig", marker="^", color="purple")
+            plt.plot(timestamps, t_mittig, label="T_Mittig", marker="^", color="purple", markersize=4)
 
-        plt.plot(timestamps, einschaltpunkte, label="Einschaltpunkt (historisch)", linestyle="--", color="green")
-        plt.plot(timestamps, ausschaltpunkte, label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
+        plt.plot(timestamps, einschaltpunkte, label="Einschaltpunkt", linestyle="--", color="green")
+        plt.plot(timestamps, ausschaltpunkte, label="Ausschaltpunkt", linestyle="--", color="orange")
 
         if solar_ueberschuss.any():
             plt.axhline(y=state.aktueller_einschaltpunkt, color="purple", linestyle="-.",
@@ -1360,22 +1310,21 @@ async def get_boiler_temperature_history(session, hours, state, config):
         plt.ylim(0, max(untere_grenze, obere_grenze) + 5)
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
-        plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
-        plt.grid(True)
+        plt.title(f"Boiler-Temperaturverlauf ({hours}h)")
+        plt.grid(True, linestyle='--', alpha=0.7)
         plt.xticks(rotation=45)
-        plt.legend(loc="lower left")
+        plt.legend(loc="lower left", fontsize=8)
         plt.tight_layout()
 
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=100)
+        plt.savefig(buf, format="png", dpi=80)  # Niedrigere DPI für schnellere Speicherung
         buf.seek(0)
         plt.close()
 
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
-        form.add_field("caption",
-                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Unten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz, blau=Keine Quelle, weiß=AUS)")
+        form.add_field("caption", f"📈 Verlauf {hours}h")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
@@ -1757,7 +1706,7 @@ async def main_loop(config, state, session):
 
                 # Watchdog
                 cycle_duration = (datetime.now(local_tz) - last_cycle_time).total_seconds()
-                if cycle_duration > 30:
+                if cycle_duration > 60:
                     watchdog_warning_count += 1
                     logging.error(
                         f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
