@@ -1277,23 +1277,36 @@ async def get_boiler_temperature_history(session, hours, state, config):
         power_sources = df["PowerSource"]
         solar_ueberschuss = df["Solarüberschuss"]
 
+        # Visualisierung
         plt.figure(figsize=(12, 6))
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
             "Strom vom Netz": "red",
             "Keine aktive Energiequelle": "blue",
-            "Unbekannt": "gray"
+            "Unbekannt": "gray",
+            "Kompressor AUS": "white"  # Neue Kategorie für AUS
         }
 
         untere_grenze = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 20))
         obere_grenze = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
+
+        # Hintergrund für Kompressor AUS
+        mask_aus = (kompressor_status == 0)
+        if mask_aus.any():
+            plt.fill_between(timestamps[mask_aus], 0, max(untere_grenze, obere_grenze) + 5,
+                             color=color_map["Kompressor AUS"], alpha=0.1, label="Kompressor AUS")
+
+        # Hintergrund für Kompressor EIN nach Energiequelle
         for source in color_map:
+            if source == "Kompressor AUS":
+                continue  # Überspringe die AUS-Kategorie
             mask = (power_sources == source) & (kompressor_status == 1)
             if mask.any():
                 plt.fill_between(timestamps[mask], 0, max(untere_grenze, obere_grenze) + 5,
                                  color=color_map[source], alpha=0.2, label=f"Kompressor EIN ({source})")
 
+        # Rest des Plot-Codes bleibt gleich
         if t_oben is not None:
             plt.plot(timestamps, t_oben, label="T_Oben", marker="o", color="blue")
         if t_unten is not None:
