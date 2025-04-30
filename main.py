@@ -1180,19 +1180,28 @@ async def get_boiler_temperature_history(session, hours, state, config):
                 os.fsync(f.fileno())
 
             # Lade CSV ohne usecols, um Header zu prüfen
-            df = pd.read_csv("heizungsdaten.csv", parse_dates=["Zeitstempel"], nrows=1)
+            df = pd.read_csv("heizungsdaten.csv", nrows=1)
             available_columns = [col for col in expected_columns if col in df.columns]
             if not available_columns:
                 raise ValueError("Keine der erwarteten Spalten in der CSV gefunden.")
 
-            # Lade CSV mit verfügbaren Spalten
+            # Lade CSV mit verfügbaren Spalten und flexiblem Datums-Parsing
             df = pd.read_csv(
                 "heizungsdaten.csv",
-                parse_dates=["Zeitstempel"],
                 usecols=available_columns
             )
+            # Parse Zeitstempel flexibel und überspringe ungültige
+            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce', dayfirst=True, format='mixed')
+            # Logge und entferne ungültige Zeitstempel
+            invalid_rows = df["Zeitstempel"].isna().sum()
+            if invalid_rows > 0:
+                invalid_example = df[df["Zeitstempel"].isna()].iloc[0]["Zeitstempel"] if invalid_rows > 0 else "unbekannt"
+                logging.warning(f"{invalid_rows} Zeilen mit ungültigen Zeitstempeln übersprungen (z. B. '{invalid_example}').")
+                df = df.dropna(subset=["Zeitstempel"])
+
+            # Lokalisiere Zeitstempel in der richtigen Zeitzone
+            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz)
             # Filtere Daten im gewünschten Zeitfenster
-            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"]).dt.tz_localize(local_tz)
             df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
             logging.debug(f"CSV gefiltert: {len(df)} Einträge, Zeitraum {time_ago} bis {now}")
         except Exception as e:
@@ -1619,7 +1628,7 @@ async def main_loop(config, state, session):
                                         now - last_compressor_off_time).total_seconds() < state.min_pause.total_seconds():
                                     pause_remaining = state.min_pause.total_seconds() - (
                                             now - last_compressor_off_time).total_seconds()
-                                    state.ausschluss_grund = f"Zu kurze Pause ({pause_remaining:.1f}s verbleibend)"
+                                    state.ausschluss_grund = f"Zu kurze Pause ({pause_remaining:.1f}s verbleibend, benötigt: {state.min_pause.total_seconds():.1f}s)"
                                     logging.info(
                                         f"Kompressor bleibt aus (zu kurze Pause: {(now - last_compressor_off_time)}, benötigt: {state.min_pause})"
                                     )
@@ -1638,7 +1647,7 @@ async def main_loop(config, state, session):
                                     else:
                                         state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler"
                                         logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
-                        if t_boiler_unten >= state.aktueller_ausschaltpunkt:
+                        elif t_boiler_unten >= state.aktueller_ausschaltpunkt:
                             if state.kompressor_ein:
                                 result = set_kompressor_status(state, False, t_boiler_oben=t_boiler_oben)
                                 if result:
