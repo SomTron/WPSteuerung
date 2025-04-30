@@ -1204,6 +1204,38 @@ async def get_boiler_temperature_history(session, hours, state, config):
             # Filtere Daten im gewünschten Zeitfenster
             df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
             logging.debug(f"CSV gefiltert: {len(df)} Einträge, Zeitraum {time_ago} bis {now}")
+
+            # Lücken > 5 Minuten erkennen und synthetische Punkte einfügen
+            if not df.empty:
+                gap_threshold = timedelta(minutes=5)
+                gaps = df["Zeitstempel"].diff()[1:] > gap_threshold
+                gap_indices = gaps[gaps].index
+                if gap_indices.any():
+                    synthetic_rows = []
+                    for idx in gap_indices:
+                        prev_time = df.loc[idx-1, "Zeitstempel"]
+                        next_time = df.loc[idx, "Zeitstempel"]
+                        # Füge einen synthetischen Punkt 1 Minute nach dem letzten bekannten
+                        synthetic_time = prev_time + timedelta(minutes=1)
+                        synthetic_row = {
+                            "Zeitstempel": synthetic_time,
+                            "Kompressor": 0,
+                            "PowerSource": "Keine aktive Energiequelle",
+                            "Einschaltpunkt": df.loc[idx-1, "Einschaltpunkt"] if "Einschaltpunkt" in df.columns else 42,
+                            "Ausschaltpunkt": df.loc[idx-1, "Ausschaltpunkt"] if "Ausschaltpunkt" in df.columns else 45,
+                            "Solarüberschuss": 0
+                        }
+                        for col in ["T_Oben", "T_Unten", "T_Mittig"]:
+                            if col in df.columns:
+                                synthetic_row[col] = pd.NA
+                        synthetic_rows.append(synthetic_row)
+                    # Füge synthetische Zeilen hinzu
+                    if synthetic_rows:
+                        synthetic_df = pd.DataFrame(synthetic_rows)
+                        df = pd.concat([df, synthetic_df], ignore_index=True)
+                        df = df.sort_values("Zeitstempel").reset_index(drop=True)
+                        logging.info(f"{len(synthetic_rows)} Lücken > 5 Minuten erkannt, synthetische Datenpunkte mit Kompressor=AUS hinzugefügt.")
+
         except Exception as e:
             logging.error(f"Fehler beim Laden der CSV: {e}")
             await send_telegram_message(session, state.chat_id, f"Fehler beim Laden der Daten: {str(e)}",
@@ -1223,10 +1255,10 @@ async def get_boiler_temperature_history(session, hours, state, config):
             await send_telegram_message(session, state.chat_id, "Keine Temperaturdaten verfügbar.", state.bot_token)
             return
 
-        df = df.dropna(subset=temp_columns)
+        df = df.dropna(subset=temp_columns, how='all')
         for col in temp_columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.dropna(subset=temp_columns)
+        # Lasse Zeilen mit synthetischen Daten (NaN in Temperaturen) bestehen
 
         if "Einschaltpunkt" in df.columns:
             df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").fillna(42)
