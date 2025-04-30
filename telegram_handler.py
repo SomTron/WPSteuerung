@@ -538,9 +538,9 @@ async def get_boiler_temperature_history(session, hours, state, config):
 
 
 async def get_runtime_bar_chart(session, days=7, state=None):
-    """Erstellt ein gestapeltes Balkendiagramm der Kompressorlaufzeiten nach Energiequelle für die letzten 'days' Tage."""
+    """Erstellt ein Balkendiagramm der Kompressorlaufzeiten nach Energiequelle (nur wenn Kompressor == 'EIN')"""
     if state is None:
-        logging.error("State-Objekt nicht übergeben, kann Telegram-Nachricht nicht senden.")
+        logging.error("State-Objekt nicht übergeben.")
         return
 
     try:
@@ -549,114 +549,97 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         today = now.date()
         start_date = today - timedelta(days=days - 1)
 
-        # Initialisiere Listen zur Datenerfassung
-        dates = []
-        runtime_pv_data = []
-        runtime_battery_data = []
-        runtime_grid_data = []
+        # Erzeuge Datumsliste für alle Tage im Zeitraum
+        date_range = [start_date + timedelta(days=i) for i in range(days)]
+        runtimes = {
+            "PV": [timedelta() for _ in date_range],
+            "Battery": [timedelta() for _ in date_range],
+            "Grid": [timedelta() for _ in date_range],
+            "Unbekannt": [timedelta() for _ in date_range]
+        }
 
-        async with aiofiles.open("heizungsdaten.csv", "r") as csvfile:
-            lines = await csvfile.readlines()
+        # CSV laden
+        df = pd.read_csv("heizungsdaten.csv", on_bad_lines="skip", engine="python")
+        if "Zeitstempel" not in df.columns or "Kompressor" not in df.columns or "PowerSource" not in df.columns:
+            raise ValueError("Notwendige Spalten fehlen in der CSV.")
 
-        if not lines:
-            logging.warning("CSV-Datei ist leer.")
-            await session.post(
-                f"https://api.telegram.org/bot{state.bot_token}/sendMessage",
-                json={"chat_id": state.chat_id, "text": "Keine Laufzeitdaten verfügbar."}
+        # Parse Zeitstempel robust
+        df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
+        df = df[df["Zeitstempel"].notna()].copy()
+        df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz)
+        df["Datum"] = df["Zeitstempel"].dt.date
+
+        # Filtere auf den Zielzeitraum
+        df = df[(df["Datum"] >= start_date) & (df["Datum"] <= today)]
+
+        # Prüfe, ob Kompressorstatus enthalten und setze auf 0/1
+        df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0).astype(int)
+
+        # Nur relevante Zeilen verwenden
+        active_rows = df[df["Kompressor"] == 1]
+
+        if active_rows.empty:
+            await send_telegram_message(
+                session, state.chat_id,
+                f"Keine Laufzeiten mit Kompressor=EIN in den letzten {days} Tagen gefunden.",
+                state.bot_token
             )
             return
 
-        header = lines[0].strip().split(",")
-        logging.debug(f"CSV-Header: {header}")
+        # Mapping der PowerSource zu Kategorien
+        power_source_to_category = {
+            "Direkter PV-Strom": "PV",
+            "Strom aus der Batterie": "Battery",
+            "Strom vom Netz": "Grid"
+        }
 
-        try:
-            timestamp_col = header.index("Zeitstempel")
-            power_source_col = header.index("PowerSource")
-        except ValueError as e:
-            logging.error(f"Notwendige Spalten nicht gefunden: {e}")
-            await send_telegram_message(session, state.chat_id, "CSV-Spalten nicht korrekt.", state.bot_token)
-            return
+        # Aggregation nach Tag und Quelle
+        for _, row in active_rows.iterrows():
+            date = row["Datum"]
+            source = row["PowerSource"]
+            category = power_source_to_category.get(source, "Unbekannt")
 
-        for line in lines[1:]:
-            parts = line.strip().split(",")
-            if len(parts) <= max(timestamp_col, power_source_col):
-                continue  # Ungültige Zeile überspringen
+            idx = (date - start_date).days
+            if 0 <= idx < days:
+                runtimes[category][idx] += timedelta(minutes=1)
 
-            try:
-                timestamp_str = parts[timestamp_col]
-                timestamp = local_tz.localize(
-                    datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                ).date()
-            except Exception as e:
-                logging.warning(f"Fehler beim Parsen des Zeitstempels: '{timestamp_str}' -> {e}")
-                continue
+        # Konvertiere Timedelta in Stunden für Darstellung
+        runtime_pv_hours = [rt.total_seconds() / 3600 for rt in runtimes['PV']]
+        runtime_battery_hours = [rt.total_seconds() / 3600 for rt in runtimes['Battery']]
+        runtime_grid_hours = [rt.total_seconds() / 3600 for rt in runtimes['Grid']]
+        runtime_unknown_hours = [rt.total_seconds() / 3600 for rt in runtimes['Unbekannt']]
 
-            if not (start_date <= timestamp <= now.date()):
-                continue  # Außerhalb des Zielzeitraums
+        # Plot erstellen
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bottom_unk = [0] * len(date_range)
+        bottom_pv = [u + p for u, p in zip(bottom_unk, runtime_unknown_hours)]
+        bottom_bat = [u + p for u, p in zip(bottom_pv, runtime_pv_hours)]
 
-            source = parts[power_source_col]
+        ax.bar(date_range, runtime_unknown_hours, label="Unbekannt / Kein Eintrag", color="gray", alpha=0.5)
+        ax.bar(date_range, runtime_pv_hours, bottom=bottom_unk, label="PV-Strom", color="green")
+        ax.bar(date_range, runtime_battery_hours, bottom=bottom_pv, label="Batterie", color="orange")
+        ax.bar(date_range, runtime_grid_hours, bottom=bottom_bat, label="Netz", color="red")
 
-            # Füge Tag hinzu, wenn neu
-            if timestamp not in dates:
-                dates.append(timestamp)
-                runtime_pv_data.append(timedelta())      # PV
-                runtime_battery_data.append(timedelta()) # Batterie
-                runtime_grid_data.append(timedelta())   # Netz
-
-            # Finde Index des Tages
-            i = dates.index(timestamp)
-
-            # Addiere Zeit je nach Quelle
-            if source == "Direkter PV-Strom":
-                runtime_pv_data[i] += timedelta(minutes=1)
-            elif source == "Strom aus der Batterie":
-                runtime_battery_data[i] += timedelta(minutes=1)
-            elif source == "Strom vom Netz":
-                runtime_grid_data[i] += timedelta(minutes=1)
-            else:
-                continue
-
-        if not dates:
-            logging.warning("Keine Daten für den angegebenen Zeitraum gefunden.")
-            await send_telegram_message(session, state.chat_id, "Keine Laufzeitdaten für den Verlauf.", state.bot_token)
-            return
-
-        # Konvertiere Timedelta zu Stunden
-        runtime_pv_hours = [td.total_seconds() / 3600 for td in runtime_pv_data]
-        runtime_battery_hours = [td.total_seconds() / 3600 for td in runtime_battery_data]
-        runtime_grid_hours = [td.total_seconds() / 3600 for td in runtime_grid_data]
-
-        # Diagrammerstellung
-        plt.figure(figsize=(10, 6))
-        plt.bar(dates, runtime_pv_hours, label="PV", color="green")
-        plt.bar(dates, runtime_battery_hours, bottom=runtime_pv_hours, label="Batterie", color="orange")
-        plt.bar(
-            dates,
-            runtime_grid_hours,
-            bottom=[pv + bat for pv, bat in zip(runtime_pv_hours, runtime_battery_hours)],
-            label="Netz",
-            color="blue"
-        )
-
-        plt.xlabel("Datum")
-        plt.ylabel("Laufzeit (h)")
-        plt.title(f"Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
+        ax.set_title(f"Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
+        ax.set_xlabel("Datum")
+        ax.set_ylabel("Laufzeit (h)")
+        ax.grid(True, axis='y', linestyle='--', alpha=0.3)
+        ax.legend(loc="upper left")
         plt.xticks(rotation=45)
-        plt.legend()
         plt.tight_layout()
 
-        # Bild speichern
+        # Speichere das Bild
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
         plt.close()
 
-        # Telegram-Bild senden
+        # Sende per Telegram
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
-        form.add_field("caption", f"📊 Laufzeiten der letzten {days} Tage")
-        form.add_field("photo", buf.getvalue(), filename="runtime_chart.png", content_type="image/png")
+        form.add_field("caption", f"📊 Laufzeiten nach Quelle – Letzte {days} Tage")
+        form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
             response.raise_for_status()
@@ -665,7 +648,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         buf.close()
 
     except Exception as e:
-        logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {str(e)}", exc_info=True)
+        logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {e}", exc_info=True)
         await send_telegram_message(
             session, state.chat_id,
             f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token
