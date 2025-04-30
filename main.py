@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import io
 from aiohttp import FormData
 import pandas as pd
+import numpy as np
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task)
 
@@ -1169,142 +1170,130 @@ async def get_boiler_temperature_history(session, hours, state, config):
         now = datetime.now(local_tz)
         time_ago = now - timedelta(hours=hours)
 
-        # Verfügbare Spalten dynamisch ermitteln
+        # Erwartete Spalten definieren
         expected_columns = [
             "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "Kompressor",
             "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "PowerSource"
         ]
+
+        # Sicherstellen, dass Datei synchronisiert ist
         try:
-            # Stelle sicher, dass die CSV-Datei synchronisiert ist
             with open("heizungsdaten.csv", "r") as f:
                 os.fsync(f.fileno())
+        except Exception as e:
+            logging.warning(f"Fehler bei Dateisynchronisation: {e}")
 
-            # Lade CSV ohne usecols, um Header zu prüfen
-            df = pd.read_csv("heizungsdaten.csv", nrows=1)
-            available_columns = [col for col in expected_columns if col in df.columns]
+        # Lese Header zur Bestimmung verfügbarer Spalten
+        try:
+            df_header = pd.read_csv("heizungsdaten.csv", nrows=1)
+            available_columns = [col for col in expected_columns if col in df_header.columns]
             if not available_columns:
                 raise ValueError("Keine der erwarteten Spalten in der CSV gefunden.")
+            logging.debug(f"Verfügbare Spalten: {available_columns}")
+        except Exception as e:
+            logging.error(f"Fehler beim Lesen des Headers: {e}")
+            await send_telegram_message(session, state.chat_id, "CSV-Header konnte nicht gelesen werden.", state.bot_token)
+            return
 
-            # Lade CSV mit verfügbaren Spalten und flexiblem Datums-Parsing
+        # Robustes Laden der CSV mit Überspringen fehlerhafter Zeilen
+        try:
             df = pd.read_csv(
                 "heizungsdaten.csv",
-                usecols=available_columns
+                usecols=available_columns,
+                on_bad_lines='skip',  # ⚠️ Fehlerhafte Zeilen werden einfach ignoriert
+                engine='python'
             )
-            # Parse Zeitstempel flexibel und überspringe ungültige
-            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce', dayfirst=True, format='mixed')
-            # Logge und entferne ungültige Zeitstempel
-            invalid_rows = df["Zeitstempel"].isna().sum()
-            if invalid_rows > 0:
-                invalid_example = df[df["Zeitstempel"].isna()].iloc[0]["Zeitstempel"] if invalid_rows > 0 else "unbekannt"
-                logging.warning(f"{invalid_rows} Zeilen mit ungültigen Zeitstempeln übersprungen (z. B. '{invalid_example}').")
-                df = df.dropna(subset=["Zeitstempel"])
-
-            # Lokalisiere Zeitstempel in der richtigen Zeitzone
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz)
-            # Filtere Daten im gewünschten Zeitfenster
-            df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
-            logging.debug(f"CSV gefiltert: {len(df)} Einträge, Zeitraum {time_ago} bis {now}")
-
-            # Lücken > 5 Minuten erkennen und synthetische Punkte einfügen
-            if not df.empty:
-                gap_threshold = timedelta(minutes=5)
-                gaps = df["Zeitstempel"].diff()[1:] > gap_threshold
-                gap_indices = gaps[gaps].index
-                if gap_indices.any():
-                    synthetic_rows = []
-                    for idx in gap_indices:
-                        prev_time = df.loc[idx-1, "Zeitstempel"]
-                        next_time = df.loc[idx, "Zeitstempel"]
-                        # Füge einen synthetischen Punkt 1 Minute nach dem letzten bekannten
-                        synthetic_time = prev_time + timedelta(minutes=1)
-                        synthetic_row = {
-                            "Zeitstempel": synthetic_time,
-                            "Kompressor": 0,
-                            "PowerSource": "Keine aktive Energiequelle",
-                            "Einschaltpunkt": df.loc[idx-1, "Einschaltpunkt"] if "Einschaltpunkt" in df.columns else 42,
-                            "Ausschaltpunkt": df.loc[idx-1, "Ausschaltpunkt"] if "Ausschaltpunkt" in df.columns else 45,
-                            "Solarüberschuss": 0
-                        }
-                        for col in ["T_Oben", "T_Unten", "T_Mittig"]:
-                            if col in df.columns:
-                                synthetic_row[col] = pd.NA
-                        synthetic_rows.append(synthetic_row)
-                    # Füge synthetische Zeilen hinzu
-                    if synthetic_rows:
-                        synthetic_df = pd.DataFrame(synthetic_rows)
-                        df = pd.concat([df, synthetic_df], ignore_index=True)
-                        df = df.sort_values("Zeitstempel").reset_index(drop=True)
-                        logging.info(f"{len(synthetic_rows)} Lücken > 5 Minuten erkannt, synthetische Datenpunkte mit Kompressor=AUS hinzugefügt.")
-
+            logging.debug(f"{len(df)} Zeilen aus CSV geladen.")
         except Exception as e:
             logging.error(f"Fehler beim Laden der CSV: {e}")
-            await send_telegram_message(session, state.chat_id, f"Fehler beim Laden der Daten: {str(e)}",
-                                        state.bot_token)
+            await send_telegram_message(session, state.chat_id, "Fehler beim Laden der CSV-Datei.", state.bot_token)
             return
+
+        # Parse Zeitstempel robust und lösche ungültige Zeilen
+        try:
+            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce', dayfirst=True, format='mixed')
+            invalid_rows = df[df["Zeitstempel"].isna()]
+            if not invalid_rows.empty:
+                invalid_indices = invalid_rows.index.tolist()
+                sample = invalid_rows.iloc[0]["Zeitstempel"] if len(invalid_rows) > 0 else "unbekannt"
+                logging.warning(f"{len(invalid_rows)} Zeilen mit ungültigen Zeitstempeln übersprungen (z. B. '{sample}', Indizes: {invalid_indices[:10]}...)")
+                df = df.dropna(subset=["Zeitstempel"]).reset_index(drop=True)
+            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz)
+            logging.debug(f"{len(df)} Zeilen nach Zeitstempelparsing.")
+        except Exception as e:
+            logging.error(f"Fehler beim Parsen der Zeitstempel: {e}")
+            await send_telegram_message(session, state.chat_id, "Fehler beim Verarbeiten der Zeitstempel.", state.bot_token)
+            return
+
+        # Filtere Zeitraum
+        df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
+        logging.debug(f"{len(df)} Zeilen nach Zeitfilterung.")
 
         if df.empty:
             logging.warning(f"Keine Daten im Zeitfenster ({hours}h) gefunden.")
-            await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.",
-                                        state.bot_token)
+            await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.", state.bot_token)
             return
 
-        # Fehlerbehandlung für Temperaturen
-        temp_columns = [col for col in ["T_Oben", "T_Unten", "T_Mittig"] if col in df.columns]
-        if not temp_columns:
-            logging.error("Keine Temperaturspalten (T_Oben, T_Unten, T_Mittig) verfügbar.")
-            await send_telegram_message(session, state.chat_id, "Keine Temperaturdaten verfügbar.", state.bot_token)
-            return
+        # Standardwerte setzen / Bereinigung weiterer Spalten
+        df = df.copy()  # Avoid SettingWithCopyWarning
+        df["Einschaltpunkt"] = pd.to_numeric(df.get("Einschaltpunkt", pd.Series(42)), errors="coerce").fillna(42)
+        df["Ausschaltpunkt"] = pd.to_numeric(df.get("Ausschaltpunkt", pd.Series(45)), errors="coerce").fillna(45)
+        df["Solarüberschuss"] = pd.to_numeric(df.get("Solarüberschuss", pd.Series(0)), errors="coerce").fillna(0).astype(int)
+        df["PowerSource"] = df.get("PowerSource", pd.Series("Unbekannt")).fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
+        df["Kompressor"] = df.get("Kompressor", pd.Series(0)).replace({"EIN": 1, "AUS": 0}).fillna(0).astype(int)
 
-        df = df.dropna(subset=temp_columns, how='all')
+        # Temperaturspalten sichern
+        temp_columns = [c for c in ["T_Oben", "T_Unten", "T_Mittig"] if c in df.columns]
         for col in temp_columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        # Lasse Zeilen mit synthetischen Daten (NaN in Temperaturen) bestehen
 
-        if "Einschaltpunkt" in df.columns:
-            df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").fillna(42)
-        else:
-            df["Einschaltpunkt"] = 42
-            logging.warning("Spalte 'Einschaltpunkt' fehlt, verwende Standardwert 42.")
+        # Synthetische Lückenbehandlung (optional)
+        if not df.empty:
+            gap_threshold = timedelta(minutes=5)
+            gaps = df["Zeitstempel"].diff()[1:] > gap_threshold
+            gap_indices = gaps[gaps].index
+            if not gap_indices.empty:
+                synthetic_rows = []
+                for idx in gap_indices:
+                    prev_time = df.loc[idx - 1, "Zeitstempel"]
+                    next_time = df.loc[idx, "Zeitstempel"]
+                    synthetic_time = prev_time + timedelta(minutes=1)
+                    synthetic_row = {
+                        "Zeitstempel": synthetic_time,
+                        "Kompressor": 0,
+                        "PowerSource": "Keine aktive Energiequelle",
+                        "Einschaltpunkt": df.loc[idx - 1, "Einschaltpunkt"],
+                        "Ausschaltpunkt": df.loc[idx - 1, "Ausschaltpunkt"],
+                        "Solarüberschuss": 0
+                    }
+                    for col in ["T_Oben", "T_Unten", "T_Mittig"]:
+                        synthetic_row[col] = np.nan
+                    synthetic_rows.append(synthetic_row)
 
-        if "Ausschaltpunkt" in df.columns:
-            df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").fillna(45)
-        else:
-            df["Ausschaltpunkt"] = 45
-            logging.warning("Spalte 'Ausschaltpunkt' fehlt, verwende Standardwert 45.")
+                if synthetic_rows:
+                    synthetic_df = pd.DataFrame(synthetic_rows)
+                    df = pd.concat([df, synthetic_df], ignore_index=True)
+                    df = df.sort_values("Zeitstempel").reset_index(drop=True)
+                    logging.info(f"{len(synthetic_rows)} synthetische Punkte zur Lückenbehandlung hinzugefügt.")
 
-        if "Solarüberschuss" in df.columns:
-            df["Solarüberschuss"] = pd.to_numeric(df["Solarüberschuss"], errors="coerce").fillna(0).astype(int)
-        else:
-            df["Solarüberschuss"] = 0
-            logging.warning("Spalte 'Solarüberschuss' fehlt, verwende Standardwert 0.")
-
-        if "PowerSource" in df.columns:
-            df["PowerSource"] = df["PowerSource"].fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
-        else:
-            df["PowerSource"] = "Unbekannt"
-            logging.warning("Spalte 'PowerSource' fehlt, verwende Standardwert 'Unbekannt'.")
-
-        if "Kompressor" in df.columns:
-            df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0)
-        else:
-            df["Kompressor"] = 0
-            logging.warning("Spalte 'Kompressor' fehlt, verwende Standardwert 0.")
-
+        # Reduziere auf max. target_points für bessere Darstellung
         target_points = 50
         if len(df) > target_points:
             df = df.iloc[::len(df) // target_points].head(target_points)
+        logging.debug(f"{len(df)} Zeilen nach Downscaling.")
 
+        # Daten für das Diagramm vorbereiten
         timestamps = df["Zeitstempel"]
-        t_oben = df["T_Oben"] if "T_Oben" in df.columns else None
-        t_unten = df["T_Unten"] if "T_Unten" in df.columns else None
-        t_mittig = df["T_Mittig"] if "T_Mittig" in df.columns else None
+        t_oben = df.get("T_Oben")
+        t_unten = df.get("T_Unten")
+        t_mittig = df.get("T_Mittig")
         einschaltpunkte = df["Einschaltpunkt"]
         ausschaltpunkte = df["Ausschaltpunkt"]
         kompressor_status = df["Kompressor"]
         power_sources = df["PowerSource"]
         solar_ueberschuss = df["Solarüberschuss"]
 
-        plt.figure(figsize=(12, 6))
+        # Farbkodierung für Stromquellen
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
@@ -1315,12 +1304,28 @@ async def get_boiler_temperature_history(session, hours, state, config):
 
         untere_grenze = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 20))
         obere_grenze = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
-        for source in color_map:
+
+        # Diagrammerstellung
+        plt.figure(figsize=(12, 6))
+
+        # Nur ein Eintrag pro Quelle, um Dopplungen in der Legende zu vermeiden
+        shown_labels = set()
+
+        # Überlagerung: Kompressorstatus stärker markieren
+        for source, color in color_map.items():
             mask = (power_sources == source) & (kompressor_status == 1)
             if mask.any():
-                plt.fill_between(timestamps[mask], 0, max(untere_grenze, obere_grenze) + 5,
-                                 color=color_map[source], alpha=0.2, label=f"Kompressor EIN ({source})")
+                label = f"Kompressor EIN ({source})"
+                plt.fill_between(
+                    timestamps[mask],
+                    0, max(untere_grenze, obere_grenze) + 5,
+                    color=color,
+                    alpha=0.3,
+                    label=label
+                )
+                shown_labels.add(label)
 
+        # Temperaturkurven
         if t_oben is not None:
             plt.plot(timestamps, t_oben, label="T_Oben", marker="o", color="blue")
         if t_unten is not None:
@@ -1328,15 +1333,18 @@ async def get_boiler_temperature_history(session, hours, state, config):
         if t_mittig is not None:
             plt.plot(timestamps, t_mittig, label="T_Mittig", marker="^", color="purple")
 
+        # Historische Einschaltpunkte
         plt.plot(timestamps, einschaltpunkte, label="Einschaltpunkt (historisch)", linestyle="--", color="green")
         plt.plot(timestamps, ausschaltpunkte, label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
 
+        # Aktuelle Grenzwerte
         if solar_ueberschuss.any():
             plt.axhline(y=state.aktueller_einschaltpunkt, color="purple", linestyle="-.",
                         label=f"Einschaltpunkt ({state.aktueller_einschaltpunkt}°C)")
             plt.axhline(y=state.aktueller_ausschaltpunkt, color="cyan", linestyle="-.",
                         label=f"Ausschaltpunkt ({state.aktueller_ausschaltpunkt}°C)")
 
+        # Plot-Einstellungen
         plt.xlim(time_ago, now)
         plt.ylim(0, max(untere_grenze, obere_grenze) + 5)
         plt.xlabel("Zeit")
@@ -1347,29 +1355,30 @@ async def get_boiler_temperature_history(session, hours, state, config):
         plt.legend(loc="lower left")
         plt.tight_layout()
 
+        # Bild speichern
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
         plt.close()
 
+        # Telegram-Bild senden
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
-        form.add_field("caption",
-                       f"📈 Verlauf {hours}h (T_Oben = blau, T_Unten = rot, T_Mittig = lila, Kompressor EIN: grün=PV, gelb=Batterie, rot=Netz, blau=Keine Quelle)")
+        form.add_field("caption", f"📈 Verlauf {hours}h (T_Oben = blau, T_Unten = rot, T_Mittig = lila)")
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
         async with session.post(url, data=form) as response:
             response.raise_for_status()
             logging.info(f"Temperaturdiagramm für {hours}h gesendet.")
-
         buf.close()
 
     except Exception as e:
-        logging.error(f"Fehler beim Erstellen des Temperaturverlaufs: {e}")
-        await send_telegram_message(session, state.chat_id, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}",
-                                    state.bot_token)
-
+        logging.error(f"Fehler beim Erstellen des Temperaturverlaufs: {e}", exc_info=True)
+        await send_telegram_message(
+            session, state.chat_id,
+            f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}", state.bot_token
+        )
 
 # Asynchrone Hauptschleife
 
