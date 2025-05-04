@@ -187,8 +187,7 @@ class State:
                 f"Ausschaltpunkt ({self.aktueller_ausschaltpunkt}°C) <= Einschaltpunkt ({self.aktueller_einschaltpunkt}°C), "
                 f"setze Ausschaltpunkt auf Einschaltpunkt + {min_hysteresis}°C"
             )
-            self.aktueller_ausschaltpunkt = self
-            plethora_einschaltpunkt + min_hysteresis
+            self.aktueller_ausschaltpunkt = self.aktueller_einschaltpunkt + min_hysteresis
 
         logging.debug(
             f"State initialisiert: last_day={self.last_day}, "
@@ -255,7 +254,7 @@ async def get_solax_data(session, state):
                     state.last_api_data = data.get("result")
                     state.last_api_timestamp = now
                     state.last_api_call = now
-                    logging.info(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
+                    logging.debug(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
                     return state.last_api_data
                 else:
                     logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
@@ -405,15 +404,6 @@ async def send_runtimes_telegram(session, state):  # Nimm 'state' als Argument e
     else:
         await send_telegram_message(session, state.chat_id, "Fehler beim Abrufen der Laufzeiten.")  # Verwende state.chat_id
 
-
-async def is_nighttime(config):
-    """Prüft, ob es Nacht ist basierend auf der Konfiguration."""
-    local_tz = pytz.timezone("Europe/Berlin")
-    now = datetime.now(local_tz)
-    logging.debug(f"is_nighttime: now={now}, tzinfo={now.tzinfo}")
-    night_start = int(config["Heizungssteuerung"].get("NACHT_START", 22))
-    night_end = int(config["Heizungssteuerung"].get("NACHT_ENDE", 6))
-    return now.hour >= night_start or now.hour < night_end
 
 # test.py (angepasste shutdown-Funktion)
 async def shutdown(session, state):  # Nimm 'state' als Argument entgegen
