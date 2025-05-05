@@ -155,7 +155,8 @@ class State:
         self.t_boiler = None
         self.start_time = None
         self.last_pressure_state = None
-        self.last_compressor_on_time = None  # Für Laufzeitberechnung
+        self.last_compressor_on_time = None
+        self.last_compressor_off_time = None
 
         # Telegram-Konfiguration
         self.bot_token = config["Telegram"].get("BOT_TOKEN")
@@ -695,45 +696,41 @@ async def reload_config(session, state, config):
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
 def adjust_shutdown_and_start_points(solax_data, config, state):
     """
-    Passt die Sollwerte (Ausschaltpunkt und Einschaltpunkt) basierend auf dem aktuellen Modus und den Solax-Daten an.
-    Verwendet das State-Objekt zur Verwaltung der Zustände.
+    Passt die Sollwerte basierend auf dem aktuellen Modus und den Solax-Daten an.
     """
-    # Initialisiere statische Attribute, falls noch nicht vorhanden
     if not hasattr(adjust_shutdown_and_start_points, "last_night"):
         adjust_shutdown_and_start_points.last_night = None
         adjust_shutdown_and_start_points.last_config_hash = None
         adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt = None
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = None
 
-    # Prüfe, ob Nachtzeit vorliegt
     is_night = is_nighttime(config)
     current_config_hash = calculate_file_hash("config.ini")
 
-    # Wenn sich weder die Nachtzeit noch die Konfiguration geändert hat, breche ab
+    # Debugging: Aufrufbedingungen
+    logging.debug(f"adjust_shutdown_and_start_points: is_night={is_night}, current_config_hash={current_config_hash}, "
+                  f"last_night={adjust_shutdown_and_start_points.last_night}, last_config_hash={adjust_shutdown_and_start_points.last_config_hash}")
+
     if (is_night == adjust_shutdown_and_start_points.last_night and
             current_config_hash == adjust_shutdown_and_start_points.last_config_hash):
+        logging.debug("Keine Änderung in Nachtzeit oder Konfiguration, überspringe Berechnung")
         return
 
-    # Aktualisiere statische Attribute
     adjust_shutdown_and_start_points.last_night = is_night
     adjust_shutdown_and_start_points.last_config_hash = current_config_hash
 
-    # Speichere alte Sollwerte für Logging
     old_ausschaltpunkt = state.aktueller_ausschaltpunkt
     old_einschaltpunkt = state.aktueller_einschaltpunkt
 
-    # Berechne neue Sollwerte
     state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(
         config, is_night, solax_data, state
     )
 
-    # Mindestwert für Einschaltpunkt prüfen
     MIN_EINSCHALTPUNKT = 20
     if state.aktueller_einschaltpunkt < MIN_EINSCHALTPUNKT:
         state.aktueller_einschaltpunkt = MIN_EINSCHALTPUNKT
         logging.warning(f"Einschaltpunkt auf Mindestwert {MIN_EINSCHALTPUNKT} gesetzt.")
 
-    # Logge Änderungen der Sollwerte, falls sie sich geändert haben
     if (state.aktueller_ausschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_ausschaltpunkt or
             state.aktueller_einschaltpunkt != adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt):
         logging.info(
@@ -874,9 +871,16 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
+        # Debugging: Status und Solax-Daten
+        logging.debug(f"Vor Solarüberschuss-Logik: was_active={was_active}, solar_ueberschuss_aktiv={state.solar_ueberschuss_aktiv}, "
+                      f"batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+
         # Solarüberschuss-Logik
         was_active = state.solar_ueberschuss_aktiv
         state.solar_ueberschuss_aktiv = bat_power > 600 or (soc > 95 and feedin_power > 600)
+
+        # Debugging: Status nach Berechnung
+        logging.debug(f"Nach Solarüberschuss-Logik: was_active={was_active}, solar_ueberschuss_aktiv={state.solar_ueberschuss_aktiv}")
 
         if state.solar_ueberschuss_aktiv and not was_active:
             logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
@@ -890,7 +894,6 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
             ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - total_reduction
             einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
 
-        # Validierung: Stelle sicher, dass Ausschaltpunkt > Einschaltpunkt
         HYSTERESE_MIN = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))
         if ausschaltpunkt <= einschaltpunkt:
             logging.warning(
@@ -908,7 +911,6 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
 
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
-        # Standardwerte als Fallback
         ausschaltpunkt = 45
         einschaltpunkt = 42
         logging.warning(f"Verwende Standard-Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}")
@@ -1065,10 +1067,8 @@ async def initialize_gpio():
 
 # Asynchrone Hauptschleife
 
-"""Hauptschleife des Programms mit State-Objekt."""
 async def main_loop(config, state, session):
-    """Hauptschleife
-    des Programms mit State-Objekt."""
+    """Hauptschleife des Programms mit State-Objekt."""
     local_tz = pytz.timezone("Europe/Berlin")
     NOTIFICATION_COOLDOWN = 600
     PRESSURE_ERROR_DELAY = timedelta(minutes=5)
@@ -1111,10 +1111,12 @@ async def main_loop(config, state, session):
         state.previous_solar_ueberschuss_aktiv = state.solar_ueberschuss_aktiv if hasattr(state, 'solar_ueberschuss_aktiv') else False
 
         # Variables for the solar-only start window after night setback
-        # Initialize to None, will be calculated in the loop
         night_setback_end_time_today = None
         solar_only_window_end_time_today = None
 
+        # Watchdog-Variablen (fehlten im Original, müssen initialisiert werden)
+        last_cycle_time = datetime.now(local_tz)
+        watchdog_warning_count = 0
 
         while True:
             try:
@@ -1125,31 +1127,18 @@ async def main_loop(config, state, session):
                 try:
                     end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
                     end_hour, end_minute = map(int, end_time_str.split(':'))
-
-                    # Calculate the nominal end time for today
                     potential_night_setback_end_today = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
-
-                    # If the potential end time is in the future or has passed less than 2 hours ago,
-                    # this is the relevant window for today.
                     if now < potential_night_setback_end_today + timedelta(hours=2):
-                         night_setback_end_time_today = potential_night_setback_end_today
+                        night_setback_end_time_today = potential_night_setback_end_today
                     else:
-                        # The window for today has passed, calculate the window for tomorrow
                         night_setback_end_time_today = potential_night_setback_end_today + timedelta(days=1)
-
                     solar_only_window_start_time_today = night_setback_end_time_today
                     solar_only_window_end_time_today = night_setback_end_time_today + timedelta(hours=2)
-
                     within_solar_only_window = solar_only_window_start_time_today <= now < solar_only_window_end_time_today
-
                     logging.debug(f"Solar-only window: Start={solar_only_window_start_time_today.strftime('%Y-%m-%d %H:%M')}, End={solar_only_window_end_time_today.strftime('%Y-%m-%d %H:%M')}, Now={now.strftime('%Y-%m-%d %H:%M')}, Within window={within_solar_only_window}")
-
                 except Exception as e:
                     logging.error(f"Fehler bei der Berechnung des Solar-Fensters: {e}", exc_info=True)
-                    within_solar_only_window = False # Default to not being in the window on error
-
-                # --- End of solar-only window calculation ---
-
+                    within_solar_only_window = False
 
                 # Tageswechsel prüfen
                 should_check_day = (state.last_log_time is None or
@@ -1192,7 +1181,7 @@ async def main_loop(config, state, session):
                     }
                     acpower = feedinpower = batPower = soc = powerdc1 = powerdc2 = consumeenergy = "N/A"
 
-                # Sollwerte berechnen (already considers general solar surplus)
+                # Sollwerte berechnen
                 try:
                     is_night = await asyncio.to_thread(is_nighttime, config)
                     nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
@@ -1201,17 +1190,14 @@ async def main_loop(config, state, session):
                 except Exception as e:
                     logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
                     nacht_reduction = 0
-                    # Fallback values in case of error
                     state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
                     state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
 
-
-                # Moduswechsel speichern (existing logic)
+                # Moduswechsel speichern
                 if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv:
                     state.previous_ausschaltpunkt = state.aktueller_ausschaltpunkt
                     state.previous_einschaltpunkt = state.aktueller_einschaltpunkt
                 state.previous_solar_ueberschuss_aktiv = state.solar_ueberschuss_aktiv
-
 
                 # Sensorwerte lesen
                 t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
@@ -1223,15 +1209,14 @@ async def main_loop(config, state, session):
                 )
                 state.t_boiler = t_boiler
 
-
                 # Druckprüfung
                 pressure_ok = await asyncio.to_thread(check_pressure, state)
                 if not pressure_ok:
                     if state.kompressor_ein:
-                        result = set_kompressor_status(state, False, force_off=True)
+                        result = await set_kompressor_status(state, False, force_off=True)
                         if result:
                             state.kompressor_ein = False
-                            last_compressor_off_time = now
+                            state.last_compressor_off_time = now  # Korrigiert
                             logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
                     state.ausschluss_grund = "Druckschalter offen"
                     if not state.pressure_error_sent:
@@ -1260,15 +1245,14 @@ async def main_loop(config, state, session):
                     else:
                         logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
 
-
                 # Sensorprüfung
                 fehler, is_overtemp = await check_boiler_sensors(t_boiler_oben, t_boiler_unten, config)
                 if fehler:
                     if state.kompressor_ein:
-                        result = set_kompressor_status(state, False, force_off=True)
+                        result = await set_kompressor_status(state, False, force_off=True)
                         if result:
                             state.kompressor_ein = False
-                            last_compressor_off_time = now
+                            state.last_compressor_off_time = now  # Korrigiert
                             logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
                     state.ausschluss_grund = fehler
                     if is_overtemp:
@@ -1293,19 +1277,14 @@ async def main_loop(config, state, session):
                     await asyncio.sleep(2)
                     continue
 
-
                 # Kompressorsteuerung
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
-
-                # Existing solar surplus active calculation (keeps the higher target logic)
-                # This logic is for general solar surplus heating, not just the 2-hour window start condition
                 state.solar_ueberschuss_aktiv = (
-                        power_source == "Direkter PV-Strom" or
-                        (state.kompressor_ein and state.current_runtime < state.min_laufzeit) # Keep compressor on for min runtime if it was started due to solar
+                    power_source == "Direkter PV-Strom" or
+                    (state.kompressor_ein and state.current_runtime < state.min_laufzeit)
                 )
 
-
-                # Prüfe GPIO-Zustand gegen Softwarestatus (existing check)
+                # Prüfe GPIO-Zustand gegen Softwarestatus
                 actual_gpio_state = GPIO.input(GIO21_PIN)
                 if state.kompressor_ein and actual_gpio_state == GPIO.LOW:
                     logging.critical("Inkonsistenz: state.kompressor_ein=True, aber GPIO 21 ist LOW!")
@@ -1328,7 +1307,6 @@ async def main_loop(config, state, session):
                             state.bot_token
                         )
 
-
                 if t_boiler_oben is not None and t_boiler_unten is not None and t_boiler_mittig is not None:
                     try:
                         SICHERHEITS_TEMP = int(config["Heizungssteuerung"]["SICHERHEITS_TEMP"])
@@ -1336,22 +1314,21 @@ async def main_loop(config, state, session):
                         SICHERHEITS_TEMP = 51
                         logging.warning(f"SICHERHEITS_TEMP ungültig, verwende Standard: {SICHERHEITS_TEMP}")
 
-                    # Sicherheitsabschaltung (existing logic - always applies)
+                    # Sicherheitsabschaltung
                     if (t_boiler_oben >= SICHERHEITS_TEMP or t_boiler_unten >= SICHERHEITS_TEMP):
                         if state.kompressor_ein:
                             result = await set_kompressor_status(state, False, force_off=True)
                             if result:
                                 state.kompressor_ein = False
-                                last_compressor_off_time = now
-                                if state.last_compressor_on_time: # Calculate runtime only if it was recorded
+                                state.last_compressor_off_time = now  # Korrigiert
+                                if state.last_compressor_on_time:
                                     state.last_runtime = now - state.last_compressor_on_time
                                     state.total_runtime_today += state.last_runtime
                                     logging.info("Kompressor erfolgreich ausgeschaltet (Sicherheitsabschaltung).")
                                 else:
                                     state.last_runtime = timedelta(0)
                                     logging.info("Kompressor ausgeschaltet (Sicherheitsabschaltung). Laufzeit unbekannt.")
-
-                                state.ausschluss_grund = None # Clear exclusion reason on successful shutdown
+                                state.ausschluss_grund = None
                             else:
                                 logging.critical(
                                     "Kritischer Fehler: Kompressor konnte trotz Übertemperatur nicht ausgeschaltet werden!")
@@ -1372,21 +1349,18 @@ async def main_loop(config, state, session):
                         await asyncio.sleep(2)
                         continue
 
-
-                    # Moduswechsel prüfen (existing logic)
+                    # Moduswechsel prüfen
                     if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv:
                         effective_ausschaltpunkt = (
                             state.previous_ausschaltpunkt if state.previous_ausschaltpunkt is not None else state.aktueller_ausschaltpunkt
                         )
                         if not state.solar_ueberschuss_aktiv:
-                            # Bei Übergang zu Normalmodus sofort Abschaltbedingungen prüfen
-                            if (
-                                    t_boiler_oben >= effective_ausschaltpunkt or t_boiler_mittig >= effective_ausschaltpunkt):
+                            if (t_boiler_oben >= effective_ausschaltpunkt or t_boiler_mittig >= effective_ausschaltpunkt):
                                 result = await set_kompressor_status(state, False, force_off=True)
                                 if result:
                                     state.kompressor_ein = False
-                                    last_compressor_off_time = now
-                                    if state.last_compressor_on_time: # Calculate runtime only if recorded
+                                    state.last_compressor_off_time = now  # Korrigiert
+                                    if state.last_compressor_on_time:
                                         state.last_runtime = now - state.last_compressor_on_time
                                         state.total_runtime_today += state.last_runtime
                                     else:
@@ -1405,23 +1379,15 @@ async def main_loop(config, state, session):
                                         state.bot_token
                                     )
 
-
-                    # Kompressorsteuerung (modified to include the new solar-only window logic)
-
-                    # Determine if temperature conditions for starting are met
-                    # Use the currently calculated einschaltpunkt (which might be influenced by the general solar_ueberschuss_aktiv)
+                    # Kompressorsteuerung
                     temp_conditions_met_to_start = (t_boiler_oben < state.aktueller_einschaltpunkt or t_boiler_mittig < state.aktueller_einschaltpunkt)
-
-                    # Check pause time
                     pause_ok = True
-                    if last_compressor_off_time and (now - last_compressor_off_time) < state.min_pause:
+                    if state.last_compressor_off_time and (now - state.last_compressor_off_time) < state.min_pause:
                         pause_ok = False
-                        pause_remaining = state.min_pause - (now - last_compressor_off_time)
+                        pause_remaining = state.min_pause - (now - state.last_compressor_off_time)
                         state.ausschluss_grund = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
-                        logging.info(f"Kompressor bleibt aus (zu kurze Pause: {(now - last_compressor_off_time)}, benötigt: {state.min_pause})")
+                        logging.info(f"Kompressor bleibt aus (zu kurze Pause: {(now - state.last_compressor_off_time)}, benötigt: {state.min_pause})")
 
-
-                    # Check solar window start condition: Within the window, require direct PV
                     solar_window_conditions_met_to_start = True
                     if within_solar_only_window:
                         if power_source != "Direkter PV-Strom":
@@ -1429,37 +1395,34 @@ async def main_loop(config, state, session):
                             state.ausschluss_grund = f"Warte auf direkten Solarstrom nach Nachtabsenkung ({solar_only_window_start_time_today.strftime('%H:%M')}-{solar_only_window_end_time_today.strftime('%H:%M')})"
                             logging.debug(f"Kompressorstart verhindert: Nicht genug direkter Solarstrom im Fenster nach Nachtabsenkung.")
 
-
-                    # Attempt to start compressor only if not already on and all conditions met
                     if not state.kompressor_ein and temp_conditions_met_to_start and pause_ok and solar_window_conditions_met_to_start:
                         logging.info("Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten.")
                         result = await set_kompressor_status(state, True)
                         if result:
                             state.kompressor_ein = True
                             state.last_compressor_on_time = now
-                            last_compressor_off_time = None
-                            state.ausschluss_grund = None # Clear exclusion reason on successful start
+                            state.last_compressor_off_time = None  # Korrigiert
+                            state.ausschluss_grund = None
                             logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
                         else:
                             state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler beim Einschalten"
                             logging.warning(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
 
-                    # Kompressor ausschalten wenn Temp erreicht (existing logic - applies regardless of window)
                     elif (t_boiler_oben >= state.aktueller_ausschaltpunkt or t_boiler_mittig >= state.aktueller_ausschaltpunkt):
                         if state.kompressor_ein:
                             logging.info(f"Abschaltbedingung erreicht: T_Oben={t_boiler_oben:.1f}°C, T_Mittig={t_boiler_mittig:.1f}°C, Ausschaltpunkt={state.aktueller_ausschaltpunkt}°C. Versuche auszuschalten.")
-                            result = await set_kompressor_status(state, False, force_off=True) # Force off due to reaching temp
+                            result = await set_kompressor_status(state, False, force_off=True)
                             if result:
                                 state.kompressor_ein = False
-                                last_compressor_off_time = now
-                                if state.last_compressor_on_time: # Calculate runtime only if it was recorded
+                                state.last_compressor_off_time = now  # Korrigiert
+                                if state.last_compressor_on_time:
                                     state.last_runtime = now - state.last_compressor_on_time
                                     state.total_runtime_today += state.last_runtime
                                     logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
                                 else:
                                     state.last_runtime = timedelta(0)
                                     logging.info("Kompressor ausgeschaltet. Laufzeit unbekannt (Startzeit nicht erfasst).")
-                                state.ausschluss_grund = None # Clear exclusion reason on successful shutdown
+                                state.ausschluss_grund = None
                             else:
                                 logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
                                 await send_telegram_message(
@@ -1467,7 +1430,6 @@ async def main_loop(config, state, session):
                                     "🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet!",
                                     state.bot_token
                                 )
-
 
                 # Laufzeit aktualisieren
                 if state.kompressor_ein and state.last_compressor_on_time:
@@ -1509,7 +1471,7 @@ async def main_loop(config, state, session):
                     logging.error(
                         f"Zyklus dauert zu lange ({cycle_duration:.2f}s), Warnung {watchdog_warning_count}/{WATCHDOG_MAX_WARNINGS}")
                     if watchdog_warning_count >= WATCHDOG_MAX_WARNINGS:
-                        result = set_kompressor_status(state, False, force_off=True)
+                        result = await set_kompressor_status(state, False, force_off=True)
                         await send_telegram_message(
                             session, state.chat_id,
                             "🚨 Watchdog-Fehler: Programm beendet.", state.bot_token
