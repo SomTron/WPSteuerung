@@ -279,6 +279,63 @@ async def get_solax_data(session, state):
                 }
                 return fallback_data
 
+async def fetch_solax_data(session, state, now):
+    """
+    Holt die aktuellen Solax-Daten und gibt sie mit Fallback-Werten zurück.
+    """
+    fallback_data = {
+        "acpower": 0,
+        "feedinpower": 0,
+        "consumeenergy": 0,
+        "batPower": 0,
+        "soc": 0,
+        "powerdc1": 0,
+        "powerdc2": 0,
+        "api_fehler": True
+    }
+
+    try:
+        solax_data = await get_solax_data(session, state) or fallback_data.copy()
+
+        # Upload-Zeit prüfen und Verzögerung berechnen (mit Zeitzone)
+        if "utcDateTime" in solax_data:
+            upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert("Europe/Berlin")
+            delay = (now - upload_time).total_seconds()
+            logging.debug(f"Solax-Datenverzögerung: {delay:.1f} Sekunden")
+
+        acpower = solax_data.get("acpower", "N/A")
+        feedinpower = solax_data.get("feedinpower", "N/A")
+        batPower = solax_data.get("batPower", "N/A")
+        soc = solax_data.get("soc", "N/A")
+        powerdc1 = solax_data.get("powerdc1", "N/A")
+        powerdc2 = solax_data.get("powerdc2", "N/A")
+        consumeenergy = solax_data.get("consumeenergy", "N/A")
+
+        return {
+            "solax_data": solax_data,
+            "acpower": acpower,
+            "feedinpower": feedinpower,
+            "batPower": batPower,
+            "soc": soc,
+            "powerdc1": powerdc1,
+            "powerdc2": powerdc2,
+            "consumeenergy": consumeenergy,
+        }
+
+    except Exception as e:
+        logging.error(f"Fehler beim Abrufen von Solax-Daten: {e}", exc_info=True)
+
+        # Fallback-Werte setzen
+        return {
+            "solax_data": fallback_data,
+            "acpower": "N/A",
+            "feedinpower": "N/A",
+            "batPower": "N/A",
+            "soc": "N/A",
+            "powerdc1": "N/A",
+            "powerdc2": "N/A",
+            "consumeenergy": "N/A",
+        }
 
 def get_power_source(solax_data):
     pv_production = solax_data.get("powerdc1", 0) + solax_data.get("powerdc2", 0)
@@ -1274,32 +1331,17 @@ async def main_loop(config, state, session):
                     await reload_config(session, state, config)
                     state.last_config_hash = current_hash
 
-                # Solax-Daten abrufen
-                try:
-                    solax_data = await get_solax_data(session, state) or {
-                        "acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                        "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                        "api_fehler": True
-                    }
-                    if "utcDateTime" in solax_data:
-                        upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert("Europe/Berlin")
-                        delay = (now - upload_time).total_seconds()
-                        logging.debug(f"Solax-Datenverzögerung: {delay:.1f} Sekunden")
-                    acpower = solax_data.get("acpower", "N/A")
-                    feedinpower = solax_data.get("feedinpower", "N/A")
-                    batPower = solax_data.get("batPower", "N/A")
-                    soc = solax_data.get("soc", "N/A")
-                    powerdc1 = solax_data.get("powerdc1", "N/A")
-                    powerdc2 = solax_data.get("powerdc2", "N/A")
-                    consumeenergy = solax_data.get("consumeenergy", "N/A")
-                except Exception as e:
-                    logging.error(f"Fehler beim Abrufen von Solax-Daten: {e}", exc_info=True)
-                    solax_data = {
-                        "acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-                        "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-                        "api_fehler": True
-                    }
-                    acpower = feedinpower = batPower = soc = powerdc1 = powerdc2 = consumeenergy = "N/A"
+                # Solax-Daten abrufen (ausgelagert)
+                solax_result = await fetch_solax_data(session, state, now)
+                solax_data = solax_result["solax_data"]
+                acpower = solax_result["acpower"]
+                feedinpower = solax_result["feedinpower"]
+                batPower = solax_result["batPower"]
+                soc = solax_result["soc"]
+                powerdc1 = solax_result["powerdc1"]
+                powerdc2 = solax_result["powerdc2"]
+                consumeenergy = solax_result["consumeenergy"]
+
 
                 # Sollwerte berechnen
                 try:
