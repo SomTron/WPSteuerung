@@ -136,68 +136,86 @@ class State:
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
 
-        self.gpio_lock = asyncio.Lock()  # Lock für GPIO-Zugriffe
-        self.session = None  # Wird in run_program gesetzt
+        # --- Basiswerte ---
+        self.gpio_lock = asyncio.Lock()
+        self.session = None
         self.config = config
+
+        # --- Laufzeitstatistik ---
         self.current_runtime = timedelta()
-        self.ausschluss_grund = None
-        self.last_config_hash = calculate_file_hash("config.ini")
-        self.kompressor_ein = False
+        self.last_runtime = timedelta()
         self.total_runtime_today = timedelta()
         self.last_day = now.date()
-        self.last_shutdown_time = now
-        self.last_log_time = now - timedelta(minutes=1)
-        self.last_kompressor_status = None
-        self.urlaubsmodus_aktiv = False
-        self.solar_ueberschuss_aktiv = False
-        self.last_runtime = timedelta()
-        self.pressure_error_sent = False
-        self.last_pressure_error_time = None
-        self.t_boiler = None
         self.start_time = None
-        self.last_pressure_state = None
         self.last_compressor_on_time = None
         self.last_compressor_off_time = None
+        self.last_shutdown_time = now  # <-- Jetzt vorhanden!
+        self.last_log_time = now - timedelta(minutes=1)
+        self.last_kompressor_status = None
 
-        # Telegram-Konfiguration
+        # --- Steuerungslogik ---
+        self.kompressor_ein = False
+        self.urlaubsmodus_aktiv = False
+        self.solar_ueberschuss_aktiv = False
+        self.ausschluss_grund = None
+        self.t_boiler = None  # Durchschnittliche Boiler-Temperatur
+
+        # --- Telegram-Konfiguration ---
         self.bot_token = config["Telegram"].get("BOT_TOKEN")
         self.chat_id = config["Telegram"].get("CHAT_ID")
         if not self.bot_token or not self.chat_id:
             logging.warning("Telegram BOT_TOKEN oder CHAT_ID fehlt. Telegram-Nachrichten deaktiviert.")
 
-        # SolaxCloud-Konfiguration
+        # --- SolaxCloud-Konfiguration ---
         self.token_id = config["SolaxCloud"].get("TOKEN_ID")
         self.sn = config["SolaxCloud"].get("SN")
         if not self.token_id or not self.sn:
             logging.warning("SolaxCloud TOKEN_ID oder SN fehlt. Solax-Datenabruf eingeschränkt.")
 
-        self.min_laufzeit = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_LAUFZEIT", 10)))
-        self.min_pause = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
-        self.verdampfertemperatur = int(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", 6))
+        # --- Heizungsparameter ---
+        try:
+            self.min_laufzeit = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_LAUFZEIT", 10)))
+            self.min_pause = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
+            self.verdampfertemperatur = int(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", 6))
+        except ValueError as e:
+            logging.error(f"Fehler beim Parsen von Heizungsparametern: {e}")
+            self.min_laufzeit = timedelta(minutes=10)
+            self.min_pause = timedelta(minutes=20)
+            self.verdampfertemperatur = 6
+
         self.last_api_call = None
         self.last_api_data = None
         self.last_api_timestamp = None
 
-        # Initiale Sollwerte
-        self.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
-        self.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
+        # --- Schwellwerte ---
+        try:
+            self.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
+            self.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
+            min_hysteresis = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
 
-        # Validierung der Sollwerte
-        min_hysteresis = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
-        if self.aktueller_ausschaltpunkt <= self.aktueller_einschaltpunkt:
-            logging.warning(
-                f"Ausschaltpunkt ({self.aktueller_ausschaltpunkt}°C) <= Einschaltpunkt ({self.aktueller_einschaltpunkt}°C), "
-                f"setze Ausschaltpunkt auf Einschaltpunkt + {min_hysteresis}°C"
-            )
-            self.aktueller_ausschaltpunkt = self.aktueller_einschaltpunkt + min_hysteresis
+            if self.aktueller_ausschaltpunkt <= self.aktueller_einschaltpunkt:
+                logging.warning(
+                    f"Ausschaltpunkt ({self.aktueller_ausschaltpunkt}°C) <= Einschaltpunkt ({self.aktueller_einschaltpunkt}°C), "
+                    f"setze Ausschaltpunkt auf Einschaltpunkt + {min_hysteresis}°C"
+                )
+                self.aktueller_ausschaltpunkt = self.aktueller_einschaltpunkt + min_hysteresis
+        except ValueError as e:
+            logging.error(f"Fehler beim Einlesen der Schwellwerte: {e}")
+            self.aktueller_ausschaltpunkt = 45
+            self.aktueller_einschaltpunkt = 42
 
-        logging.debug(
-            f"State initialisiert: last_day={self.last_day}, "
-            f"last_shutdown_time={self.last_shutdown_time}, tzinfo={self.last_shutdown_time.tzinfo}, "
-            f"last_log_time={self.last_log_time}, tzinfo={self.last_log_time.tzinfo}, "
-            f"bot_token={'<set>' if self.bot_token else '<unset>'}, chat_id={'<set>' if self.chat_id else '<unset>'}, "
-            f"token_id={'<set>' if self.token_id else '<unset>'}, sn={'<set>' if self.sn else '<unset>'}"
-        )
+        # --- Fehler- und Statuszustände ---
+        self.last_config_hash = calculate_file_hash("config.ini")
+        self.pressure_error_sent = False
+        self.last_pressure_error_time = None
+        self.last_pressure_state = None
+
+        # --- Zusätzliche Flags ---
+        self.previous_einschaltpunkt = None
+        self.previous_solar_ueberschuss_aktiv = False
+
+        # ✅ Debugging erst NACH Initialisierung
+        logging.debug(f" - Letzte Abschaltung: {self.last_shutdown_time}")
 
 # Logging einrichten mit Telegram-Handler
 async def setup_logging(session, state):
@@ -1177,6 +1195,7 @@ async def main_loop(config, state, session):
     try:
         # GPIO-Initialisierung
         if not await initialize_gpio():
+            logging.critical("GPIO-Initialisierung fehlgeschlagen!")
             raise RuntimeError("GPIO-Initialisierung fehlgeschlagen")
 
         # LCD-Initialisierung
@@ -1524,41 +1543,94 @@ async def main_loop(config, state, session):
         await shutdown(session, state)
 
 async def run_program():
-    async with aiohttp.ClientSession() as session:
-        config = configparser.ConfigParser()
-        try:
-            config.read("config.ini")
-            if not config.sections():
-                raise ValueError("Konfiguration konnte nicht geladen werden")
-        except Exception as e:
-            logging.error(f"Fehler beim Laden der Konfiguration: {e}", exc_info=True)
-            raise
+    logging.info("Programm gestartet.")
+    logging.info("Log-System bereit.")
 
+    config = None
+    state = None
+    session = None
+
+    try:
+        # Konfiguration laden
+        logging.debug("Lade Konfigurationsdatei...")
+        config = load_and_validate_config()
+
+        # State-Objekt erstellen
+        logging.debug("Erzeuge State-Objekt...")
         state = State(config)
-        state.session = session
 
-        if not os.path.exists("heizungsdaten.csv"):
-            async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
-                header = (
-                    "Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
-                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
-                )
-                await csvfile.write(header)
-                logging.info("CSV-Header geschrieben: " + header.strip())
+        async with aiohttp.ClientSession() as session:
+            state.session = session
 
-        try:
+            # LCD-Initialisierung
+            logging.debug("LCD-Initialisierung beginnt...")
+            await initialize_lcd(session)
+
+            # GPIO-Initialisierung
+            logging.debug("GPIO-Initialisierung beginnt...")
+            if not await initialize_gpio():
+                raise RuntimeError("GPIO-Initialisierung fehlgeschlagen")
+
+            # CSV-Header schreiben
+            if not os.path.exists("heizungsdaten.csv"):
+                async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
+                    header = (
+                        "Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
+                        "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
+                        "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
+                    )
+                    await csvfile.write(header)
+                    logging.info("CSV-Header geschrieben.")
+
+            # Logging mit TelegramHandler erst jetzt aktivieren
+            logging.debug("Richte Telegram-Logging ein...")
             await setup_logging(session, state)
+
+            # Willkommensnachricht senden
+            now = datetime.now(pytz.timezone("Europe/Berlin"))
+            if state.bot_token and state.chat_id:
+                await send_telegram_message(
+                    session,
+                    state.chat_id,
+                    f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
+                    state.bot_token
+                )
+
+            logging.info("Initialisierung abgeschlossen. Hauptschleife startet...")
             await main_loop(config, state, session)
-        except KeyboardInterrupt:
-            logging.info("Programm durch Benutzer abgebrochen (Ctrl+C).")
-        except asyncio.CancelledError:
-            logging.info("Hauptschleife abgebrochen.")
-        except Exception as e:
-            logging.error(f"Unerwarteter Fehler in run_program: {e}", exc_info=True)
-            raise
-        finally:
+
+    except Exception as e:
+        logging.critical(f"Kritischer Fehler im Hauptprogramm: {e}", exc_info=True)
+        if state and state.bot_token and state.chat_id:
+            try:
+                await send_telegram_message(
+                    session,
+                    state.chat_id,
+                    f"🛑 Kritischer Fehler:\n{str(e)}",
+                    state.bot_token
+                )
+            except:
+                logging.warning("Konnte Fehlermeldung per Telegram nicht senden.")
+        raise
+
+    except asyncio.CancelledError:
+        logging.info("Programm durch Benutzerabbruch beendet.")
+        if state and state.bot_token and state.chat_id:
+            try:
+                await send_telegram_message(
+                    session,
+                    state.chat_id,
+                    f"🛑 Programm manuell beendet.",
+                    state.bot_token
+                )
+            except:
+                logging.warning("Konnte Abbruchmeldung per Telegram nicht senden.")
+    finally:
+        logging.info("Starte Shutdown-Prozedur...")
+        try:
             await shutdown(session, state)
+        except Exception as e:
+            logging.error(f"Fehler während des Shutdowns: {e}")
 
 if __name__ == "__main__":
     asyncio.run(run_program())
