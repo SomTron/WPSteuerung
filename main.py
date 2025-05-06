@@ -871,15 +871,20 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
-        # Debugging: Status und Solax-Daten
+        # Solarüberschuss-Logik
+        was_active = state.solar_ueberschuss_aktiv
+        # Debugging nach Definition von was_active
         logging.debug(f"Vor Solarüberschuss-Logik: was_active={was_active}, solar_ueberschuss_aktiv={state.solar_ueberschuss_aktiv}, "
                       f"batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
 
-        # Solarüberschuss-Logik
-        was_active = state.solar_ueberschuss_aktiv
-        state.solar_ueberschuss_aktiv = bat_power > 600 or (soc > 95 and feedin_power > 600)
+        if state.solar_ueberschuss_aktiv:
+            # Ausschalten nur bei niedrigeren Werten (Hysterese)
+            state.solar_ueberschuss_aktiv = bat_power > 550 or (soc > 90 and feedin_power > 550)
+        else:
+            # Einschalten nur bei klar überschrittenen Schwellen
+            state.solar_ueberschuss_aktiv = bat_power > 600 or (soc > 95 and feedin_power > 600)
 
-        # Debugging: Status nach Berechnung
+        # Debugging nach Statusänderung
         logging.debug(f"Nach Solarüberschuss-Logik: was_active={was_active}, solar_ueberschuss_aktiv={state.solar_ueberschuss_aktiv}")
 
         if state.solar_ueberschuss_aktiv and not was_active:
@@ -894,6 +899,7 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
             ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - total_reduction
             einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
 
+        # Validierung: Stelle sicher, dass Ausschaltpunkt > Einschaltpunkt
         HYSTERESE_MIN = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))
         if ausschaltpunkt <= einschaltpunkt:
             logging.warning(
@@ -911,6 +917,7 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
 
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
+        # Standardwerte als Fallback
         ausschaltpunkt = 45
         einschaltpunkt = 42
         logging.warning(f"Verwende Standard-Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}")
@@ -1066,7 +1073,6 @@ async def initialize_gpio():
 
 
 # Asynchrone Hauptschleife
-
 async def main_loop(config, state, session):
     """Hauptschleife des Programms mit State-Objekt."""
     local_tz = pytz.timezone("Europe/Berlin")
@@ -1092,6 +1098,23 @@ async def main_loop(config, state, session):
         )
         await send_welcome_message(session, state.chat_id, state.bot_token)
 
+        # Telegram-Task starten
+        logging.info("Initialisiere telegram_task")
+        telegram_task_handle = asyncio.create_task(telegram_task(
+            session=session,
+            read_temperature_func=read_temperature,
+            sensor_ids=SENSOR_IDS,
+            kompressor_status_func=lambda: state.kompressor_ein,
+            current_runtime_func=lambda: state.current_runtime,
+            total_runtime_func=lambda: state.total_runtime_today,
+            config=config,
+            get_solax_data_func=get_solax_data,
+            state=state,
+            get_temperature_history_func=get_boiler_temperature_history,
+            get_runtime_bar_chart_func=get_runtime_bar_chart,
+            is_nighttime_func=is_nighttime
+        ))
+
         # Initialisiere Zeitstempel und Zustandsvariablen
         state.last_log_time = None if not hasattr(state, 'last_log_time') else state.last_log_time
         if state.last_log_time and state.last_log_time.tzinfo is None:
@@ -1114,7 +1137,7 @@ async def main_loop(config, state, session):
         night_setback_end_time_today = None
         solar_only_window_end_time_today = None
 
-        # Watchdog-Variablen (fehlten im Original, müssen initialisiert werden)
+        # Watchdog-Variablen
         last_cycle_time = datetime.now(local_tz)
         watchdog_warning_count = 0
 
@@ -1216,7 +1239,7 @@ async def main_loop(config, state, session):
                         result = await set_kompressor_status(state, False, force_off=True)
                         if result:
                             state.kompressor_ein = False
-                            state.last_compressor_off_time = now  # Korrigiert
+                            state.last_compressor_off_time = now
                             logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
                     state.ausschluss_grund = "Druckschalter offen"
                     if not state.pressure_error_sent:
@@ -1252,7 +1275,7 @@ async def main_loop(config, state, session):
                         result = await set_kompressor_status(state, False, force_off=True)
                         if result:
                             state.kompressor_ein = False
-                            state.last_compressor_off_time = now  # Korrigiert
+                            state.last_compressor_off_time = now
                             logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
                     state.ausschluss_grund = fehler
                     if is_overtemp:
@@ -1320,7 +1343,7 @@ async def main_loop(config, state, session):
                             result = await set_kompressor_status(state, False, force_off=True)
                             if result:
                                 state.kompressor_ein = False
-                                state.last_compressor_off_time = now  # Korrigiert
+                                state.last_compressor_off_time = now
                                 if state.last_compressor_on_time:
                                     state.last_runtime = now - state.last_compressor_on_time
                                     state.total_runtime_today += state.last_runtime
@@ -1359,7 +1382,7 @@ async def main_loop(config, state, session):
                                 result = await set_kompressor_status(state, False, force_off=True)
                                 if result:
                                     state.kompressor_ein = False
-                                    state.last_compressor_off_time = now  # Korrigiert
+                                    state.last_compressor_off_time = now
                                     if state.last_compressor_on_time:
                                         state.last_runtime = now - state.last_compressor_on_time
                                         state.total_runtime_today += state.last_runtime
@@ -1401,7 +1424,7 @@ async def main_loop(config, state, session):
                         if result:
                             state.kompressor_ein = True
                             state.last_compressor_on_time = now
-                            state.last_compressor_off_time = None  # Korrigiert
+                            state.last_compressor_off_time = None
                             state.ausschluss_grund = None
                             logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
                         else:
@@ -1414,7 +1437,7 @@ async def main_loop(config, state, session):
                             result = await set_kompressor_status(state, False, force_off=True)
                             if result:
                                 state.kompressor_ein = False
-                                state.last_compressor_off_time = now  # Korrigiert
+                                state.last_compressor_off_time = now
                                 if state.last_compressor_on_time:
                                     state.last_runtime = now - state.last_compressor_on_time
                                     state.total_runtime_today += state.last_runtime
@@ -1487,14 +1510,19 @@ async def main_loop(config, state, session):
                 await asyncio.sleep(30)
 
     except asyncio.CancelledError:
-        telegram_task_handle.cancel()
-        display_task_handle.cancel()
-        await asyncio.gather(telegram_task_handle, display_task_handle, return_exceptions=True)
+        if 'telegram_task_handle' in locals():
+            telegram_task_handle.cancel()
+        if 'display_task_handle' in locals():
+            display_task_handle.cancel()
+        await asyncio.gather(
+            telegram_task_handle if 'telegram_task_handle' in locals() else asyncio.sleep(0),
+            display_task_handle if 'display_task_handle' in locals() else asyncio.sleep(0),
+            return_exceptions=True
+        )
         raise
 
     finally:
         await shutdown(session, state)
-
 
 async def run_program():
     async with aiohttp.ClientSession() as session:
@@ -1508,9 +1536,8 @@ async def run_program():
             raise
 
         state = State(config)
-        state.session = session  # Setze session im State
+        state.session = session
 
-        # CSV-Initialisierung
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
@@ -1534,11 +1561,5 @@ async def run_program():
         finally:
             await shutdown(session, state)
 
-
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)  # Fallback-Logging vor setup_logging
-    try:
-        asyncio.run(run_program())
-    except Exception as e:
-        logging.error(f"Fehler beim Starten des Skripts: {e}", exc_info=True)
-        raise
+    asyncio.run(run_program())
