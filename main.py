@@ -745,77 +745,6 @@ async def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None)
 
 
 
-# Asynchrone Funktion zum Neuladen der Konfiguration
-async def reload_config(session, state, config):
-    """Lädt die Konfigurationsdatei neu und aktualisiert die Parameter."""
-    try:
-        logging.info("Lade Konfigurationsdatei neu...")
-        new_config = configparser.ConfigParser()
-        new_config.read("config.ini")
-
-        # Validierte Konfiguration
-        validated_config = {
-            "Heizungssteuerung": {
-                "AUSSCHALTPUNKT": new_config.getint("Heizungssteuerung", "AUSSCHALTPUNKT", fallback=45),
-                "EINSCHALTPUNKT": new_config.getint("Heizungssteuerung", "EINSCHALTPUNKT", fallback=42),
-                "AUSSCHALTPUNKT_ERHOEHT": new_config.getint("Heizungssteuerung", "AUSSCHALTPUNKT_ERHOEHT", fallback=50),
-                "EINSCHALTPUNKT_ERHOEHT": new_config.getint("Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", fallback=46),
-                "NACHTABSENKUNG": new_config.getint("Heizungssteuerung", "NACHTABSENKUNG", fallback=0),
-                "VERDAMPFERTEMPERATUR": new_config.getint("Heizungssteuerung", "VERDAMPFERTEMPERATUR", fallback=5),
-                "MIN_PAUSE": new_config.getint("Heizungssteuerung", "MIN_PAUSE", fallback=5),
-                "SICHERHEITS_TEMP": new_config.getint("Heizungssteuerung", "SICHERHEITS_TEMP", fallback=52),
-            },
-            "Urlaubsmodus": {
-                "URLAUBSABSENKUNG": new_config.getint("Urlaubsmodus", "URLAUBSABSENKUNG", fallback=0)
-            },
-            "Telegram": {
-                "CHAT_ID": new_config.get("Telegram", "CHAT_ID", fallback=""),
-                "BOT_TOKEN": new_config.get("Telegram", "BOT_TOKEN", fallback="")  # Korrigiert von TOKEN
-            }
-        }
-
-        # Debug-Log der geladenen Konfiguration
-        logging.debug(f"Geladene Konfiguration: {validated_config}")
-
-        # Aktualisiere config
-        config.clear()
-        config.update(validated_config)
-
-        # Aktualisiere state.bot_token und state.chat_id
-        state.bot_token = validated_config["Telegram"]["BOT_TOKEN"]
-        state.chat_id = validated_config["Telegram"]["CHAT_ID"]
-        if not state.bot_token or not state.chat_id:
-            logging.warning("Kein gültiger Telegram-Token oder Chat-ID in der Konfiguration gefunden. Telegram-Nachrichten deaktiviert.")
-
-        # Solax-Daten für calculate_shutdown_point
-        solax_data = await get_solax_data(session, state) or {
-            "acpower": 0, "feedinpower": 0, "consumeenergy": 0,
-            "batPower": 0, "soc": 0, "powerdc1": 0, "powerdc2": 0,
-            "api_fehler": True
-        }
-
-        # Aktualisiere Sollwerte
-        state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(
-            validated_config, await asyncio.to_thread(is_nighttime, validated_config), solax_data, state
-        )
-
-        logging.info("Konfiguration erfolgreich neu geladen.")
-        # Sende Telegram-Nachricht nur, wenn Token und Chat-ID gültig sind
-        if state.bot_token and state.chat_id:
-            await send_telegram_message(session, state.chat_id,
-                                      "🔧 Konfigurationsdatei wurde geändert.", state.bot_token)
-        else:
-            logging.debug("Überspringe Telegram-Nachricht, da Token oder Chat-ID fehlt.")
-
-    except Exception as e:
-        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}", exc_info=True)
-        # Sende Fehler-Nachricht nur, wenn Token und Chat-ID gültig sind
-        if state.bot_token and state.chat_id:
-            await send_telegram_message(session, state.chat_id,
-                                      f"⚠️ Fehler beim Neuladen der Konfiguration: {str(e)}", state.bot_token)
-        else:
-            logging.debug("Überspringe Telegram-Fehlernachricht, da Token oder Chat-ID fehlt.")
-
 # Funktion zum Anpassen der Sollwerte (synchron, wird in Thread ausgeführt)
 def adjust_shutdown_and_start_points(solax_data, config, state):
     """
@@ -865,6 +794,89 @@ def adjust_shutdown_and_start_points(solax_data, config, state):
         adjust_shutdown_and_start_points.last_aktueller_einschaltpunkt = state.aktueller_einschaltpunkt
 
 
+def load_and_validate_config():
+    defaults = {
+        "Heizungssteuerung": {
+            "AUSSCHALTPUNKT": "45",
+            "EINSCHALTPUNKT": "42",
+            "AUSSCHALTPUNKT_ERHOEHT": "50",
+            "EINSCHALTPUNKT_ERHOEHT": "46",
+            "NACHTABSENKUNG": "0",
+            "VERDAMPFERTEMPERATUR": "5",
+            "MIN_PAUSE": "5",
+            "SICHERHEITS_TEMP": "52",
+            "HYSTERESE_MIN": "2"
+        },
+        "Urlaubsmodus": {
+            "URLAUBSABSENKUNG": "0"
+        },
+        "Telegram": {
+            "CHAT_ID": "",
+            "BOT_TOKEN": ""
+        },
+        "SolaxCloud": {
+            "TOKEN_ID": "",
+            "SN": ""
+        }
+    }
+
+    config = configparser.ConfigParser()
+    read_ok = config.read("config.ini")
+
+    if not read_ok:
+        logging.warning("Konfigurationsdatei konnte nicht gefunden oder gelesen werden. Verwende Standardwerte.")
+
+    # Füge fehlende Sections/Werte hinzu
+    for section, keys in defaults.items():
+        if not config.has_section(section):
+            config.add_section(section)
+        for key, default in keys.items():
+            if not config.has_option(section, key):
+                config.set(section, key, default)
+                logging.debug(f"[{section}] {key} fehlt → Standardwert gesetzt: {default}")
+
+    return config
+
+# Asynchrone Funktion zum Neuladen der Konfiguration
+async def reload_config(session, state):
+    try:
+        new_config = load_and_validate_config()
+        current_hash = calculate_file_hash("config.ini")
+
+        if hasattr(state, "last_config_hash") and state.last_config_hash == current_hash:
+            logging.debug("Keine Änderung an der Konfigurationsdatei festgestellt.")
+            return
+
+        logging.info("Neue Konfiguration erkannt – wird geladen...")
+
+        # Heizungsparameter
+        state.aktueller_ausschaltpunkt = new_config.getint("Heizungssteuerung", "AUSSCHALTPUNKT")
+        state.aktueller_einschaltpunkt = new_config.getint("Heizungssteuerung", "EINSCHALTPUNKT")
+        state.min_pause = timedelta(minutes=new_config.getint("Heizungssteuerung", "MIN_PAUSE"))
+
+        # Telegram
+        old_token = state.bot_token
+        old_chat_id = state.chat_id
+        state.bot_token = new_config.get("Telegram", "BOT_TOKEN")
+        state.chat_id = new_config.get("Telegram", "CHAT_ID")
+
+        if not state.bot_token or not state.chat_id:
+            logging.warning("Telegram-Token oder Chat-ID fehlt. Nachrichten deaktiviert.")
+
+        # Benachrichtigung bei Änderung
+        if state.bot_token and state.chat_id and (old_token != state.bot_token or old_chat_id != state.chat_id):
+            await send_telegram_message(session, state.chat_id, "🔧 Konfiguration neu geladen.", state.bot_token)
+
+        state.last_config_hash = current_hash
+        logging.info("Konfiguration erfolgreich neu geladen.")
+
+    except Exception as e:
+        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}", exc_info=True)
+        if state.bot_token and state.chat_id:
+            await send_telegram_message(session, state.chat_id,
+                                      f"⚠️ Fehler beim Neuladen der Konfiguration: {str(e)}",
+                                      state.bot_token)
+
 def calculate_file_hash(file_path):
     """Berechnet den SHA-256-Hash einer Datei."""
     sha256_hash = hashlib.sha256()
@@ -880,79 +892,6 @@ def calculate_file_hash(file_path):
         return None
 
 
-def load_config():
-    """Lädt die Konfigurationsdatei synchron."""
-    config = configparser.ConfigParser()
-    config.read("config.ini")
-    logging.debug(f"Konfiguration geladen: {dict(config['Heizungssteuerung'])}")
-    return config
-
-
-def validate_config(config):
-    defaults = {
-        "Heizungssteuerung": {
-            "AUSSCHALTPUNKT": "50",
-            "AUSSCHALTPUNKT_ERHOEHT": "55",
-            "EINSCHALTPUNKT": "42",
-            "EINSCHALTPUNKT_ERHOEHT": "46",
-            "TEMP_OFFSET": "10",
-            "VERDAMPFERTEMPERATUR": "25",
-            "MIN_LAUFZEIT": "10",
-            "MIN_PAUSE": "20",
-            "NACHTABSENKUNG": "0",
-            "HYSTERESE_MIN": "2",
-            "SICHERHEITS_TEMP": "51"  # Neu hinzugefügt
-        },
-        "Telegram": {"state.bot_token": "", "CHAT_ID": ""},
-        "SolaxCloud": {"TOKEN_ID": "", "SN": ""}
-    }
-    for section in defaults:
-        if section not in config:
-            config[section] = {}
-            logging.warning(f"Abschnitt {section} fehlt in config.ini, wird mit Standardwerten erstellt.")
-        for key, default in defaults[section].items():
-            try:
-                if key in config[section]:
-                    if key not in ["state.bot_token", "CHAT_ID", "TOKEN_ID", "SN"]:
-                        value = int(config[section][key])
-                        min_val = 0 if key not in ["AUSSCHALTPUNKT", "AUSSCHALTPUNKT_ERHOEHT", "EINSCHALTPUNKT", "EINSCHALTPUNKT_ERHOEHT", "SICHERHEITS_TEMP"] else 20
-                        max_val = 100 if key not in ["MIN_LAUFZEIT", "MIN_PAUSE"] else 60
-                        if not (min_val <= value <= max_val):
-                            logging.warning(
-                                f"Ungültiger Wert für {key} in {section}: {value}. Verwende Standardwert: {default}")
-                            config[section][key] = default
-                        else:
-                            config[section][key] = str(value)
-                    else:
-                        config[section][key] = config[section][key]
-                else:
-                    config[section][key] = default
-                    logging.warning(f"Schlüssel {key} in {section} fehlt, verwende Standardwert: {default}")
-            except ValueError as e:
-                config[section][key] = default
-                logging.error(f"Ungültiger Wert für {key} in {section}: {e}, verwende Standardwert: {default}")
-
-    ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 50))
-    einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
-    hys_min = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))
-    if ausschaltpunkt <= einschaltpunkt:
-        logging.warning(
-            f"AUSSCHALTPUNKT ({ausschaltpunkt}) <= EINSCHALTPUNKT ({einschaltpunkt}), "
-            f"setze AUSSCHALTPUNKT auf EINSCHALTPUNKT + {hys_min}"
-        )
-        config["Heizungssteuerung"]["AUSSCHALTPUNKT"] = str(einschaltpunkt + hys_min)
-
-    ausschaltpunkt_erh = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
-    einschaltpunkt_erh = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46))
-    if ausschaltpunkt_erh <= einschaltpunkt_erh:
-        logging.warning(
-            f"AUSSCHALTPUNKT_ERHOEHT ({ausschaltpunkt_erh}) <= EINSCHALTPUNKT_ERHOEHT ({einschaltpunkt_erh}), "
-            f"setze AUSSCHALTPUNKT_ERHOEHT auf EINSCHALTPUNKT_ERHOEHT + {hys_min}"
-        )
-        config["Heizungssteuerung"]["AUSSCHALTPUNKT_ERHOEHT"] = str(einschaltpunkt_erh + hys_min)
-
-    logging.debug(f"Validierte Konfiguration: {dict(config['Heizungssteuerung'])}")
-    return config
 
 async def log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, solax_data,
                      aktueller_einschaltpunkt, aktueller_ausschaltpunkt, solar_ueberschuss_aktiv,
@@ -1328,7 +1267,7 @@ async def main_loop(config, state, session):
                 # Konfiguration neu laden
                 current_hash = calculate_file_hash("config.ini")
                 if state.last_config_hash != current_hash:
-                    await reload_config(session, state, config)
+                    await reload_config(session, state)
                     state.last_config_hash = current_hash
 
                 # Solax-Daten abrufen (ausgelagert)
