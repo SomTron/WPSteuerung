@@ -138,6 +138,7 @@ class State:
 
         self.gpio_lock = asyncio.Lock()  # Lock für GPIO-Zugriffe
         self.session = None  # Wird in run_program gesetzt
+        self.config = config
         self.current_runtime = timedelta()
         self.ausschluss_grund = None
         self.last_config_hash = calculate_file_hash("config.ini")
@@ -493,6 +494,71 @@ def check_pressure(state):
 
     return pressure_ok
 
+async def handle_pressure_check(session, state):
+    pressure_ok = await asyncio.to_thread(check_pressure, state)
+
+    if not pressure_ok:
+        if state.kompressor_ein:
+            result = await set_kompressor_status(state, False, force_off=True)
+            if result:
+                state.kompressor_ein = False
+                state.last_compressor_off_time = datetime.now(state.local_tz)
+                logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
+        state.ausschluss_grund = "Druckschalter offen"
+        if not state.pressure_error_sent:
+            if state.bot_token and state.chat_id:
+                await send_telegram_message(
+                    session, state.chat_id,
+                    "⚠️ Druckschalter offen!", state.bot_token
+                )
+                state.pressure_error_sent = True
+                state.last_pressure_error_time = datetime.now(state.local_tz)
+        return False
+
+    if state.pressure_error_sent and (
+        datetime.now(state.local_tz) - state.last_pressure_error_time
+    ) >= PRESSURE_ERROR_DELAY:
+        if state.bot_token and state.chat_id:
+            await send_telegram_message(
+                session, state.chat_id,
+                "✅ Druckschalter wieder normal.", state.bot_token
+            )
+            state.pressure_error_sent = False
+            state.last_pressure_error_time = None
+    return True
+
+async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten):
+    fehler, is_overtemp = await check_boiler_sensors(t_boiler_oben, t_boiler_unten, state.config)
+
+    if fehler:
+        if state.kompressor_ein:
+            result = await set_kompressor_status(state, False, force_off=True)
+            if result:
+                state.kompressor_ein = False
+                state.last_compressor_off_time = datetime.now(state.local_tz)
+                logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
+        state.ausschluss_grund = fehler
+
+        if is_overtemp:
+            try:
+                SICHERHEITS_TEMP = int(state.config["Heizungssteuerung"]["SICHERHEITS_TEMP"])
+            except (KeyError, ValueError):
+                SICHERHEITS_TEMP = 51
+
+            now = datetime.now(state.local_tz)
+            if (state.last_overtemp_notification is None or
+                (now - state.last_overtemp_notification).total_seconds() >= NOTIFICATION_COOLDOWN):
+                if state.bot_token and state.chat_id:
+                    message = (
+                        f"⚠️ Sicherheitsabschaltung: "
+                        f"T_Oben={'N/A' if t_boiler_oben is None else t_boiler_oben:.1f}°C, "
+                        f"T_Unten={'N/A' if t_boiler_unten is None else t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C"
+                    )
+                    await send_telegram_message(session, state.chat_id, message, state.bot_token)
+                    state.last_overtemp_notification = now
+        await asyncio.sleep(2)
+        return False
+    return True
 
 async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config):
     try:
@@ -831,6 +897,37 @@ def validate_config(config):
     logging.debug(f"Validierte Konfiguration: {dict(config['Heizungssteuerung'])}")
     return config
 
+async def log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, solax_data,
+                     aktueller_einschaltpunkt, aktueller_ausschaltpunkt, solar_ueberschuss_aktiv,
+                     nacht_reduction, power_source):
+    should_log = (state.last_log_time is None or
+                  (now - state.last_log_time) >= timedelta(minutes=1) or
+                  state.kompressor_ein != state.last_kompressor_status)
+
+    if should_log:
+        async with csv_lock:
+            async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
+                csv_line = (
+                    f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
+                    f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
+                    f"{t_boiler_unten if t_boiler_unten is not None else 'N/A'},"
+                    f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"
+                    f"{state.t_boiler if state.t_boiler != 'Fehler' else 'N/A'},"
+                    f"{t_verd if t_verd is not None else 'N/A'},"
+                    f"{'EIN' if state.kompressor_ein else 'AUS'},"
+                    f"{solax_data.get('acpower', 'N/A')},{solax_data.get('feedinpower', 'N/A')},"
+                    f"{solax_data.get('batPower', 'N/A')},{solax_data.get('soc', 'N/A')},"
+                    f"{solax_data.get('powerdc1', 'N/A')},{solax_data.get('powerdc2', 'N/A')},"
+                    f"{solax_data.get('consumeenergy', 'N/A')},"
+                    f"{state.aktueller_einschaltpunkt},{state.aktueller_ausschaltpunkt},"
+                    f"{int(state.solar_ueberschuss_aktiv)},"
+                    f"{nacht_reduction},"
+                    f"{power_source}\n"
+                )
+                await csvfile.write(csv_line)
+                await csvfile.flush()
+            state.last_log_time = now
+            state.last_kompressor_status = state.kompressor_ein
 
 def is_nighttime(config):
     """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
@@ -1212,6 +1309,7 @@ async def main_loop(config, state, session):
                         config, is_night, solax_data, state)
                 except Exception as e:
                     logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
+                    is_night = False
                     nacht_reduction = 0
                     state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
                     state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
@@ -1232,72 +1330,14 @@ async def main_loop(config, state, session):
                 )
                 state.t_boiler = t_boiler
 
-                # Druckprüfung
-                pressure_ok = await asyncio.to_thread(check_pressure, state)
-                if not pressure_ok:
-                    if state.kompressor_ein:
-                        result = await set_kompressor_status(state, False, force_off=True)
-                        if result:
-                            state.kompressor_ein = False
-                            state.last_compressor_off_time = now
-                            logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
-                    state.ausschluss_grund = "Druckschalter offen"
-                    if not state.pressure_error_sent:
-                        if state.bot_token and state.chat_id:
-                            await send_telegram_message(
-                                session, state.chat_id,
-                                "⚠️ Druckschalter offen!", state.bot_token
-                            )
-                            state.pressure_error_sent = True
-                            state.last_pressure_error_time = now
-                            logging.debug("Telegram-Nachricht für Druckschalter gesendet")
-                        else:
-                            logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
+
+                # Druck- und Sensorfehler prüfen
+                if not await handle_pressure_check(session, state):
                     await asyncio.sleep(2)
                     continue
 
-                if state.pressure_error_sent and (now - state.last_pressure_error_time) >= PRESSURE_ERROR_DELAY:
-                    if state.bot_token and state.chat_id:
-                        await send_telegram_message(
-                            session, state.chat_id,
-                            "✅ Druckschalter wieder normal.", state.bot_token
-                        )
-                        state.pressure_error_sent = False
-                        state.last_pressure_error_time = None
-                        logging.debug("Telegram-Nachricht für Druckschalter-Wiederherstellung gesendet")
-                    else:
-                        logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
-
-                # Sensorprüfung
-                fehler, is_overtemp = await check_boiler_sensors(t_boiler_oben, t_boiler_unten, config)
-                if fehler:
-                    if state.kompressor_ein:
-                        result = await set_kompressor_status(state, False, force_off=True)
-                        if result:
-                            state.kompressor_ein = False
-                            state.last_compressor_off_time = now
-                            logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
-                    state.ausschluss_grund = fehler
-                    if is_overtemp:
-                        try:
-                            SICHERHEITS_TEMP = int(config["Heizungssteuerung"]["SICHERHEITS_TEMP"])
-                        except (KeyError, ValueError):
-                            SICHERHEITS_TEMP = 51
-                            logging.warning(f"SICHERHEITS_TEMP ungültig, verwende Standard: {SICHERHEITS_TEMP}")
-                        if (state.last_overtemp_notification is None or
-                                (now - state.last_overtemp_notification).total_seconds() >= NOTIFICATION_COOLDOWN):
-                            if state.bot_token and state.chat_id:
-                                message = (
-                                    f"⚠️ Sicherheitsabschaltung: "
-                                    f"T_Oben={'N/A' if t_boiler_oben is None else t_boiler_oben:.1f}°C, "
-                                    f"T_Unten={'N/A' if t_boiler_unten is None else t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C"
-                                )
-                                await send_telegram_message(session, state.chat_id, message, state.bot_token)
-                                state.last_overtemp_notification = now
-                                logging.info("Telegram-Nachricht für Übertemperatur gesendet")
-                            else:
-                                logging.warning("Keine Telegram-Nachricht gesendet: bot_token oder chat_id fehlt")
-                    await asyncio.sleep(2)
+                sensor_ok = await check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
+                if not sensor_ok:
                     continue
 
                 # Kompressorsteuerung
@@ -1461,31 +1501,9 @@ async def main_loop(config, state, session):
                     state.current_runtime = timedelta(0)
 
                 # CSV-Protokollierung
-                should_log = (state.last_log_time is None or
-                              (now - state.last_log_time) >= timedelta(minutes=1) or
-                              state.kompressor_ein != state.last_kompressor_status)
-                if should_log:
-                    async with csv_lock:
-                        async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                            csv_line = (
-                                f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
-                                f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
-                                f"{t_boiler_unten if t_boiler_unten is not None else 'N/A'},"
-                                f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"
-                                f"{t_boiler if t_boiler != 'Fehler' else 'N/A'},"
-                                f"{t_verd if t_verd is not None else 'N/A'},"
-                                f"{'EIN' if state.kompressor_ein else 'AUS'},"
-                                f"{acpower},{feedinpower},{batPower},{soc},{powerdc1},{powerdc2},{consumeenergy},"
-                                f"{state.aktueller_einschaltpunkt},{state.aktueller_ausschaltpunkt},"
-                                f"{int(state.solar_ueberschuss_aktiv)},{nacht_reduction},"
-                                f"{power_source}\n"
-                            )
-                            await csvfile.write(csv_line)
-                            await csvfile.flush()
-                            logging.debug(f"CSV-Eintrag geschrieben: {csv_line.strip()}")
-
-                        state.last_log_time = now
-                        state.last_kompressor_status = state.kompressor_ein
+                await log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, solax_data,
+                                 state.aktueller_einschaltpunkt, state.aktueller_ausschaltpunkt,
+                                 state.solar_ueberschuss_aktiv, nacht_reduction, power_source)
 
                 # Watchdog
                 cycle_duration = (datetime.now(local_tz) - last_cycle_time).total_seconds()
