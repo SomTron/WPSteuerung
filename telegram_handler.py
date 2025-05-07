@@ -121,7 +121,7 @@ async def get_telegram_updates(session, bot_token, offset=None):
             if response.status == 200:
                 data = await response.json()
                 updates = data.get("result", [])
-                logging.info(f"Empfangene Telegram-Updates: {len(updates)}")
+                logging.debug(f"Empfangene Telegram-Updates: {len(updates)}")
                 return updates
             else:
                 error_text = await response.text()

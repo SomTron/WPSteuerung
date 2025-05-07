@@ -1310,7 +1310,7 @@ async def main_loop(config, state, session):
                     await reload_config(session, state)
                     state.last_config_hash = current_hash
 
-                # Solax-Daten abrufen (ausgelagert)
+                # Solax-Daten abrufen
                 solax_result = await fetch_solax_data(session, state, now)
                 solax_data = solax_result["solax_data"]
                 acpower = solax_result["acpower"]
@@ -1321,13 +1321,15 @@ async def main_loop(config, state, session):
                 powerdc2 = solax_result["powerdc2"]
                 consumeenergy = solax_result["consumeenergy"]
 
-
                 # Sollwerte berechnen
                 try:
                     is_night = await asyncio.to_thread(is_nighttime, config)
                     nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                    state.aktueller_ausschaltpunkt, state.aktueller_einschaltpunkt = calculate_shutdown_point(
-                        config, is_night, solax_data, state)
+                    ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv = await asyncio.to_thread(
+                        calculate_shutdown_point, config, is_night, solax_data, state)
+                    state.aktueller_ausschaltpunkt = ausschaltpunkt
+                    state.aktueller_einschaltpunkt = einschaltpunkt
+                    state.solar_ueberschuss_aktiv = solar_ueberschuss_aktiv
                 except Exception as e:
                     logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
                     is_night = False
@@ -1351,22 +1353,29 @@ async def main_loop(config, state, session):
                 )
                 state.t_boiler = t_boiler
 
+                # Debugging-Logs für Sensorwerte und Sollwerte
+                logging.debug(f"Sensorwerte: T_Oben={t_boiler_oben if t_boiler_oben is not None else 'N/A'}°C, "
+                              f"T_Mittig={t_boiler_mittig if t_boiler_mittig is not None else 'N/A'}°C, "
+                              f"T_Unten={t_boiler_unten if t_boiler_unten is not None else 'N/A'}°C, "
+                              f"T_Verd={t_verd if t_verd is not None else 'N/A'}°C")
+                logging.debug(f"Sollwerte: Einschaltpunkt={state.aktueller_einschaltpunkt}°C, "
+                              f"Ausschaltpunkt={state.aktueller_ausschaltpunkt}°C, "
+                              f"Solarüberschuss_aktiv={state.solar_ueberschuss_aktiv}")
 
                 # Druck- und Sensorfehler prüfen
                 if not await handle_pressure_check(session, state):
+                    logging.info("Kompressor bleibt aus wegen Druckschalterfehler")
                     await asyncio.sleep(2)
                     continue
 
                 sensor_ok = await check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
                 if not sensor_ok:
+                    logging.info("Kompressor bleibt aus wegen Sensorfehler")
                     continue
 
                 # Kompressorsteuerung
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
-                state.solar_ueberschuss_aktiv = (
-                    power_source == "Direkter PV-Strom" or
-                    (state.kompressor_ein and state.current_runtime < state.min_laufzeit)
-                )
+                logging.debug(f"Power Source: {power_source}, Feedinpower={feedinpower}, BatPower={batPower}, SOC={soc}")
 
                 # Prüfe GPIO-Zustand gegen Softwarestatus
                 actual_gpio_state = GPIO.input(GIO21_PIN)
@@ -1464,7 +1473,24 @@ async def main_loop(config, state, session):
                                     )
 
                     # Kompressorsteuerung
-                    temp_conditions_met_to_start = (t_boiler_oben < state.aktueller_einschaltpunkt or t_boiler_mittig < state.aktueller_einschaltpunkt)
+                    if state.solar_ueberschuss_aktiv:
+                        temp_conditions_met_to_start = (
+                            t_boiler_oben < state.aktueller_einschaltpunkt or
+                            t_boiler_mittig < state.aktueller_einschaltpunkt or
+                            t_boiler_unten < state.aktueller_einschaltpunkt
+                        )
+                        logging.debug(f"Solarüberschussmodus: temp_conditions_met_to_start={temp_conditions_met_to_start}, "
+                                      f"T_Oben={t_boiler_oben:.1f}°C, T_Mittig={t_boiler_mittig:.1f}°C, T_Unten={t_boiler_unten:.1f}°C, "
+                                      f"Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
+                    else:
+                        temp_conditions_met_to_start = (
+                            t_boiler_oben < state.aktueller_einschaltpunkt or
+                            t_boiler_mittig < state.aktueller_einschaltpunkt
+                        )
+                        logging.debug(f"Normalmodus: temp_conditions_met_to_start={temp_conditions_met_to_start}, "
+                                      f"T_Oben={t_boiler_oben:.1f}°C, T_Mittig={t_boiler_mittig:.1f}°C, "
+                                      f"Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
+
                     pause_ok = True
                     if state.last_compressor_off_time and (now - state.last_compressor_off_time) < state.min_pause:
                         pause_ok = False
