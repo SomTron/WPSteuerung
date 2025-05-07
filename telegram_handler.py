@@ -11,6 +11,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
+# Logging-Konfiguration wird in main.py definiert
+# Empfehlung: Stelle sicher, dass logger.setLevel(logging.DEBUG) in main.py gesetzt ist
+
 def is_solar_window(config):
     """Prüft, ob die aktuelle Uhrzeit im Solarfenster nach der Nachtabsenkung liegt."""
     local_tz = pytz.timezone("Europe/Berlin")
@@ -18,7 +21,6 @@ def is_solar_window(config):
     logging.debug(f"is_solar_window: now={now}, tzinfo={now.tzinfo}")
     try:
         end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
-        # Validierung des Zeitformats
         if not isinstance(end_time_str, str):
             raise ValueError("NACHTABSENKUNG_END muss ein String sein")
         try:
@@ -28,7 +30,6 @@ def is_solar_window(config):
         if not (0 <= end_hour < 24 and 0 <= end_minute < 60):
             raise ValueError(f"Ungültige Zeitwerte: Ende={end_time_str}")
 
-        # Berechne das Solarfenster
         potential_night_setback_end_today = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
         if now < potential_night_setback_end_today + timedelta(hours=2):
             night_setback_end_time_today = potential_night_setback_end_today
@@ -61,6 +62,8 @@ async def send_telegram_message(session, chat_id, message, bot_token):
     try:
         async with session.post(url, json=payload, timeout=10) as response:
             if response.status == 200:
+                # Zusätzliche Debugging-Ausgabe
+                logging.debug(f"INFO-Nachricht wird geloggt: {message[:150]}... (Länge={len(message)})")
                 logging.info(f"Telegram-Nachricht gesendet: {message[:100]}...")
                 return True
             else:
@@ -149,21 +152,79 @@ async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
 
 async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token):
     """Sendet die aktuellen Temperaturen über Telegram."""
-    t_oben_str = f"{t_boiler_oben:.1f}°C" if t_boiler_oben is not None else "N/A"
-    t_unten_str = f"{t_boiler_unten:.1f}°C" if t_boiler_unten is not None else "N/A"
-    t_mittig_str = f"{t_boiler_mittig:.1f}°C" if t_boiler_mittig is not None else "N/A"
-    t_verd_str = f"{t_verd:.1f}°C" if t_verd is not None else "N/A"
-    message = (
-        f"🌡️ Aktuelle Temperaturen:\n"
-        f"Boiler oben: {t_oben_str}\n"
-        f"Boiler mittig: {t_mittig_str}\n"
-        f"Boiler unten: {t_unten_str}\n"
-        f"Verdampfer: {t_verd_str}"
-    )
+    logging.debug(f"Generiere Temperaturen-Nachricht: t_oben={t_boiler_oben}, t_unten={t_boiler_unten}, t_mittig={t_boiler_mittig}, t_verd={t_verd}")
+
+    # Explizite Typprüfung
+    try:
+        t_oben = float(t_boiler_oben) if t_boiler_oben is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_oben: {t_boiler_oben}, Fehler: {e}")
+        t_oben = None
+    try:
+        t_unten = float(t_boiler_unten) if t_boiler_unten is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_unten: {t_boiler_unten}, Fehler: {e}")
+        t_unten = None
+    try:
+        t_mittig = float(t_boiler_mittig) if t_boiler_mittig is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_mittig: {t_boiler_mittig}, Fehler: {e}")
+        t_mittig = None
+    try:
+        t_verd = float(t_verd) if t_verd is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_verd: {t_verd}, Fehler: {e}")
+        t_verd = None
+
+    # Schrittweise Nachrichten-Generierung
+    temp_lines = []
+    temp_lines.append("🌡️ Aktuelle Temperaturen:")
+    logging.debug("Temperaturen-Nachricht: Linie 1 generiert")
+    temp_lines.append(f"Boiler oben: {'N/A' if t_oben is None else f'{t_oben:.1f}°C'}")
+    logging.debug("Temperaturen-Nachricht: Linie 2 generiert")
+    temp_lines.append(f"Boiler mittig: {'N/A' if t_mittig is None else f'{t_mittig:.1f}°C'}")
+    logging.debug("Temperaturen-Nachricht: Linie 3 generiert")
+    temp_lines.append(f"Boiler unten: {'N/A' if t_unten is None else f'{t_unten:.1f}°C'}")
+    logging.debug("Temperaturen-Nachricht: Linie 4 generiert")
+    try:
+        temp_lines.append(f"Verdampfer: {'N/A' if t_verd is None else f'{t_verd:.1f}°C'}")
+        logging.debug("Temperaturen-Nachricht: Linie 5 (Verdampfer) generiert")
+    except Exception as e:
+        logging.error(f"Fehler beim Formatieren von Verdampfer: t_verd={t_verd}, Fehler: {e}", exc_info=True)
+        temp_lines.append("Verdampfer: Fehler")
+
+    # Nachricht zusammenfügen
+    message = "\n".join(temp_lines)
+    logging.debug(f"Vollständige Temperaturen-Nachricht (Länge={len(message)}): {message}")
+
     await send_telegram_message(session, chat_id, message, bot_token)
 
 async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
     """Sendet den aktuellen Systemstatus über Telegram."""
+    logging.debug(f"Generiere Status-Nachricht: t_oben={t_oben}, t_unten={t_unten}, t_mittig={t_mittig}, t_verd={t_verd}")
+
+    # Explizite Typprüfung
+    try:
+        t_oben = float(t_oben) if t_oben is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_oben: {t_oben}, Fehler: {e}")
+        t_oben = None
+    try:
+        t_unten = float(t_unten) if t_unten is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_unten: {t_unten}, Fehler: {e}")
+        t_unten = None
+    try:
+        t_mittig = float(t_mittig) if t_mittig is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_mittig: {t_mittig}, Fehler: {e}")
+        t_mittig = None
+    try:
+        t_verd = float(t_verd) if t_verd is not None else None
+    except (ValueError, TypeError) as e:
+        logging.warning(f"Ungültiger Wert für t_verd: {t_verd}, Fehler: {e}")
+        t_verd = None
+
     solax_data = await get_solax_data_func(session, state) or {
         "feedinpower": 0, "batPower": 0, "soc": 0, "api_fehler": True
     }
@@ -181,11 +242,6 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
             return f"{hours}h {minutes}min"
         except (ValueError, TypeError):
             return "0h 0min"
-
-    t_oben_str = f"{t_oben:.1f}°C" if t_oben is not None else "N/A"
-    t_unten_str = f"{t_unten:.1f}°C" if t_unten is not None else "N/A"
-    t_mittig_str = f"{t_mittig:.1f}°C" if t_mittig is not None else "N/A"
-    t_verd_str = f"{t_verd:.1f}°C" if t_verd is not None else "N/A"
 
     nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func and is_nighttime_func(config) else 0
     is_solar_window_active = is_solar_window_func and is_solar_window_func(config)
@@ -208,31 +264,60 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
 
     compressor_status_str = "EIN" if kompressor_status else "AUS"
 
-    message = (
-        "📊 **Systemstatus**\n"
-        "🌡️ **Temperaturen**\n"
-        f"  • Oben: {t_oben_str}\n"
-        f"  • Mittig: {t_mittig_str}\n"
-        f"  • Unten: {t_unten_str}\n"
-        f"  • Verdampfer: {t_verd_str}\n"
-        "🛠️ **Kompressor**\n"
-        f"  • Status: {compressor_status_str}\n"
-        f"  • Aktuelle Laufzeit: {format_time(current_runtime)}\n"
-        f"  • Gesamtlaufzeit heute: {format_time(total_runtime)}\n"
-        f"  • Letzte Laufzeit: {format_time(state.last_runtime)}\n"
-        "🎯 **Sollwerte**\n"
-        f"  • Einschaltpunkt: {state.aktueller_einschaltpunkt}°C\n"
-        f"  • Ausschaltpunkt: {state.aktueller_ausschaltpunkt}°C\n"
-        f"  • Gilt für: {'Unten' if state.solar_ueberschuss_aktiv else 'Oben, Mitte'}\n"
-        "⚙️ **Betriebsmodus**\n"
-        f"  • {mode_str}\n"
-        "ℹ️ **Zusatzinfo**\n"
-        f"  • Solarüberschuss: {feedinpower:.1f} W\n"
-        f"  • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})\n"
-        f"  • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}\n"
-    )
+    # Schrittweise Nachrichten-Generierung
+    status_lines = []
+    status_lines.append("📊 **Systemstatus**")
+    status_lines.append("🌡️ **Temperaturen**")
+    logging.debug("Status-Nachricht: Linie 1-2 generiert")
+    status_lines.append(f"  • Oben: {'N/A' if t_oben is None else f'{t_oben:.1f}°C'}")
+    logging.debug("Status-Nachricht: Linie 3 generiert")
+    status_lines.append(f"  • Mittig: {'N/A' if t_mittig is None else f'{t_mittig:.1f}°C'}")
+    logging.debug("Status-Nachricht: Linie 4 generiert")
+    status_lines.append(f"  • Unten: {'N/A' if t_unten is None else f'{t_unten:.1f}°C'}")
+    logging.debug("Status-Nachricht: Linie 5 generiert")
+    try:
+        status_lines.append(f"  • Verdampfer: {'N/A' if t_verd is None else f'{t_verd:.1f}°C'}")
+        logging.debug("Status-Nachricht: Linie 6 (Verdampfer) generiert")
+    except Exception as e:
+        logging.error(f"Fehler beim Formatieren von Verdampfer: t_verd={t_verd}, Fehler: {e}", exc_info=True)
+        status_lines.append("  • Verdampfer: Fehler")
+    status_lines.append("🛠️ **Kompressor**")
+    logging.debug("Status-Nachricht: Linie 7 generiert")
+    status_lines.append(f"  • Status: {compressor_status_str}")
+    logging.debug("Status-Nachricht: Linie 8 generiert")
+    status_lines.append(f"  • Aktuelle Laufzeit: {format_time(current_runtime)}")
+    logging.debug("Status-Nachricht: Linie 9 generiert")
+    status_lines.append(f"  • Gesamtlaufzeit heute: {format_time(total_runtime)}")
+    logging.debug("Status-Nachricht: Linie 10 generiert")
+    status_lines.append(f"  • Letzte Laufzeit: {format_time(state.last_runtime)}")
+    logging.debug("Status-Nachricht: Linie 11 generiert")
+    status_lines.append("🎯 **Sollwerte**")
+    logging.debug("Status-Nachricht: Linie 12 generiert")
+    status_lines.append(f"  • Einschaltpunkt: {state.aktueller_einschaltpunkt}°C")
+    logging.debug("Status-Nachricht: Linie 13 generiert")
+    status_lines.append(f"  • Ausschaltpunkt: {state.aktueller_ausschaltpunkt}°C")
+    logging.debug("Status-Nachricht: Linie 14 generiert")
+    status_lines.append(f"  • Gilt für: {'Unten' if state.solar_ueberschuss_aktiv else 'Oben, Mitte'}")
+    logging.debug("Status-Nachricht: Linie 15 generiert")
+    status_lines.append("⚙️ **Betriebsmodus**")
+    logging.debug("Status-Nachricht: Linie 16 generiert")
+    status_lines.append(f"  • {mode_str}")
+    logging.debug("Status-Nachricht: Linie 17 generiert")
+    status_lines.append("ℹ️ **Zusatzinfo**")
+    logging.debug("Status-Nachricht: Linie 18 generiert")
+    status_lines.append(f"  • Solarüberschuss: {feedinpower:.1f} W")
+    logging.debug("Status-Nachricht: Linie 19 generiert")
+    status_lines.append(f"  • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})")
+    logging.debug("Status-Nachricht: Linie 20 generiert")
+    status_lines.append(f"  • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}")
+    logging.debug("Status-Nachricht: Linie 21 generiert")
     if state.ausschluss_grund:
-        message += f"\n  • Ausschlussgrund: {state.ausschluss_grund}"
+        status_lines.append(f"  • Ausschlussgrund: {state.ausschluss_grund}")
+        logging.debug("Status-Nachricht: Linie 22 generiert")
+
+    # Nachricht zusammenfügen
+    message = "\n".join(status_lines)
+    logging.debug(f"Vollständige Status-Nachricht (Länge={len(message)}): {message}")
 
     await send_telegram_message(session, chat_id, message, bot_token)
 
@@ -258,7 +343,6 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                 if message_text and chat_id_from_update:
                     message_text = message_text.strip()
                     logging.info(f"Empfangene Telegram-Nachricht: '{message_text}' von chat_id {chat_id_from_update}")
-                    # Typensichere Konvertierung und Vergleich
                     try:
                         chat_id_from_update = int(chat_id_from_update)
                         expected_chat_id = int(chat_id)
@@ -274,24 +358,15 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     message_text_lower = message_text.lower()
                     if message_text_lower == "🌡️ temperaturen" or message_text_lower == "temperaturen":
                         logging.debug(f"Sensorwerte: oben={t_boiler_oben}, unten={t_boiler_unten}, mittig={t_boiler_mittig}, verd={t_verd}")
-                        if all(x is not None for x in [t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd]):
-                            await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig,
-                                                           t_verd, chat_id, bot_token)
-                        else:
-                            logging.warning(f"Temperaturbefehl fehlgeschlagen: Sensorwerte ungültig (oben={t_boiler_oben}, unten={t_boiler_unten}, mittig={t_boiler_mittig}, verd={t_verd})")
-                            await send_telegram_message(session, chat_id, "Fehler beim Abrufen der Temperaturen.",
-                                                       bot_token)
+                        await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig,
+                                                       t_verd, chat_id, bot_token)
                     elif message_text_lower == "📊 status" or message_text_lower == "status":
                         logging.debug(f"Sensorwerte: oben={t_boiler_oben}, unten={t_boiler_unten}, mittig={t_boiler_mittig}, verd={t_verd}")
-                        if all(x is not None for x in [t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd]):
-                            await send_status_telegram(
-                                session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd,
-                                kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
-                                config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func
-                            )
-                        else:
-                            logging.warning(f"Statusbefehl fehlgeschlagen: Sensorwerte ungültig (oben={t_boiler_oben}, unten={t_boiler_unten}, mittig={t_boiler_mittig}, verd={t_verd})")
-                            await send_telegram_message(session, chat_id, "Fehler beim Abrufen des Status.", bot_token)
+                        await send_status_telegram(
+                            session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd,
+                            kompressor_status, aktuelle_laufzeit, gesamtlaufzeit,
+                            config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func
+                        )
                     elif message_text_lower == "🆘 hilfe" or message_text_lower == "hilfe":
                         await send_help_message(session, chat_id, bot_token)
                     elif message_text_lower == "🌴 urlaub" or message_text_lower == "urlaub":
@@ -359,6 +434,8 @@ async def telegram_task(session, read_temperature_func, sensor_ids, kompressor_s
                     if isinstance(temp, Exception) or temp is None:
                         logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {temp or 'Kein Wert'}")
                         temp = None
+                # Erzwinge Rohwerte-Log
+                logging.debug(f"Rohwerte (vor Verarbeitung): t_oben={t_boiler_oben}, t_unten={t_boiler_unten}, t_mittig={t_boiler_mittig}, t_verd={t_verd}")
                 kompressor_status = kompressor_status_func()
                 aktuelle_laufzeit = current_runtime_func()
                 gesamtlaufzeit = total_runtime_func()
@@ -391,7 +468,6 @@ async def send_help_message(session, chat_id, bot_token):
     await send_telegram_message(session, chat_id, message, bot_token)
 
 async def get_boiler_temperature_history(session, hours, state, config):
-    logging.debug(f"get_boiler_temperature_history aufgerufen mit hours={hours}, state.bot_token={state.bot_token}")
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
     try:
         local_tz = pytz.timezone("Europe/Berlin")
