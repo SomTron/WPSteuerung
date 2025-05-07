@@ -7,6 +7,7 @@ import time
 from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
 import logging
+from logging.handlers import RotatingFileHandler
 import configparser
 import aiohttp
 import hashlib
@@ -72,12 +73,32 @@ PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 
 
 # Logging einrichten
-logging.basicConfig(
-    filename="heizungssteuerung.log",
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S %z"
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+
+# FileHandler mit größerer maxBytes und UTF-8
+file_handler = RotatingFileHandler(
+    "heizungssteuerung.log",
+    maxBytes=100*1024*1024,  # 100 MB
+    backupCount=5,
+    encoding="utf-8"
 )
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S %z"
+))
+logger.addHandler(file_handler)
+
+# StreamHandler für Konsolenausgabe
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setLevel(logging.INFO)
+stream_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S %z"
+))
+logger.addHandler(stream_handler)
+
 
 local_tz = pytz.timezone("Europe/Berlin")
 logging.info(f"Programm gestartet: {datetime.now(local_tz)}")
