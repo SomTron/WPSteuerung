@@ -1432,7 +1432,7 @@ async def main_loop(config, state, session):
                 logging.debug(f"Power Source: {power_source}, Feedinpower={feedinpower}, BatPower={batPower}, SOC={soc}")
 
                 # Prüfe GPIO-Zustand gegen Softwarestatus
-                actual_gpio_state = state.kompressor_ein
+                actual_gpio_state = GPIO.input(GIO21_PIN)
                 if state.kompressor_ein and actual_gpio_state == GPIO.LOW:
                     logging.critical("Inkonsistenz: state.kompressor_ein=True, aber GPIO 21 ist LOW!")
                     state.kompressor_ein = False
@@ -1444,6 +1444,7 @@ async def main_loop(config, state, session):
                         state.bot_token
                     )
                     reset_sensor_cache()
+
                 elif not state.kompressor_ein and actual_gpio_state == GPIO.HIGH:
                     logging.critical("Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
                     result = await set_kompressor_status(state, False, force_off=True)
@@ -1547,25 +1548,26 @@ async def main_loop(config, state, session):
                                       f"T_Oben={t_boiler_oben:.1f}°C, T_Mittig={t_boiler_mittig:.1f}°C, "
                                       f"Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
 
+                    # --- Prüfung auf Mindestpause ---
                     pause_ok = True
                     if state.last_compressor_off_time:
                         time_since_off = now - state.last_compressor_off_time
-                        pause_remaining = state.min_pause - time_since_off
                         if time_since_off < state.min_pause:
                             pause_ok = False
+                            pause_remaining = state.min_pause - time_since_off
                             reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
 
-                            # Prüfe, ob Grund gleich wie letzte Meldung und ob genug Zeit vergangen ist
                             same_reason = getattr(state, 'last_pause_reason', None) == reason
-                            if not hasattr(state, 'last_pause_log') or (
-                                    now - state.last_pause_log).total_seconds() > 300 or not same_reason:
+                            enough_time_passed = not hasattr(state, 'last_pause_log') or (
+                                        now - state.last_pause_log).total_seconds() > 300
+
+                            if not same_reason or enough_time_passed:
                                 logging.info(f"Kompressor bleibt aus: {reason}")
                                 state.last_pause_log = now
                                 state.last_pause_reason = reason
 
                             state.ausschluss_grund = reason
                         else:
-                            # Reset nach Ablauf der Pause
                             state.last_pause_log = None
                             state.last_pause_reason = None
 
