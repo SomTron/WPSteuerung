@@ -205,6 +205,8 @@ class State:
         self.pressure_error_sent = False
         self.last_pressure_error_time = None
         self.last_pressure_state = None
+        self.last_pause_log = None  # Zeitpunkt der letzten Pause-Meldung
+        self.current_pause_reason = None  # Grund für aktuelle Pause
 
         # --- Zusätzliche Flags ---
         self.previous_einschaltpunkt = None
@@ -1528,11 +1530,26 @@ async def main_loop(config, state, session):
                                       f"Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
 
                     pause_ok = True
-                    if state.last_compressor_off_time and (now - state.last_compressor_off_time) < state.min_pause:
-                        pause_ok = False
-                        pause_remaining = state.min_pause - (now - state.last_compressor_off_time)
-                        state.ausschluss_grund = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
-                        logging.info(f"Kompressor bleibt aus (zu kurze Pause: {(now - state.last_compressor_off_time)}, benötigt: {state.min_pause})")
+                    if state.last_compressor_off_time:
+                        time_since_off = now - state.last_compressor_off_time
+                        pause_remaining = state.min_pause - time_since_off
+                        if time_since_off < state.min_pause:
+                            pause_ok = False
+                            reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
+
+                            # Prüfe, ob Grund gleich wie letzte Meldung und ob genug Zeit vergangen ist
+                            same_reason = getattr(state, 'last_pause_reason', None) == reason
+                            if not hasattr(state, 'last_pause_log') or (
+                                    now - state.last_pause_log).total_seconds() > 300 or not same_reason:
+                                logging.info(f"Kompressor bleibt aus: {reason}")
+                                state.last_pause_log = now
+                                state.last_pause_reason = reason
+
+                            state.ausschluss_grund = reason
+                        else:
+                            # Reset nach Ablauf der Pause
+                            state.last_pause_log = None
+                            state.last_pause_reason = None
 
                     solar_window_conditions_met_to_start = True
                     if within_solar_only_window:
