@@ -72,33 +72,6 @@ gpio_lock = asyncio.Lock()
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 
 
-# Logging einrichten
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-
-# FileHandler mit größerer maxBytes und UTF-8
-file_handler = RotatingFileHandler(
-    "heizungssteuerung.log",
-    maxBytes=100*1024*1024,  # 100 MB
-    backupCount=5,
-    encoding="utf-8"
-)
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S %z"
-))
-logger.addHandler(file_handler)
-
-# StreamHandler für Konsolenausgabe
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setLevel(logging.INFO)
-stream_handler.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S %z"
-))
-logger.addHandler(stream_handler)
-
 
 local_tz = pytz.timezone("Europe/Berlin")
 logging.info(f"Programm gestartet: {datetime.now(local_tz)}")
@@ -240,18 +213,52 @@ class State:
 
 # Logging einrichten mit Telegram-Handler
 async def setup_logging(session, state):
+    """
+    Richtet das Logging ein, inklusive RotatingFileHandler und optional TelegramHandler.
+    Wird nur einmal beim Start aufgerufen.
+    """
     try:
-        file_handler = logging.FileHandler("/home/patrik/heizungssteuerung.log")
-        file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s - %(message)s"))
+        # Entferne alle bisherigen Handler, um Duplikate zu vermeiden
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            handler.close()
+            root_logger.removeHandler(handler)
 
-        telegram_handler = TelegramHandler(state.bot_token, state.chat_id, session, level=logging.WARNING)
-        telegram_handler.setFormatter(logging.Formatter("%(message)s"))
+        # Setze Basis-Level
+        root_logger.setLevel(logging.DEBUG)
 
-        logging.basicConfig(
-            level=logging.DEBUG,
-            handlers=[file_handler, telegram_handler]
+        # --- FileHandler: RotatingFileHandler mit UTF-8 ---
+        file_handler = RotatingFileHandler(
+            "heizungssteuerung.log",
+            maxBytes=100 * 1024 * 1024,  # 100 MB
+            backupCount=5,
+            encoding="utf-8"
         )
-        logging.debug("Logging initialisiert")
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter(
+            "%(asctime)s %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S %z"
+        )
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
+
+        # --- StreamHandler für Konsolenausgabe ---
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setLevel(logging.INFO)
+        stream_handler.setFormatter(file_formatter)  # Gleiche Formatierung wie im File
+        root_logger.addHandler(stream_handler)
+
+        # --- TelegramHandler nur hinzufügen, wenn Token und Chat-ID vorhanden ---
+        if state.bot_token and state.chat_id:
+            telegram_handler = TelegramHandler(state.bot_token, state.chat_id, session, level=logging.WARNING)
+            telegram_handler.setFormatter(logging.Formatter("%(message)s"))
+            root_logger.addHandler(telegram_handler)
+            logging.debug("TelegramHandler erfolgreich zum Logging hinzugefügt")
+        else:
+            logging.warning("Telegram-Benachrichtigungen deaktiviert (fehlendes Token oder Chat-ID)")
+
+        logging.debug("Logging vollständig konfiguriert")
+
     except Exception as e:
         print(f"Fehler bei Logging-Setup: {e}", file=sys.stderr)
         raise
@@ -1595,7 +1602,6 @@ async def main_loop(config, state, session):
 
 async def run_program():
     logging.info("Programm gestartet.")
-    logging.info("Log-System bereit.")
 
     config = None
     state = None
@@ -1612,6 +1618,11 @@ async def run_program():
 
         async with aiohttp.ClientSession() as session:
             state.session = session
+
+            # Logging mit TelegramHandler einrichten
+            logging.debug("Richte Logging mit TelegramHandler ein...")
+            await setup_logging(session, state)
+            logging.info("Logging erfolgreich konfiguriert")
 
             # LCD-Initialisierung
             logging.debug("LCD-Initialisierung beginnt...")
@@ -1632,10 +1643,6 @@ async def run_program():
                     )
                     await csvfile.write(header)
                     logging.info("CSV-Header geschrieben.")
-
-            # Logging mit TelegramHandler erst jetzt aktivieren
-            logging.debug("Richte Telegram-Logging ein...")
-            await setup_logging(session, state)
 
             # Willkommensnachricht senden
             now = datetime.now(pytz.timezone("Europe/Berlin"))
@@ -1676,6 +1683,7 @@ async def run_program():
                 )
             except:
                 logging.warning("Konnte Abbruchmeldung per Telegram nicht senden.")
+
     finally:
         logging.info("Starte Shutdown-Prozedur...")
         try:
