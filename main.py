@@ -1661,7 +1661,7 @@ async def main_loop(config, state, session):
                                  state.aktueller_einschaltpunkt, state.aktueller_ausschaltpunkt,
                                  state.solar_ueberschuss_aktiv, nacht_reduction, power_source)
 
-                # Watchdog
+                # Watchdog mit none anfrage
                 if last_cycle_time is not None:
                     cycle_duration = (datetime.now(local_tz) - last_cycle_time).total_seconds()
                 else:
