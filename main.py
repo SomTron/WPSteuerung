@@ -1220,7 +1220,7 @@ async def display_task(state):
 async def watchdog_gpio(state):
     while True:
         try:
-            actual_gpio = GPIO.input(GIO21_PIN)
+            actual_gpio = state.kompressor_ein
             if actual_gpio != (GPIO.HIGH if state.kompressor_ein else GPIO.LOW):
                 logging.warning("GPIO-Inkonsistenz erkannt – Synchronisiere...")
                 await set_kompressor_status(state, state.kompressor_ein, force_off=True)
@@ -1432,7 +1432,7 @@ async def main_loop(config, state, session):
                 logging.debug(f"Power Source: {power_source}, Feedinpower={feedinpower}, BatPower={batPower}, SOC={soc}")
 
                 # Prüfe GPIO-Zustand gegen Softwarestatus
-                actual_gpio_state = GPIO.input(GIO21_PIN)
+                actual_gpio_state = state.kompressor_ein
                 if state.kompressor_ein and actual_gpio_state == GPIO.LOW:
                     logging.critical("Inkonsistenz: state.kompressor_ein=True, aber GPIO 21 ist LOW!")
                     state.kompressor_ein = False
