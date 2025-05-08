@@ -1558,46 +1558,39 @@ async def main_loop(config, state, session):
 
                     # --- Prüfung auf Mindestpause ---
                     pause_ok = True
-                    reason = None  # ✅ Definiere 'reason' hier, damit sie immer existiert
-
-
+                    reason = None  # ✅ Initialisiere reason hier
                     if state.last_compressor_off_time:
                         time_since_off = now - state.last_compressor_off_time
                         if time_since_off < state.min_pause:
                             pause_ok = False
                             pause_remaining = state.min_pause - time_since_off
                             reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
-                            # Log nur, wenn:
-                            # - vorheriger Grund anders war ODER
-                    same_reason = getattr(state, 'last_pause_reason', None) == reason
-                    # Prüfe, ob last_pause_log existiert und ein datetime ist
-                    if getattr(state, 'last_pause_log', None) is not None:
-                        time_passed = (now - state.last_pause_log).total_seconds()
-                    else:
-                        time_passed = float('inf')  # Kein vorheriger Logeintrag → sofort loggen
 
-                    enough_time_passed = not hasattr(state, 'last_pause_log') or time_passed > 300 or not same_reason
+                            # Log nur, wenn Grund anders oder Zeit überschritten
+                            same_reason = getattr(state, 'last_pause_reason', None) == reason
+                            enough_time_passed = not hasattr(state, 'last_pause_log') or (
+                                        now - state.last_pause_log).total_seconds() > 300 or not same_reason
 
-                    if not same_reason or enough_time_passed:
-                        logging.info(f"Kompressor bleibt aus: {reason}")
-                        if state.bot_token and state.chat_id:
-                            try:
-                                await send_telegram_message(
-                                    session,
-                                    state.chat_id,
-                                    f"⚠️ Kompressor bleibt aus: {reason}",
-                                    state.bot_token
-                                )
-                            except Exception as e:
-                                logging.warning("Telegram-Nachricht konnte nicht gesendet werden.")
-                        state.last_pause_reason = reason
-                        state.last_pause_log = now
+                            if not same_reason or enough_time_passed:
+                                logging.info(f"Kompressor bleibt aus: {reason}")
+                                if state.bot_token and state.chat_id:
+                                    try:
+                                        await send_telegram_message(
+                                            session,
+                                            state.chat_id,
+                                            f"⚠️ Kompressor bleibt aus: {reason}",
+                                            state.bot_token
+                                        )
+                                    except Exception as e:
+                                        logging.warning("Telegram-Nachricht konnte nicht gesendet werden.")
+                                state.last_pause_reason = reason
+                                state.last_pause_log = now
 
-                    state.ausschluss_grund = reason
-                else:
-                    # Reset nach Ablauf der Pause
-                    state.last_pause_reason = None
-                    state.last_pause_log = None
+                            state.ausschluss_grund = reason
+                        else:
+                            state.last_pause_reason = None
+                            state.last_pause_log = None
+                            state.ausschluss_grund = None
 
                     solar_window_conditions_met_to_start = True
                     if within_solar_only_window:
