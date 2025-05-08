@@ -667,6 +667,7 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
                 state.kompressor_ein = False
                 state.last_compressor_off_time = datetime.now(state.local_tz)
                 logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
+            reset_sensor_cache()
         state.ausschluss_grund = fehler
 
         if is_overtemp:
@@ -734,7 +735,7 @@ async def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None)
 
     async with state.gpio_lock:  # Verwende gpio_lock für Synchronisation
         logging.debug(f"set_kompressor_status: ein={ein}, force_off={force_off}, t_boiler_oben={t_boiler_oben}, "
-                      f"kompressor_ein={state.kompressor_ein}, current_GPIO_state={GPIO.input(GIO21_PIN)}")
+                      f"kompressor_ein={state.kompressor_ein}, current_GPIO_state={state.kompressor_ein}")
 
         try:
             # Prüfe GPIO-Initialisierung
@@ -783,7 +784,7 @@ async def set_kompressor_status(state, ein, force_off=False, t_boiler_oben=None)
                     logging.debug(f"Setze GPIO 21 auf {'HIGH' if ein else 'LOW'}, Versuch {attempt + 1}/{max_attempts}")
                     GPIO.output(GIO21_PIN, target_state)
                     await asyncio.sleep(attempt_delay)  # Asynchrone Pause für Stabilisierung
-                    actual_state = GPIO.input(GIO21_PIN)
+                    actual_state = state.kompressor_ein
                     if actual_state == target_state:
                         logging.info(f"GPIO 21 erfolgreich auf {'HIGH' if ein else 'LOW'} gesetzt, tatsächlicher Zustand: {actual_state}")
                         return True
@@ -1216,6 +1217,17 @@ async def display_task(state):
                 await asyncio.sleep(5)
 
 
+async def watchdog_gpio(state):
+    while True:
+        try:
+            actual_gpio = GPIO.input(GIO21_PIN)
+            if actual_gpio != (GPIO.HIGH if state.kompressor_ein else GPIO.LOW):
+                logging.warning("GPIO-Inkonsistenz erkannt – Synchronisiere...")
+                await set_kompressor_status(state, state.kompressor_ein, force_off=True)
+        except Exception as e:
+            logging.error(f"Fehler im GPIO-Watchdog: {e}")
+        await asyncio.sleep(60)
+
 async def initialize_gpio():
     """
     Initialisiert GPIO-Pins mit Wiederholungslogik für Robustheit.
@@ -1259,6 +1271,10 @@ async def main_loop(config, state, session):
 
         # LCD-Initialisierung
         await initialize_lcd(session)
+
+        # --- Starte Watchdog für GPIO ---
+        logging.info("Starte GPIO-Watchdog zur Zustandsüberwachung")
+        asyncio.create_task(watchdog_gpio(state))
 
         # Startnachrichten
         now = datetime.now(local_tz)
@@ -1416,7 +1432,7 @@ async def main_loop(config, state, session):
                 logging.debug(f"Power Source: {power_source}, Feedinpower={feedinpower}, BatPower={batPower}, SOC={soc}")
 
                 # Prüfe GPIO-Zustand gegen Softwarestatus
-                actual_gpio_state = GPIO.input(GIO21_PIN)
+                actual_gpio_state = state.kompressor_ein
                 if state.kompressor_ein and actual_gpio_state == GPIO.LOW:
                     logging.critical("Inkonsistenz: state.kompressor_ein=True, aber GPIO 21 ist LOW!")
                     state.kompressor_ein = False
@@ -1427,6 +1443,7 @@ async def main_loop(config, state, session):
                         "🚨 Inkonsistenz: Kompressorstatus korrigiert (war eingeschaltet, GPIO war LOW)!",
                         state.bot_token
                     )
+                    reset_sensor_cache()
                 elif not state.kompressor_ein and actual_gpio_state == GPIO.HIGH:
                     logging.critical("Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
                     result = await set_kompressor_status(state, False, force_off=True)
@@ -1434,9 +1451,10 @@ async def main_loop(config, state, session):
                         logging.critical("Kritischer Fehler: Konnte Kompressor nicht ausschalten!")
                         await send_telegram_message(
                             session, state.chat_id,
-                            "🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet trotz Inkonsistenz!",
+                            "🚨 KRITISCHER FEHLER: Kompressor bleibt trotz Inkonsistenz eingeschaltet!",
                             state.bot_token
                         )
+                    reset_sensor_cache()
 
                 if t_boiler_oben is not None and t_boiler_unten is not None and t_boiler_mittig is not None:
                     try:
