@@ -1561,7 +1561,7 @@ async def main_loop(config, state, session):
                     pause_ok = True
                     reason = None
                     if state.last_compressor_off_time:
-                        time_since_off = now - state.last_compressor_off_time
+                        time_since_off = now - state.last_compressor_off_time if state.last_compressor_off_time else timedelta.max
                         if time_since_off < state.min_pause:
                             pause_ok = False
                             pause_remaining = state.min_pause - time_since_off
