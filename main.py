@@ -103,15 +103,25 @@ class TelegramHandler(logging.Handler):
     def emit(self, record):
         try:
             msg = self.format(record)
-            # Stelle sicher, dass emit im Event-Loop ausgeführt wird
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
+
+            # Prüfe, ob ein Event Loop für diesen Thread existiert
+            try:
+                loop = asyncio.get_event_loop_policy().get_event_loop()
+            except RuntimeError:
+                # Kein Loop verfügbar → ignorieren
+                return
+
+            if loop and loop.is_running():
+                # Nachricht in die Queue legen
                 self.queue.put_nowait(msg)
+
+                # Task zur Verarbeitung starten oder neu erstellen
                 if not self.task or self.task.done():
-                    self.task = loop.create_task(self.process_queue())
+                    self.task = asyncio.run_coroutine_threadsafe(self.process_queue(), loop)
             else:
-                # Fallback für keinen laufenden Event-Loop
-                time.sleep(0.1)  # Verhindere Blockierung
+                # Optional: Log-Nachricht puffern oder ignorieren
+                pass
+
         except Exception as e:
             logging.error(f"Fehler in TelegramHandler.emit: {e}", exc_info=True)
 
@@ -142,11 +152,12 @@ class State:
         self.last_runtime = timedelta()
         self.total_runtime_today = timedelta()
         self.last_day = now.date()
-        self.start_time = None
-        self.last_compressor_on_time = None
-        self.last_compressor_off_time = None
-        self.last_shutdown_time = now  # <-- Jetzt vorhanden!
+        self.start_time = now
+        self.last_compressor_on_time = now  # Empfehlung 1: Standardwert
+        self.last_compressor_off_time = now  # Empfehlung 1: Standardwert
+        self.last_shutdown_time = now
         self.last_log_time = now - timedelta(minutes=1)
+        self._last_config_check = now  # Empfehlung 1: Standardwert
         self.last_kompressor_status = None
 
         # --- Steuerungslogik ---
@@ -154,7 +165,7 @@ class State:
         self.urlaubsmodus_aktiv = False
         self.solar_ueberschuss_aktiv = False
         self.ausschluss_grund = None
-        self.t_boiler = None  # Durchschnittliche Boiler-Temperatur
+        self.t_boiler = None
 
         # --- Telegram-Konfiguration ---
         self.bot_token = config["Telegram"].get("BOT_TOKEN")
@@ -201,19 +212,24 @@ class State:
             self.aktueller_ausschaltpunkt = 45
             self.aktueller_einschaltpunkt = 42
 
+        self.previous_ausschaltpunkt = None
+        self.previous_einschaltpunkt = None
+        self.previous_solar_ueberschuss_aktiv = False
+
+
         # --- Fehler- und Statuszustände ---
         self.last_config_hash = calculate_file_hash("config.ini")
         self.pressure_error_sent = False
-        self.last_pressure_error_time = None
+        self.last_pressure_error_time = now
         self.last_pressure_state = None
-        self.last_pause_log = None  # Zeitpunkt der letzten Pause-Meldung
-        self.current_pause_reason = None  # Grund für aktuelle Pause
+        self.last_pause_log = None
+        self.current_pause_reason = None
 
         # --- Zusätzliche Flags ---
         self.previous_einschaltpunkt = None
         self.previous_solar_ueberschuss_aktiv = False
+        self.last_overtemp_notification = now
 
-        # ✅ Debugging erst NACH Initialisierung
         logging.debug(f" - Letzte Abschaltung: {self.last_shutdown_time}")
 
 # Logging einrichten mit Telegram-Handler
@@ -269,6 +285,31 @@ async def setup_logging(session, state):
         raise
 
 
+# Neue Hilfsfunktion für sichere Zeitdifferenzberechnung
+def safe_timedelta(now, timestamp, default=timedelta()):
+    """
+    Berechnet die Zeitdifferenz sicher, behandelt None-Werte und Typfehler.
+
+    Args:
+        now: Aktueller Zeitstempel (datetime)
+        timestamp: Zu vergleichender Zeitstempel (datetime oder None)
+        default: Standardwert, falls Berechnung fehlschlägt (timedelta)
+
+    Returns:
+        timedelta: Zeitdifferenz oder Standardwert
+    """
+    if timestamp is None:
+        logging.warning(f"Zeitstempel ist None, verwende Standard: {default}")
+        return default
+    try:
+        if timestamp.tzinfo is None:
+            logging.warning(f"Zeitzone fehlt für Zeitstempel: {timestamp}. Lokalisiere auf Europe/Berlin.")
+            timestamp = local_tz.localize(timestamp)
+        return now - timestamp
+    except TypeError as e:
+        logging.error(f"Fehler bei Zeitdifferenzberechnung: {e}, now={now}, timestamp={timestamp}")
+        return default
+
 def reset_sensor_cache():
     """Leert den Temperatur-Cache, um nach Fehlern frische Werte zu lesen."""
     global last_sensor_readings
@@ -297,6 +338,21 @@ async def initialize_lcd(session):
         logging.error(f"Fehler bei der LCD-Initialisierung: {e}")
         lcd = None
 
+async def safe_send_telegram_message(bot_token, chat_id, message):
+    if not bot_token or not chat_id:
+        logging.warning("Telegram-Token oder Chat-ID fehlt. Nachricht wird nicht gesendet.")
+        return
+
+    url = f"https://api.telegram.org/bot {bot_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message}
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(url, json=payload) as response:
+                if response.status != 200:
+                    logging.error(f"Telegram send failed: {await response.text()}")
+        except Exception as e:
+            logging.error(f"Fehler beim Senden an Telegram: {e}", exc_info=True)
 
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session, state):
@@ -1273,7 +1329,7 @@ async def main_loop(config, state, session):
         # LCD-Initialisierung
         await initialize_lcd(session)
 
-        # --- Starte Watchdog für GPIO ---
+        # Starte Watchdog für GPIO
         logging.info("Starte GPIO-Watchdog zur Zustandsüberwachung")
         asyncio.create_task(watchdog_gpio(state))
 
@@ -1304,22 +1360,22 @@ async def main_loop(config, state, session):
         ))
 
         # Initialisiere Zeitstempel und Zustandsvariablen
-        state.last_log_time = None if not hasattr(state, 'last_log_time') else state.last_log_time
-        if state.last_log_time and state.last_log_time.tzinfo is None:
+        state.last_log_time = state.last_log_time or now
+        if state.last_log_time.tzinfo is None:
             state.last_log_time = local_tz.localize(state.last_log_time)
-        state.last_day = now.date() if not hasattr(state, 'last_day') else state.last_day
-        state.last_compressor_on_time = None if not hasattr(state, 'last_compressor_on_time') else state.last_compressor_on_time
-        if state.last_compressor_on_time and state.last_compressor_on_time.tzinfo is None:
+        state.last_day = state.last_day or now.date()
+        state.last_compressor_on_time = state.last_compressor_on_time or now
+        if state.last_compressor_on_time.tzinfo is None:
             state.last_compressor_on_time = local_tz.localize(state.last_compressor_on_time)
-        state.last_pressure_error_time = None if not hasattr(state, 'last_pressure_error_time') else state.last_pressure_error_time
-        if state.last_pressure_error_time and state.last_pressure_error_time.tzinfo is None:
+        state.last_pressure_error_time = state.last_pressure_error_time or now
+        if state.last_pressure_error_time.tzinfo is None:
             state.last_pressure_error_time = local_tz.localize(state.last_pressure_error_time)
-        state.last_overtemp_notification = None if not hasattr(state, 'last_overtemp_notification') else state.last_overtemp_notification
-        if state.last_overtemp_notification and state.last_overtemp_notification.tzinfo is None:
+        state.last_overtemp_notification = state.last_overtemp_notification or now
+        if state.last_overtemp_notification.tzinfo is None:
             state.last_overtemp_notification = local_tz.localize(state.last_overtemp_notification)
-        state.previous_ausschaltpunkt = None if not hasattr(state, 'previous_ausschaltpunkt') else state.previous_ausschaltpunkt
-        state.previous_einschaltpunkt = None if not hasattr(state, 'previous_einschaltpunkt') else state.previous_einschaltpunkt
-        state.previous_solar_ueberschuss_aktiv = state.solar_ueberschuss_aktiv if hasattr(state, 'solar_ueberschuss_aktiv') else False
+        state.previous_ausschaltpunkt = state.previous_ausschaltpunkt or None
+        state.previous_einschaltpunkt = state.previous_einschaltpunkt or None
+        state.previous_solar_ueberschuss_aktiv = state.solar_ueberschuss_aktiv or False
 
         # Variables for the solar-only start window after night setback
         night_setback_end_time_today = None
@@ -1334,7 +1390,14 @@ async def main_loop(config, state, session):
                 now = datetime.now(local_tz)
                 logging.debug(f"Schleifeniteration: {now}")
 
-                # --- Calculate the solar-only window for the current day ---
+                # Debugging: Zeitstempelstatus
+                logging.debug(f"Zeitstempelstatus: last_compressor_off_time={state.last_compressor_off_time}, "
+                              f"last_compressor_on_time={state.last_compressor_on_time}, "
+                              f"last_shutdown_time={state.last_shutdown_time}, "
+                              f"last_log_time={state.last_log_time}, "
+                              f"_last_config_check={getattr(state, '_last_config_check', None)}")
+
+                # Calculate the solar-only window for the current day
                 try:
                     end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
                     end_hour, end_minute = map(int, end_time_str.split(':'))
@@ -1346,31 +1409,30 @@ async def main_loop(config, state, session):
                     solar_only_window_start_time_today = night_setback_end_time_today
                     solar_only_window_end_time_today = night_setback_end_time_today + timedelta(hours=2)
                     within_solar_only_window = solar_only_window_start_time_today <= now < solar_only_window_end_time_today
-                    logging.debug(f"Solar-only window: Start={solar_only_window_start_time_today.strftime('%Y-%m-%d %H:%M')}, End={solar_only_window_end_time_today.strftime('%Y-%m-%d %H:%M')}, Now={now.strftime('%Y-%m-%d %H:%M')}, Within window={within_solar_only_window}")
+                    logging.debug(f"Solar-only window: Start={solar_only_window_start_time_today.strftime('%Y-%m-%d %H:%M')}, "
+                                  f"End={solar_only_window_end_time_today.strftime('%Y-%m-%d %H:%M')}, "
+                                  f"Now={now.strftime('%Y-%m-%d %H:%M')}, Within window={within_solar_only_window}")
                 except Exception as e:
                     logging.error(f"Fehler bei der Berechnung des Solar-Fensters: {e}", exc_info=True)
                     within_solar_only_window = False
 
                 # Tageswechsel prüfen
                 should_check_day = (state.last_log_time is None or
-                                    (now - state.last_log_time) >= timedelta(minutes=1))
+                                    safe_timedelta(now, state.last_log_time) >= timedelta(minutes=1))
                 if should_check_day and now.date() != state.last_day:
                     logging.info(f"Neuer Tag erkannt: {now.date()}. Setze Gesamtlaufzeit zurück.")
                     state.total_runtime_today = timedelta()
                     state.last_day = now.date()
 
-                # --- Konfigurationsprüfung mit Intervallbegrenzung ---
-                CONFIG_CHECK_INTERVAL = timedelta(seconds=60)  # Alle 60 Sekunden prüfen
-                now = datetime.now(local_tz)
-
-                # Nur prüfen, wenn das Intervall erreicht ist
-                if not hasattr(state, '_last_config_check') or now - state._last_config_check > CONFIG_CHECK_INTERVAL:
+                # Konfigurationsprüfung
+                CONFIG_CHECK_INTERVAL = timedelta(seconds=60)
+                if not hasattr(state, '_last_config_check'):
+                    state._last_config_check = now
+                elif safe_timedelta(now, state._last_config_check) > CONFIG_CHECK_INTERVAL:
                     current_hash = calculate_file_hash("config.ini")
                     if current_hash != state.last_config_hash:
                         await reload_config(session, state)
                         state.last_config_hash = current_hash
-
-                    # Setze letzte Prüfzeit zurück
                     state._last_config_check = now
 
                 # Solax-Daten abrufen
@@ -1480,13 +1542,9 @@ async def main_loop(config, state, session):
                             if result:
                                 state.kompressor_ein = False
                                 state.last_compressor_off_time = now
-                                if state.last_compressor_on_time:
-                                    state.last_runtime = now - state.last_compressor_on_time
-                                    state.total_runtime_today += state.last_runtime
-                                    logging.info("Kompressor erfolgreich ausgeschaltet (Sicherheitsabschaltung).")
-                                else:
-                                    state.last_runtime = timedelta(0)
-                                    logging.info("Kompressor ausgeschaltet (Sicherheitsabschaltung). Laufzeit unbekannt.")
+                                state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
+                                state.total_runtime_today += state.last_runtime
+                                logging.info(f"Kompressor erfolgreich ausgeschaltet (Sicherheitsabschaltung). Laufzeit: {state.last_runtime}")
                                 state.ausschluss_grund = None
                             else:
                                 logging.critical(
@@ -1519,11 +1577,8 @@ async def main_loop(config, state, session):
                                 if result:
                                     state.kompressor_ein = False
                                     state.last_compressor_off_time = now
-                                    if state.last_compressor_on_time:
-                                        state.last_runtime = now - state.last_compressor_on_time
-                                        state.total_runtime_today += state.last_runtime
-                                    else:
-                                        state.last_runtime = timedelta(0)
+                                    state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
+                                    state.total_runtime_today += state.last_runtime
                                     state.ausschluss_grund = None
                                     logging.info(
                                         f"Kompressor ausgeschaltet bei Moduswechsel (T_Oben={t_boiler_oben:.1f}°C >= {effective_ausschaltpunkt}°C oder "
@@ -1557,56 +1612,52 @@ async def main_loop(config, state, session):
                                       f"T_Oben={t_boiler_oben:.1f}°C, T_Mittig={t_boiler_mittig:.1f}°C, "
                                       f"Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
 
-                    # --- Prüfung auf Mindestpause ---
+                    # Prüfung auf Mindestpause
                     pause_ok = True
                     reason = None
-                    if state.last_compressor_off_time:
-                        time_since_off = now - state.last_compressor_off_time if state.last_compressor_off_time else timedelta.max
-                        if time_since_off < state.min_pause:
-                            pause_ok = False
-                            pause_remaining = state.min_pause - time_since_off
-                            reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
+                    time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
+                    logging.debug(f"Prüfe Mindestpause: last_compressor_off_time={state.last_compressor_off_time}, now={now}, time_since_off={time_since_off}")
+                    if time_since_off < state.min_pause:
+                        pause_ok = False
+                        pause_remaining = state.min_pause - time_since_off
+                        reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
 
-                            # Log nur, wenn Grund anders oder Zeit überschritten
-                            same_reason = getattr(state, 'last_pause_reason', None) == reason
-                            enough_time_passed = not hasattr(state, 'last_pause_log') or \
-                                                 (now - state.last_pause_log).total_seconds() > 300 or not same_reason
+                        same_reason = getattr(state, 'last_pause_reason', None) == reason
+                        enough_time_passed = not hasattr(state, 'last_pause_log') or \
+                                             (safe_timedelta(now, state.last_pause_log).total_seconds() > 300 or not same_reason)
 
-                            if not same_reason or enough_time_passed:
-                                logging.info(f"Kompressor bleibt aus: {reason}")
+                        if not same_reason or enough_time_passed:
+                            logging.info(f"Kompressor bleibt aus: {reason}")
 
-                                # Telegram nur alle X Sekunde / Minuten senden
-                                TELEGRAM_PAUSE_INTERVAL = timedelta(minutes=5)
-                                last_tg = getattr(state, 'last_pause_telegram_notification', None)
-                                can_send_telegram = (
-                                        state.bot_token and state.chat_id and
-                                        (last_tg is None or (now - last_tg) > TELEGRAM_PAUSE_INTERVAL)
-                                )
+                            TELEGRAM_PAUSE_INTERVAL = timedelta(minutes=5)
+                            last_tg = getattr(state, 'last_pause_telegram_notification', None)
+                            can_send_telegram = (
+                                state.bot_token and state.chat_id and
+                                (last_tg is None or safe_timedelta(now, last_tg) > TELEGRAM_PAUSE_INTERVAL)
+                            )
 
-                                if can_send_telegram:
-                                    try:
-                                        await send_telegram_message(
-                                            session,
-                                            state.chat_id,
-                                            f"⚠️ Kompressor bleibt aus: {reason}",
-                                            state.bot_token
-                                        )
-                                        state.last_pause_telegram_notification = now
-                                    except Exception as e:
-                                        logging.info("Telegram-Nachricht konnte nicht gesendet werden.")
+                            if can_send_telegram:
+                                try:
+                                    await send_telegram_message(
+                                        session,
+                                        state.chat_id,
+                                        f"⚠️ Kompressor bleibt aus: {reason}",
+                                        state.bot_token
+                                    )
+                                    state.last_pause_telegram_notification = now
+                                except Exception as e:
+                                    logging.info(f"Telegram-Nachricht konnte nicht gesendet werden: {e}")
 
-                                # Zustandsaktualisierung immer durchführen
-                                state.last_pause_reason = reason
-                                state.last_pause_log = now
-                                state.ausschluss_grund = reason
-                        else:
-                            state.last_pause_reason = None
-                            state.last_pause_log = None
-                            state.last_pause_telegram_notification = None
-                            state.ausschluss_grund = None
+                            state.last_pause_reason = reason
+                            state.last_pause_log = now
+                            state.ausschluss_grund = reason
+                    else:
+                        state.last_pause_reason = None
+                        state.last_pause_log = None
+                        state.last_pause_telegram_notification = None
+                        state.ausschluss_grund = None
 
-                    ### Übergangsmodus
-
+                    # Übergangsmodus
                     solar_window_conditions_met_to_start = True
                     if within_solar_only_window:
                         if power_source != "Direkter PV-Strom":
@@ -1634,13 +1685,9 @@ async def main_loop(config, state, session):
                             if result:
                                 state.kompressor_ein = False
                                 state.last_compressor_off_time = now
-                                if state.last_compressor_on_time:
-                                    state.last_runtime = now - state.last_compressor_on_time
-                                    state.total_runtime_today += state.last_runtime
-                                    logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
-                                else:
-                                    state.last_runtime = timedelta(0)
-                                    logging.info("Kompressor ausgeschaltet. Laufzeit unbekannt (Startzeit nicht erfasst).")
+                                state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
+                                state.total_runtime_today += state.last_runtime
+                                logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
                                 state.ausschluss_grund = None
                             else:
                                 logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
@@ -1651,23 +1698,18 @@ async def main_loop(config, state, session):
                                 )
 
                 # Laufzeit aktualisieren
-                if state.kompressor_ein and state.last_compressor_on_time:
-                    state.current_runtime = now - state.last_compressor_on_time
+                if state.kompressor_ein:
+                    state.current_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
                 else:
-                    state.current_runtime = timedelta(0)
+                    state.current_runtime = timedelta()
 
                 # CSV-Protokollierung
                 await log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, solax_data,
                                  state.aktueller_einschaltpunkt, state.aktueller_ausschaltpunkt,
                                  state.solar_ueberschuss_aktiv, nacht_reduction, power_source)
 
-                # Watchdog mit none anfrage
-                if last_cycle_time is not None:
-                    cycle_duration = (datetime.now(local_tz) - last_cycle_time).total_seconds()
-                else:
-                    logging.warning("last_cycle_time ist None – setze auf aktuellen Zeitpunkt")
-                    last_cycle_time = datetime.now(local_tz)
-                    cycle_duration = 0  # oder einfach weiterspringen
+                # Watchdog
+                cycle_duration = safe_timedelta(now, last_cycle_time, default=timedelta()).total_seconds()
                 if cycle_duration > 30:
                     watchdog_warning_count += 1
                     logging.error(
@@ -1681,7 +1723,7 @@ async def main_loop(config, state, session):
                         await shutdown(session, state)
                         raise SystemExit("Watchdog-Exit")
 
-                last_cycle_time = datetime.now(local_tz)
+                last_cycle_time = now
                 await asyncio.sleep(2)
 
             except Exception as e:
@@ -1691,11 +1733,8 @@ async def main_loop(config, state, session):
     except asyncio.CancelledError:
         if 'telegram_task_handle' in locals():
             telegram_task_handle.cancel()
-        if 'display_task_handle' in locals():
-            display_task_handle.cancel()
         await asyncio.gather(
             telegram_task_handle if 'telegram_task_handle' in locals() else asyncio.sleep(0),
-            display_task_handle if 'display_task_handle' in locals() else asyncio.sleep(0),
             return_exceptions=True
         )
         raise
@@ -1764,11 +1803,11 @@ async def run_program():
         logging.critical(f"Kritischer Fehler im Hauptprogramm: {e}", exc_info=True)
         if state and state.bot_token and state.chat_id:
             try:
-                await send_telegram_message(
-                    session,
+                await safe_send_telegram_message(
+                    state.bot_token,
                     state.chat_id,
                     f"🛑 Kritischer Fehler:\n{str(e)}",
-                    state.bot_token
+                    force_new_session=True  # Optional: sicherstellen, dass neue Session genutzt wird
                 )
             except:
                 logging.warning("Konnte Fehlermeldung per Telegram nicht senden.")
@@ -1778,11 +1817,10 @@ async def run_program():
         logging.info("Programm durch Benutzerabbruch beendet.")
         if state and state.bot_token and state.chat_id:
             try:
-                await send_telegram_message(
-                    session,
+                await safe_send_telegram_message(
+                    state.bot_token,
                     state.chat_id,
-                    f"🛑 Programm manuell beendet.",
-                    state.bot_token
+                    f"🛑 Programm manuell beendet."
                 )
             except:
                 logging.warning("Konnte Abbruchmeldung per Telegram nicht senden.")
