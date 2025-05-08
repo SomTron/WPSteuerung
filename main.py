@@ -67,6 +67,8 @@ last_update_id = None
 lcd = None
 csv_lock = asyncio.Lock()
 gpio_lock = asyncio.Lock()
+last_sensor_readings = {}
+SENSOR_READ_INTERVAL = timedelta(seconds=5)
 
 
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
@@ -262,6 +264,24 @@ async def setup_logging(session, state):
     except Exception as e:
         print(f"Fehler bei Logging-Setup: {e}", file=sys.stderr)
         raise
+
+
+def reset_sensor_cache():
+    """Leert den Temperatur-Cache, um nach Fehlern frische Werte zu lesen."""
+    global last_sensor_readings
+    last_sensor_readings.clear()
+    logging.debug("Sensor-Cache geleert (reset_sensor_cache())")
+
+async def read_temperature_cached(sensor_id):
+    now = datetime.now(pytz.timezone("Europe/Berlin"))
+    if sensor_id in last_sensor_readings:
+        last_time, value = last_sensor_readings[sensor_id]
+        if now - last_time < SENSOR_READ_INTERVAL:
+            return value
+    # Lese tatsächlich
+    temp = await asyncio.to_thread(read_temperature, sensor_id)
+    last_sensor_readings[sensor_id] = (now, temp)
+    return temp
 
 # Funktion zur LCD-Initialisierung (angepasst)
 async def initialize_lcd(session):
@@ -542,6 +562,8 @@ async def shutdown(session, state):  # Nimm 'state' als Argument entgegen
         else:
             logging.warning("GPIO bereits bereinigt, überspringe cleanup")
 
+        reset_sensor_cache()
+
     except Exception as e:
         logging.error(f"Fehler beim Herunterfahren: {e}", exc_info=True)
     finally:
@@ -607,6 +629,9 @@ async def handle_pressure_check(session, state):
                 state.kompressor_ein = False
                 state.last_compressor_off_time = datetime.now(state.local_tz)
                 logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
+
+        reset_sensor_cache()
+
         state.ausschluss_grund = "Druckschalter offen"
         if not state.pressure_error_sent:
             if state.bot_token and state.chat_id:
@@ -1105,9 +1130,9 @@ async def display_task(state):
 
             try:
                 # Seite 1: Temperaturen
-                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
-                t_boiler_unten = await asyncio.to_thread(read_temperature, SENSOR_IDS["unten"])
-                t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
+                t_boiler_oben = await read_temperature_cached(SENSOR_IDS["oben"])
+                t_boiler_unten = await read_temperature_cached(SENSOR_IDS["unten"])
+                t_verd = await read_temperature_cached(SENSOR_IDS["verd"])
                 t_boiler = (
                     (t_boiler_oben + t_boiler_unten) / 2
                     if t_boiler_oben is not None and t_boiler_unten is not None
@@ -1355,10 +1380,10 @@ async def main_loop(config, state, session):
                 state.previous_solar_ueberschuss_aktiv = state.solar_ueberschuss_aktiv
 
                 # Sensorwerte lesen
-                t_boiler_oben = await asyncio.to_thread(read_temperature, SENSOR_IDS["oben"])
-                t_boiler_unten = await asyncio.to_thread(read_temperature, SENSOR_IDS["unten"])
-                t_boiler_mittig = await asyncio.to_thread(read_temperature, SENSOR_IDS["mittig"])
-                t_verd = await asyncio.to_thread(read_temperature, SENSOR_IDS["verd"])
+                t_boiler_oben = await read_temperature_cached(SENSOR_IDS["oben"])
+                t_boiler_unten = await read_temperature_cached(SENSOR_IDS["unten"])
+                t_boiler_mittig = await read_temperature_cached(SENSOR_IDS["mittig"])
+                t_verd = await read_temperature_cached(SENSOR_IDS["verd"])
                 t_boiler = (
                     (t_boiler_oben + t_boiler_unten) / 2 if t_boiler_oben is not None and t_boiler_unten is not None else "Fehler"
                 )
