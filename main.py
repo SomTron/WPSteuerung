@@ -999,31 +999,27 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
         urlaubs_reduction = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
         total_reduction = nacht_reduction + urlaubs_reduction
+
         bat_power = solax_data.get("batPower", 0)
         feedin_power = solax_data.get("feedinpower", 0)
         soc = solax_data.get("soc", 0)
 
-        # Solarüberschuss-Logik
+        # Solarüberschuss-Logik mit korrekter Hysterese
         was_active = state.solar_ueberschuss_aktiv
-        # Debugging nach Definition von was_active
-        logging.debug(f"Vor Solarüberschuss-Logik: was_active={was_active}, solar_ueberschuss_aktiv={state.solar_ueberschuss_aktiv}, "
-                      f"batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
+        MIN_SOLAR_POWER_ACTIVE = 550
+        MIN_SOLAR_POWER_INACTIVE = 600
 
-        if state.solar_ueberschuss_aktiv:
-            # Ausschalten nur bei niedrigeren Werten (Hysterese)
-            state.solar_ueberschuss_aktiv = bat_power > 550 or (soc > 90 and feedin_power > 550)
+        if solax_data.get("api_fehler", False):
+            logging.warning("API-Fehler: Solardaten nicht verfügbar – Solarüberschuss deaktiviert")
+            state.solar_ueberschuss_aktiv = False
+        elif state.solar_ueberschuss_aktiv:
+            # Ausschaltlogik: Bleibe aktiv, solange genug Überschuss da
+            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (soc > 90 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
         else:
-            # Einschalten nur bei klar überschrittenen Schwellen
-            state.solar_ueberschuss_aktiv = bat_power > 600 or (soc > 95 and feedin_power > 600)
+            # Einschaltlogik: Nur bei starkem Überschuss starten
+            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (soc > 95 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
 
-        # Debugging nach Statusänderung
-        logging.debug(f"Nach Solarüberschuss-Logik: was_active={was_active}, solar_ueberschuss_aktiv={state.solar_ueberschuss_aktiv}")
-
-        if state.solar_ueberschuss_aktiv and not was_active:
-            logging.info(f"Solarüberschuss aktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
-        elif was_active and not state.solar_ueberschuss_aktiv:
-            logging.info(f"Solarüberschuss deaktiviert: batPower={bat_power}, feedinpower={feedin_power}, soc={soc}")
-
+        # Sollwerte berechnen
         if state.solar_ueberschuss_aktiv:
             ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 50)) - total_reduction
             einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 46)) - total_reduction
@@ -1031,29 +1027,37 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
             ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45)) - total_reduction
             einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
 
-        # Validierung: Stelle sicher, dass Ausschaltpunkt > Einschaltpunkt
+        # Minimaltemperatur schützen
+        MIN_TEMPERATUR = 20
+        ausschaltpunkt = max(MIN_TEMPERATUR, ausschaltpunkt)
+        einschaltpunkt = max(MIN_TEMPERATUR, einschaltpunkt)
+
+        # Validierung: Ausschaltpunkt muss immer über Einschaltpunkt liegen
         HYSTERESE_MIN = int(config["Heizungssteuerung"].get("HYSTERESE_MIN", 2))
         if ausschaltpunkt <= einschaltpunkt:
             logging.warning(
-                f"Ausschaltpunkt ({ausschaltpunkt}°C) <= Einschaltpunkt ({einschaltpunkt}°C), "
+                f"Ausschaltpunkt ({ausschaltpunkt}°C) ≤ Einschaltpunkt ({einschaltpunkt}°C), "
                 f"setze Ausschaltpunkt auf Einschaltpunkt + {HYSTERESE_MIN}°C"
             )
             ausschaltpunkt = einschaltpunkt + HYSTERESE_MIN
 
+        # Debugging-Ausgabe
         logging.debug(
-            f"Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, "
-            f"Nachtabsenkung={nacht_reduction}, Urlaubsabsenkung={urlaubs_reduction}, "
-            f"Solarüberschuss={state.solar_ueberschuss_aktiv}"
+            f"Sollwerte berechnet: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, "
+            f"Nacht={is_night}, Urlaub={state.urlaubsmodus_aktiv}, Solar={state.solar_ueberschuss_aktiv}, "
+            f"Reduction=Nacht({nacht_reduction})+Urlaub({urlaubs_reduction}), "
+            f"batPower={bat_power}, soc={soc}, feedin={feedin_power}"
         )
-        return ausschaltpunkt, einschaltpunkt
+
+        return ausschaltpunkt, einschaltpunkt, state.solar_ueberschuss_aktiv
 
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
-        # Standardwerte als Fallback
         ausschaltpunkt = 45
         einschaltpunkt = 42
-        logging.warning(f"Verwende Standard-Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}")
-        return ausschaltpunkt, einschaltpunkt
+        state.solar_ueberschuss_aktiv = False
+        logging.warning(f"Verwende Standard-Sollwerte: Ausschaltpunkt={ausschaltpunkt}, Einschaltpunkt={einschaltpunkt}, Solarüberschuss_aktiv={state.solar_ueberschuss_aktiv}")
+        return ausschaltpunkt, einschaltpunkt, state.solar_ueberschuss_aktiv
 
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
