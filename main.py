@@ -1358,11 +1358,19 @@ async def main_loop(config, state, session):
                     state.total_runtime_today = timedelta()
                     state.last_day = now.date()
 
-                # Konfiguration neu laden
-                current_hash = calculate_file_hash("config.ini")
-                if state.last_config_hash != current_hash:
-                    await reload_config(session, state)
-                    state.last_config_hash = current_hash
+                # --- Konfigurationsprüfung mit Intervallbegrenzung ---
+                CONFIG_CHECK_INTERVAL = timedelta(seconds=60)  # Alle 60 Sekunden prüfen
+                now = datetime.now(local_tz)
+
+                # Nur prüfen, wenn das Intervall erreicht ist
+                if not hasattr(state, '_last_config_check') or now - state._last_config_check > CONFIG_CHECK_INTERVAL:
+                    current_hash = calculate_file_hash("config.ini")
+                    if current_hash != state.last_config_hash:
+                        await reload_config(session, state)
+                        state.last_config_hash = current_hash
+
+                    # Setze letzte Prüfzeit zurück
+                    state._last_config_check = now
 
                 # Solax-Daten abrufen
                 solax_result = await fetch_solax_data(session, state, now)
