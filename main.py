@@ -909,7 +909,7 @@ def adjust_shutdown_and_start_points(solax_data, config, state):
         config, is_night, solax_data, state
     )
 
-    MIN_EINSCHALTPUNKT = 20
+    MIN_EINSCHALTPUNKT = 15
     if state.aktueller_einschaltpunkt < MIN_EINSCHALTPUNKT:
         state.aktueller_einschaltpunkt = MIN_EINSCHALTPUNKT
         logging.warning(f"Einschaltpunkt auf Mindestwert {MIN_EINSCHALTPUNKT} gesetzt.")
