@@ -161,6 +161,7 @@ class State:
         self.chat_id = config["Telegram"].get("CHAT_ID")
         if not self.bot_token or not self.chat_id:
             logging.warning("Telegram BOT_TOKEN oder CHAT_ID fehlt. Telegram-Nachrichten deaktiviert.")
+        self.last_pause_telegram_notification = None
 
         # --- SolaxCloud-Konfiguration ---
         self.token_id = config["SolaxCloud"].get("TOKEN_ID")
@@ -1558,7 +1559,7 @@ async def main_loop(config, state, session):
 
                     # --- Prüfung auf Mindestpause ---
                     pause_ok = True
-                    reason = None  # ✅ Initialisiere reason hier
+                    reason = None
                     if state.last_compressor_off_time:
                         time_since_off = now - state.last_compressor_off_time
                         if time_since_off < state.min_pause:
@@ -1568,12 +1569,21 @@ async def main_loop(config, state, session):
 
                             # Log nur, wenn Grund anders oder Zeit überschritten
                             same_reason = getattr(state, 'last_pause_reason', None) == reason
-                            enough_time_passed = not hasattr(state, 'last_pause_log') or (
-                                        now - state.last_pause_log).total_seconds() > 300 or not same_reason
+                            enough_time_passed = not hasattr(state, 'last_pause_log') or \
+                                                 (now - state.last_pause_log).total_seconds() > 300 or not same_reason
 
                             if not same_reason or enough_time_passed:
                                 logging.info(f"Kompressor bleibt aus: {reason}")
-                                if state.bot_token and state.chat_id:
+
+                                # Telegram nur alle X Sekunde / Minuten senden
+                                TELEGRAM_PAUSE_INTERVAL = timedelta(minutes=5)
+                                last_tg = getattr(state, 'last_pause_telegram_notification', None)
+                                can_send_telegram = (
+                                        state.bot_token and state.chat_id and
+                                        (last_tg is None or (now - last_tg) > TELEGRAM_PAUSE_INTERVAL)
+                                )
+
+                                if can_send_telegram:
                                     try:
                                         await send_telegram_message(
                                             session,
@@ -1581,16 +1591,21 @@ async def main_loop(config, state, session):
                                             f"⚠️ Kompressor bleibt aus: {reason}",
                                             state.bot_token
                                         )
+                                        state.last_pause_telegram_notification = now
                                     except Exception as e:
-                                        logging.warning("Telegram-Nachricht konnte nicht gesendet werden.")
+                                        logging.info("Telegram-Nachricht konnte nicht gesendet werden.")
+
+                                # Zustandsaktualisierung immer durchführen
                                 state.last_pause_reason = reason
                                 state.last_pause_log = now
-
-                            state.ausschluss_grund = reason
+                                state.ausschluss_grund = reason
                         else:
                             state.last_pause_reason = None
                             state.last_pause_log = None
+                            state.last_pause_telegram_notification = None
                             state.ausschluss_grund = None
+
+                    ### Übergangsmodus
 
                     solar_window_conditions_met_to_start = True
                     if within_solar_only_window:
@@ -1610,7 +1625,7 @@ async def main_loop(config, state, session):
                             logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
                         else:
                             state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler beim Einschalten"
-                            logging.warning(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
+                            logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
 
                     elif (t_boiler_oben >= state.aktueller_ausschaltpunkt or t_boiler_mittig >= state.aktueller_ausschaltpunkt):
                         if state.kompressor_ein:
