@@ -1662,7 +1662,12 @@ async def main_loop(config, state, session):
                                  state.solar_ueberschuss_aktiv, nacht_reduction, power_source)
 
                 # Watchdog
-                cycle_duration = (datetime.now(local_tz) - last_cycle_time).total_seconds()
+                if last_cycle_time is not None:
+                    cycle_duration = (datetime.now(local_tz) - last_cycle_time).total_seconds()
+                else:
+                    logging.warning("last_cycle_time ist None – setze auf aktuellen Zeitpunkt")
+                    last_cycle_time = datetime.now(local_tz)
+                    cycle_duration = 0  # oder einfach weiterspringen
                 if cycle_duration > 30:
                     watchdog_warning_count += 1
                     logging.error(
