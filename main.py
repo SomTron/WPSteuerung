@@ -229,6 +229,7 @@ class State:
         self.previous_einschaltpunkt = None
         self.previous_solar_ueberschuss_aktiv = False
         self.last_overtemp_notification = now
+        self.last_cycle_time = now
 
         logging.debug(f" - Letzte Abschaltung: {self.last_shutdown_time}")
 
@@ -1120,7 +1121,7 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
             einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42)) - total_reduction
 
         # Minimaltemperatur schützen
-        MIN_TEMPERATUR = 20
+        MIN_TEMPERATUR = 15
         ausschaltpunkt = max(MIN_TEMPERATUR, ausschaltpunkt)
         einschaltpunkt = max(MIN_TEMPERATUR, einschaltpunkt)
 
