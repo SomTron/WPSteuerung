@@ -21,6 +21,7 @@ import io
 from aiohttp import FormData
 import pandas as pd
 import numpy as np
+from typing import Optional
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
                               get_boiler_temperature_history)
@@ -152,27 +153,27 @@ class State:
         self.last_runtime = timedelta()
         self.total_runtime_today = timedelta()
         self.last_day = now.date()
-        self.start_time = now
-        self.last_compressor_on_time = now  # Empfehlung 1: Standardwert
-        self.last_compressor_off_time = now  # Empfehlung 1: Standardwert
-        self.last_shutdown_time = now
-        self.last_log_time = now - timedelta(minutes=1)
-        self._last_config_check = now  # Empfehlung 1: Standardwert
-        self.last_kompressor_status = None
+        self.start_time = now  # Startzeit des Kompressors (kann später überschrieben werden)
+        self.last_compressor_on_time = now  # Erste Einschaltzeit auf Startzeit gesetzt
+        self.last_compressor_off_time = now  # Erste Ausschaltzeit auf Startzeit gesetzt
+        self.last_shutdown_time = now  # Letzte Abschaltung auf jetzt gesetzt
+        self.last_log_time = now - timedelta(minutes=1)  # Für Logging-Intervalle
+        self._last_config_check = now  # Letzte Konfigurationsprüfung
+        self.last_kompressor_status = None  # Letzter GPIO-Zustand
 
         # --- Steuerungslogik ---
-        self.kompressor_ein = False
-        self.urlaubsmodus_aktiv = False
-        self.solar_ueberschuss_aktiv = False
-        self.ausschluss_grund = None
-        self.t_boiler = None
+        self.kompressor_ein = False  # Kompressor ist zu Beginn aus
+        self.urlaubsmodus_aktiv = False  # Urlaubsmodus standardmäßig deaktiviert
+        self.solar_ueberschuss_aktiv = False  # Solarüberschuss nicht aktiv
+        self.ausschluss_grund = None  # Grund für Nicht-Einschalten
+        self.t_boiler = None  # Durchschnittstemperatur im Boiler
 
         # --- Telegram-Konfiguration ---
         self.bot_token = config["Telegram"].get("BOT_TOKEN")
         self.chat_id = config["Telegram"].get("CHAT_ID")
         if not self.bot_token or not self.chat_id:
             logging.warning("Telegram BOT_TOKEN oder CHAT_ID fehlt. Telegram-Nachrichten deaktiviert.")
-        self.last_pause_telegram_notification = None
+        self.last_pause_telegram_notification = None  # Letzte Pause-Benachrichtigung
 
         # --- SolaxCloud-Konfiguration ---
         self.token_id = config["SolaxCloud"].get("TOKEN_ID")
@@ -191,9 +192,9 @@ class State:
             self.min_pause = timedelta(minutes=20)
             self.verdampfertemperatur = 6
 
-        self.last_api_call = None
-        self.last_api_data = None
-        self.last_api_timestamp = None
+        self.last_api_call = None  # Letzter API-Aufruf
+        self.last_api_data = None  # Letzte API-Daten
+        self.last_api_timestamp = None  # Zeitstempel der letzten API-Daten
 
         # --- Schwellwerte ---
         try:
@@ -212,25 +213,40 @@ class State:
             self.aktueller_ausschaltpunkt = 45
             self.aktueller_einschaltpunkt = 42
 
-        self.previous_ausschaltpunkt = None
-        self.previous_einschaltpunkt = None
-        self.previous_solar_ueberschuss_aktiv = False
-
+        self.previous_ausschaltpunkt = self.aktueller_ausschaltpunkt # Vorheriger Ausschaltpunkt
+        self.previous_einschaltpunkt = self.aktueller_einschaltpunkt  # Vorheriger Einschaltpunkt
+        self.previous_solar_ueberschuss_aktiv = False  # Vorheriger Zustand
 
         # --- Fehler- und Statuszustände ---
-        self.last_config_hash = calculate_file_hash("config.ini")
-        self.pressure_error_sent = False
-        self.last_pressure_error_time = now
-        self.last_pressure_state = None
-        self.last_pause_log = None
-        self.current_pause_reason = None
+        self.last_config_hash = calculate_file_hash("config.ini")  # Hash zur Änderungserkennung
+        self.pressure_error_sent = False  # Flag für Druckfehlermeldung
+        self.last_pressure_error_time = now  # Letzter Druckfehler
+        self.last_pressure_state = None  # Letzter Druckstatus
+        self.last_pause_log = None  # Letzte Pause-Meldung
+        self.current_pause_reason = None  # Aktueller Grund für Pause
 
         # --- Zusätzliche Flags ---
-        self.previous_einschaltpunkt = None
-        self.previous_solar_ueberschuss_aktiv = False
-        self.last_overtemp_notification = now
-        self.last_cycle_time = now
+        self.last_overtemp_notification = now  # Letzte Übertemperaturmeldung
+        self.last_cycle_time = now  # Letzter Zyklusstart für Watchdog
+        self.nacht_reduction = 0  # Nachtabsenkung
+        self.power_source = "unbekannt"  # Stromquelle
+        self.t_oben = None  # Oberer Temperatursensor
+        self.t_unten = None  # Unterer Temperatursensor
+        self.t_mittig = None  # Mittlerer Temperatursensor
+        self.t_verd = None  # Verdampfertemperatur
+        self.acpower = None  # AC-Leistung
+        self.feedinpower = None  # Einspeiseleistung
+        self.batpower = None  # Batterieleistung
+        self.soc = None  # SOC (Ladezustand)
+        self.powerdc1 = None  # DC Power 1
+        self.powerdc2 = None  # DC Power 2
+        self.consumeenergy = None  # Verbrauch
+        self.einschaltpunkt = self.aktueller_einschaltpunkt  # Aktueller Einschaltpunkt
+        self.ausschaltpunkt = self.aktueller_ausschaltpunkt  # Aktueller Ausschaltpunkt
+        self.solarueberschuss = 0  # Solarüberschuss in Watt
+        self.nachtabsenkung = False  # Nachtabsenkung aktiv?
 
+        # --- Debugging / Logging ---
         logging.debug(f" - Letzte Abschaltung: {self.last_shutdown_time}")
 
 # Logging einrichten mit Telegram-Handler
@@ -1392,11 +1408,16 @@ async def main_loop(config, state, session):
                 logging.debug(f"Schleifeniteration: {now}")
 
                 # Debugging: Zeitstempelstatus
-                logging.debug(f"Zeitstempelstatus: last_compressor_off_time={state.last_compressor_off_time}, "
+                logging.debug(f"Zeitstempelstatus: "
+                              f"last_compressor_off_time={state.last_compressor_off_time}, "
                               f"last_compressor_on_time={state.last_compressor_on_time}, "
                               f"last_shutdown_time={state.last_shutdown_time}, "
                               f"last_log_time={state.last_log_time}, "
-                              f"_last_config_check={getattr(state, '_last_config_check', None)}")
+                              f"last_cycle_time={state.last_cycle_time}, "
+                              f"last_overtemp_notification={state.last_overtemp_notification}, "
+                              f"_last_config_check={getattr(state, '_last_config_check', None)}, "
+                              f"previous_ausschaltpunkt={state.previous_ausschaltpunkt}")
+
 
                 # Calculate the solar-only window for the current day
                 try:
