@@ -50,36 +50,51 @@ def is_solar_window(config):
         logging.error(f"Fehler in is_solar_window: {e}")
         return False
 
-async def send_telegram_message(session, chat_id, message, bot_token):
-    """Sendet eine Nachricht über Telegram mit Fehlerbehandlung."""
+async def send_telegram_message(session, chat_id, message, bot_token, retries=3, retry_delay=5):
+    """Sendet eine Nachricht über Telegram mit Fehlerbehandlung und Wiederholungslogik."""
     if len(message) > 4096:
         message = message[:4093] + "..."
         logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": message}
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown"  # Explizit Markdown setzen, falls gewünscht
+    }
 
-    try:
-        async with session.post(url, json=payload, timeout=10) as response:
-            if response.status == 200:
-                # Zusätzliche Debugging-Ausgabe
-                logging.debug(f"INFO-Nachricht wird geloggt: {message[:150]}... (Länge={len(message)})")
-                logging.info(f"Telegram-Nachricht gesendet: {message[:100]}...")
-                return True
+    logging.debug(f"Sende Telegram-Nachricht: chat_id={chat_id}, message={message[:150]}... (Länge={len(message)})")
+
+    for attempt in range(1, retries + 1):
+        try:
+            async with session.post(url, json=payload, timeout=20) as response:
+                if response.status == 200:
+                    logging.info(f"Telegram-Nachricht gesendet: {message[:100]}...")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logging.error(f"Fehler beim Senden der Telegram-Nachricht (Status {response.status}): {error_text}")
+                    return False
+        except aiohttp.ClientError as e:
+            logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+            if attempt < retries:
+                logging.info(f"Warte {retry_delay} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(retry_delay)
             else:
-                error_text = await response.text()
-                logging.error(f"Fehler beim Senden der Telegram-Nachricht: Status {response.status}, Details: {error_text}")
+                logging.error("Alle Versuche fehlgeschlagen (Netzwerkfehler).")
                 return False
-    except aiohttp.ClientError as e:
-        logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht: {e}", exc_info=True)
-        return False
-    except asyncio.TimeoutError:
-        logging.error("Timeout beim Senden der Telegram-Nachricht", exc_info=True)
-        return False
-    except Exception as e:
-        logging.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}", exc_info=True)
-        return False
-
+        except asyncio.TimeoutError:
+            logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+            if attempt < retries:
+                logging.info(f"Warte {retry_delay} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logging.error("Alle Versuche fehlgeschlagen (Timeout).")
+                return False
+        except Exception as e:
+            logging.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}", exc_info=True)
+            return False
+    return False
 async def send_welcome_message(session, chat_id, bot_token):
     """Sendet die Willkommensnachricht mit benutzerdefiniertem Keyboard."""
     message = "Willkommen! Verwende die Schaltflächen unten, um das System zu steuern."
