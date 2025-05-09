@@ -1030,7 +1030,14 @@ def calculate_file_hash(file_path):
         logging.error(f"Fehler beim Berechnen des Hash-Werts für {file_path}: {e}")
         return None
 
-
+async def check_network(session, timeout=5):
+    """Prüfe die Netzwerkverbindung durch eine Testanfrage."""
+    try:
+        async with session.get("https://www.google.com", timeout=timeout) as response:
+            return response.status == 200
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        logging.error(f"Netzwerkprüfung fehlgeschlagen: {e}")
+        return False
 
 async def log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, solax_data,
                      aktueller_einschaltpunkt, aktueller_ausschaltpunkt, solar_ueberschuss_aktiv,
@@ -1357,14 +1364,31 @@ async def main_loop(config, state, session):
         logging.info("Starte GPIO-Watchdog zur Zustandsüberwachung")
         asyncio.create_task(watchdog_gpio(state))
 
+        # Warte auf Netzwerkverbindung
+        logging.info("Prüfe Netzwerkverbindung vor dem Senden der Startnachrichten...")
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            if await check_network(session):
+                logging.info("Netzwerkverbindung erfolgreich.")
+                break
+            logging.warning(f"Netzwerkprüfung fehlgeschlagen (Versuch {attempt}/{max_attempts}), warte 5 Sekunden...")
+            await asyncio.sleep(5)
+        else:
+            logging.error("Keine Netzwerkverbindung nach mehreren Versuchen. Überspringe Startnachrichten.")
+            # Fahre ohne Startnachrichten fort
+
         # Startnachrichten
-        now = datetime.now(local_tz)
-        await send_telegram_message(
-            session, state.chat_id,
-            f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
-            state.bot_token
-        )
-        await send_welcome_message(session, state.chat_id, state.bot_token)
+        if state.bot_token and state.chat_id:
+            if not await send_telegram_message(
+                    session, state.chat_id,
+                    f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
+                    state.bot_token
+            ):
+                logging.warning("Startnachricht konnte nicht gesendet werden, fahre fort.")
+            if not await send_welcome_message(session, state.chat_id, state.bot_token):
+                logging.warning("Willkommensnachricht konnte nicht gesendet werden, fahre fort.")
+        else:
+            logging.warning("Telegram-Konfiguration fehlt, überspringe Startnachrichten.")
 
         # Telegram-Task starten
         logging.info("Initialisiere telegram_task")
