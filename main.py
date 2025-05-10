@@ -1778,7 +1778,6 @@ async def main_loop(config, state, session):
                         result = await set_kompressor_status(state, True)
                         if result:
                             state.kompressor_ein = True
-                            state.last_compressor_on_time = now
                             state.ausschluss_grund = None
                             logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
                         else:
