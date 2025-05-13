@@ -1849,45 +1849,57 @@ async def main_loop(config, state, session):
                         time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
                         logging.debug(
                             f"Prüfe Mindestpause: last_compressor_off_time={state.last_compressor_off_time}, now={now}, time_since_off={time_since_off}")
+
                         if time_since_off < state.min_pause:
                             pause_ok = False
                             pause_remaining = state.min_pause - time_since_off
                             reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
-
                             same_reason = getattr(state, 'last_pause_reason', None) == reason
                             enough_time_passed = not hasattr(state, 'last_pause_log') or \
-                                                 (safe_timedelta(now, state.last_pause_log).total_seconds() > 300 or not same_reason)
+                                                 (safe_timedelta(now,
+                                                                 state.last_pause_log).total_seconds() > 300 or not same_reason)
 
-                            if not same_reason or enough_time_passed:
-                                logging.info(f"Kompressor bleibt aus: {reason}")
+                            # --- START: Nur setzen, wenn ein Start gewünscht ist ---
+                            if temp_conditions_met_to_start and solar_window_conditions_met_to_start:
+                                state.ausschluss_grund = reason
 
-                                TELEGRAM_PAUSE_INTERVAL = timedelta(minutes=5)
-                                last_tg = getattr(state, 'last_pause_telegram_notification', None)
-                                can_send_telegram = (
-                                        state.bot_token and state.chat_id and
-                                        (last_tg is None or safe_timedelta(now, last_tg) > TELEGRAM_PAUSE_INTERVAL)
-                                )
-
-                                if can_send_telegram:
-                                    try:
+                                if not same_reason or enough_time_passed:
+                                    logging.info(f"Kompressor START VERHINDERT: {reason}")
+                                    # Telegram-Meldung nur bei Änderung oder Cooldown abgelaufen
+                                    if state.bot_token and state.chat_id:
                                         await send_telegram_message(
-                                            session,
-                                            state.chat_id,
-                                            f"⚠️ Kompressor bleibt aus: {reason}",
+                                            session, state.chat_id,
+                                            f"⚠️ Kompressor START VERHINDERT: {reason}",
                                             state.bot_token
                                         )
                                         state.last_pause_telegram_notification = now
-                                    except Exception as e:
-                                        logging.error(f"Telegram-Nachricht konnte nicht gesendet werden: {e}")
 
+                                    state.last_pause_reason = reason
+                                    state.last_pause_log = now
+                                else:
+                                    state.ausschluss_grund = reason  # Halte Grund bei, solange keine neue Meldung nötig ist
+                            else:
+                                state.ausschluss_grund = None  # Kein Start gewünscht → kein Grund zur Meldung
+
+                            # Allgemeines Logging immer zeigen, um Verhalten transparent zu halten
+                            if not same_reason or enough_time_passed:
+                                logging.info(f"Kompressor bleibt aus: {reason}")
+                                if state.bot_token and state.chat_id:
+                                    await send_telegram_message(
+                                        session, state.chat_id,
+                                        f"⚠️ Kompressor bleibt aus: {reason}",
+                                        state.bot_token
+                                    )
+                                    state.last_pause_telegram_notification = now
                                 state.last_pause_reason = reason
                                 state.last_pause_log = now
-                                state.ausschluss_grund = reason
-                    else:
-                        state.last_pause_reason = None
-                        state.last_pause_log = None
-                        state.last_pause_telegram_notification = None
-                        state.ausschluss_grund = None
+
+                        else:
+                            # Mindestpause abgelaufen → alle Pause-bezogenen Flags zurücksetzen
+                            state.last_pause_reason = None
+                            state.last_pause_log = None
+                            state.last_pause_telegram_notification = None
+                            state.ausschluss_grund = None
 
                     # Übergangsmodus
                     solar_window_conditions_met_to_start = True
@@ -1971,3 +1983,50 @@ async def main_loop(config, state, session):
 
     finally:
         await shutdown(session, state)
+
+
+async def run_program():
+    async with aiohttp.ClientSession() as session:
+        config = configparser.ConfigParser()
+        try:
+            config.read("config.ini")
+            if not config.sections():
+                raise ValueError("Konfiguration konnte nicht geladen werden")
+        except Exception as e:
+            logging.error(f"Fehler beim Laden der Konfiguration: {e}", exc_info=True)
+            raise
+
+        state = State(config)
+
+        # CSV-Initialisierung
+        if not os.path.exists("heizungsdaten.csv"):
+            async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
+                header = (
+                    "Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
+                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
+                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
+                )
+                await csvfile.write(header)
+                logging.info("CSV-Header geschrieben: " + header.strip())
+
+        try:
+            await setup_logging(session, state)
+            await main_loop(config, state, session)
+        except KeyboardInterrupt:
+            logging.info("Programm durch Benutzer abgebrochen (Ctrl+C).")
+        except asyncio.CancelledError:
+            logging.info("Hauptschleife abgebrochen.")
+        except Exception as e:
+            logging.error(f"Unerwarteter Fehler in run_program: {e}", exc_info=True)
+            raise
+        finally:
+            await shutdown(session, state)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)  # Fallback-Logging vor setup_logging
+    try:
+        asyncio.run(run_program())
+    except Exception as e:
+        logging.error(f"Fehler beim Starten des Skripts: {e}", exc_info=True)
+        raise
