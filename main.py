@@ -790,7 +790,8 @@ async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config):
     return fehler, is_overtemp
 
 
-async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_oben: Optional[float] = None):
+async def set_kompressor_status(state, ein: bool, force_off: bool = False, force: bool = False, t_boiler_oben: Optional[float] = None):
+
     """
     Setzt den Zustand des Kompressors (GPIO 21) sicher und robust.
 
@@ -802,6 +803,10 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
     Returns:
         bool: True bei Erfolg, False bei Fehlschlag oder wenn Aktion nicht durchgeführt wurde (z.B. Pause/Laufzeit).
     """
+    if force and force_off:
+        logging.warning("Beide Parameter 'force' und 'force_off' wurden gesetzt. Verwende force_off.")
+    force = force_off or force
+
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
     max_attempts = 3
@@ -1399,12 +1404,22 @@ async def display_task(state):
 async def watchdog_gpio(state):
     while True:
         try:
-            actual_gpio = state.kompressor_ein
-            if actual_gpio != (GPIO.HIGH if state.kompressor_ein else GPIO.LOW):
+            actual_gpio = GPIO.input(21)  # Lies den aktuellen physischen Zustand vom GPIO
+            expected_gpio = GPIO.HIGH if state.kompressor_ein else GPIO.LOW
+
+            if actual_gpio != expected_gpio:
                 logging.warning("GPIO-Inkonsistenz erkannt – Synchronisiere...")
-                await set_kompressor_status(state, state.kompressor_ein, force_off=True)
+
+                # Rufe set_kompressor_status korrekt auf:
+                # - Wenn Kompressor eingeschaltet sein soll, dann einschalten (force=False)
+                # - Wenn ausgeschaltet sein soll, dann mit force_off=True ausschalten
+                if state.kompressor_ein:
+                    await set_kompressor_status(state, True)  # Einschalten (ohne force_off)
+                else:
+                    await set_kompressor_status(state, False, force_off=True)  # Ausschalten mit force_off
         except Exception as e:
             logging.error(f"Fehler im GPIO-Watchdog: {e}")
+
         await asyncio.sleep(60)
 
 async def initialize_gpio():
@@ -1956,96 +1971,3 @@ async def main_loop(config, state, session):
 
     finally:
         await shutdown(session, state)
-
-async def run_program():
-    logging.info("Programm gestartet.")
-
-    config = None
-    state = None
-    session = None
-
-    try:
-        # Konfiguration laden
-        logging.debug("Lade Konfigurationsdatei...")
-        config = load_and_validate_config()
-
-        # State-Objekt erstellen
-        logging.debug("Erzeuge State-Objekt...")
-        state = State(config)
-
-        async with aiohttp.ClientSession() as session:
-            state.session = session
-
-            # Logging mit TelegramHandler einrichten
-            logging.debug("Richte Logging mit TelegramHandler ein...")
-            await setup_logging(session, state)
-            logging.info("Logging erfolgreich konfiguriert")
-
-            # LCD-Initialisierung
-            logging.debug("LCD-Initialisierung beginnt...")
-            await initialize_lcd(session)
-
-            # GPIO-Initialisierung
-            logging.debug("GPIO-Initialisierung beginnt...")
-            if not await initialize_gpio():
-                raise RuntimeError("GPIO-Initialisierung fehlgeschlagen")
-
-            # CSV-Header schreiben
-            if not os.path.exists("heizungsdaten.csv"):
-                async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
-                    header = (
-                        "Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
-                        "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
-                        "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
-                    )
-                    await csvfile.write(header)
-                    logging.info("CSV-Header geschrieben.")
-
-            # Willkommensnachricht senden
-            now = datetime.now(pytz.timezone("Europe/Berlin"))
-            if state.bot_token and state.chat_id:
-                await send_telegram_message(
-                    session,
-                    state.chat_id,
-                    f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
-                    state.bot_token
-                )
-
-            logging.info("Initialisierung abgeschlossen. Hauptschleife startet...")
-            await main_loop(config, state, session)
-
-    except Exception as e:
-        logging.critical(f"Kritischer Fehler im Hauptprogramm: {e}", exc_info=True)
-        if state and state.bot_token and state.chat_id:
-            try:
-                await safe_send_telegram_message(
-                    state.bot_token,
-                    state.chat_id,
-                    f"🛑 Kritischer Fehler:\n{str(e)}",
-                    force_new_session=True  # Optional: sicherstellen, dass neue Session genutzt wird
-                )
-            except:
-                logging.warning("Konnte Fehlermeldung per Telegram nicht senden.")
-        raise
-
-    except asyncio.CancelledError:
-        logging.info("Programm durch Benutzerabbruch beendet.")
-        if state and state.bot_token and state.chat_id:
-            try:
-                await safe_send_telegram_message(
-                    state.bot_token,
-                    state.chat_id,
-                    f"🛑 Programm manuell beendet."
-                )
-            except:
-                logging.warning("Konnte Abbruchmeldung per Telegram nicht senden.")
-
-    finally:
-        logging.info("Starte Shutdown-Prozedur...")
-        try:
-            await shutdown(session, state)
-        except Exception as e:
-            logging.error(f"Fehler während des Shutdowns: {e}")
-
-if __name__ == "__main__":
-    asyncio.run(run_program())
