@@ -496,48 +496,6 @@ def get_power_source(solax_data):
         return "Unbekannt"  # Fallback für edge cases wie batPower = 0, feedinpower = 0
 
 
-def calculate_runtimes():
-    try:
-        # Lese die CSV-Datei
-        df = pd.read_csv("heizungsdaten.csv", on_bad_lines="skip", parse_dates=["Zeitstempel"])
-
-        # Aktuelles Datum mit Zeitzone
-        local_tz = pytz.timezone("Europe/Berlin")
-        now = datetime.now(local_tz)
-
-        # Zeitzone für Zeitstempel in der CSV sicherstellen
-        if df["Zeitstempel"].dt.tz is None:
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz)
-        else:
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_convert(local_tz)
-
-        logging.debug(f"calculate_runtimes: now={now}, tzinfo={now.tzinfo}, Zeitstempel tz={df['Zeitstempel'].dt.tz}")
-
-        # Zeiträume definieren
-        time_periods = {
-            "Aktuelle Woche": (now - timedelta(days=7), now),
-            "Vorherige Woche": (now - timedelta(days=14), now - timedelta(days=7)),
-            "Aktueller Monat": (now - timedelta(days=30), now),
-            "Vorheriger Monat": (now - timedelta(days=60), now - timedelta(days=30)),
-        }
-
-        # Berechne die Laufzeiten für jeden Zeitraum
-        runtimes = {}
-        for period, (start_date, end_date) in time_periods.items():
-            logging.debug(
-                f"Zeitraum {period}: start_date={start_date}, tzinfo={start_date.tzinfo}, end_date={end_date}, tzinfo={end_date.tzinfo}")
-            runtime_percentage, runtime_duration = calculate_runtime(df, start_date, end_date)
-            runtimes[period] = {
-                "percentage": runtime_percentage,
-                "duration": runtime_duration
-            }
-
-        return runtimes
-    except Exception as e:
-        logging.error(f"Fehler beim Berechnen der Laufzeiten: {e}")
-        return None
-
-
 def calculate_runtime(df, start_date, end_date):
     """Berechnet die Laufzeit in Prozent und die tatsächliche Laufzeit für einen bestimmten Zeitraum."""
     # Filtere die Daten für den Zeitraum
@@ -1570,6 +1528,7 @@ async def main_loop(config, state, session):
             try:
                 now = datetime.now(local_tz)
                 logging.debug(f"Schleifeniteration: {now}")
+                solar_window_conditions_met_to_start = True  # Immer erlauben, außer im Solarfenster und Quelle passt nicht
 
                 # Debugging: Zeitstempelstatus
                 logging.debug(f"Zeitstempelstatus: "
@@ -1902,12 +1861,14 @@ async def main_loop(config, state, session):
                             state.ausschluss_grund = None
 
                     # Übergangsmodus
-                    solar_window_conditions_met_to_start = True
+                    # --- Berechne, ob Solar-Fenster erfüllt ist ---
+                    solar_window_conditions_met_to_start = True  # Standardmäßig erlaubt
                     if within_solar_only_window:
                         if power_source != "Direkter PV-Strom":
                             solar_window_conditions_met_to_start = False
                             state.ausschluss_grund = f"Warte auf direkten Solarstrom nach Nachtabsenkung ({solar_only_window_start_time_today.strftime('%H:%M')}-{solar_only_window_end_time_today.strftime('%H:%M')})"
-                            logging.debug(f"Kompressorstart verhindert: Nicht genug direkter Solarstrom im Fenster nach Nachtabsenkung.")
+                            logging.debug(
+                                f"Kompressorstart verhindert: Nicht genug direkter Solarstrom im Fenster nach Nachtabsenkung.")
 
                     if not state.kompressor_ein and temp_conditions_met_to_start and pause_ok and solar_window_conditions_met_to_start:
                         logging.info("Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten.")
