@@ -1530,6 +1530,36 @@ async def main_loop(config, state, session):
                 logging.debug(f"Schleifeniteration: {now}")
                 solar_window_conditions_met_to_start = True  # Immer erlauben, außer im Solarfenster und Quelle passt nicht
 
+
+                # Sicherstellen, dass last_compressor_off_time gültig ist
+                if state.last_compressor_off_time is None:
+                    set_last_compressor_off_time(state, now - state.min_pause)
+                    logging.warning("last_compressor_off_time war None zur Laufzeit – wurde auf gültigen Wert gesetzt.")
+
+                # Mindestpause prüfen (mit Cooldown)
+                time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
+                pause_ok = True
+                reason = None
+                if not state.kompressor_ein:
+                    if time_since_off < state.min_pause:
+                        pause_ok = False
+                        pause_remaining = state.min_pause - time_since_off
+                        reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
+
+                        COOLDOWN_SEKUNDEN = 300
+                        same_reason = getattr(state, 'last_pause_reason', None) == reason
+                        last_logged = getattr(state, 'last_pause_log', None)
+                        enough_time_passed = last_logged is None or \
+                            (safe_timedelta(now, last_logged).total_seconds() > COOLDOWN_SEKUNDEN)
+
+                        if not same_reason or enough_time_passed:
+                            logging.info(f"Kompressor bleibt aus: {reason}")
+                            if state.bot_token and state.chat_id:
+                                await send_telegram_message(session, state.chat_id,
+                                    f"⚠️ Kompressor bleibt aus: {reason}", state.bot_token)
+                            state.last_pause_reason = reason
+                            state.last_pause_log = now
+
                 # Debugging: Zeitstempelstatus
                 logging.debug(f"Zeitstempelstatus: "
                               f"last_compressor_off_time={state.last_compressor_off_time}, "

@@ -482,6 +482,39 @@ async def send_help_message(session, chat_id, bot_token):
     )
     await send_telegram_message(session, chat_id, message, bot_token)
 
+# Neue Hilfsfunktion: Liefert Liste der Zeilen innerhalb des gewünschten Zeitfensters
+def prefilter_csv_lines(file_path, hours, tz):
+    now = datetime.now(tz)
+    time_ago = now - timedelta(hours=hours)
+    relevant_lines = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            header = next(f)
+            relevant_lines.append(header.strip())
+            for line_num, line in enumerate(f):
+                try:
+                    parts = line.strip().split(",")
+                    if len(parts) < 2:
+                        continue
+                    timestamp_str = parts[0]
+                    timestamp = pd.to_datetime(timestamp_str, errors='coerce')
+                    if pd.isna(timestamp):
+                        continue
+                    if timestamp.tzinfo is None:
+                        timestamp = tz.localize(timestamp)
+                    else:
+                        timestamp = timestamp.astimezone(tz)
+                    if time_ago <= timestamp <= now:
+                        relevant_lines.append(line.strip())
+                except Exception as e:
+                    logging.warning(f"⚠️ Konnte Zeile {line_num} nicht verarbeiten: {e}")
+        logging.debug(f"✅ {len(relevant_lines)} Zeilen nach Vorfilterung.")
+        return relevant_lines
+    except Exception as e:
+        logging.error(f"❌ Fehler beim Lesen der CSV-Zeilen: {e}", exc_info=True)
+        return []
+
+
 async def get_boiler_temperature_history(session, hours, state, config):
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
     try:
@@ -489,118 +522,124 @@ async def get_boiler_temperature_history(session, hours, state, config):
         now = datetime.now(local_tz)
         time_ago = now - timedelta(hours=hours)
 
-        expected_columns = [
-            "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "Kompressor",
-            "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "PowerSource"
-        ]
+        logging.debug(f"⏳ Starte Temperaturverlauf für {hours} Stunden, Zeitfenster: {time_ago} bis {now}")
 
-        try:
-            with open("heizungsdaten.csv", "r") as f:
-                os.fsync(f.fileno())
-        except Exception as e:
-            logging.warning(f"Fehler bei Dateisynchronisation: {e}")
-
-        try:
-            df_header = pd.read_csv("heizungsdaten.csv", nrows=1)
-            available_columns = [col for col in expected_columns if col in df_header.columns]
-            if not available_columns:
-                raise ValueError("Keine der erwarteten Spalten in der CSV gefunden.")
-            logging.debug(f"Verfügbare Spalten: {available_columns}")
-        except Exception as e:
-            logging.error(f"Fehler beim Lesen des Headers: {e}")
-            await send_telegram_message(session, state.chat_id, "CSV-Header konnte nicht gelesen werden.", state.bot_token)
+        file_path = "heizungsdaten.csv"
+        if not os.path.isfile(file_path):
+            logging.error(f"❌ CSV-Datei nicht gefunden: {file_path}")
+            await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
             return
 
+        # 1. CSV effizient einlesen mit Pandas
+        logging.debug(f"🔍 Lese CSV-Datei: {file_path}")
         try:
-            df = pd.read_csv(
-                "heizungsdaten.csv",
-                usecols=available_columns,
-                on_bad_lines='skip',
-                engine='python'
-            )
-            logging.debug(f"{len(df)} Zeilen aus CSV geladen.")
+            df = pd.read_csv(file_path, usecols=[
+                "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd",
+                "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"
+            ], engine="c")
+            logging.debug(f"CSV geladen, {len(df)} Zeilen, Spalten: {df.columns.tolist()}")
         except Exception as e:
-            logging.error(f"Fehler beim Laden der CSV: {e}")
-            await send_telegram_message(session, state.chat_id, "Fehler beim Laden der CSV-Datei.", state.bot_token)
+            logging.error(f"❌ Fehler beim Einlesen der CSV: {e}", exc_info=True)
+            await send_telegram_message(session, state.chat_id, "Fehler beim Lesen der CSV-Datei.", state.bot_token)
             return
 
-        try:
-            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce', dayfirst=True, format='mixed')
-            invalid_rows = df[df["Zeitstempel"].isna()]
-            if not invalid_rows.empty:
-                invalid_indices = invalid_rows.index.tolist()
-                sample = invalid_rows.iloc[0]["Zeitstempel"] if len(invalid_rows) > 0 else "unbekannt"
-                logging.warning(f"{len(invalid_rows)} Zeilen mit ungültigen Zeitstempeln übersprungen (z. B. '{sample}', Indizes: {invalid_indices[:10]}...)")
-                df = df.dropna(subset=["Zeitstempel"]).reset_index(drop=True)
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz)
-            logging.debug(f"{len(df)} Zeilen nach Zeitstempelparsing.")
-        except Exception as e:
-            logging.error(f"Fehler beim Parsen der Zeitstempel: {e}")
-            await send_telegram_message(session, state.chat_id, "Fehler beim Verarbeiten der Zeitstempel.", state.bot_token)
+        # 2. Prüfen, ob Zeitstempel-Spalte existiert
+        if "Zeitstempel" not in df.columns:
+            logging.error("❌ Spalte 'Zeitstempel' fehlt in der CSV.")
+            await send_telegram_message(session, state.chat_id, "Spalte 'Zeitstempel' fehlt in der CSV.", state.bot_token)
             return
 
-        df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
-        logging.debug(f"{len(df)} Zeilen nach Zeitfilterung.")
+        # 3. Zeitstempel manuell parsen
+        logging.debug(f"Erste Zeitstempel vor Parsing: {df['Zeitstempel'].head().tolist()}")
+        try:
+            # Versuche zunächst Standardformat, falls nicht erfolgreich, spezifisches Format
+            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce')
+            # Optional: Wenn ein spezifisches Format bekannt ist, z. B. DD.MM.YYYY HH:MM:SS
+            # df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], format="%d.%m.%Y %H:%M:%S", errors='coerce')
+            logging.debug(f"Zeitstempel-Datentyp nach Parsing: {df['Zeitstempel'].dtype}")
+        except Exception as e:
+            logging.error(f"❌ Fehler beim Parsen der Zeitstempel: {e}", exc_info=True)
+            await send_telegram_message(session, state.chat_id, "Fehler beim Parsen der Zeitstempel.", state.bot_token)
+            return
+
+        # 4. Ungültige Zeitstempel prüfen und entfernen
+        invalid_rows = df[df["Zeitstempel"].isna()]
+        if not invalid_rows.empty:
+            logging.warning(f"⚠️ {len(invalid_rows)} Zeilen mit ungültigen Zeitstempeln gefunden. Beispiele: {invalid_rows['Zeitstempel'].head().tolist()}")
+            df = df[df["Zeitstempel"].notna()].copy()
+            logging.debug(f"Nach Entfernen ungültiger Zeitstempel: {len(df)} Zeilen")
 
         if df.empty:
-            logging.warning(f"Keine Daten im Zeitfenster ({hours}h) gefunden.")
-            await send_telegram_message(session, state.chat_id, "Keine Daten für den Verlauf verfügbar.", state.bot_token)
+            logging.warning(f"❌ Keine gültigen Daten nach Zeitstempel-Parsing für die letzten {hours} Stunden.")
+            # Fallback: Neueste verfügbare Daten anzeigen
+            try:
+                latest_data = pd.read_csv(file_path, usecols=["Zeitstempel"])
+                latest_data["Zeitstempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
+                latest_time = latest_data["Zeitstempel"].dropna().max() if not latest_data["Zeitstempel"].dropna().empty else "unbekannt"
+                await send_telegram_message(
+                    session, state.chat_id,
+                    f"Keine gültigen Daten für die letzten {hours} Stunden vorhanden. Letzter Eintrag: {latest_time}.",
+                    state.bot_token
+                )
+            except Exception as e:
+                logging.error(f"❌ Fehler beim Abrufen des neuesten Zeitstempels: {e}", exc_info=True)
+                await send_telegram_message(
+                    session, state.chat_id,
+                    f"Keine gültigen Daten für die letzten {hours} Stunden vorhanden. Fehler beim Abrufen des neuesten Eintrags.",
+                    state.bot_token
+                )
             return
 
-        df = df.copy()
-        df["Einschaltpunkt"] = pd.to_numeric(df.get("Einschaltpunkt", pd.Series(42)), errors="coerce").fillna(42)
-        df["Ausschaltpunkt"] = pd.to_numeric(df.get("Ausschaltpunkt", pd.Series(45)), errors="coerce").fillna(45)
-        df["Solarüberschuss"] = pd.to_numeric(df.get("Solarüberschuss", pd.Series(0)), errors="coerce").fillna(0).astype(int)
-        df["PowerSource"] = df.get("PowerSource", pd.Series("Unbekannt")).fillna("Unbekannt").replace(["N/A", "Fehler"], "Unbekannt")
-        df["Kompressor"] = df.get("Kompressor", pd.Series(0)).replace({"EIN": 1, "AUS": 0}).fillna(0).astype(int)
+        # 5. Zeitzone hinzufügen
+        try:
+            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
+            logging.debug(f"Zeitstempel nach Zeitzone: {df['Zeitstempel'].head().tolist()}")
+        except Exception as e:
+            logging.error(f"❌ Fehler beim Hinzufügen der Zeitzone: {e}", exc_info=True)
+            await send_telegram_message(session, state.chat_id, "Fehler beim Hinzufügen der Zeitzone.", state.bot_token)
+            return
 
-        temp_columns = [c for c in ["T_Oben", "T_Unten", "T_Mittig"] if c in df.columns]
+        # 6. Filtern nach Zeitfenster
+        df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
+        logging.debug(f"Nach Zeitfenster-Filter: {len(df)} Zeilen, Zeitstempel-Bereich: {df['Zeitstempel'].min()} bis {df['Zeitstempel'].max()}")
+
+        if df.empty:
+            logging.warning(f"❌ Keine Daten für die letzten {hours} Stunden gefunden.")
+            # Fallback: Neueste verfügbare Daten anzeigen
+            try:
+                latest_data = pd.read_csv(file_path, usecols=["Zeitstempel"])
+                latest_data["Zeitstempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
+                latest_time = latest_data["Zeitstempel"].dropna().max() if not latest_data["Zeitstempel"].dropna().empty else "unbekannt"
+                await send_telegram_message(
+                    session, state.chat_id,
+                    f"Keine Daten für die letzten {hours} Stunden vorhanden. Letzter Eintrag: {latest_time}.",
+                    state.bot_token
+                )
+            except Exception as e:
+                logging.error(f"❌ Fehler beim Abrufen des neuesten Zeitstempels: {e}", exc_info=True)
+                await send_telegram_message(
+                    session, state.chat_id,
+                    f"Keine Daten für die letzten {hours} Stunden vorhanden. Fehler beim Abrufen des neuesten Eintrags.",
+                    state.bot_token
+                )
+            return
+
+        # 7. Temperaturwerte konvertieren
+        temp_columns = ["T_Oben", "T_Unten", "T_Mittig", "T_Verd"]
         for col in temp_columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            else:
+                logging.warning(f"Spalte {col} fehlt in der CSV.")
+                df[col] = float('nan')
 
-        if not df.empty:
-            gap_threshold = timedelta(minutes=5)
-            gaps = df["Zeitstempel"].diff()[1:] > gap_threshold
-            gap_indices = gaps[gaps].index
-            if not gap_indices.empty:
-                synthetic_rows = []
-                for idx in gap_indices:
-                    prev_time = df.loc[idx - 1, "Zeitstempel"]
-                    next_time = df.loc[idx, "Zeitstempel"]
-                    synthetic_time = prev_time + timedelta(minutes=1)
-                    synthetic_row = {
-                        "Zeitstempel": synthetic_time,
-                        "Kompressor": 0,
-                        "PowerSource": "Keine aktive Energiequelle",
-                        "Einschaltpunkt": df.loc[idx - 1, "Einschaltpunkt"],
-                        "Ausschaltpunkt": df.loc[idx - 1, "Ausschaltpunkt"],
-                        "Solarüberschuss": 0
-                    }
-                    for col in ["T_Oben", "T_Unten", "T_Mittig"]:
-                        synthetic_row[col] = np.nan
-                    synthetic_rows.append(synthetic_row)
+        # 8. Y-Achsen-Skalierung
+        min_temp = df[temp_columns].min().min()
+        max_temp = df[temp_columns].max().max()
+        y_min = max(0, min_temp - 2) if pd.notna(min_temp) else 0
+        y_max = max_temp + 5 if pd.notna(max_temp) else 60
 
-                if synthetic_rows:
-                    synthetic_df = pd.DataFrame(synthetic_rows)
-                    df = pd.concat([df, synthetic_df], ignore_index=True)
-                    df = df.sort_values("Zeitstempel").reset_index(drop=True)
-                    logging.info(f"{len(synthetic_rows)} synthetische Punkte zur Lückenbehandlung hinzugefügt.")
-
-        target_points = 50
-        if len(df) > target_points:
-            df = df.iloc[::len(df) // target_points].head(target_points)
-        logging.debug(f"{len(df)} Zeilen nach Downscaling.")
-
-        timestamps = df["Zeitstempel"]
-        t_oben = df.get("T_Oben")
-        t_unten = df.get("T_Unten")
-        t_mittig = df.get("T_Mittig")
-        einschaltpunkte = df["Einschaltpunkt"]
-        ausschaltpunkte = df["Ausschaltpunkt"]
-        kompressor_status = df["Kompressor"]
-        power_sources = df["PowerSource"]
-        solar_ueberschuss = df["Solarüberschuss"]
-
+        # 9. Farbschema für Energiequelle
         color_map = {
             "Direkter PV-Strom": "green",
             "Strom aus der Batterie": "yellow",
@@ -609,66 +648,81 @@ async def get_boiler_temperature_history(session, hours, state, config):
             "Unbekannt": "gray"
         }
 
-        untere_grenze = int(config["Heizungssteuerung"].get("UNTERER_FUEHLER_MIN", 20))
-        obere_grenze = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
-
+        # 10. Plot erstellen
         plt.figure(figsize=(12, 6))
-
         shown_labels = set()
 
-        for source, color in color_map.items():
-            mask = (power_sources == source) & (kompressor_status == 1)
-            if mask.any():
-                label = f"Kompressor EIN ({source})"
-                plt.fill_between(
-                    timestamps[mask],
-                    0, max(untere_grenze, obere_grenze) + 5,
-                    color=color,
-                    alpha=0.3,
-                    label=label
-                )
-                shown_labels.add(label)
+        # 11. Kompressoreinschaltphasen farbig markieren
+        if "Kompressor" in df.columns and "PowerSource" in df.columns:
+            df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0).astype(int)
+            for source, color in color_map.items():
+                mask = (df["PowerSource"] == source) & (df["Kompressor"] == 1)
+                if mask.any():
+                    label = f"Kompressor EIN ({source})"
+                    plt.fill_between(
+                        df["Zeitstempel"][mask], y_min, y_max,
+                        color=color, alpha=0.2, label=label
+                    )
+                    shown_labels.add(label)
 
-        if t_oben is not None:
-            plt.plot(timestamps, t_oben, label="T_Oben", marker="o", color="blue")
-        if t_unten is not None:
-            plt.plot(timestamps, t_unten, label="T_Unten", marker="x", color="red")
-        if t_mittig is not None:
-            plt.plot(timestamps, t_mittig, label="T_Mittig", marker="^", color="purple")
+        # 12. Temperaturen plotten
+        for col, color, marker, linestyle in [
+            ("T_Oben", "blue", "-"),
+            ("T_Unten", "red", "-"),
+            ("T_Mittig", "purple", "-"),
+            ("T_Verd", "gray", "--")
+        ]:
+            if col in df.columns and df[col].notna().any():
+                plt.plot(df["Zeitstempel"], df[col], label=col, marker=marker, color=color, linestyle=linestyle, linewidth=1.2)
 
-        plt.plot(timestamps, einschaltpunkte, label="Einschaltpunkt (historisch)", linestyle="--", color="green")
-        plt.plot(timestamps, ausschaltpunkte, label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
+        # 13. Historische Sollwerte
+        if "Einschaltpunkt" in df.columns:
+            df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").ffill()
+            plt.plot(df["Zeitstempel"], df["Einschaltpunkt"], label="Einschaltpunkt (historisch)", linestyle="--", color="green")
 
-        if solar_ueberschuss.any():
+        if "Ausschaltpunkt" in df.columns:
+            df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").ffill()
+            plt.plot(df["Zeitstempel"], df["Ausschaltpunkt"], label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
+
+        # 14. Aktuelle Sollwerte
+        if state.solar_ueberschuss_aktiv:
             plt.axhline(y=state.aktueller_einschaltpunkt, color="purple", linestyle="-.",
-                        label=f"Einschaltpunkt ({state.aktueller_einschaltpunkt}°C)")
-            plt.axhline(y=state.aktueller_ausschaltpunkt, color="cyan", linestyle="-.",
-                        label=f"Ausschaltpunkt ({state.aktueller_ausschaltpunkt}°C)")
+                        label=f"Einschaltpunkt (aktuell): {state.aktueller_einschaltpunkt:.1f}°C")
+        plt.axhline(y=state.aktueller_ausschaltpunkt, color="cyan", linestyle="-.",
+                    label=f"Ausschaltpunkt (aktuell): {state.aktueller_ausschaltpunkt:.1f}°C")
 
+        # 15. Formatierung
         plt.xlim(time_ago, now)
-        plt.ylim(0, max(untere_grenze, obere_grenze) + 5)
+        plt.ylim(y_min, y_max)
         plt.xlabel("Zeit")
         plt.ylabel("Temperatur (°C)")
-        plt.title(f"Boiler-Temperaturverlauf (letzte {hours} Stunden)")
-        plt.grid(True)
+        plt.title(f"Boiler-Temperaturverlauf – Letzte {hours} Stunden")
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.xticks(rotation=45)
         plt.legend(loc="lower left")
         plt.tight_layout()
 
+        # 16. Bild speichern und senden
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=100)
+        plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
         buf.seek(0)
         plt.close()
 
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
-        form.add_field("caption", f"📈 Verlauf {hours}h (T_Oben = blau, T_Unten = rot, T_Mittig = lila)")
+        caption = f"📈 Verlauf {hours}h | T_Oben = blau | T_Unten = rot | T_Mittig = lila | T_Verd = grau gestrichelt"
+        form.add_field("caption", caption[:200])
         form.add_field("photo", buf, filename="temperature_graph.png", content_type="image/png")
 
-        async with session.post(url, data=form) as response:
-            response.raise_for_status()
-            logging.info(f"Temperaturdiagramm für {hours}h gesendet.")
+        async with session.post(url, data=form, timeout=30) as response:
+            if response.status == 200:
+                logging.info(f"Temperaturdiagramm für {hours}h gesendet.")
+            else:
+                error_text = await response.text()
+                logging.error(f"Fehler beim Senden des Diagramms: {response.status} – {error_text}")
+                await send_telegram_message(session, state.chat_id, "Fehler beim Senden des Diagramms.", state.bot_token)
+
         buf.close()
 
     except Exception as e:
@@ -677,7 +731,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
             session, state.chat_id,
             f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}", state.bot_token
         )
-
 async def get_runtime_bar_chart(session, days=7, state=None):
     """Erstellt ein Balkendiagramm der Kompressorlaufzeiten nach Energiequelle (nur wenn Kompressor == 'EIN')"""
     if state is None:
@@ -698,7 +751,45 @@ async def get_runtime_bar_chart(session, days=7, state=None):
             "Unbekannt": [timedelta() for _ in date_range]
         }
 
-        df = pd.read_csv("heizungsdaten.csv", on_bad_lines="skip", engine="python")
+        # 1. Vorfilterung: Nur relevante Zeilen laden (ohne gesamte Datei einzulesen)
+        file_path = "heizungsdaten.csv"
+        if not os.path.isfile(file_path):
+            await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
+            return
+
+        logging.debug(f"Lese nur Zeilen aus den letzten {hours} Stunden aus {file_path}")
+        relevant_lines = []
+        header = None
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not header:
+                        header = line.strip()
+                        relevant_lines.append(header)
+                        continue
+                    try:
+                        timestamp_str = line.split(",")[0]
+                        timestamp = pd.to_datetime(timestamp_str, errors='coerce')
+                        if pd.isna(timestamp):
+                            continue
+                        timestamp = timestamp.tz_localize(
+                            local_tz) if timestamp.tzinfo is None else timestamp.astimezone(local_tz)
+                        if time_ago <= timestamp <= now:
+                            relevant_lines.append(line.strip())
+                    except Exception as e:
+                        logging.warning(f"Konnte Zeile nicht verarbeiten: {e}")
+        except Exception as e:
+            logging.error(f"Fehler beim Lesen der CSV-Zeilen: {e}")
+            await send_telegram_message(session, state.chat_id, "Fehler beim Lesen der CSV-Zeilen.", state.bot_token)
+            return
+
+        if len(relevant_lines) < 2:
+            await send_telegram_message(session, state.chat_id,
+                                        f"Keine Daten für die letzten {hours} Stunden vorhanden.", state.bot_token)
+            return
+
+        # 2. DataFrame erstellen
+        df = pd.DataFrame(relevant_lines[1:], columns=relevant_lines[0].split(","))
         if "Zeitstempel" not in df.columns or "Kompressor" not in df.columns or "PowerSource" not in df.columns:
             raise ValueError("Notwendige Spalten fehlen in der CSV.")
 
