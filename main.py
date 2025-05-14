@@ -1805,6 +1805,11 @@ async def main_loop(config, state, session):
                     pause_ok = True
                     reason = None
                     if not state.kompressor_ein:
+                        # Sicherstellen, dass last_compressor_off_time nie None ist
+                        if state.last_compressor_off_time is None:
+                            set_last_compressor_off_time(state, now - state.min_pause)
+                            logging.warning(
+                                "last_compressor_off_time war None zur Laufzeit – wurde auf gültigen Wert gesetzt.")
                         time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
                         logging.debug(
                             f"Prüfe Mindestpause: last_compressor_off_time={state.last_compressor_off_time}, now={now}, time_since_off={time_since_off}")
