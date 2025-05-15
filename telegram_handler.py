@@ -552,10 +552,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
         # 3. Zeitstempel manuell parsen
         logging.debug(f"Erste Zeitstempel vor Parsing: {df['Zeitstempel'].head().tolist()}")
         try:
-            # Versuche zunächst Standardformat, falls nicht erfolgreich, spezifisches Format
             df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce')
-            # Optional: Wenn ein spezifisches Format bekannt ist, z. B. DD.MM.YYYY HH:MM:SS
-            # df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], format="%d.%m.%Y %H:%M:%S", errors='coerce')
             logging.debug(f"Zeitstempel-Datentyp nach Parsing: {df['Zeitstempel'].dtype}")
         except Exception as e:
             logging.error(f"❌ Fehler beim Parsen der Zeitstempel: {e}", exc_info=True)
@@ -571,7 +568,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
 
         if df.empty:
             logging.warning(f"❌ Keine gültigen Daten nach Zeitstempel-Parsing für die letzten {hours} Stunden.")
-            # Fallback: Neueste verfügbare Daten anzeigen
             try:
                 latest_data = pd.read_csv(file_path, usecols=["Zeitstempel"])
                 latest_data["Zeitstempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
@@ -605,7 +601,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
 
         if df.empty:
             logging.warning(f"❌ Keine Daten für die letzten {hours} Stunden gefunden.")
-            # Fallback: Neueste verfügbare Daten anzeigen
             try:
                 latest_data = pd.read_csv(file_path, usecols=["Zeitstempel"])
                 latest_data["Zeitstempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
@@ -665,15 +660,15 @@ async def get_boiler_temperature_history(session, hours, state, config):
                     )
                     shown_labels.add(label)
 
-        # 12. Temperaturen plotten
-        for col, color, marker, linestyle in [
+        # 12. Temperaturen plotten (ohne Marker)
+        for col, color, linestyle in [
             ("T_Oben", "blue", "-"),
             ("T_Unten", "red", "-"),
             ("T_Mittig", "purple", "-"),
             ("T_Verd", "gray", "--")
         ]:
             if col in df.columns and df[col].notna().any():
-                plt.plot(df["Zeitstempel"], df[col], label=col, marker=marker, color=color, linestyle=linestyle, linewidth=1.2)
+                plt.plot(df["Zeitstempel"], df[col], label=col, color=color, linestyle=linestyle, linewidth=1.2)
 
         # 13. Historische Sollwerte
         if "Einschaltpunkt" in df.columns:
