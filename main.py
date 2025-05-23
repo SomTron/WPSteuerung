@@ -1530,17 +1530,28 @@ async def main_loop(config, state, session):
                 logging.debug(f"Schleifeniteration: {now}")
                 solar_window_conditions_met_to_start = True  # Immer erlauben, außer im Solarfenster und Quelle passt nicht
 
-
-                # Sicherstellen, dass last_compressor_off_time gültig ist
-                if state.last_compressor_off_time is None:
-                    set_last_compressor_off_time(state, now - state.min_pause)
-                    logging.warning("last_compressor_off_time war None zur Laufzeit – wurde auf gültigen Wert gesetzt.")
-
-                # Mindestpause prüfen (mit Cooldown)
-                time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
+                # Konsolidierte Prüfung auf Mindestpause
                 pause_ok = True
                 reason = None
+                temp_conditions_met_to_start = False  # Standardwert setzen
+                solar_window_conditions_met_to_start = False  # Standardwert setzen
+
+                # Sicherstellen, dass t_boiler_oben, t_boiler_mittig, und t_boiler_unten definiert sind
+                t_boiler_oben = None
+                t_boiler_mittig = None
+                t_boiler_unten = None
+
                 if not state.kompressor_ein:
+                    # Sicherstellen, dass last_compressor_off_time nie None ist
+                    if state.last_compressor_off_time is None:
+                        set_last_compressor_off_time(state, now - state.min_pause)
+                        logging.warning(
+                            "last_compressor_off_time war None zur Laufzeit – wurde auf gültigen Wert gesetzt.")
+
+                    time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
+                    logging.debug(
+                        f"Prüfe Mindestpause: last_compressor_off_time={state.last_compressor_off_time}, now={now}, time_since_off={time_since_off}")
+
                     if time_since_off < state.min_pause:
                         pause_ok = False
                         pause_remaining = state.min_pause - time_since_off
@@ -1550,15 +1561,55 @@ async def main_loop(config, state, session):
                         same_reason = getattr(state, 'last_pause_reason', None) == reason
                         last_logged = getattr(state, 'last_pause_log', None)
                         enough_time_passed = last_logged is None or \
-                            (safe_timedelta(now, last_logged).total_seconds() > COOLDOWN_SEKUNDEN)
+                                             (safe_timedelta(now, last_logged).total_seconds() > COOLDOWN_SEKUNDEN)
 
+                        # Berechnen Sie temp_conditions_met_to_start und solar_window_conditions_met_to_start
+                        temp_conditions_met_to_start = (
+                                t_boiler_oben < state.aktueller_einschaltpunkt or
+                                t_boiler_mittig < state.aktueller_einschaltpunkt or
+                                t_boiler_unten < state.aktueller_einschaltpunkt
+                        )
+                        solar_window_conditions_met_to_start = True  # Beispielwert, anpassen falls nötig
+
+                        if temp_conditions_met_to_start and solar_window_conditions_met_to_start:
+                            state.ausschluss_grund = reason
+
+                            if not same_reason or enough_time_passed:
+                                logging.info(f"Kompressor START VERHINDERT: {reason}")
+                                # Telegram-Meldung nur bei Änderung oder Cooldown abgelaufen
+                                if state.bot_token and state.chat_id:
+                                    await send_telegram_message(
+                                        session, state.chat_id,
+                                        f"⚠️ Kompressor START VERHINDERT: {reason}",
+                                        state.bot_token
+                                    )
+                                    state.last_pause_telegram_notification = now
+
+                                state.last_pause_reason = reason
+                                state.last_pause_log = now
+                            else:
+                                state.ausschluss_grund = reason  # Halte Grund bei, solange keine neue Meldung nötig ist
+                        else:
+                            state.ausschluss_grund = None  # Kein Start gewünscht → kein Grund zur Meldung
+
+                        # Allgemeines Logging immer zeigen, um Verhalten transparent zu halten
                         if not same_reason or enough_time_passed:
                             logging.info(f"Kompressor bleibt aus: {reason}")
                             if state.bot_token and state.chat_id:
-                                await send_telegram_message(session, state.chat_id,
-                                    f"⚠️ Kompressor bleibt aus: {reason}", state.bot_token)
+                                await send_telegram_message(
+                                    session, state.chat_id,
+                                    f"⚠️ Kompressor bleibt aus: {reason}",
+                                    state.bot_token
+                                )
+                                state.last_pause_telegram_notification = now
                             state.last_pause_reason = reason
                             state.last_pause_log = now
+                    else:
+                        # Mindestpause abgelaufen → alle Pause-bezogenen Flags zurücksetzen
+                        state.last_pause_reason = None
+                        state.last_pause_log = None
+                        state.last_pause_telegram_notification = None
+                        state.ausschluss_grund = None
 
                 # Debugging: Zeitstempelstatus
                 logging.debug(f"Zeitstempelstatus: "
@@ -1831,69 +1882,6 @@ async def main_loop(config, state, session):
                                       f"T_Oben={t_boiler_oben:.1f}°C, T_Mittig={t_boiler_mittig:.1f}°C, "
                                       f"Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
 
-                    # Prüfung auf Mindestpause
-                    pause_ok = True
-                    reason = None
-                    if not state.kompressor_ein:
-                        # Sicherstellen, dass last_compressor_off_time nie None ist
-                        if state.last_compressor_off_time is None:
-                            set_last_compressor_off_time(state, now - state.min_pause)
-                            logging.warning(
-                                "last_compressor_off_time war None zur Laufzeit – wurde auf gültigen Wert gesetzt.")
-                        time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
-                        logging.debug(
-                            f"Prüfe Mindestpause: last_compressor_off_time={state.last_compressor_off_time}, now={now}, time_since_off={time_since_off}")
-
-                        if time_since_off < state.min_pause:
-                            pause_ok = False
-                            pause_remaining = state.min_pause - time_since_off
-                            reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
-                            same_reason = getattr(state, 'last_pause_reason', None) == reason
-                            enough_time_passed = not hasattr(state, 'last_pause_log') or \
-                                                 (safe_timedelta(now,
-                                                                 state.last_pause_log).total_seconds() > 300 or not same_reason)
-
-                            # --- START: Nur setzen, wenn ein Start gewünscht ist ---
-                            if temp_conditions_met_to_start and solar_window_conditions_met_to_start:
-                                state.ausschluss_grund = reason
-
-                                if not same_reason or enough_time_passed:
-                                    logging.info(f"Kompressor START VERHINDERT: {reason}")
-                                    # Telegram-Meldung nur bei Änderung oder Cooldown abgelaufen
-                                    if state.bot_token and state.chat_id:
-                                        await send_telegram_message(
-                                            session, state.chat_id,
-                                            f"⚠️ Kompressor START VERHINDERT: {reason}",
-                                            state.bot_token
-                                        )
-                                        state.last_pause_telegram_notification = now
-
-                                    state.last_pause_reason = reason
-                                    state.last_pause_log = now
-                                else:
-                                    state.ausschluss_grund = reason  # Halte Grund bei, solange keine neue Meldung nötig ist
-                            else:
-                                state.ausschluss_grund = None  # Kein Start gewünscht → kein Grund zur Meldung
-
-                            # Allgemeines Logging immer zeigen, um Verhalten transparent zu halten
-                            if not same_reason or enough_time_passed:
-                                logging.info(f"Kompressor bleibt aus: {reason}")
-                                if state.bot_token and state.chat_id:
-                                    await send_telegram_message(
-                                        session, state.chat_id,
-                                        f"⚠️ Kompressor bleibt aus: {reason}",
-                                        state.bot_token
-                                    )
-                                    state.last_pause_telegram_notification = now
-                                state.last_pause_reason = reason
-                                state.last_pause_log = now
-
-                        else:
-                            # Mindestpause abgelaufen → alle Pause-bezogenen Flags zurücksetzen
-                            state.last_pause_reason = None
-                            state.last_pause_log = None
-                            state.last_pause_telegram_notification = None
-                            state.ausschluss_grund = None
 
                     # Übergangsmodus
                     # --- Berechne, ob Solar-Fenster erfüllt ist ---
