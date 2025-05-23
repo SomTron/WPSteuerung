@@ -10,6 +10,9 @@ letzte Logs anzeigen
 
 tail -n 200 heizungssteuerung.log
 
+grep -i "error" heizungssteuerung.log
+
+
 wpsteuerung.ddns.net
 
 sudo systemctl restart my_script.service
