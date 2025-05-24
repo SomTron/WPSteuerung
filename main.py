@@ -144,6 +144,8 @@ class State:
         self.start_time = None  # Startzeit des Kompressors (None, wenn aus)
         self.last_compressor_on_time = now
         self.last_compressor_off_time = now - timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
+        logging.debug(
+            f"[State.__init__] Initialer last_compressor_off_time: {self.last_compressor_off_time} (tzinfo={self.last_compressor_off_time.tzinfo})")
         self.last_log_time = now - timedelta(minutes=1)
         self._last_config_check = now
         self.last_kompressor_status = None
@@ -185,6 +187,17 @@ class State:
             self.min_laufzeit = timedelta(minutes=10)
             self.min_pause = timedelta(minutes=20)
             self.verdampfertemperatur = 6.0
+
+        # --- Erhöhte Schwellwerte ---
+        try:
+            self.einschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", "42"))
+            self.ausschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", "48"))
+        except ValueError as e:
+            logging.warning(f"Fehler beim Einlesen der erhöhten Schwellwerte: {e}. Verwende Standardwerte.")
+            self.einschaltpunkt_erhoeht = 42
+            self.ausschaltpunkt_erhoeht = 48
+
+
         # --- Übergangsmodus-Zeitpunkte ---
         try:
             self.uebergangsmodus_start = datetime.strptime(
@@ -193,8 +206,8 @@ class State:
             self.uebergangsmodus_ende = datetime.strptime(
                 config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "00:00"), "%H:%M"
             ).time()
-            logging.debug(
-                f"Übergangsmodus-Zeiten gesetzt: Start={self.uebergangsmodus_start}, Ende={self.uebergangsmodus_ende}")
+            #logging.debug(
+            #   f"Übergangsmodus-Zeiten gesetzt: Start={self.uebergangsmodus_start}, Ende={self.uebergangsmodus_ende}")
         except Exception as e:
             logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
             self.uebergangsmodus_start = time(0, 0)
@@ -383,15 +396,15 @@ async def safe_send_telegram_message(bot_token, chat_id, message):
 async def get_solax_data(session, state):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
-    logging.debug(f"get_solax_data: now={now}, tzinfo={now.tzinfo}, last_api_call={state.last_api_call}, tzinfo={state.last_api_call.tzinfo if state.last_api_call else None}")
+    #logging.debug(f"get_solax_data: now={now}, tzinfo={now.tzinfo}, last_api_call={state.last_api_call}, tzinfo={state.last_api_call.tzinfo if state.last_api_call else None}")
 
     # Stelle sicher, dass state.last_api_call zeitzonenbewusst ist
     if state.last_api_call and state.last_api_call.tzinfo is None:
         state.last_api_call = local_tz.localize(state.last_api_call)
-        logging.debug(f"state.last_api_call lokalisiert: {state.last_api_call}")
+        #logging.debug(f"state.last_api_call lokalisiert: {state.last_api_call}")
 
     if state.last_api_call and (now - state.last_api_call) < timedelta(minutes=5):
-        logging.debug("Verwende zwischengespeicherte API-Daten.")
+        #logging.debug("Verwende zwischengespeicherte API-Daten.")
         return state.last_api_data
 
     max_retries = 3
@@ -406,7 +419,7 @@ async def get_solax_data(session, state):
                     state.last_api_data = data.get("result")
                     state.last_api_timestamp = now
                     state.last_api_call = now
-                    logging.debug(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
+                    #logging.debug(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
                     return state.last_api_data
                 else:
                     logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
@@ -636,7 +649,7 @@ def read_temperature(sensor_id):
                 if temp < -20 or temp > 100:
                     logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                     return None
-                logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
+                #logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
                 return temp
             else:
                 logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")
@@ -756,9 +769,9 @@ async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config):
             logging.warning(
                 f"Fühlerdifferenz erkannt: oben={t_boiler_oben:.1f}°C, unten={t_boiler_unten:.1f}°C, "
                 f"Differenz={abs(t_boiler_oben - t_boiler_unten):.1f}°C")
-        logging.debug(
-            f"Sensorprüfung: T_Oben={'N/A' if t_boiler_oben is None else t_boiler_oben:.1f}°C, "
-            f"T_Unten={'N/A' if t_boiler_unten is None else t_boiler_unten:.1f}°C, SICHERHEITS_TEMP={SICHERHEITS_TEMP}°C")
+        #logging.debug(
+        #    f"Sensorprüfung: T_Oben={'N/A' if t_boiler_oben is None else t_boiler_oben:.1f}°C, "
+        #    f"T_Unten={'N/A' if t_boiler_unten is None else t_boiler_unten:.1f}°C, SICHERHEITS_TEMP={SICHERHEITS_TEMP}°C")
     except Exception as e:
         fehler = "Sensorprüfungsfehler!"
         logging.error(f"Fehler bei Sensorprüfung: {e}", exc_info=True)
@@ -818,6 +831,8 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
 
                 # Prüfe minimale Pause
                 time_since_off = now - state.last_compressor_off_time if state.last_compressor_off_time else timedelta(days=999)
+                logging.debug(
+                    f"[set_kompressor_status] last_compressor_off_time aktualisiert: {state.last_compressor_off_time} (tzinfo={state.last_compressor_off_time.tzinfo})")
                 if time_since_off < min_pause and not force:
                     grund = f"Minimale Pause ({min_pause.total_seconds():.0f}s) nicht erreicht ({time_since_off.total_seconds():.0f}s)"
                     if state.ausschluss_grund != grund or (state.last_ausschluss_log is None or (now - state.last_ausschluss_log) >= timedelta(seconds=30)):
@@ -1026,7 +1041,7 @@ async def reload_config(session, state):
         current_hash = calculate_file_hash("config.ini")
 
         if hasattr(state, "last_config_hash") and state.last_config_hash == current_hash:
-            logging.debug("Keine Änderung an der Konfigurationsdatei festgestellt.")
+            #logging.debug("Keine Änderung an der Konfigurationsdatei festgestellt.")
             return
 
         logging.info("Neue Konfiguration erkannt – wird geladen...")
@@ -1049,6 +1064,10 @@ async def reload_config(session, state):
 
         state.aktueller_ausschaltpunkt = ausschalt
         state.aktueller_einschaltpunkt = einschalt
+
+        # --- Erhöhte Sollwerte ---
+        state.einschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42)
+        state.ausschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "AUSSCHALTPUNKT_ERHOEHT", 48)
 
         min_pause_min = get_int_checked("Heizungssteuerung", "MIN_PAUSE", 20, 0, 1440)
         state.min_pause = timedelta(minutes=min_pause_min)
@@ -1102,7 +1121,7 @@ def calculate_file_hash(file_path):
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
         hash_value = sha256_hash.hexdigest()
-        logging.debug(f"Hash für {file_path} berechnet: {hash_value}")
+        #logging.debug(f"Hash für {file_path} berechnet: {hash_value}")
         return hash_value
     except Exception as e:
         logging.error(f"Fehler beim Berechnen des Hash-Werts für {file_path}: {e}")
@@ -1170,8 +1189,8 @@ def is_nighttime(config):
         else:
             is_night = start_time_minutes <= now_time <= end_time_minutes
 
-        logging.debug(
-            f"Nachtzeitprüfung: Jetzt={now_time}, Start={start_time_minutes}, Ende={end_time_minutes}, Ist Nacht={is_night}")
+        #logging.debug(
+        #    f"Nachtzeitprüfung: Jetzt={now_time}, Start={start_time_minutes}, Ende={end_time_minutes}, Ist Nacht={is_night}")
         return is_night
     except Exception as e:
         logging.error(f"Fehler in is_nighttime: {e}")
@@ -1191,8 +1210,13 @@ def ist_uebergangsmodus_aktiv(state) -> bool:
 
 
 def calculate_shutdown_point(config, is_night, solax_data, state):
-    """Berechnet die Sollwerte basierend auf Modus und Absenkungen."""
+    """
+    Berechnet die Sollwerte basierend auf Modus und Absenkungen.
+    ACHTUNG: 'config' wird nur bei Fehlern verwendet – im Normalfall wird state.config genutzt.
+    """
     try:
+        # Immer die aktuellste Konfiguration verwenden!
+        config = state.config
         nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
         urlaubs_reduction = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
         total_reduction = nacht_reduction + urlaubs_reduction
@@ -1275,7 +1299,7 @@ def is_data_old(timestamp):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
     is_old = timestamp and (now - timestamp) > timedelta(minutes=15)
-    logging.debug(f"Prüfe Solax-Datenalter: now={now}, tzinfo={now.tzinfo}, Zeitstempel={timestamp}, tzinfo={timestamp.tzinfo if timestamp else None}, Ist alt={is_old}")
+    #logging.debug(f"Prüfe Solax-Datenalter: now={now}, tzinfo={now.tzinfo}, Zeitstempel={timestamp}, tzinfo={timestamp.tzinfo if timestamp else None}, Ist alt={is_old}")
     return is_old
 
 
@@ -1429,6 +1453,7 @@ def set_last_compressor_off_time(state, value):
     """Hilfsfunktion zum Setzen von last_compressor_off_time mit Debugging."""
     logging.debug(f"Setze last_compressor_off_time: {state.last_compressor_off_time} -> {value}")
     state.last_compressor_off_time = value
+    
 
 # Asynchrone Hauptschleife
 async def main_loop(config, state, session):
@@ -1588,6 +1613,8 @@ async def main_loop(config, state, session):
                                 state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
                                 state.total_runtime_today += state.last_runtime
                                 logging.info(f"Kompressor ausgeschaltet (Sicherheitsabschaltung). Laufzeit: {state.last_runtime}")
+                                logging.debug(
+                                    f"[Hauptschleife] Kompressor ausgeschaltet, last_compressor_off_time auf {state.last_compressor_off_time} gesetzt.")
                             else:
                                 logging.critical("Kritischer Fehler: Kompressor konnte trotz Übertemperatur nicht ausgeschaltet werden!")
                                 await send_telegram_message(
@@ -1651,6 +1678,10 @@ async def main_loop(config, state, session):
                 if not state.kompressor_ein and temp_conditions_met_to_start and solar_window_conditions_met_to_start:
                     time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
                     logging.debug(f"Prüfe Mindestpause: time_since_off={time_since_off}, min_pause={state.min_pause}")
+                    logging.debug(f"[Hauptschleife] now={now} (tzinfo={now.tzinfo}), "
+                                  f"last_compressor_off_time={state.last_compressor_off_time} (tzinfo={state.last_compressor_off_time.tzinfo}), "
+                                  f"time_since_off={time_since_off.total_seconds()}s, "
+                                  f"min_pause={state.min_pause.total_seconds()}s")
                     if time_since_off < state.min_pause:
                         pause_ok = False
                         pause_remaining = state.min_pause - time_since_off
@@ -1706,10 +1737,11 @@ async def main_loop(config, state, session):
 
                 # Sollwerte berechnen
                 try:
-                    is_night = await asyncio.to_thread(is_nighttime, config)
-                    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+                    is_night = await asyncio.to_thread(is_nighttime, state.config)  # <- hier state.config nutzen
+                    nacht_reduction = int(state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
                     ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv = await asyncio.to_thread(
-                        calculate_shutdown_point, config, is_night, solax_data, state)
+                        calculate_shutdown_point, state.config, is_night, solax_data,
+                        state)  # <- state.config übergeben
                     state.aktueller_ausschaltpunkt = ausschaltpunkt
                     state.aktueller_einschaltpunkt = einschaltpunkt
                     state.solar_ueberschuss_aktiv = solar_ueberschuss_aktiv

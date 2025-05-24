@@ -11,7 +11,7 @@ letzte Logs anzeigen
 tail -n 200 heizungssteuerung.log
 
 grep -i "error" heizungssteuerung.log
-
+grep -i "info" heizungssteuerung.log
 
 wpsteuerung.ddns.net
 
