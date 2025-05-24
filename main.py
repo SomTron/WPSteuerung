@@ -1395,7 +1395,8 @@ async def main_loop(config, state, session):
         else:
             logging.info("Kompressor ist beim Start ausgeschaltet (GPIO LOW)")
             state.kompressor_ein = False
-            set_last_compressor_off_time(state, now)
+            set_last_compressor_off_time(state, now - state.min_pause)
+
 
         # LCD-Initialisierung
         await initialize_lcd(session)
