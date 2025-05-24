@@ -1554,6 +1554,10 @@ async def main_loop(config, state, session):
                 )
                 state.t_boiler = t_boiler
 
+                # Initialisierung der Einschaltbedingungen
+                temp_conditions_met_to_start = False
+                solar_window_conditions_met_to_start = True
+
                 # Debugging-Logs für Sensorwerte
                 #logging.debug(f"Sensorwerte: T_Oben={t_boiler_oben if t_boiler_oben is not None else 'N/A'}°C, "
                 #              f"T_Mittig={t_boiler_mittig if t_boiler_mittig is not None else 'N/A'}°C, "
@@ -1641,10 +1645,10 @@ async def main_loop(config, state, session):
                     await asyncio.sleep(2)
                     continue
 
-                # Konsolidierte Prüfung auf Mindestpause
+                # Kompressorsteuerung: Einschaltprüfung
                 pause_ok = True
                 reason = None
-                if not state.kompressor_ein:
+                if not state.kompressor_ein and temp_conditions_met_to_start and solar_window_conditions_met_to_start:
                     time_since_off = safe_timedelta(now, state.last_compressor_off_time, default=timedelta.max)
                     logging.debug(f"Prüfe Mindestpause: time_since_off={time_since_off}, min_pause={state.min_pause}")
                     if time_since_off < state.min_pause:
@@ -1655,7 +1659,7 @@ async def main_loop(config, state, session):
                         same_reason = getattr(state, 'last_pause_reason', None) == reason
                         last_logged = getattr(state, 'last_pause_log', None)
                         enough_time_passed = last_logged is None or (
-                            safe_timedelta(now, last_logged).total_seconds() > COOLDOWN_SEKUNDEN)
+                                safe_timedelta(now, last_logged).total_seconds() > COOLDOWN_SEKUNDEN)
                         if not same_reason or enough_time_passed:
                             logging.info(f"Kompressor START VERHINDERT: {reason}")
                             if state.bot_token and state.chat_id:
