@@ -143,9 +143,7 @@ class State:
         self.last_day = now.date()
         self.start_time = None  # Startzeit des Kompressors (None, wenn aus)
         self.last_compressor_on_time = now
-        self.last_compressor_off_time = now - timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
-        logging.debug(
-            f"[State.__init__] Initialer last_compressor_off_time: {self.last_compressor_off_time} (tzinfo={self.last_compressor_off_time.tzinfo})")
+        self.last_compressor_off_time = now
         self.last_log_time = now - timedelta(minutes=1)
         self._last_config_check = now
         self.last_kompressor_status = None
@@ -682,7 +680,11 @@ async def handle_pressure_check(session, state):
             result = await set_kompressor_status(state, False, force_off=True)
             if result:
                 state.kompressor_ein = False
-                state.last_compressor_off_time = datetime.now(state.local_tz)
+                now_correct = datetime.now(local_tz)  # Sicherstellen, dass aktuelle Zeit verwendet wird
+                set_last_compressor_off_time(state, now_correct)  # Korrekte Zuweisung
+                state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time)
+                state.total_runtime_today += state.last_runtime
+                logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
                 logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
 
         reset_sensor_cache()
@@ -718,7 +720,11 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
             result = await set_kompressor_status(state, False, force_off=True)
             if result:
                 state.kompressor_ein = False
-                state.last_compressor_off_time = datetime.now(state.local_tz)
+                now_correct = datetime.now(local_tz)  # Sicherstellen, dass aktuelle Zeit verwendet wird
+                set_last_compressor_off_time(state, now_correct)  # Korrekte Zuweisung
+                state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time)
+                state.total_runtime_today += state.last_runtime
+                logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
                 logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
             reset_sensor_cache()
         state.ausschluss_grund = fehler
@@ -786,159 +792,158 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
     Args:
         state: Das State-Objekt mit allen relevanten Zuständen und Konfigurationen.
         ein (bool): True, um den Kompressor einzuschalten, False zum Ausschalten.
-        force (bool): True, um Mindestlaufzeit/Mindestpause zu ignorieren (z.B. bei Fehlern oder Sicherheitsabschaltung).
+        force (bool): Wenn True, werden Mindestlaufzeit/Mindestpause ignoriert (z.B. bei Fehlern).
         t_boiler_oben (Optional[float]): Aktuelle obere Boilertemperatur für Sicherheitsabschaltung.
+
     Returns:
         bool: True bei Erfolg, False bei Fehlschlag oder wenn Aktion nicht durchgeführt wurde.
     """
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
+
     max_attempts = 3
     attempt_delay = float(state.config["Heizungssteuerung"].get("GPIO_ATTEMPT_DELAY", 0.1))
 
-    # Konfigurationswerte aus state
-    SICHERHEITS_TEMP = state.sicherheits_temp
-    min_laufzeit = state.min_laufzeit
-    min_pause = state.min_pause
+    # Lese Konfigurationswerte sicher
+    try:
+        SICHERHEITS_TEMP = float(state.config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 52.0))
+        min_laufzeit = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_LAUFZEIT_S", 900)))
+        min_pause = timedelta(minutes=int(state.config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
+    except (KeyError, ValueError, configparser.Error) as e:
+        logging.error(f"Fehler beim Lesen der Konfiguration für set_kompressor_status: {e}. Verwende Standardwerte.")
+        SICHERHEITS_TEMP = 52.0
+        min_laufzeit = timedelta(seconds=900)
+        min_pause = timedelta(minutes=20)
+
+    state.min_laufzeit = min_laufzeit
+    state.min_pause = min_pause
 
     async with state.gpio_lock:
         logging.debug(f"Aufruf set_kompressor_status: Ziel={'EIN' if ein else 'AUS'}, Force={force}, "
                       f"Aktuell kompressor_ein={state.kompressor_ein}")
-
         try:
             if GPIO.getmode() is None:
                 logging.critical("GPIO nicht initialisiert in set_kompressor_status!")
                 return False
 
-            current_physical_state = GPIO.input(GIO21_PIN)
+            current_physical_state = GPIO.input(21)
             current_intended_state = state.kompressor_ein
+
+            if force:
+                logging.debug("Force=True: Sicherheits- und Pausenprüfung übersprungen.")
+                if not ein:
+                    logging.debug("Force=True und Ausschalten: Umgehe alle Prüfungen")
+                    state.start_time = None
 
             if ein:
                 if current_intended_state or current_physical_state == GPIO.HIGH:
                     if not current_intended_state:
                         logging.warning("GPIO war HIGH, obwohl state.kompressor_ein=False. Korrigiere Zustand.")
                         state.kompressor_ein = True
+                        now_correct = datetime.now(local_tz)
+                        state.start_time = now_correct
+                        state.last_compressor_on_time = now_correct
+                        logging.info(f"Kompressor eingeschaltet. Startzeit: {now_correct}")
                     logging.debug("Kompressor ist bereits an oder GPIO ist bereits HIGH.")
                     return True
+            else:
+                if not current_intended_state and current_physical_state == GPIO.LOW:
+                    logging.debug("Kompressor ist bereits aus oder GPIO ist bereits LOW.")
+                    return True
 
-                # Sicherheitsprüfung
-                if t_boiler_oben is None and ein:
-                    logging.warning("Keine Boilertemperatur angegeben. Sicherheitsprüfung übersprungen.")
-                elif t_boiler_oben is not None and t_boiler_oben >= SICHERHEITS_TEMP:
-                    logging.info(f"Kompressor START VERHINDERT: Sicherheitsabschaltung ({t_boiler_oben:.1f}°C >= {SICHERHEITS_TEMP}°C)")
-                    state.ausschluss_grund = f"Sicherheitsabschaltung ({t_boiler_oben:.1f}°C)"
+            if not force and ein and t_boiler_oben is not None and t_boiler_oben >= SICHERHEITS_TEMP:
+                logging.warning(f"Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C >= {SICHERHEITS_TEMP}°C")
+                return False
+
+            if ein and not force and state.kompressor_ein:
+                if state.start_time is None and state.last_compressor_on_time is not None:
+                    state.start_time = state.last_compressor_on_time
+                elapsed_time = now - state.start_time if state.start_time else timedelta(seconds=9999)
+                if elapsed_time.total_seconds() < min_laufzeit.total_seconds() - 0.5:
+                    grund = f"Minimale Laufzeit ({min_laufzeit.total_seconds():.0f}s) nicht erreicht ({elapsed_time.total_seconds():.0f}s)"
+                    if state.ausschluss_grund != grund or (
+                            state.last_ausschluss_log is None or (now - state.last_ausschluss_log) >= timedelta(seconds=30)):
+                        logging.info(f"Kompressor START VERHINDERT: {grund}")
+                        state.ausschluss_grund = grund
+                        state.last_ausschluss_log = now
+                    state.start_time = None
                     return False
 
-                # Prüfe minimale Pause
-                time_since_off = now - state.last_compressor_off_time if state.last_compressor_off_time else timedelta(days=999)
-                logging.debug(
-                    f"[set_kompressor_status] last_compressor_off_time aktualisiert: {state.last_compressor_off_time} (tzinfo={state.last_compressor_off_time.tzinfo})")
-                if time_since_off < min_pause and not force:
+            if not ein and not force:
+                time_since_off = safe_timedelta(now, state.last_compressor_off_time)
+                if time_since_off < min_pause:
                     grund = f"Minimale Pause ({min_pause.total_seconds():.0f}s) nicht erreicht ({time_since_off.total_seconds():.0f}s)"
-                    if state.ausschluss_grund != grund or (state.last_ausschluss_log is None or (now - state.last_ausschluss_log) >= timedelta(seconds=30)):
+                    if state.ausschluss_grund != grund or (
+                            state.last_ausschluss_log is None or (now - state.last_ausschluss_log) >= timedelta(seconds=30)):
                         logging.info(f"Kompressor START VERHINDERT: {grund}")
                         state.ausschluss_grund = grund
                         state.last_ausschluss_log = now
                     return False
 
-                logging.info("Versuche Kompressor EINZUSCHALTEN...")
-                target_gpio_state = GPIO.HIGH
-                success = False
-                for attempt in range(max_attempts):
-                    try:
-                        GPIO.output(GIO21_PIN, target_gpio_state)
-                        await asyncio.sleep(attempt_delay)
-                        if GPIO.input(GIO21_PIN) == target_gpio_state:
-                            logging.info(f"GPIO 21 erfolgreich auf HIGH gesetzt (Versuch {attempt + 1}).")
-                            success = True
-                            break
-                        logging.warning(f"GPIO-Verifikation fehlgeschlagen (Versuch {attempt + 1}): Soll=HIGH, Ist={GPIO.input(GIO21_PIN)}")
-                    except Exception as e:
-                        logging.error(f"Fehler beim Setzen von GPIO 21 auf HIGH (Versuch {attempt + 1}): {e}", exc_info=True)
-                    await asyncio.sleep(attempt_delay)
+            target_gpio = GPIO.HIGH if ein else GPIO.LOW
+            success = False
+            for attempt in range(max_attempts):
+                GPIO.output(21, target_gpio)
+                await asyncio.sleep(attempt_delay)
+                readback = GPIO.input(21)
+                if readback == target_gpio:
+                    success = True
+                    break
 
-                if success:
-                    state.kompressor_ein = True
-                    state.start_time = now
-                    state.last_compressor_on_time = now
-                    state.current_runtime = timedelta()
-                    state.ausschluss_grund = None
-                    logging.info(f"KOMPRESSOR EINGESCHALTET um {now.strftime('%H:%M:%S')}.")
-                    return True
-                else:
+            if not success:
+                if ein:
                     logging.critical(f"Konnte GPIO 21 nicht auf HIGH setzen nach {max_attempts} Versuchen!")
                     state.kompressor_ein = False
+                    now_correct = datetime.now(local_tz)
+                    set_last_compressor_off_time(state, now_correct)
+                    state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time)
+                    state.total_runtime_today += state.last_runtime
                     state.start_time = None
+                    logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
                     if state.bot_token and state.chat_id and state.session:
-                        asyncio.create_task(send_telegram_message(state.session, state.chat_id, "🚨 KRITISCHER FEHLER: Kompressor konnte nicht eingeschaltet werden!", state.bot_token))
+                        asyncio.create_task(send_telegram_message(
+                            state.session, state.chat_id,
+                            "🚨 KRITISCHER FEHLER: Kompressor konnte nicht eingeschaltet werden!",
+                            state.bot_token))
                     return False
-
-            else:  # Ausschalten
-                if not current_intended_state or current_physical_state == GPIO.LOW:
-                    if current_intended_state:
-                        logging.warning("GPIO war LOW, obwohl state.kompressor_ein=True. Korrigiere Zustand.")
-                        state.kompressor_ein = False
-                    logging.debug("Kompressor ist bereits aus oder GPIO ist bereits LOW.")
-                    return True
-
-                # Prüfe minimale Laufzeit
-                start = state.start_time or state.last_compressor_on_time
-                elapsed_time = now - start if start else timedelta()
-                is_safety_shutdown = t_boiler_oben is not None and t_boiler_oben >= SICHERHEITS_TEMP
-
-                if elapsed_time < min_laufzeit and not force and not is_safety_shutdown:
-                    grund = f"Minimale Laufzeit ({min_laufzeit.total_seconds():.0f}s) nicht erreicht ({elapsed_time.total_seconds():.0f}s)"
-                    if state.ausschluss_grund != grund or (state.last_ausschluss_log is None or (now - state.last_ausschluss_log) >= timedelta(seconds=30)):
-                        logging.info(f"Kompressor STOPP VERHINDERT: {grund}")
-                        state.ausschluss_grund = grund
-                        state.last_ausschluss_log = now
-                    return True
-
-                reason = "Sicherheitsabschaltung" if is_safety_shutdown else ("Erzwungen" if force else "Normal")
-                logging.info(f"Versuche Kompressor AUSZUSCHALTEN (Grund: {reason})...")
-                target_gpio_state = GPIO.LOW
-                success = False
-                for attempt in range(max_attempts):
-                    try:
-                        GPIO.output(GIO21_PIN, target_gpio_state)
-                        await asyncio.sleep(attempt_delay)
-                        if GPIO.input(GIO21_PIN) == target_gpio_state:
-                            logging.info(f"GPIO 21 erfolgreich auf LOW gesetzt (Versuch {attempt + 1}).")
-                            success = True
-                            break
-                        logging.warning(f"GPIO-Verifikation fehlgeschlagen (Versuch {attempt + 1}): Soll=LOW, Ist={GPIO.input(GIO21_PIN)}")
-                    except Exception as e:
-                        logging.error(f"Fehler beim Setzen von GPIO 21 auf LOW (Versuch {attempt + 1}): {e}", exc_info=True)
-                    await asyncio.sleep(attempt_delay)
-
-                if success:
-                    state.kompressor_ein = False
-                    state.last_compressor_off_time = now
-                    state.current_runtime = elapsed_time
-                    state.total_runtime_today += state.current_runtime
-                    state.last_runtime = state.current_runtime
-                    state.start_time = None
-                    logging.info(f"KOMPRESSOR AUSGESCHALTET um {now.strftime('%H:%M:%S')}. Laufzeit: {elapsed_time}.")
-                    return True
                 else:
                     logging.critical(f"Konnte GPIO 21 nicht auf LOW setzen nach {max_attempts} Versuchen!")
                     state.kompressor_ein = True
-                    state.start_time = start
+                    now_correct = datetime.now(local_tz)
+                    state.start_time = now_correct
+                    state.last_compressor_on_time = now_correct
+                    logging.info(f"Kompressor eingeschaltet. Startzeit: {now_correct}")
                     if state.bot_token and state.chat_id and state.session:
-                        asyncio.create_task(send_telegram_message(state.session, state.chat_id, "🚨 KRITISCHER FEHLER: Kompressor konnte nicht ausgeschaltet werden!", state.bot_token))
+                        asyncio.create_task(send_telegram_message(
+                            state.session, state.chat_id,
+                            "🚨 KRITISCHER FEHLER: Kompressor konnte nicht ausgeschaltet werden!",
+                            state.bot_token))
                     return False
+
+            if ein:
+                state.kompressor_ein = True
+                now_correct = datetime.now(local_tz)
+                state.start_time = now_correct
+                state.last_compressor_on_time = now_correct
+                state.current_runtime = timedelta()
+                state.ausschluss_grund = None
+                logging.info(f"KOMPRESSOR EINGESCHALTET um {now_correct.strftime('%H:%M:%S')}.")
+            else:
+                state.kompressor_ein = False
+                state.start_time = None
+                now_correct = datetime.now(local_tz)
+                set_last_compressor_off_time(state, now_correct)
+                state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time)
+                state.total_runtime_today += state.last_runtime
+                logging.info(f"KOMPRESSOR AUSGESCHALTET um {now_correct.strftime('%H:%M:%S')}. Laufzeit: {state.last_runtime}")
+
+            return True
 
         except Exception as e:
             logging.error(f"Unerwarteter Fehler in set_kompressor_status: {e}", exc_info=True)
-            current_physical_state = GPIO.input(GIO21_PIN) if GPIO.getmode() is not None else None
-            if current_physical_state is not None:
-                state.kompressor_ein = (current_physical_state == GPIO.HIGH)
-            else:
-                state.kompressor_ein = False
-            if not state.kompressor_ein:
-                state.start_time = None
-            if not ein and state.kompressor_ein and state.bot_token and state.chat_id and state.session:
-                asyncio.create_task(send_telegram_message(state.session, state.chat_id, f"🚨 KRITISCHER FEHLER: Kompressor-Abschaltung fehlgeschlagen: {e}", state.bot_token))
+            current_physical_state = GPIO.input(21) if GPIO.getmode() is not None else None
+            state.kompressor_ein = (current_physical_state == GPIO.HIGH) if current_physical_state is not None else False
+            state.start_time = None
             return False
 
 
@@ -1453,7 +1458,7 @@ def set_last_compressor_off_time(state, value):
     """Hilfsfunktion zum Setzen von last_compressor_off_time mit Debugging."""
     logging.debug(f"Setze last_compressor_off_time: {state.last_compressor_off_time} -> {value}")
     state.last_compressor_off_time = value
-    
+
 
 # Asynchrone Hauptschleife
 async def main_loop(config, state, session):
@@ -1476,12 +1481,15 @@ async def main_loop(config, state, session):
         if actual_gpio_state == GPIO.HIGH:
             logging.info("Kompressor ist beim Start eingeschaltet (GPIO HIGH)")
             state.kompressor_ein = True
-            state.last_compressor_on_time = now
-            set_last_compressor_off_time(state, now - state.min_pause)
+            now = datetime.now(local_tz)
+            state.start_time = now_correct
+            state.last_compressor_on_time = now_correct
+            logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
         else:
             logging.info("Kompressor ist beim Start ausgeschaltet (GPIO LOW)")
             state.kompressor_ein = False
-            set_last_compressor_off_time(state, now - state.min_pause)
+            now_correct = datetime.now(local_tz)
+            set_last_compressor_off_time(state, now_correct)
 
 
         # LCD-Initialisierung
@@ -1542,10 +1550,11 @@ async def main_loop(config, state, session):
         if state.last_compressor_on_time.tzinfo is None:
             state.last_compressor_on_time = local_tz.localize(state.last_compressor_on_time)
         if state.last_compressor_off_time is None:
-            set_last_compressor_off_time(state, now - state.min_pause)
-            logging.info(f"last_compressor_off_time war None, initialisiert auf {state.last_compressor_off_time}")
+            #set_last_compressor_off_time(state, now - state.min_pause)
+            logging.info(f"last_compressor_off_time war None, ausgeklammert initialisiert auf {state.last_compressor_off_time}")
         if state.last_compressor_off_time.tzinfo is None:
-            set_last_compressor_off_time(state, local_tz.localize(state.last_compressor_off_time))
+            #set_last_compressor_off_time(state, local_tz.localize(state.last_compressor_off_time))
+            logging.info(f"last_compressor_off_time.tzinfo war None, ausgeklammert initialisiert auf {state.last_compressor_off_time}")
         state.last_pressure_error_time = state.last_pressure_error_time or now
         if state.last_pressure_error_time.tzinfo is None:
             state.last_pressure_error_time = local_tz.localize(state.last_pressure_error_time)
@@ -1609,7 +1618,7 @@ async def main_loop(config, state, session):
                             result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                             if result:
                                 state.kompressor_ein = False
-                                set_last_compressor_off_time(state, now)
+                                #set_last_compressor_off_time(state, now)
                                 state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
                                 state.total_runtime_today += state.last_runtime
                                 logging.info(f"Kompressor ausgeschaltet (Sicherheitsabschaltung). Laufzeit: {state.last_runtime}")
@@ -1649,7 +1658,7 @@ async def main_loop(config, state, session):
                         result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                         if result:
                             state.kompressor_ein = False
-                            set_last_compressor_off_time(state, now)
+                            #set_last_compressor_off_time(state, now)
                             state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
                             state.total_runtime_today += state.last_runtime
                             logging.info(f"Kompressor ausgeschaltet wegen zu niedriger Verdampfertemperatur. Laufzeit: {state.last_runtime}")
@@ -1682,7 +1691,7 @@ async def main_loop(config, state, session):
                                   f"last_compressor_off_time={state.last_compressor_off_time} (tzinfo={state.last_compressor_off_time.tzinfo}), "
                                   f"time_since_off={time_since_off.total_seconds()}s, "
                                   f"min_pause={state.min_pause.total_seconds()}s")
-                    if time_since_off < state.min_pause:
+                    if time_since_off.total_seconds() < state.min_pause.total_seconds() - 0.5:
                         pause_ok = False
                         pause_remaining = state.min_pause - time_since_off
                         reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
@@ -1764,7 +1773,7 @@ async def main_loop(config, state, session):
                     logging.critical("Inkonsistenz: state.kompressor_ein=True, aber GPIO 21 ist LOW!")
                     state.kompressor_ein = False
                     state.last_shutdown_time = now
-                    set_last_compressor_off_time(state, now)
+                    #set_last_compressor_off_time(state, now)
                     state.start_time = None
                     await send_telegram_message(
                         session, state.chat_id,
@@ -1776,7 +1785,8 @@ async def main_loop(config, state, session):
                     logging.critical("Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
                     result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                     if result:
-                        set_last_compressor_off_time(state, now)
+                        #set_last_compressor_off_time(state, now)
+                        logging.critical(" If result: Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
                     else:
                         logging.critical("Kritischer Fehler: Konnte Kompressor nicht ausschalten!")
                         await send_telegram_message(
@@ -1820,8 +1830,11 @@ async def main_loop(config, state, session):
                     result = await set_kompressor_status(state, True, t_boiler_oben=t_boiler_oben)
                     if result:
                         state.kompressor_ein = True
+                        now = datetime.now(local_tz)
+                        state.start_time = now
+                        state.last_compressor_on_time = now  # ✅ Einheitlich setzen
+                        logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
                         state.ausschluss_grund = None
-                        logging.info(f"Kompressor erfolgreich eingeschaltet. Startzeit: {now}")
                     else:
                         state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler beim Einschalten"
                         logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
@@ -1834,7 +1847,7 @@ async def main_loop(config, state, session):
                         result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                         if result:
                             state.kompressor_ein = False
-                            set_last_compressor_off_time(state, now)
+                            #set_last_compressor_off_time(state, now)
                             state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
                             state.total_runtime_today += state.last_runtime
                             logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
@@ -1855,7 +1868,7 @@ async def main_loop(config, state, session):
                             result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                             if result:
                                 state.kompressor_ein = False
-                                set_last_compressor_off_time(state, now)
+                                #set_last_compressor_off_time(state, now)
                                 state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, default=timedelta())
                                 state.total_runtime_today += state.last_runtime
                                 logging.info(f"Kompressor ausgeschaltet bei Moduswechsel. Laufzeit: {state.last_runtime}")
