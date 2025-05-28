@@ -1813,15 +1813,11 @@ async def main_loop(config, state, session):
                     if t_boiler_unten is not None:
                         temp_conditions_met_to_start = t_boiler_unten < 43.0
                         logging.debug(f"[Solarmodus] T_Unten={t_boiler_unten:.1f}°C, Einschaltpunkt=43.0°C")
-                else:
-                    if t_boiler_oben is not None and t_boiler_mittig is not None:
-                        temp_conditions_met_to_start = (
-                                t_boiler_oben < state.aktueller_einschaltpunkt or
-                                t_boiler_mittig < state.aktueller_einschaltpunkt
-                        )
-                        logging.debug(
-                            f"[Standardmodus] T_Oben={t_boiler_oben:.1f}°C, T_Mittig={t_boiler_mittig:.1f}°C, "
-                            f"Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
+                    else:
+                        if t_boiler_mittig is not None:
+                            temp_conditions_met_to_start = t_boiler_mittig < state.aktueller_einschaltpunkt
+                            logging.debug(
+                                f"[Normalmodus] T_Mittig={t_boiler_mittig:.1f}°C, Einschaltpunkt={state.aktueller_einschaltpunkt}°C")
 
                 # Solar-Fenster prüfen
                 if within_uebergangsmodus and power_source != "Direkter PV-Strom":
@@ -1872,27 +1868,25 @@ async def main_loop(config, state, session):
                                         "🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet!",
                                         state.bot_token
                                     )
-                        else:
-                            if t_boiler_oben is not None and t_boiler_mittig is not None and (
-                                    t_boiler_oben >= state.aktueller_ausschaltpunkt or t_boiler_mittig >= state.aktueller_ausschaltpunkt):
-                                logging.info(f"Abschaltbedingung erreicht: T_Oben={t_boiler_oben:.1f}°C, "
-                                             f"T_Mittig={t_boiler_mittig:.1f}°C, Ausschaltpunkt={state.aktueller_ausschaltpunkt}°C")
-                                result = await set_kompressor_status(state, False, force=True,
-                                                                     t_boiler_oben=t_boiler_oben)
-                                if result:
-                                    state.kompressor_ein = False
-                                    state.last_runtime = safe_timedelta(now, state.last_compressor_on_time,
-                                                                        default=timedelta())
-                                    state.total_runtime_today += state.last_runtime
-                                    logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
-                                    state.ausschluss_grund = None
-                                else:
-                                    logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
-                                    await send_telegram_message(
-                                        session, state.chat_id,
-                                        "🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet!",
-                                        state.bot_token
-                                    )
+                            else:
+                                if t_boiler_mittig is not None and t_boiler_mittig >= state.aktueller_ausschaltpunkt:
+                                    logging.info(
+                                           f"[Normalmodus] Abschaltbedingung erreicht: T_Mittig={t_boiler_mittig:.1f}°C >= {state.aktueller_ausschaltpunkt}°C")
+                                    result = await set_kompressor_status(state, False, force=True,
+                                                                             t_boiler_oben=t_boiler_oben)
+                                    if result:
+                                        state.kompressor_ein = False
+                                        state.last_runtime = safe_timedelta(now, state.last_compressor_on_time,
+                                                                                default=timedelta())
+                                        state.total_runtime_today += state.last_runtime
+                                        logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
+                                        state.ausschluss_grund = None
+                                    else:
+                                        logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
+                                        await send_telegram_message(
+                                            session, state.chat_id,
+                                            "🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet!",
+                                            state.bot_token)
 
                 # Moduswechsel prüfen
                 if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv:
