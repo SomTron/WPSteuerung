@@ -1770,23 +1770,33 @@ async def main_loop(config, state, session):
                 # Prüfe GPIO-Zustand gegen Softwarestatus
                 actual_gpio_state = GPIO.input(21)
                 if state.kompressor_ein and actual_gpio_state == GPIO.LOW:
-                    logging.critical("Inkonsistenz: state.kompressor_ein=True, aber GPIO 21 ist LOW!")
+                    logging.critical(
+                        "Inkonsistenz: state.kompressor_ein=True, aber GPIO 21 ist LOW! Zustand wird korrigiert.")
                     state.kompressor_ein = False
-                    state.last_shutdown_time = now
-                    #set_last_compressor_off_time(state, now)
                     state.start_time = None
+                    now_correct = now
+                    set_last_compressor_off_time(state, now_correct)
+                    state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time)
+                    state.total_runtime_today += state.last_runtime
                     await send_telegram_message(
                         session, state.chat_id,
                         "🚨 Inkonsistenz: Kompressorstatus korrigiert (war eingeschaltet, GPIO war LOW)!",
                         state.bot_token
                     )
                     reset_sensor_cache()
+
                 elif not state.kompressor_ein and actual_gpio_state == GPIO.HIGH:
                     logging.critical("Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
                     result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                     if result:
-                        #set_last_compressor_off_time(state, now)
-                        logging.critical(" If result: Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
+                        now_correct = now
+                        set_last_compressor_off_time(state, now_correct)
+                        state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time)
+                        state.total_runtime_today += state.last_runtime
+                        state.kompressor_ein = False
+                        state.start_time = None
+                        logging.info(
+                            f"Kompressorstatus nach GPIO-Inkonsistenz korrigiert. Laufzeit: {state.last_runtime}")
                     else:
                         logging.critical("Kritischer Fehler: Konnte Kompressor nicht ausschalten!")
                         await send_telegram_message(
