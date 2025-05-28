@@ -677,7 +677,7 @@ async def handle_pressure_check(session, state):
 
     if not pressure_ok:
         if state.kompressor_ein:
-            result = await set_kompressor_status(state, False, force_off=True)
+            result = await set_kompressor_status(state, False, force=True)
             if result:
                 state.kompressor_ein = False
                 now_correct = datetime.now(local_tz)  # Sicherstellen, dass aktuelle Zeit verwendet wird
@@ -717,7 +717,7 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
 
     if fehler:
         if state.kompressor_ein:
-            result = await set_kompressor_status(state, False, force_off=True)
+            result = await set_kompressor_status(state, False, force=True)
             if result:
                 state.kompressor_ein = False
                 now_correct = datetime.now(local_tz)  # Sicherstellen, dass aktuelle Zeit verwendet wird
@@ -1419,11 +1419,11 @@ async def watchdog_gpio(state):
 
                 # Rufe set_kompressor_status korrekt auf:
                 # - Wenn Kompressor eingeschaltet sein soll, dann einschalten (force=False)
-                # - Wenn ausgeschaltet sein soll, dann mit force_off=True ausschalten
+                # - Wenn ausgeschaltet sein soll, dann mit force=True ausschalten
                 if state.kompressor_ein:
-                    await set_kompressor_status(state, True)  # Einschalten (ohne force_off)
+                    await set_kompressor_status(state, True)  # Einschalten (ohne force)
                 else:
-                    await set_kompressor_status(state, False, force_off=True)  # Ausschalten mit force_off
+                    await set_kompressor_status(state, False, force=True)  # Ausschalten mit force
         except Exception as e:
             logging.error(f"Fehler im GPIO-Watchdog: {e}")
 
