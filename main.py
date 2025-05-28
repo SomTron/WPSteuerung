@@ -1797,8 +1797,8 @@ async def main_loop(config, state, session):
                     reset_sensor_cache()
 
                 # Kompressorsteuerung
-                temp_conditions_met_to_start = False
-                solar_window_conditions_met_to_start = True
+                #temp_conditions_met_to_start = False
+                #solar_window_conditions_met_to_start = True
                 if state.solar_ueberschuss_aktiv:
                     if t_boiler_unten is not None:
                         temp_conditions_met_to_start = t_boiler_unten < 43.0
