@@ -1431,21 +1431,17 @@ async def main_loop(config, state, session):
             logging.critical("GPIO-Initialisierung fehlgeschlagen!")
             raise RuntimeError("GPIO-Initialisierung fehlgeschlagen")
 
-        # Prüfe initialen Kompressorstatus
-        actual_gpio_state = GPIO.input(21)
-        if actual_gpio_state == GPIO.HIGH:
-            logging.info("Kompressor ist beim Start eingeschaltet (GPIO HIGH)")
-            state.kompressor_ein = True
-            now = datetime.now(local_tz)
-            state.start_time = now_correct
-            state.last_compressor_on_time = now_correct
-            logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
-        else:
-            logging.info("Kompressor ist beim Start ausgeschaltet (GPIO LOW)")
+
+        # Erzwinge sicheren Startzustand: Kompressor AUS
+        try:
+            GPIO.output(GIO21_PIN, GPIO.LOW)
             state.kompressor_ein = False
+            state.start_time = None
             now_correct = datetime.now(local_tz)
             set_last_compressor_off_time(state, now_correct)
-
+            logging.info("Kompressor-Startstatus gesetzt: AUS (GPIO LOW erzwungen)")
+        except Exception as e:
+            logging.error(f"Fehler beim Setzen des Startzustands für Kompressor: {e}", exc_info=True)
 
         # LCD-Initialisierung
         await initialize_lcd(session)
