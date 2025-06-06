@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import io
 from aiohttp import FormData
 import pandas as pd
+import socket
 import numpy as np
 from typing import Optional
 from dateutil.relativedelta import relativedelta
@@ -394,109 +395,96 @@ async def safe_send_telegram_message(bot_token, chat_id, message):
 async def get_solax_data(session, state):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
-    #logging.debug(f"get_solax_data: now={now}, tzinfo={now.tzinfo}, last_api_call={state.last_api_call}, tzinfo={state.last_api_call.tzinfo if state.last_api_call else None}")
 
-    # Stelle sicher, dass state.last_api_call zeitzonenbewusst ist
     if state.last_api_call and state.last_api_call.tzinfo is None:
         state.last_api_call = local_tz.localize(state.last_api_call)
-        #logging.debug(f"state.last_api_call lokalisiert: {state.last_api_call}")
 
     if state.last_api_call and (now - state.last_api_call) < timedelta(minutes=5):
-        #logging.debug("Verwende zwischengespeicherte API-Daten.")
         return state.last_api_data
 
     max_retries = 3
     retry_delay = 5
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Python aiohttp)",
+        "Host": "www.solaxcloud.com"
+    }
+
     for attempt in range(max_retries):
         try:
             params = {"tokenId": state.token_id, "sn": state.sn}
-            async with session.get(API_URL, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
+            async with session.get(API_URL, params=params, timeout=aiohttp.ClientTimeout(total=30), headers=headers) as response:
                 response.raise_for_status()
                 data = await response.json()
                 if data.get("success"):
                     state.last_api_data = data.get("result")
                     state.last_api_timestamp = now
                     state.last_api_call = now
-                    #logging.debug(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
+                    logging.info(f"Solax-API erfolgreich (Versuch {attempt + 1})")
                     return state.last_api_data
                 else:
                     logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
                     return None
-        except aiohttp.ClientError as e:
-            logging.error(f"Fehler bei der API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-            else:
-                logging.error("Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
-                fallback_data = {
-                    "acpower": 0,
-                    "feedinpower": 0,
-                    "batPower": 0,
-                    "soc": 0,
-                    "powerdc1": 0,
-                    "powerdc2": 0,
-                    "consumeenergy": 0,
-                    "api_fehler": True
-                }
-                return fallback_data
 
-async def fetch_solax_data(session, state, now):
-    """
-    Holt die aktuellen Solax-Daten und gibt sie mit Fallback-Werten zurück.
-    """
-    fallback_data = {
+        except asyncio.TimeoutError:
+            logging.error(f"Timeout bei Solax-API (Versuch {attempt + 1}/{max_retries})")
+        except aiohttp.ClientError as e:
+            logging.error(f"ClientError bei API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
+        except Exception as e:
+            logging.error(f"Unerwarteter Fehler bei API-Anfrage (Versuch {attempt + 1}): {e}", exc_info=True)
+
+        if attempt < max_retries - 1:
+            await asyncio.sleep(retry_delay)
+
+    logging.error("Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
+    return {
         "acpower": 0,
         "feedinpower": 0,
-        "consumeenergy": 0,
         "batPower": 0,
         "soc": 0,
         "powerdc1": 0,
         "powerdc2": 0,
+        "consumeenergy": 0,
         "api_fehler": True
     }
 
-    try:
-        solax_data = await get_solax_data(session, state) or fallback_data.copy()
 
-        # Upload-Zeit prüfen und Verzögerung berechnen (mit Zeitzone)
-        if "utcDateTime" in solax_data:
-            upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert("Europe/Berlin")
-            delay = (now - upload_time).total_seconds()
-            #logging.debug(f"Solax-Datenverzögerung: {delay:.1f} Sekunden")
 
-        acpower = solax_data.get("acpower", "N/A")
-        feedinpower = solax_data.get("feedinpower", "N/A")
-        batPower = solax_data.get("batPower", "N/A")
-        soc = solax_data.get("soc", "N/A")
-        powerdc1 = solax_data.get("powerdc1", "N/A")
-        powerdc2 = solax_data.get("powerdc2", "N/A")
-        consumeenergy = solax_data.get("consumeenergy", "N/A")
+async def solax_updater(state):
+    import socket
+    connector = aiohttp.TCPConnector(family=socket.AF_INET)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Python aiohttp)",
+        "Host": "www.solaxcloud.com"
+    }
 
-        return {
-            "solax_data": solax_data,
-            "acpower": acpower,
-            "feedinpower": feedinpower,
-            "batPower": batPower,
-            "soc": soc,
-            "powerdc1": powerdc1,
-            "powerdc2": powerdc2,
-            "consumeenergy": consumeenergy,
-        }
+    async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
+        while True:
+            try:
+                now = datetime.now(pytz.timezone("Europe/Berlin"))
+                data = await get_solax_data(session, state)
 
-    except Exception as e:
-        logging.error(f"Fehler beim Abrufen von Solax-Daten: {e}", exc_info=True)
+                if data is not None:
+                    result = {
+                        "solax_data": data,
+                        "acpower": data.get("acpower", "N/A"),
+                        "feedinpower": data.get("feedinpower", "N/A"),
+                        "batPower": data.get("batPower", "N/A"),
+                        "soc": data.get("soc", "N/A"),
+                        "powerdc1": data.get("powerdc1", "N/A"),
+                        "powerdc2": data.get("powerdc2", "N/A"),
+                        "consumeenergy": data.get("consumeenergy", "N/A"),
+                    }
+                    state.last_api_data = result
+                    state.last_api_timestamp = now
+                else:
+                    logging.warning("Solax-Updater: Keine Daten erhalten")
 
-        # Fallback-Werte setzen
-        return {
-            "solax_data": fallback_data,
-            "acpower": "N/A",
-            "feedinpower": "N/A",
-            "batPower": "N/A",
-            "soc": "N/A",
-            "powerdc1": "N/A",
-            "powerdc2": "N/A",
-            "consumeenergy": "N/A",
-        }
+            except Exception as e:
+                logging.error(f"Solax-Updater Fehler: {e}", exc_info=True)
+
+            await asyncio.sleep(30)
+
 
 def get_power_source(solax_data):
     pv_production = solax_data.get("powerdc1", 0) + solax_data.get("powerdc2", 0)
@@ -1492,6 +1480,9 @@ async def main_loop(config, state, session):
             is_nighttime_func=is_nighttime
         ))
 
+        # Starte Solax-Updater (asynchrone Hintergrundabfrage)
+        asyncio.create_task(solax_updater(state))
+
         # Initialisiere Zeitstempel
         state.last_log_time = state.last_log_time or now
         if state.last_log_time.tzinfo is None:
@@ -1690,7 +1681,17 @@ async def main_loop(config, state, session):
                     state._last_config_check = now
 
                 # Solax-Daten abrufen
-                solax_result = await fetch_solax_data(session, state, now)
+                solax_result = state.last_api_data or {
+                    "solax_data": {},
+                    "acpower": "N/A",
+                    "feedinpower": "N/A",
+                    "batPower": "N/A",
+                    "soc": "N/A",
+                    "powerdc1": "N/A",
+                    "powerdc2": "N/A",
+                    "consumeenergy": "N/A",
+                }
+
                 solax_data = solax_result["solax_data"]
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
                 logging.debug(f"Power Source: {power_source}")
