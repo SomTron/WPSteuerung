@@ -396,10 +396,13 @@ async def get_solax_data(session, state):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
 
+    # Zeitzone für letzten Call prüfen
     if state.last_api_call and state.last_api_call.tzinfo is None:
         state.last_api_call = local_tz.localize(state.last_api_call)
 
+    # Innerhalb der 5-Minuten-Sperre: nicht erneut abfragen
     if state.last_api_call and (now - state.last_api_call) < timedelta(minutes=5):
+        logging.debug("Solax-API nicht abgefragt – innerhalb 5-Minuten-Zeitraum")
         return state.last_api_data
 
     max_retries = 3
@@ -413,30 +416,43 @@ async def get_solax_data(session, state):
     for attempt in range(max_retries):
         try:
             params = {"tokenId": state.token_id, "sn": state.sn}
-            async with session.get(API_URL, params=params, timeout=aiohttp.ClientTimeout(total=30), headers=headers) as response:
+            logging.debug(f"Solax-API Anfrage wird gesendet (Versuch {attempt + 1}) – params: {params}")
+
+            async with session.get(
+                API_URL,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=30),
+                headers=headers
+            ) as response:
+                logging.debug(f"HTTP-Status: {response.status}")
                 response.raise_for_status()
+
                 data = await response.json()
+                logging.debug(f"Antwortdaten (Roh): {data}")
+
                 if data.get("success"):
-                    state.last_api_data = data.get("result")
+                    result = data.get("result", {})
+                    logging.info(f"Solax-API erfolgreich (Versuch {attempt + 1})")
+                    state.last_api_data = result
                     state.last_api_timestamp = now
                     state.last_api_call = now
-                    logging.info(f"Solax-API erfolgreich (Versuch {attempt + 1})")
-                    return state.last_api_data
+                    return result
                 else:
-                    logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
+                    logging.error(f"Solax-API meldet Fehler: {data.get('exception', 'Unbekannter Fehler')} (Versuch {attempt + 1})")
                     return None
 
         except asyncio.TimeoutError:
-            logging.error(f"Timeout bei Solax-API (Versuch {attempt + 1}/{max_retries})")
+            logging.error(f"❌ Timeout bei Solax-API (Versuch {attempt + 1}/{max_retries})")
         except aiohttp.ClientError as e:
-            logging.error(f"ClientError bei API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
+            logging.error(f"❌ ClientError bei API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
         except Exception as e:
-            logging.error(f"Unerwarteter Fehler bei API-Anfrage (Versuch {attempt + 1}): {e}", exc_info=True)
+            logging.error(f"❌ Unerwarteter Fehler bei API-Anfrage (Versuch {attempt + 1}): {e}", exc_info=True)
 
         if attempt < max_retries - 1:
+            logging.debug(f"Warte {retry_delay} Sekunden vor erneutem Versuch...")
             await asyncio.sleep(retry_delay)
 
-    logging.error("Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
+    logging.error("🚫 Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
     return {
         "acpower": 0,
         "feedinpower": 0,
@@ -467,6 +483,7 @@ async def solax_updater(state):
                 now = datetime.now(pytz.timezone("Europe/Berlin"))
 
                 if not state.last_api_call or (now - state.last_api_call) > timedelta(minutes=5):
+                    logging.debug("Starte Solax-API-Abfrage...")
                     data = await get_solax_data(session, state)
 
                     if data is not None:
@@ -483,7 +500,7 @@ async def solax_updater(state):
                         state.last_api_data = result
                         state.last_api_timestamp = now
                     else:
-                        logging.warning("Solax-Updater: Keine Daten erhalten")
+                        logging.warning("Solax-Updater: get_solax_data() lieferte None – evtl. Timeout oder Fehler")
                 else:
                     logging.debug("Solax-Abfrage übersprungen – noch innerhalb 5 Minuten")
 
