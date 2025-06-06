@@ -458,32 +458,40 @@ async def solax_updater(state):
         "Host": "www.solaxcloud.com"
     }
 
+    # 👉 Warten nach Skriptstart (z 60 Sekunden)
+    await asyncio.sleep(60)
+
     async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
         while True:
             try:
                 now = datetime.now(pytz.timezone("Europe/Berlin"))
-                data = await get_solax_data(session, state)
 
-                if data is not None:
-                    result = {
-                        "solax_data": data,
-                        "acpower": data.get("acpower", "N/A"),
-                        "feedinpower": data.get("feedinpower", "N/A"),
-                        "batPower": data.get("batPower", "N/A"),
-                        "soc": data.get("soc", "N/A"),
-                        "powerdc1": data.get("powerdc1", "N/A"),
-                        "powerdc2": data.get("powerdc2", "N/A"),
-                        "consumeenergy": data.get("consumeenergy", "N/A"),
-                    }
-                    state.last_api_data = result
-                    state.last_api_timestamp = now
+                if not state.last_api_call or (now - state.last_api_call) > timedelta(minutes=5):
+                    data = await get_solax_data(session, state)
+
+                    if data is not None:
+                        result = {
+                            "solax_data": data,
+                            "acpower": data.get("acpower", "N/A"),
+                            "feedinpower": data.get("feedinpower", "N/A"),
+                            "batPower": data.get("batPower", "N/A"),
+                            "soc": data.get("soc", "N/A"),
+                            "powerdc1": data.get("powerdc1", "N/A"),
+                            "powerdc2": data.get("powerdc2", "N/A"),
+                            "consumeenergy": data.get("consumeenergy", "N/A"),
+                        }
+                        state.last_api_data = result
+                        state.last_api_timestamp = now
+                    else:
+                        logging.warning("Solax-Updater: Keine Daten erhalten")
                 else:
-                    logging.warning("Solax-Updater: Keine Daten erhalten")
+                    logging.debug("Solax-Abfrage übersprungen – noch innerhalb 5 Minuten")
 
             except Exception as e:
                 logging.error(f"Solax-Updater Fehler: {e}", exc_info=True)
 
             await asyncio.sleep(30)
+
 
 
 def get_power_source(solax_data):
@@ -1680,7 +1688,7 @@ async def main_loop(config, state, session):
                         state.last_config_hash = current_hash
                     state._last_config_check = now
 
-                # Solax-Daten abrufen
+                # Solax-Daten abrufen (aus Updater-Task gepuffert)
                 solax_result = state.last_api_data or {
                     "solax_data": {},
                     "acpower": "N/A",
@@ -1690,11 +1698,25 @@ async def main_loop(config, state, session):
                     "powerdc1": "N/A",
                     "powerdc2": "N/A",
                     "consumeenergy": "N/A",
+                    "api_fehler": True
                 }
 
-                solax_data = solax_result["solax_data"]
+                # Sicherer Zugriff auf Unterstruktur
+                solax_data = solax_result.get("solax_data", {})
+
+                # Optional: Warnung, wenn leer oder ungültig
+                if not solax_data or solax_data.get("api_fehler"):
+                    logging.warning(
+                        "Solax-Daten fehlen oder sind ungültig – evtl. noch keine Verbindung oder Fallback aktiv")
+
+                # Power Source ermitteln
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
                 logging.debug(f"Power Source: {power_source}")
+
+                # Optional: Prüfen, ob Daten zu alt
+                if is_data_old(state.last_api_timestamp):
+                    logging.warning("Solax-Daten zu alt – Solarüberschuss deaktiviert")
+                    state.solar_ueberschuss_aktiv = False
 
                 # Sollwerte berechnen
                 try:
