@@ -682,12 +682,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
             df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").ffill()
             plt.plot(df["Zeitstempel"], df["Ausschaltpunkt"], label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
 
-        # 14. Aktuelle Sollwerte
-        if state.solar_ueberschuss_aktiv:
-            plt.axhline(y=state.aktueller_einschaltpunkt, color="purple", linestyle="-.",
-                        label=f"Einschaltpunkt (aktuell): {state.aktueller_einschaltpunkt:.1f}°C")
-        plt.axhline(y=state.aktueller_ausschaltpunkt, color="cyan", linestyle="-.",
-                    label=f"Ausschaltpunkt (aktuell): {state.aktueller_ausschaltpunkt:.1f}°C")
 
         # 15. Formatierung
         plt.xlim(time_ago, now)
