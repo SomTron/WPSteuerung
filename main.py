@@ -1791,7 +1791,29 @@ async def main_loop(config, state, session):
 
                 elif not state.kompressor_ein and actual_gpio_state == GPIO.HIGH:
                     logging.critical("Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
-                    result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
+
+                    # --- [Sicherheitsflags setzen] ---
+                    is_overtemp = False
+                    is_pressure_error = False
+
+                    # Prüfe aktuelle Temperaturwerte
+                    if t_boiler_oben is not None and t_boiler_oben >= state.sicherheits_temp:
+                        is_overtemp = True
+                    if not await handle_pressure_check(session, state):
+                        is_pressure_error = True
+
+                    is_safety_condition = is_overtemp or is_pressure_error
+
+                    # --- [Ausschaltentscheidung] ---
+                    if is_safety_condition:
+                        logging.warning(
+                            f"Sicherheitsfall erkannt – ausschalten mit force=True ({'Übertemperatur' if is_overtemp else 'Druckschalter'})")
+                        result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
+                    else:
+                        logging.debug("Kein Sicherheitsfall – reguläre Ausschaltung prüfen")
+                        result = await set_kompressor_status(state, False, force=False, t_boiler_oben=t_boiler_oben)
+
+                    # --- [Statusaktualisierung nach Ausschaltversuch] ---
                     if result:
                         now_correct = now
                         set_last_compressor_off_time(state, now_correct)
