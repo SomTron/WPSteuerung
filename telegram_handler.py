@@ -649,16 +649,19 @@ async def get_boiler_temperature_history(session, hours, state, config):
 
         # 11. Kompressoreinschaltphasen farbig markieren
         if "Kompressor" in df.columns and "PowerSource" in df.columns:
-            df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0).astype(int)
+            # Optional: Umwandlung in Boolean für bessere Lesbarkeit
+            df["Kompressor"] = df["Kompressor"].map({"EIN": True, "AUS": False}).fillna(False)
+
             for source, color in color_map.items():
-                mask = (df["PowerSource"] == source) & (df["Kompressor"] == 1)
+                mask = (df["PowerSource"] == source) & df["Kompressor"]  # Benutzt jetzt Boolean
                 if mask.any():
                     label = f"Kompressor EIN ({source})"
-                    plt.fill_between(
-                        df["Zeitstempel"][mask], y_min, y_max,
-                        color=color, alpha=0.2, label=label
-                    )
-                    shown_labels.add(label)
+                    if label not in shown_labels:
+                        plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3,
+                                         label=label)
+                        shown_labels.add(label)
+                    else:
+                        plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3)
 
         # 12. Temperaturen plotten (ohne Marker)
         for col, color, linestyle in [
