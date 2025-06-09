@@ -1863,7 +1863,23 @@ async def main_loop(config, state, session):
 
                 # --- [Kompressor ausschalten falls nötig] ---
                 if abschalten and state.kompressor_ein:
-                    result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
+                    # Nur ausschalten, wenn die Mindestlaufzeit erreicht ist, außer bei force=True
+                    now = datetime.now(local_tz)
+
+                    if state.start_time is not None:
+                        elapsed_time = now - state.start_time
+                        if elapsed_time >= state.min_laufzeit:
+                            logging.debug(
+                                f"Mindestlaufzeit ({state.min_laufzeit.total_seconds()}s) erreicht. Schalte Kompressor aus.")
+                            result = await set_kompressor_status(state, False, force=False, t_boiler_oben=t_boiler_oben)
+                        else:
+                            logging.debug(
+                                f"Mindestlaufzeit noch nicht erreicht. Verbleibend: {(state.min_laufzeit - elapsed_time).total_seconds():.1f}s")
+                            result = True  # Keine Aktion nötig
+                    else:
+                        logging.warning("Startzeit des Kompressors unbekannt. Ausschaltung übersprungen.")
+                        result = True  # Keine Aktion nötig
+
                     if result:
                         state.kompressor_ein = False
                         now_correct = now
