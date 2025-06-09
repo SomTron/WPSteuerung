@@ -474,7 +474,8 @@ async def solax_updater(state):
         "Host": "www.solaxcloud.com"
     }
 
-    # 👉 Warten nach Skriptstart (z 60 Sekunden)
+    # 🕒 Warte auf Netzwerkstabilisierung nach Start
+    logging.info("Solax-Updater startet in 60 Sekunden...")
     await asyncio.sleep(60)
 
     async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
@@ -482,11 +483,13 @@ async def solax_updater(state):
             try:
                 now = datetime.now(pytz.timezone("Europe/Berlin"))
 
+                # Prüfen, ob 5 Minuten seit letzter Abfrage vergangen sind
                 if not state.last_api_call or (now - state.last_api_call) > timedelta(minutes=5):
                     logging.debug("Starte Solax-API-Abfrage...")
+
                     data = await get_solax_data(session, state)
 
-                    if data is not None:
+                    if data is not None and not data.get("api_fehler", False):
                         result = {
                             "solax_data": data,
                             "acpower": data.get("acpower", "N/A"),
@@ -499,15 +502,19 @@ async def solax_updater(state):
                         }
                         state.last_api_data = result
                         state.last_api_timestamp = now
+                        state.api_verfügbar = True
+                        logging.debug("Solax-Daten erfolgreich aktualisiert.")
                     else:
-                        logging.warning("Solax-Updater: get_solax_data() lieferte None – evtl. Timeout oder Fehler")
+                        logging.warning("⚠️ get_solax_data() lieferte None oder Fallback – API evtl. nicht erreichbar")
+                        state.api_verfügbar = False
                 else:
                     logging.debug("Solax-Abfrage übersprungen – noch innerhalb 5 Minuten")
-
             except Exception as e:
-                logging.error(f"Solax-Updater Fehler: {e}", exc_info=True)
+                logging.error(f"❌ Solax-Updater Fehler: {e}", exc_info=True)
+                state.api_verfügbar = False
 
             await asyncio.sleep(30)
+
 
 
 
@@ -1200,15 +1207,21 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         MIN_SOLAR_POWER_ACTIVE = 550
         MIN_SOLAR_POWER_INACTIVE = 600
 
-        if solax_data.get("api_fehler", False):
+        # +++ NEU: Kein Solarmodus, wenn Nachtmodus aktiv +++
+        if is_night:
+            logging.debug("Nachtmodus aktiv → Solarüberschuss deaktiviert")
+            state.solar_ueberschuss_aktiv = False
+        elif solax_data.get("api_fehler", False):
             logging.warning("API-Fehler: Solardaten nicht verfügbar – Solarüberschuss deaktiviert")
             state.solar_ueberschuss_aktiv = False
         elif state.solar_ueberschuss_aktiv:
             # Ausschaltlogik: Bleibe aktiv, solange genug Überschuss da
-            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (soc > 90 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
+            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (
+                        soc > 90 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
         else:
             # Einschaltlogik: Nur bei starkem Überschuss starten
-            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (soc > 95 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
+            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (
+                        soc > 95 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
 
         # Sollwerte berechnen
         if state.solar_ueberschuss_aktiv:
