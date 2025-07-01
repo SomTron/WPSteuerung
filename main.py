@@ -20,7 +20,6 @@ import matplotlib.pyplot as plt
 import io
 from aiohttp import FormData
 import pandas as pd
-import socket
 import numpy as np
 from typing import Optional
 from dateutil.relativedelta import relativedelta
@@ -130,6 +129,7 @@ class TelegramHandler(logging.Handler):
 class State:
     def __init__(self, config):
         local_tz = pytz.timezone("Europe/Berlin")
+        self.local_tz = local_tz
         now = datetime.now(local_tz)
 
         # --- Basiswerte ---
@@ -395,128 +395,109 @@ async def safe_send_telegram_message(bot_token, chat_id, message):
 async def get_solax_data(session, state):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
+    #logging.debug(f"get_solax_data: now={now}, tzinfo={now.tzinfo}, last_api_call={state.last_api_call}, tzinfo={state.last_api_call.tzinfo if state.last_api_call else None}")
 
-    # Zeitzone für letzten Call prüfen
+    # Stelle sicher, dass state.last_api_call zeitzonenbewusst ist
     if state.last_api_call and state.last_api_call.tzinfo is None:
         state.last_api_call = local_tz.localize(state.last_api_call)
+        #logging.debug(f"state.last_api_call lokalisiert: {state.last_api_call}")
 
-    # Innerhalb der 5-Minuten-Sperre: nicht erneut abfragen
     if state.last_api_call and (now - state.last_api_call) < timedelta(minutes=5):
-        logging.debug("Solax-API nicht abgefragt – innerhalb 5-Minuten-Zeitraum")
+        #logging.debug("Verwende zwischengespeicherte API-Daten.")
         return state.last_api_data
 
     max_retries = 3
     retry_delay = 5
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Python aiohttp)",
-        "Host": "www.solaxcloud.com"
-    }
-
     for attempt in range(max_retries):
         try:
             params = {"tokenId": state.token_id, "sn": state.sn}
-            logging.debug(f"Solax-API Anfrage wird gesendet (Versuch {attempt + 1}) – params: {params}")
-
-            async with session.get(
-                API_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=30),
-                headers=headers
-            ) as response:
-                logging.debug(f"HTTP-Status: {response.status}")
+            async with session.get(API_URL, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 response.raise_for_status()
-
                 data = await response.json()
-                logging.debug(f"Antwortdaten (Roh): {data}")
-
                 if data.get("success"):
-                    result = data.get("result", {})
-                    logging.info(f"Solax-API erfolgreich (Versuch {attempt + 1})")
-                    state.last_api_data = result
+                    state.last_api_data = data.get("result")
                     state.last_api_timestamp = now
                     state.last_api_call = now
-                    return result
+                    #logging.debug(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
+                    return state.last_api_data
                 else:
-                    logging.error(f"Solax-API meldet Fehler: {data.get('exception', 'Unbekannter Fehler')} (Versuch {attempt + 1})")
+                    logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
                     return None
-
-        except asyncio.TimeoutError:
-            logging.error(f"❌ Timeout bei Solax-API (Versuch {attempt + 1}/{max_retries})")
         except aiohttp.ClientError as e:
-            logging.error(f"❌ ClientError bei API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
-        except Exception as e:
-            logging.error(f"❌ Unerwarteter Fehler bei API-Anfrage (Versuch {attempt + 1}): {e}", exc_info=True)
+            logging.error(f"Fehler bei der API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+            else:
+                logging.error("Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
+                fallback_data = {
+                    "acpower": 0,
+                    "feedinpower": 0,
+                    "batPower": 0,
+                    "soc": 0,
+                    "powerdc1": 0,
+                    "powerdc2": 0,
+                    "consumeenergy": 0,
+                    "api_fehler": True
+                }
+                return fallback_data
 
-        if attempt < max_retries - 1:
-            logging.debug(f"Warte {retry_delay} Sekunden vor erneutem Versuch...")
-            await asyncio.sleep(retry_delay)
-
-    logging.error("🚫 Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
-    return {
+async def fetch_solax_data(session, state, now):
+    """
+    Holt die aktuellen Solax-Daten und gibt sie mit Fallback-Werten zurück.
+    """
+    fallback_data = {
         "acpower": 0,
         "feedinpower": 0,
+        "consumeenergy": 0,
         "batPower": 0,
         "soc": 0,
         "powerdc1": 0,
         "powerdc2": 0,
-        "consumeenergy": 0,
         "api_fehler": True
     }
 
+    try:
+        solax_data = await get_solax_data(session, state) or fallback_data.copy()
 
+        # Upload-Zeit prüfen und Verzögerung berechnen (mit Zeitzone)
+        if "utcDateTime" in solax_data:
+            upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert("Europe/Berlin")
+            delay = (now - upload_time).total_seconds()
+            #logging.debug(f"Solax-Datenverzögerung: {delay:.1f} Sekunden")
 
-async def solax_updater(state):
-    import socket
-    connector = aiohttp.TCPConnector(family=socket.AF_INET)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Python aiohttp)",
-        "Host": "www.solaxcloud.com"
-    }
+        acpower = solax_data.get("acpower", "N/A")
+        feedinpower = solax_data.get("feedinpower", "N/A")
+        batPower = solax_data.get("batPower", "N/A")
+        soc = solax_data.get("soc", "N/A")
+        powerdc1 = solax_data.get("powerdc1", "N/A")
+        powerdc2 = solax_data.get("powerdc2", "N/A")
+        consumeenergy = solax_data.get("consumeenergy", "N/A")
 
-    # 🕒 Warte auf Netzwerkstabilisierung nach Start
-    logging.info("Solax-Updater startet in 60 Sekunden...")
-    await asyncio.sleep(60)
+        return {
+            "solax_data": solax_data,
+            "acpower": acpower,
+            "feedinpower": feedinpower,
+            "batPower": batPower,
+            "soc": soc,
+            "powerdc1": powerdc1,
+            "powerdc2": powerdc2,
+            "consumeenergy": consumeenergy,
+        }
 
-    async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-        while True:
-            try:
-                now = datetime.now(pytz.timezone("Europe/Berlin"))
+    except Exception as e:
+        logging.error(f"Fehler beim Abrufen von Solax-Daten: {e}", exc_info=True)
 
-                # Prüfen, ob 5 Minuten seit letzter Abfrage vergangen sind
-                if not state.last_api_call or (now - state.last_api_call) > timedelta(minutes=5):
-                    logging.debug("Starte Solax-API-Abfrage...")
-
-                    data = await get_solax_data(session, state)
-
-                    if data is not None and not data.get("api_fehler", False):
-                        result = {
-                            "solax_data": data,
-                            "acpower": data.get("acpower", "N/A"),
-                            "feedinpower": data.get("feedinpower", "N/A"),
-                            "batPower": data.get("batPower", "N/A"),
-                            "soc": data.get("soc", "N/A"),
-                            "powerdc1": data.get("powerdc1", "N/A"),
-                            "powerdc2": data.get("powerdc2", "N/A"),
-                            "consumeenergy": data.get("consumeenergy", "N/A"),
-                        }
-                        state.last_api_data = result
-                        state.last_api_timestamp = now
-                        state.api_verfügbar = True
-                        logging.debug("Solax-Daten erfolgreich aktualisiert.")
-                    else:
-                        logging.warning("⚠️ get_solax_data() lieferte None oder Fallback – API evtl. nicht erreichbar")
-                        state.api_verfügbar = False
-                else:
-                    logging.debug("Solax-Abfrage übersprungen – noch innerhalb 5 Minuten")
-            except Exception as e:
-                logging.error(f"❌ Solax-Updater Fehler: {e}", exc_info=True)
-                state.api_verfügbar = False
-
-            await asyncio.sleep(30)
-
-
-
+        # Fallback-Werte setzen
+        return {
+            "solax_data": fallback_data,
+            "acpower": "N/A",
+            "feedinpower": "N/A",
+            "batPower": "N/A",
+            "soc": "N/A",
+            "powerdc1": "N/A",
+            "powerdc2": "N/A",
+            "consumeenergy": "N/A",
+        }
 
 def get_power_source(solax_data):
     pv_production = solax_data.get("powerdc1", 0) + solax_data.get("powerdc2", 0)
@@ -1207,21 +1188,15 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         MIN_SOLAR_POWER_ACTIVE = 550
         MIN_SOLAR_POWER_INACTIVE = 600
 
-        # +++ NEU: Kein Solarmodus, wenn Nachtmodus aktiv +++
-        if is_night:
-            logging.debug("Nachtmodus aktiv → Solarüberschuss deaktiviert")
-            state.solar_ueberschuss_aktiv = False
-        elif solax_data.get("api_fehler", False):
+        if solax_data.get("api_fehler", False):
             logging.warning("API-Fehler: Solardaten nicht verfügbar – Solarüberschuss deaktiviert")
             state.solar_ueberschuss_aktiv = False
         elif state.solar_ueberschuss_aktiv:
             # Ausschaltlogik: Bleibe aktiv, solange genug Überschuss da
-            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (
-                        soc > 90 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
+            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (soc > 90 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
         else:
             # Einschaltlogik: Nur bei starkem Überschuss starten
-            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (
-                        soc > 95 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
+            state.solar_ueberschuss_aktiv = bat_power > MIN_SOLAR_POWER_ACTIVE or (soc > 95 and feedin_power > MIN_SOLAR_POWER_ACTIVE)
 
         # Sollwerte berechnen
         if state.solar_ueberschuss_aktiv:
@@ -1457,17 +1432,21 @@ async def main_loop(config, state, session):
             logging.critical("GPIO-Initialisierung fehlgeschlagen!")
             raise RuntimeError("GPIO-Initialisierung fehlgeschlagen")
 
-
-        # Erzwinge sicheren Startzustand: Kompressor AUS
-        try:
-            GPIO.output(GIO21_PIN, GPIO.LOW)
+        # Prüfe initialen Kompressorstatus
+        actual_gpio_state = GPIO.input(21)
+        if actual_gpio_state == GPIO.HIGH:
+            logging.info("Kompressor ist beim Start eingeschaltet (GPIO HIGH)")
+            state.kompressor_ein = True
+            now = datetime.now(local_tz)
+            state.start_time = now_correct
+            state.last_compressor_on_time = now_correct
+            logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
+        else:
+            logging.info("Kompressor ist beim Start ausgeschaltet (GPIO LOW)")
             state.kompressor_ein = False
-            state.start_time = None
             now_correct = datetime.now(local_tz)
             set_last_compressor_off_time(state, now_correct)
-            logging.info("Kompressor-Startstatus gesetzt: AUS (GPIO LOW erzwungen)")
-        except Exception as e:
-            logging.error(f"Fehler beim Setzen des Startzustands für Kompressor: {e}", exc_info=True)
+
 
         # LCD-Initialisierung
         await initialize_lcd(session)
@@ -1517,9 +1496,6 @@ async def main_loop(config, state, session):
             get_runtime_bar_chart_func=get_runtime_bar_chart,
             is_nighttime_func=is_nighttime
         ))
-
-        # Starte Solax-Updater (asynchrone Hintergrundabfrage)
-        asyncio.create_task(solax_updater(state))
 
         # Initialisiere Zeitstempel
         state.last_log_time = state.last_log_time or now
@@ -1718,35 +1694,11 @@ async def main_loop(config, state, session):
                         state.last_config_hash = current_hash
                     state._last_config_check = now
 
-                # Solax-Daten abrufen (aus Updater-Task gepuffert)
-                solax_result = state.last_api_data or {
-                    "solax_data": {},
-                    "acpower": "N/A",
-                    "feedinpower": "N/A",
-                    "batPower": "N/A",
-                    "soc": "N/A",
-                    "powerdc1": "N/A",
-                    "powerdc2": "N/A",
-                    "consumeenergy": "N/A",
-                    "api_fehler": True
-                }
-
-                # Sicherer Zugriff auf Unterstruktur
-                solax_data = solax_result.get("solax_data", {})
-
-                # Optional: Warnung, wenn leer oder ungültig
-                if not solax_data or solax_data.get("api_fehler"):
-                    logging.warning(
-                        "Solax-Daten fehlen oder sind ungültig – evtl. noch keine Verbindung oder Fallback aktiv")
-
-                # Power Source ermitteln
+                # Solax-Daten abrufen
+                solax_result = await fetch_solax_data(session, state, now)
+                solax_data = solax_result["solax_data"]
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
                 logging.debug(f"Power Source: {power_source}")
-
-                # Optional: Prüfen, ob Daten zu alt
-                if is_data_old(state.last_api_timestamp):
-                    logging.warning("Solax-Daten zu alt – Solarüberschuss deaktiviert")
-                    state.solar_ueberschuss_aktiv = False
 
                 # Sollwerte berechnen
                 try:
@@ -1791,29 +1743,7 @@ async def main_loop(config, state, session):
 
                 elif not state.kompressor_ein and actual_gpio_state == GPIO.HIGH:
                     logging.critical("Inkonsistenz: state.kompressor_ein=False, aber GPIO 21 ist HIGH!")
-
-                    # --- [Sicherheitsflags setzen] ---
-                    is_overtemp = False
-                    is_pressure_error = False
-
-                    # Prüfe aktuelle Temperaturwerte
-                    if t_boiler_oben is not None and t_boiler_oben >= state.sicherheits_temp:
-                        is_overtemp = True
-                    if not await handle_pressure_check(session, state):
-                        is_pressure_error = True
-
-                    is_safety_condition = is_overtemp or is_pressure_error
-
-                    # --- [Ausschaltentscheidung] ---
-                    if is_safety_condition:
-                        logging.warning(
-                            f"Sicherheitsfall erkannt – ausschalten mit force=True ({'Übertemperatur' if is_overtemp else 'Druckschalter'})")
-                        result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
-                    else:
-                        logging.debug("Kein Sicherheitsfall – reguläre Ausschaltung prüfen")
-                        result = await set_kompressor_status(state, False, force=False, t_boiler_oben=t_boiler_oben)
-
-                    # --- [Statusaktualisierung nach Ausschaltversuch] ---
+                    result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                     if result:
                         now_correct = now
                         set_last_compressor_off_time(state, now_correct)
@@ -1885,23 +1815,7 @@ async def main_loop(config, state, session):
 
                 # --- [Kompressor ausschalten falls nötig] ---
                 if abschalten and state.kompressor_ein:
-                    # Nur ausschalten, wenn die Mindestlaufzeit erreicht ist, außer bei force=True
-                    now = datetime.now(local_tz)
-
-                    if state.start_time is not None:
-                        elapsed_time = now - state.start_time
-                        if elapsed_time >= state.min_laufzeit:
-                            logging.debug(
-                                f"Mindestlaufzeit ({state.min_laufzeit.total_seconds()}s) erreicht. Schalte Kompressor aus.")
-                            result = await set_kompressor_status(state, False, force=False, t_boiler_oben=t_boiler_oben)
-                        else:
-                            logging.debug(
-                                f"Mindestlaufzeit noch nicht erreicht. Verbleibend: {(state.min_laufzeit - elapsed_time).total_seconds():.1f}s")
-                            result = True  # Keine Aktion nötig
-                    else:
-                        logging.warning("Startzeit des Kompressors unbekannt. Ausschaltung übersprungen.")
-                        result = True  # Keine Aktion nötig
-
+                    result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                     if result:
                         state.kompressor_ein = False
                         now_correct = now
