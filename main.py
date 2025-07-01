@@ -59,7 +59,7 @@ gpio_lock = asyncio.Lock()
 last_sensor_readings = {}
 SENSOR_READ_INTERVAL = timedelta(seconds=5)
 
-
+NOTIFICATION_COOLDOWN = 600
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 
 
