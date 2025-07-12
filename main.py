@@ -1711,13 +1711,42 @@ async def main_loop(config, state, session):
                 soc_str = f"{solax_data.get('soc', 0.0):.1f}" if solax_data else "0.0"
                 feedin_str = f"{state.feedin_power:.1f}" if hasattr(state,
                                                                     'feedin_power') and state.feedin_power is not None else "0.0"
+                # --- Bestimme den aktuellen Modus ---
+                if state.solar_ueberschuss_aktiv:
+                    modus = "Solarmodus"
+                elif is_night:
+                    modus = "Nachtmodus"
+                elif within_uebergangsmodus:
+                    modus = "Übergangsmodus"
+                else:
+                    modus = "Normalmodus"
+
+                # --- Bestimme den regelnden Fühler basierend auf dem Modus ---
+                if modus == "Solarmodus":
+                    regelfuehler = "unten"
+                elif modus in ["Nachtmodus", "Normalmodus", "Übergangsmodus"]:
+                    regelfuehler = "mittig"
+                else:
+                    regelfuehler = "unbekannt"
+
+                # --- Temperaturwerte formatieren ---
+                t_oben_log = f"{t_boiler_oben:.1f}" if t_boiler_oben is not None else "N/A"
+                t_mitte_log = f"{t_boiler_mittig:.1f}" if t_boiler_mittig is not None else "N/A"
+                t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
+                t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
+
+                # --- Debug-Log erweitern ---
                 logging.debug(
-                    f"Solarmodus: T_Unten={t_unten_str}°C, "
-                    f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}, Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}, "
-                    f"Nacht={is_night}, Urlaub={state.urlaubsmodus if hasattr(state, 'urlaubsmodus') else False}, "
-                    f"Solar={state.solar_ueberschuss_aktiv}, Reduction=Nacht({nacht_reduction:.1f})+Urlaub(0.0), "
-                    f"batPower={bat_power_str}, soc={soc_str}, feedin={feedin_str}, "
-                    f"Übergangsmodus={within_uebergangsmodus}, Power Source={power_source}"
+                    f"[Modus: {modus}] "
+                    f"Regel-Fühler: {regelfuehler} | "
+                    f"T_Oben={t_oben_log}°C | "
+                    f"T_Mitte={t_mitte_log}°C | "
+                    f"T_Unten={t_unten_log}°C | "
+                    f"T_Verd={t_verd_log}°C | "
+                    f"Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}°C | "
+                    f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}°C | "
+                    f"temp_conditions_met_to_start={temp_conditions_met_to_start} | "
+                    f"Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv}"
                 )
 
                 # Moduswechsel speichern
