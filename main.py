@@ -1735,7 +1735,10 @@ async def main_loop(config, state, session):
                 t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
                 t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
 
-                # --- Debug-Log erweitern ---
+                # --- Berechne die kombinierte Absenkung ---
+                reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({float(state.config['Urlaubsmodus'].get('URLAUBSABSENKUNG', 0.0)):.1f})"
+
+                # --- Debug-Log erweitern mit neuen Werten ---
                 logging.debug(
                     f"[Modus: {modus}] "
                     f"Regel-Fühler: {regelfuehler} | "
@@ -1746,7 +1749,16 @@ async def main_loop(config, state, session):
                     f"Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}°C | "
                     f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}°C | "
                     f"temp_conditions_met_to_start={temp_conditions_met_to_start} | "
-                    f"Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv}"
+                    f"Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv} | "
+                    f"Nacht={is_night} | "
+                    f"Urlaub={state.urlaubsmodus_aktiv} | "
+                    f"Solar={state.solar_ueberschuss_aktiv} | "
+                    f"Reduction={reduction} | "
+                    f"batPower={bat_power_str}W | "
+                    f"soc={soc_str}% | "
+                    f"feedin={feedin_str}W | "
+                    f"Übergangsmodus={within_uebergangsmodus} | "
+                    f"Power Source={power_source}"
                 )
 
                 # Moduswechsel speichern
