@@ -1132,8 +1132,6 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
     """
     try:
         # Immer die aktuellste Konfiguration verwenden!
-        # Dies ist redundant, da 'state.config' bereits die aktuelle Konfig ist,
-        # aber es schadet nicht.
         current_config = state.config  # Um Verwechslung mit dem 'config' Parameter zu vermeiden
 
         # Reduktionen als Float behandeln, falls sie in der config.ini Dezimalstellen haben könnten
@@ -1147,9 +1145,6 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         soc = solax_data.get("soc", 0.0)  # Auch hier float
 
         # Solarüberschuss-Logik mit korrekter Hysterese
-        # Hier ist es wichtig, die MIN_SOLAR_POWER_... an Ihre Solaranlage anzupassen.
-        # Ein "Einschaltpunkt" von 600 W und ein "Ausschaltpunkt" von 550 W
-        # für den Solarüberschussmodus ist eine gängige Hysterese.
         MIN_SOLAR_POWER_ACTIVE_THRESHOLD = 550.0  # Schwellwert, um im Solar-Modus ZU BLEIBEN
         MIN_SOLAR_POWER_INACTIVE_THRESHOLD = 600.0  # Schwellwert, um in den Solar-Modus ZU GEHEN (höher)
 
@@ -1186,13 +1181,12 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
             ausschaltpunkt = base_ausschaltpunkt - total_reduction
             einschaltpunkt = base_einschaltpunkt - total_reduction
 
-        # Minimaltemperatur schützen (immer noch wichtig!)
+        # Minimaltemperatur schützen
         MIN_TEMPERATUR = 15.0  # Auch hier float
         ausschaltpunkt = max(MIN_TEMPERATUR, ausschaltpunkt)
         einschaltpunkt = max(MIN_TEMPERATUR, einschaltpunkt)
 
-        # --- KRITISCHER TEIL: Validierung der Hysterese nach ALLEN Anpassungen ---
-        # Diesen Teil haben Sie schon, aber stellen Sie sicher, dass er IMMER nach allen Reduktionen läuft.
+        # Validierung der Hysterese nach ALLEN Anpassungen
         HYSTERESE_MIN = float(current_config["Heizungssteuerung"].get("HYSTERESE_MIN", 2.0))  # Auch hier float
         if ausschaltpunkt <= einschaltpunkt:
             logging.warning(
@@ -1201,27 +1195,19 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
             )
             ausschaltpunkt = einschaltpunkt + HYSTERESE_MIN
 
-        # Debugging-Ausgabe
-        # Verwenden Sie f-Strings für präzisere Ausgabe und Nachkommastellen
-        logging.debug(
-            f"Sollwerte berechnet: Ausschaltpunkt={ausschaltpunkt:.1f}, Einschaltpunkt={einschaltpunkt:.1f}, "
-            f"Nacht={is_night}, Urlaub={state.urlaubsmodus_aktiv}, Solar={state.solar_ueberschuss_aktiv}, "
-            f"Reduction=Nacht({nacht_reduction:.1f})+Urlaub({urlaubs_reduction:.1f}), "
-            f"batPower={bat_power:.1f}, soc={soc:.1f}, feedin={feedin_power:.1f}"
-        )
-
-        # Die Funktion gibt die berechneten Punkte und den Solarstatus zurück
-        return ausschaltpunkt, einschaltpunkt, state.solar_ueberschuss_aktiv
+        # Rückgabe der berechneten Werte
+        return ausschaltpunkt, einschaltpunkt, state.solar_ueberschuss_aktiv, feedin_power
 
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
-        # Fallback-Werte im Fehlerfall (auch hier float für Konsistenz)
+        # Fallback-Werte im Fehlerfall
         fallback_ausschaltpunkt = 45.0
         fallback_einschaltpunkt = 42.0
         state.solar_ueberschuss_aktiv = False
+        feedin_power = 0.0
         logging.warning(
-            f"Verwende Standard-Sollwerte im Fehlerfall: Ausschaltpunkt={fallback_ausschaltpunkt:.1f}, Einschaltpunkt={fallback_einschaltpunkt:.1f}, Solarüberschuss_aktiv={state.solar_ueberschuss_aktiv}")
-        return fallback_ausschaltpunkt, fallback_einschaltpunkt, state.solar_ueberschuss_aktiv
+            f"Verwende Standard-Sollwerte im Fehlerfall: Ausschaltpunkt={fallback_ausschaltpunkt:.1f}, Einschaltpunkt={fallback_einschaltpunkt:.1f}, Solarüberschuss_aktiv={state.solar_ueberschuss_aktiv}, feedin={feedin_power:.1f}")
+        return fallback_ausschaltpunkt, fallback_einschaltpunkt, state.solar_ueberschuss_aktiv, feedin_power
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
                 min_difference=None):
@@ -1672,7 +1658,7 @@ async def main_loop(config, state, session):
 
                 # Übergangsmodus aktiv?
                 within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
-                logging.debug(f"Übergangsmodus aktiv: {within_uebergangsmodus}")
+                #logging.debug(f"Übergangsmodus aktiv: {within_uebergangsmodus}")
 
                 # Tageswechsel prüfen
                 should_check_day = state.last_log_time is None or safe_timedelta(now, state.last_log_time) >= timedelta(minutes=1)
@@ -1699,31 +1685,38 @@ async def main_loop(config, state, session):
                 try:
                     is_night = await asyncio.to_thread(is_nighttime, state.config)
                     nacht_reduction = int(state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                    ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv = await asyncio.to_thread(
+                    ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv, feedin_power = await asyncio.to_thread(
                         calculate_shutdown_point, state.config, is_night, solax_data, state)
                     state.aktueller_ausschaltpunkt = ausschaltpunkt
                     state.aktueller_einschaltpunkt = einschaltpunkt
                     state.solar_ueberschuss_aktiv = solar_ueberschuss_aktiv
+                    state.feedin_power = feedin_power  # Speichere feedin_power im state
                 except Exception as e:
                     logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
                     is_night = False
                     nacht_reduction = 0
-                    state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
-                    state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
+                    state.aktueller_ausschaltpunkt = int(
+                        state.config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
+                    state.aktueller_einschaltpunkt = int(
+                        state.config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
+                    state.solar_ueberschuss_aktiv = False
+                    state.feedin_power = 0.0  # Fallback für feedin_power
 
                 # Übergangsmodus aktiv?
                 within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
 
                 # Kombinierter Debug-Log
                 t_unten_str = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
+                bat_power_str = f"{solax_data.get('batPower', 0.0):.1f}" if solax_data else "0.0"
+                soc_str = f"{solax_data.get('soc', 0.0):.1f}" if solax_data else "0.0"
+                feedin_str = f"{state.feedin_power:.1f}" if hasattr(state,
+                                                                    'feedin_power') and state.feedin_power is not None else "0.0"
                 logging.debug(
                     f"Solarmodus: T_Unten={t_unten_str}°C, "
                     f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}, Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}, "
                     f"Nacht={is_night}, Urlaub={state.urlaubsmodus if hasattr(state, 'urlaubsmodus') else False}, "
                     f"Solar={state.solar_ueberschuss_aktiv}, Reduction=Nacht({nacht_reduction:.1f})+Urlaub(0.0), "
-                    f"batPower={solax_data.get('batPower', 0.0) if solax_data else 0.0:.1f}, "
-                    f"soc={solax_data.get('soc', 0.0) if solax_data else 0.0:.1f}, "
-                    f"feedin={solax_data.get('feedin', 0.0) if solax_data else 0.0:.1f}, "
+                    f"batPower={bat_power_str}, soc={soc_str}, feedin={feedin_str}, "
                     f"Übergangsmodus={within_uebergangsmodus}, Power Source={power_source}"
                 )
 
