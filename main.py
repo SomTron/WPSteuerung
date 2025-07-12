@@ -1771,7 +1771,7 @@ async def main_loop(config, state, session):
                 if state.solar_ueberschuss_aktiv:
                     if t_boiler_unten is not None:
                         temp_conditions_met_to_start = t_boiler_unten < 43.0
-                        logging.debug(f"[Solarmodus] T_Unten={t_boiler_unten:.1f}°C, Einschaltpunkt=43.0°C")
+                        #logging.debug(f"[Solarmodus] T_Unten={t_boiler_unten:.1f}°C, Einschaltpunkt=43.0°C")
                     else:
                         if t_boiler_mittig is not None:
                             temp_conditions_met_to_start = t_boiler_mittig < state.aktueller_einschaltpunkt
