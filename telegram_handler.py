@@ -132,7 +132,7 @@ async def get_telegram_updates(session, bot_token, offset=None):
         params["offset"] = offset
     try:
         async with session.get(url, params=params, timeout=70) as response:
-            logging.debug(f"HTTP-Status von getUpdates: {response.status}")
+            #logging.debug(f"HTTP-Status von getUpdates: {response.status}")
             if response.status == 200:
                 data = await response.json()
                 updates = data.get("result", [])
@@ -428,7 +428,7 @@ async def telegram_task(session, read_temperature_func, sensor_ids, kompressor_s
     logging.info("Starte telegram_task")
     last_update_id = None
     while True:
-        logging.debug("telegram_task Schleife ausgeführt")
+        #logging.debug("telegram_task Schleife ausgeführt")
         try:
             if not state.bot_token or not state.chat_id:
                 logging.warning(f"Telegram bot_token oder chat_id fehlt (bot_token={state.bot_token}, chat_id={state.chat_id}). Überspringe telegram_task.")
@@ -437,7 +437,7 @@ async def telegram_task(session, read_temperature_func, sensor_ids, kompressor_s
             logging.debug("Versuche Telegram-Updates abzurufen")
             updates = await get_telegram_updates(session, state.bot_token, last_update_id)
             if updates is not None:
-                logging.debug("Updates erfolgreich empfangen")
+                #logging.debug("Updates erfolgreich empfangen")
                 # Parallele Sensorlesung
                 sensor_tasks = [
                     asyncio.to_thread(read_temperature_func, sensor_ids[key])
