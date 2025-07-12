@@ -1694,15 +1694,13 @@ async def main_loop(config, state, session):
                 solax_result = await fetch_solax_data(session, state, now)
                 solax_data = solax_result["solax_data"]
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
-                logging.debug(f"Power Source: {power_source}")
 
                 # Sollwerte berechnen
                 try:
-                    is_night = await asyncio.to_thread(is_nighttime, state.config)  # <- hier state.config nutzen
+                    is_night = await asyncio.to_thread(is_nighttime, state.config)
                     nacht_reduction = int(state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
                     ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv = await asyncio.to_thread(
-                        calculate_shutdown_point, state.config, is_night, solax_data,
-                        state)  # <- state.config übergeben
+                        calculate_shutdown_point, state.config, is_night, solax_data, state)
                     state.aktueller_ausschaltpunkt = ausschaltpunkt
                     state.aktueller_einschaltpunkt = einschaltpunkt
                     state.solar_ueberschuss_aktiv = solar_ueberschuss_aktiv
@@ -1712,6 +1710,22 @@ async def main_loop(config, state, session):
                     nacht_reduction = 0
                     state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
                     state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
+
+                # Übergangsmodus aktiv?
+                within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
+
+                # Kombinierter Debug-Log
+                t_unten_str = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
+                logging.debug(
+                    f"Solarmodus: T_Unten={t_unten_str}°C, "
+                    f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}, Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}, "
+                    f"Nacht={is_night}, Urlaub={state.urlaubsmodus if hasattr(state, 'urlaubsmodus') else False}, "
+                    f"Solar={state.solar_ueberschuss_aktiv}, Reduction=Nacht({nacht_reduction:.1f})+Urlaub(0.0), "
+                    f"batPower={solax_data.get('batPower', 0.0) if solax_data else 0.0:.1f}, "
+                    f"soc={solax_data.get('soc', 0.0) if solax_data else 0.0:.1f}, "
+                    f"feedin={solax_data.get('feedin', 0.0) if solax_data else 0.0:.1f}, "
+                    f"Übergangsmodus={within_uebergangsmodus}, Power Source={power_source}"
+                )
 
                 # Moduswechsel speichern
                 if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv:
