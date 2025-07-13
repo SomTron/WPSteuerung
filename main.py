@@ -1088,7 +1088,7 @@ async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten,
                           is_night, within_uebergangsmodus, power_source, temp_conditions_met_to_start,
                           nacht_reduction, urlaubs_reduction):
     """
-    Protokolliert den aktuellen Zustand der Heizungssteuerung im Debug-Log.
+    Protokolliert den aktuellen Zustand der Heizungssteuerung im Debug-Log, aber nur einmal pro Minute.
 
     Args:
         state: Das State-Objekt mit den aktuellen Zustandsvariablen.
@@ -1104,6 +1104,13 @@ async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten,
         nacht_reduction: Float, Absenkung durch Nachtmodus.
         urlaubs_reduction: Float, Absenkung durch Urlaubsmodus.
     """
+    # Zeitprüfung: Log nur schreiben, wenn mindestens 1 Minute seit dem letzten Log vergangen ist
+    now = datetime.now(pytz.timezone("Europe/Berlin"))
+    if hasattr(state, 'last_debug_log_time') and state.last_debug_log_time is not None:
+        time_since_last_log = now - state.last_debug_log_time
+        if time_since_last_log.total_seconds() < 60:
+            return  # Kein Log, wenn weniger als 1 Minute vergangen ist
+
     # --- Bestimme den aktuellen Modus ---
     if state.solar_ueberschuss_aktiv:
         modus = "Solarmodus"
@@ -1158,6 +1165,10 @@ async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten,
         f"Übergangsmodus={within_uebergangsmodus} | "
         f"Power Source={power_source}"
     )
+
+    # Zeit des letzten Logs aktualisieren
+    state.last_debug_log_time = now
+
 
 
 def is_nighttime(config):
@@ -1484,6 +1495,7 @@ async def main_loop(config, state, session):
     WATCHDOG_MAX_WARNINGS = 3
     csv_lock = asyncio.Lock()
     now = datetime.now(local_tz)
+    state.last_debug_log_time = None
 
     try:
         # GPIO-Initialisierung
