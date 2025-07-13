@@ -13,6 +13,10 @@ tail -n 200 heizungssteuerung.log
 grep -i "error" heizungssteuerung.log
 grep -i "info" heizungssteuerung.log
 
+
+ less +/Warnung heizungssteuerung.log
+ beenden mit q
+
 wpsteuerung.ddns.net
 
 sudo systemctl restart my_script.service

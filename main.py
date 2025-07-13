@@ -1084,6 +1084,82 @@ async def log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig,
             state.last_log_time = now
             state.last_kompressor_status = state.kompressor_ein
 
+async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten, t_verd, solax_data,
+                          is_night, within_uebergangsmodus, power_source, temp_conditions_met_to_start,
+                          nacht_reduction, urlaubs_reduction):
+    """
+    Protokolliert den aktuellen Zustand der Heizungssteuerung im Debug-Log.
+
+    Args:
+        state: Das State-Objekt mit den aktuellen Zustandsvariablen.
+        t_boiler_oben: Temperatur oben im Boiler (°C).
+        t_boiler_mittig: Temperatur mittig im Boiler (°C).
+        t_boiler_unten: Temperatur unten im Boiler (°C).
+        t_verd: Verdampfertemperatur (°C).
+        solax_data: Solax-Daten (Dictionary).
+        is_night: Boolean, ob Nachtzeit aktiv ist.
+        within_uebergangsmodus: Boolean, ob Übergangsmodus aktiv ist.
+        power_source: String, aktuelle Stromquelle (z.B. "Direkter PV-Strom").
+        temp_conditions_met_to_start: Boolean, ob Temperaturbedingungen für Kompressorstart erfüllt sind.
+        nacht_reduction: Float, Absenkung durch Nachtmodus.
+        urlaubs_reduction: Float, Absenkung durch Urlaubsmodus.
+    """
+    # --- Bestimme den aktuellen Modus ---
+    if state.solar_ueberschuss_aktiv:
+        modus = "Solarmodus"
+    elif is_night:
+        modus = "Nachtmodus"
+    elif within_uebergangsmodus:
+        modus = "Übergangsmodus"
+    else:
+        modus = "Normalmodus"
+
+    # --- Bestimme den regelnden Fühler basierend auf dem Modus ---
+    if modus == "Solarmodus":
+        regelfuehler = "unten"
+    elif modus in ["Nachtmodus", "Normalmodus", "Übergangsmodus"]:
+        regelfuehler = "mittig"
+    else:
+        regelfuehler = "unbekannt"
+
+    # --- Temperaturwerte formatieren ---
+    t_oben_log = f"{t_boiler_oben:.1f}" if t_boiler_oben is not None else "N/A"
+    t_mitte_log = f"{t_boiler_mittig:.1f}" if t_boiler_mittig is not None else "N/A"
+    t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
+    t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
+
+    # --- Solax-Daten formatieren ---
+    bat_power_str = f"{solax_data.get('batPower', 0.0):.1f}" if solax_data else "0.0"
+    soc_str = f"{solax_data.get('soc', 0.0):.1f}" if solax_data else "0.0"
+    feedin_str = f"{state.feedin_power:.1f}" if hasattr(state, 'feedin_power') and state.feedin_power is not None else "0.0"
+
+    # --- Kombinierte Absenkung für den Log ---
+    reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({urlaubs_reduction:.1f})"
+
+    # --- Debug-Log erzeugen ---
+    logging.debug(
+        f"[Modus: {modus}] "
+        f"Regel-Fühler: {regelfuehler} | "
+        f"T_Oben={t_oben_log}°C | "
+        f"T_Mitte={t_mitte_log}°C | "
+        f"T_Unten={t_unten_log}°C | "
+        f"T_Verd={t_verd_log}°C | "
+        f"Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}°C | "
+        f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}°C | "
+        f"temp_conditions_met_to_start={temp_conditions_met_to_start} | "
+        f"Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv} | "
+        f"Nacht={is_night} | "
+        f"Urlaub={state.urlaubsmodus_aktiv} | "
+        f"Solar={state.solar_ueberschuss_aktiv} | "
+        f"Reduction={reduction} | "
+        f"batPower={bat_power_str}W | "
+        f"soc={soc_str}% | "
+        f"feedin={feedin_str}W | "
+        f"Übergangsmodus={within_uebergangsmodus} | "
+        f"Power Source={power_source}"
+    )
+
+
 def is_nighttime(config):
     """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
     local_tz = pytz.timezone("Europe/Berlin")
@@ -1706,60 +1782,20 @@ async def main_loop(config, state, session):
                 # Übergangsmodus aktiv?
                 within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
 
-                # Kombinierter Debug-Log
-                t_unten_str = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
-                bat_power_str = f"{solax_data.get('batPower', 0.0):.1f}" if solax_data else "0.0"
-                soc_str = f"{solax_data.get('soc', 0.0):.1f}" if solax_data else "0.0"
-                feedin_str = f"{state.feedin_power:.1f}" if hasattr(state,
-                                                                    'feedin_power') and state.feedin_power is not None else "0.0"
-                # --- Bestimme den aktuellen Modus ---
-                if state.solar_ueberschuss_aktiv:
-                    modus = "Solarmodus"
-                elif is_night:
-                    modus = "Nachtmodus"
-                elif within_uebergangsmodus:
-                    modus = "Übergangsmodus"
-                else:
-                    modus = "Normalmodus"
-
-                # --- Bestimme den regelnden Fühler basierend auf dem Modus ---
-                if modus == "Solarmodus":
-                    regelfuehler = "unten"
-                elif modus in ["Nachtmodus", "Normalmodus", "Übergangsmodus"]:
-                    regelfuehler = "mittig"
-                else:
-                    regelfuehler = "unbekannt"
-
-                # --- Temperaturwerte formatieren ---
-                t_oben_log = f"{t_boiler_oben:.1f}" if t_boiler_oben is not None else "N/A"
-                t_mitte_log = f"{t_boiler_mittig:.1f}" if t_boiler_mittig is not None else "N/A"
-                t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
-                t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
-
-                # --- Kombinierte Absenkung für den Log ---
-                reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({urlaubs_reduction:.1f})"
-
-                # --- Debug-Log erweitern ---
-                logging.debug(
-                    f"[Modus: {modus}] "
-                    f"Regel-Fühler: {regelfuehler} | "
-                    f"T_Oben={t_oben_log}°C | "
-                    f"T_Mitte={t_mitte_log}°C | "
-                    f"T_Unten={t_unten_log}°C | "
-                    f"T_Verd={t_verd_log}°C | "
-                    f"Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}°C | "
-                    f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}°C | "
-                    f"temp_conditions_met_to_start={temp_conditions_met_to_start} | "
-                    f"Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv} | "
-                    f"Nacht={is_night} | "
-                    f"Urlaub={state.urlaubsmodus_aktiv} | "
-                    f"Solar={state.solar_ueberschuss_aktiv} | "
-                    f"Reduction={reduction} | "
-                    f"batPower={bat_power_str}W | "
-                    f"soc={soc_str}% | "
-                    f"feedin={feedin_str}W | "
-                    f"Übergangsmodus={within_uebergangsmodus} | "
-                    f"Power Source={power_source}"
+                # Debug-Log aufrufen
+                await log_debug_state(
+                    state,
+                    t_boiler_oben,
+                    t_boiler_mittig,
+                    t_boiler_unten,
+                    t_verd,
+                    solax_data,
+                    is_night,
+                    within_uebergangsmodus,
+                    power_source,
+                    temp_conditions_met_to_start,
+                    nacht_reduction,
+                    urlaubs_reduction
                 )
 
                 # Moduswechsel speichern
