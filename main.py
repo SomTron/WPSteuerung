@@ -1131,10 +1131,7 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
     ACHTUNG: 'config' wird nur bei Fehlern verwendet – im Normalfall wird state.config genutzt.
     """
     try:
-        # Immer die aktuellste Konfiguration verwenden!
-        current_config = state.config  # Um Verwechslung mit dem 'config' Parameter zu vermeiden
-
-        # Reduktionen als Float behandeln, falls sie in der config.ini Dezimalstellen haben könnten
+        current_config = state.config
         nacht_reduction = float(current_config["Heizungssteuerung"].get("NACHTABSENKUNG", 0.0)) if is_night else 0.0
         urlaubs_reduction = float(
             current_config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0.0)) if state.urlaubsmodus_aktiv else 0.0
@@ -1196,18 +1193,22 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
             ausschaltpunkt = einschaltpunkt + HYSTERESE_MIN
 
         # Rückgabe der berechneten Werte
-        return ausschaltpunkt, einschaltpunkt, state.solar_ueberschuss_aktiv, feedin_power
+        return ausschaltpunkt, einschaltpunkt, state.solar_ueberschuss_aktiv, feedin_power, nacht_reduction, urlaubs_reduction
 
     except (KeyError, ValueError) as e:
         logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
-        # Fallback-Werte im Fehlerfall
         fallback_ausschaltpunkt = 45.0
         fallback_einschaltpunkt = 42.0
         state.solar_ueberschuss_aktiv = False
         feedin_power = 0.0
+        nacht_reduction = 0.0
+        urlaubs_reduction = 0.0
         logging.warning(
-            f"Verwende Standard-Sollwerte im Fehlerfall: Ausschaltpunkt={fallback_ausschaltpunkt:.1f}, Einschaltpunkt={fallback_einschaltpunkt:.1f}, Solarüberschuss_aktiv={state.solar_ueberschuss_aktiv}, feedin={feedin_power:.1f}")
-        return fallback_ausschaltpunkt, fallback_einschaltpunkt, state.solar_ueberschuss_aktiv, feedin_power
+            f"Verwende Standard-Sollwerte im Fehlerfall: Ausschaltpunkt={fallback_ausschaltpunkt:.1f}, "
+            f"Einschaltpunkt={fallback_einschaltpunkt:.1f}, Solarüberschuss_aktiv={state.solar_ueberschuss_aktiv}, "
+            f"feedin={feedin_power:.1f}, nacht_reduction={nacht_reduction:.1f}, urlaubs_reduction={urlaubs_reduction:.1f}"
+        )
+        return fallback_ausschaltpunkt, fallback_einschaltpunkt, state.solar_ueberschuss_aktiv, feedin_power, nacht_reduction, urlaubs_reduction
 
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
                 min_difference=None):
@@ -1684,23 +1685,23 @@ async def main_loop(config, state, session):
                 # Sollwerte berechnen
                 try:
                     is_night = await asyncio.to_thread(is_nighttime, state.config)
-                    nacht_reduction = int(state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                    ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv, feedin_power = await asyncio.to_thread(
+                    ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv, feedin_power, nacht_reduction, urlaubs_reduction = await asyncio.to_thread(
                         calculate_shutdown_point, state.config, is_night, solax_data, state)
                     state.aktueller_ausschaltpunkt = ausschaltpunkt
                     state.aktueller_einschaltpunkt = einschaltpunkt
                     state.solar_ueberschuss_aktiv = solar_ueberschuss_aktiv
-                    state.feedin_power = feedin_power  # Speichere feedin_power im state
+                    state.feedin_power = feedin_power
                 except Exception as e:
                     logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
                     is_night = False
-                    nacht_reduction = 0
+                    nacht_reduction = 0.0
+                    urlaubs_reduction = 0.0
                     state.aktueller_ausschaltpunkt = int(
                         state.config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
                     state.aktueller_einschaltpunkt = int(
                         state.config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
                     state.solar_ueberschuss_aktiv = False
-                    state.feedin_power = 0.0  # Fallback für feedin_power
+                    state.feedin_power = 0.0
 
                 # Übergangsmodus aktiv?
                 within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
@@ -1735,10 +1736,10 @@ async def main_loop(config, state, session):
                 t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
                 t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
 
-                # --- Berechne die kombinierte Absenkung ---
-                reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({float(state.config['Urlaubsmodus'].get('URLAUBSABSENKUNG', 0.0)):.1f})"
+                # --- Kombinierte Absenkung für den Log ---
+                reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({urlaubs_reduction:.1f})"
 
-                # --- Debug-Log erweitern mit neuen Werten ---
+                # --- Debug-Log erweitern ---
                 logging.debug(
                     f"[Modus: {modus}] "
                     f"Regel-Fühler: {regelfuehler} | "
