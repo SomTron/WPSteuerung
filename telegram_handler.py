@@ -450,7 +450,7 @@ async def telegram_task(session, read_temperature_func, sensor_ids, kompressor_s
                         logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {temp or 'Kein Wert'}")
                         temp = None
                 # Erzwinge Rohwerte-Log
-                logging.debug(f"Rohwerte (vor Verarbeitung): t_oben={t_boiler_oben}, t_unten={t_boiler_unten}, t_mittig={t_boiler_mittig}, t_verd={t_verd}")
+                #logging.debug(f"Rohwerte (vor Verarbeitung): t_oben={t_boiler_oben}, t_unten={t_boiler_unten}, t_mittig={t_boiler_mittig}, t_verd={t_verd}")
                 kompressor_status = kompressor_status_func()
                 aktuelle_laufzeit = current_runtime_func()
                 gesamtlaufzeit = total_runtime_func()
