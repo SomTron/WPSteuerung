@@ -348,7 +348,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                                          is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     try:
-        logging.debug(f"Verarbeite {len(updates)} Telegram-Updates")
+        #logging.debug(f"Verarbeite {len(updates)} Telegram-Updates")
         if updates:
             for update in updates:
                 logging.debug(f"Update-Inhalt: {update}")
@@ -434,7 +434,7 @@ async def telegram_task(session, read_temperature_func, sensor_ids, kompressor_s
                 logging.warning(f"Telegram bot_token oder chat_id fehlt (bot_token={state.bot_token}, chat_id={state.chat_id}). Überspringe telegram_task.")
                 await asyncio.sleep(60)
                 continue
-            logging.debug("Versuche Telegram-Updates abzurufen")
+            #logging.debug("Versuche Telegram-Updates abzurufen")
             updates = await get_telegram_updates(session, state.bot_token, last_update_id)
             if updates is not None:
                 #logging.debug("Updates erfolgreich empfangen")
