@@ -125,7 +125,7 @@ async def send_welcome_message(session, chat_id, bot_token):
 
 async def get_telegram_updates(session, bot_token, offset=None):
     """Ruft Telegram-Updates ab."""
-    logging.debug(f"Rufe Telegram-Updates ab mit offset={offset}")
+    #logging.debug(f"Rufe Telegram-Updates ab mit offset={offset}")
     url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
     params = {"timeout": 60}
     if offset is not None:
@@ -136,7 +136,7 @@ async def get_telegram_updates(session, bot_token, offset=None):
             if response.status == 200:
                 data = await response.json()
                 updates = data.get("result", [])
-                logging.debug(f"Empfangene Telegram-Updates: {len(updates)}")
+                #logging.debug(f"Empfangene Telegram-Updates: {len(updates)}")
                 return updates
             else:
                 error_text = await response.text()
@@ -214,6 +214,16 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_bo
 
     await send_telegram_message(session, chat_id, message, bot_token)
 
+def escape_markdown(text):
+    """Maskiert Markdown-Sonderzeichen, um Parse-Fehler zu vermeiden."""
+    if not isinstance(text, str):
+        return str(text)
+    # Liste der zu maskierenden Sonderzeichen in Markdown
+    markdown_chars = ['[', ']', '_', '*', '`', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in markdown_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
 async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
     """Sendet den aktuellen Systemstatus über Telegram."""
     logging.debug(f"Generiere Status-Nachricht: t_oben={t_oben}, t_unten={t_unten}, t_mittig={t_mittig}, t_verd={t_verd}")
@@ -283,59 +293,39 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     status_lines = []
     status_lines.append("📊 **Systemstatus**")
     status_lines.append("🌡️ **Temperaturen**")
-    #logging.debug("Status-Nachricht: Linie 1-2 generiert")
     status_lines.append(f"  • Oben: {'N/A' if t_oben is None else f'{t_oben:.1f}°C'}")
-    #logging.debug("Status-Nachricht: Linie 3 generiert")
     status_lines.append(f"  • Mittig: {'N/A' if t_mittig is None else f'{t_mittig:.1f}°C'}")
-    #logging.debug("Status-Nachricht: Linie 4 generiert")
     status_lines.append(f"  • Unten: {'N/A' if t_unten is None else f'{t_unten:.1f}°C'}")
-    #logging.debug("Status-Nachricht: Linie 5 generiert")
     try:
         status_lines.append(f"  • Verdampfer: {'N/A' if t_verd is None else f'{t_verd:.1f}°C'}")
-        #logging.debug("Status-Nachricht: Linie 6 (Verdampfer) generiert")
     except Exception as e:
         logging.error(f"Fehler beim Formatieren von Verdampfer: t_verd={t_verd}, Fehler: {e}", exc_info=True)
         status_lines.append("  • Verdampfer: Fehler")
     status_lines.append("🛠️ **Kompressor**")
-    #logging.debug("Status-Nachricht: Linie 7 generiert")
     status_lines.append(f"  • Status: {compressor_status_str}")
-    #logging.debug("Status-Nachricht: Linie 8 generiert")
     status_lines.append(f"  • Aktuelle Laufzeit: {format_time(current_runtime)}")
-    #logging.debug("Status-Nachricht: Linie 9 generiert")
     status_lines.append(f"  • Gesamtlaufzeit heute: {format_time(total_runtime)}")
-    #logging.debug("Status-Nachricht: Linie 10 generiert")
     status_lines.append(f"  • Letzte Laufzeit: {format_time(state.last_runtime)}")
-   #logging.debug("Status-Nachricht: Linie 11 generiert")
     status_lines.append("🎯 **Sollwerte**")
-    #logging.debug("Status-Nachricht: Linie 12 generiert")
     status_lines.append(f"  • Einschaltpunkt: {state.aktueller_einschaltpunkt}°C")
-    #logging.debug("Status-Nachricht: Linie 13 generiert")
     status_lines.append(f"  • Ausschaltpunkt: {state.aktueller_ausschaltpunkt}°C")
-    #logging.debug("Status-Nachricht: Linie 14 generiert")
     status_lines.append(f"  • Gilt für: {'Unten' if state.solar_ueberschuss_aktiv else 'Oben, Mitte'}")
-    #logging.debug("Status-Nachricht: Linie 15 generiert")
     status_lines.append("⚙️ **Betriebsmodus**")
-    #logging.debug("Status-Nachricht: Linie 16 generiert")
     status_lines.append(f"  • {mode_str}")
-    #logging.debug("Status-Nachricht: Linie 17 generiert")
     status_lines.append("ℹ️ **Zusatzinfo**")
-    #logging.debug("Status-Nachricht: Linie 18 generiert")
     status_lines.append(f"  • Solarüberschuss: {feedinpower:.1f} W")
-    #logging.debug("Status-Nachricht: Linie 19 generiert")
     status_lines.append(f"  • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})")
-    #logging.debug("Status-Nachricht: Linie 20 generiert")
     status_lines.append(f"  • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}")
-    #logging.debug("Status-Nachricht: Linie 21 generiert")
     if state.ausschluss_grund:
-        status_lines.append(f"  • Ausschlussgrund: {state.ausschluss_grund}")
-        #logging.debug("Status-Nachricht: Linie 22 generiert")
+        # Maskiere Sonderzeichen im Ausschlussgrund
+        escaped_ausschluss_grund = escape_markdown(state.ausschluss_grund)
+        status_lines.append(f"  • Ausschlussgrund: {escaped_ausschluss_grund}")
 
     # Nachricht zusammenfügen
     message = "\n".join(status_lines)
     logging.debug(f"Vollständige Status-Nachricht (Länge={len(message)}): {message}")
 
     await send_telegram_message(session, chat_id, message, bot_token)
-
 async def send_unknown_command_message(session, chat_id, bot_token):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
     await send_telegram_message(session, chat_id, "❓ Unbekannter Befehl. Verwende 'Hilfe' für eine Liste der Befehle.",
@@ -483,9 +473,9 @@ async def send_help_message(session, chat_id, bot_token):
     await send_telegram_message(session, chat_id, message, bot_token)
 
 # Neue Hilfsfunktion: Liefert Liste der Zeilen innerhalb des gewünschten Zeitfensters
-def prefilter_csv_lines(file_path, hours, tz):
+def prefilter_csv_lines(file_path, days, tz):
     now = datetime.now(tz)
-    time_ago = now - timedelta(hours=hours)
+    start_date = (now - timedelta(days=days - 1)).date()
     relevant_lines = []
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -504,7 +494,7 @@ def prefilter_csv_lines(file_path, hours, tz):
                         timestamp = tz.localize(timestamp)
                     else:
                         timestamp = timestamp.astimezone(tz)
-                    if time_ago <= timestamp <= now:
+                    if start_date <= timestamp.date() <= now.date():
                         relevant_lines.append(line.strip())
                 except Exception as e:
                     logging.warning(f"⚠️ Konnte Zeile {line_num} nicht verarbeiten: {e}")
@@ -723,6 +713,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
             session, state.chat_id,
             f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}", state.bot_token
         )
+
 async def get_runtime_bar_chart(session, days=7, state=None):
     """Erstellt ein Balkendiagramm der Kompressorlaufzeiten nach Energiequelle (nur wenn Kompressor == 'EIN')"""
     if state is None:
@@ -749,7 +740,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
             await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
             return
 
-        logging.debug(f"Lese nur Zeilen aus den letzten {hours} Stunden aus {file_path}")
+        logging.debug(f"Lese nur Zeilen aus den letzten {days} Tagen aus {file_path}")  # Korrektur: hours → days
         relevant_lines = []
         header = None
         try:
@@ -766,7 +757,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
                             continue
                         timestamp = timestamp.tz_localize(
                             local_tz) if timestamp.tzinfo is None else timestamp.astimezone(local_tz)
-                        if time_ago <= timestamp <= now:
+                        if start_date <= timestamp.date() <= today:  # Anpassung an days
                             relevant_lines.append(line.strip())
                     except Exception as e:
                         logging.warning(f"Konnte Zeile nicht verarbeiten: {e}")
@@ -777,17 +768,17 @@ async def get_runtime_bar_chart(session, days=7, state=None):
 
         if len(relevant_lines) < 2:
             await send_telegram_message(session, state.chat_id,
-                                        f"Keine Daten für die letzten {hours} Stunden vorhanden.", state.bot_token)
+                                       f"Keine Daten für die letzten {days} Tage vorhanden.", state.bot_token)
             return
 
         # 2. DataFrame erstellen
-        df = pd.DataFrame(relevant_lines[1:], columns=relevant_lines[0].split(","))
+        df = pd.DataFrame([line.split(",") for line in relevant_lines[1:]], columns=relevant_lines[0].split(","))
         if "Zeitstempel" not in df.columns or "Kompressor" not in df.columns or "PowerSource" not in df.columns:
             raise ValueError("Notwendige Spalten fehlen in der CSV.")
 
         df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
         df = df[df["Zeitstempel"].notna()].copy()
-        df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz)
+        df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
         df["Datum"] = df["Zeitstempel"].dt.date
 
         df = df[(df["Datum"] >= start_date) & (df["Datum"] <= today)]
