@@ -140,13 +140,128 @@ async def get_telegram_updates(session, bot_token, offset=None):
         logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
         return None
 
+
 async def aktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
-    """Aktiviert den Urlaubsmodus."""
-    state.urlaubsmodus_aktiv = True
-    urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-    keyboard = get_keyboard(state)
-    await send_telegram_message(session, chat_id, f"🌴 Urlaubsmodus aktiviert (-{urlaubsabsenkung}°C).", bot_token, reply_markup=keyboard)
-    logging.info("Urlaubsmodus aktiviert")
+    """Aktiviert den Urlaubsmodus mit Zeitauswahl."""
+    # Tastatur für Zeitauswahl anzeigen
+    time_keyboard = {
+        "keyboard": [
+            ["🌴 1 Tag", "🌴 3 Tage", "🌴 7 Tage"],
+            ["🌴 14 Tage", "🌴 Benutzerdefiniert", "❌ Abbrechen"]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+    await send_telegram_message(
+        session, chat_id,
+        "🌴 Wähle die Dauer des Urlaubsmodus:",
+        bot_token,
+        reply_markup=time_keyboard
+    )
+    state.awaiting_urlaub_duration = True
+
+
+async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, duration_text):
+    """Setzt die Urlaubsmodus-Dauer basierend auf der Auswahl."""
+    try:
+        if duration_text == "❌ Abbrechen":
+            await send_telegram_message(session, chat_id, "❌ Urlaubsmodus-Aktivierung abgebrochen.", bot_token)
+            state.awaiting_urlaub_duration = False
+            return
+
+        # Dauer parsen
+        if duration_text == "🌴 1 Tag":
+            duration_days = 1
+        elif duration_text == "🌴 3 Tage":
+            duration_days = 3
+        elif duration_text == "🌴 7 Tage":
+            duration_days = 7
+        elif duration_text == "🌴 14 Tage":
+            duration_days = 14
+        elif duration_text == "🌴 Benutzerdefiniert":
+            await send_telegram_message(
+                session, chat_id,
+                "📅 Bitte sende die Anzahl der Tage (z.B. '5' für 5 Tage):",
+                bot_token
+            )
+            state.awaiting_custom_duration = True
+            return
+        else:
+            # Versuche, eine Zahl aus dem Text zu extrahieren
+            try:
+                duration_days = int(duration_text.replace("🌴 ", "").replace(" Tage", "").strip())
+            except ValueError:
+                await send_telegram_message(
+                    session, chat_id,
+                    "❌ Ungültige Eingabe. Bitte wähle eine der Optionen oder sende eine Zahl.",
+                    bot_token
+                )
+                return
+
+        # Urlaubsmodus aktivieren
+        local_tz = pytz.timezone("Europe/Berlin")
+        now = datetime.now(local_tz)
+        state.urlaubsmodus_aktiv = True
+        state.urlaubsmodus_start = now
+        state.urlaubsmodus_ende = now + timedelta(days=duration_days)
+
+        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
+        keyboard = get_keyboard(state)
+
+        await send_telegram_message(
+            session, chat_id,
+            f"🌴 Urlaubsmodus aktiviert für {duration_days} Tage (-{urlaubsabsenkung}°C).\n"
+            f"Endet am: {state.urlaubsmodus_ende.strftime('%d.%m.%Y um %H:%M')}",
+            bot_token,
+            reply_markup=keyboard
+        )
+        logging.info(f"Urlaubsmodus aktiviert für {duration_days} Tage")
+
+        state.awaiting_urlaub_duration = False
+        state.awaiting_custom_duration = False
+
+    except Exception as e:
+        logging.error(f"Fehler beim Setzen der Urlaubsmodus-Dauer: {e}")
+        await send_telegram_message(session, chat_id, "❌ Fehler beim Aktivieren des Urlaubsmodus.", bot_token)
+
+
+async def handle_custom_duration(session, chat_id, bot_token, config, state, message_text):
+    """Behandelt benutzerdefinierte Dauer-Eingabe."""
+    try:
+        duration_days = int(message_text.strip())
+        if duration_days <= 0:
+            await send_telegram_message(session, chat_id, "❌ Bitte eine positive Zahl eingeben.", bot_token)
+            return
+
+        local_tz = pytz.timezone("Europe/Berlin")
+        now = datetime.now(local_tz)
+        state.urlaubsmodus_aktiv = True
+        state.urlaubsmodus_start = now
+        state.urlaubsmodus_ende = now + timedelta(days=duration_days)
+
+        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
+        keyboard = get_keyboard(state)
+
+        await send_telegram_message(
+            session, chat_id,
+            f"🌴 Urlaubsmodus aktiviert für {duration_days} Tage (-{urlaubsabsenkung}°C).\n"
+            f"Endet am: {state.urlaubsmodus_ende.strftime('%d.%m.%Y um %H:%M')}",
+            bot_token,
+            reply_markup=keyboard
+        )
+        logging.info(f"Urlaubsmodus aktiviert für {duration_days} Tage (benutzerdefiniert)")
+
+        state.awaiting_urlaub_duration = False
+        state.awaiting_custom_duration = False
+
+    except ValueError:
+        await send_telegram_message(session, chat_id, "❌ Bitte eine gültige Zahl eingeben.", bot_token)
+    except Exception as e:
+        logging.error(f"Fehler bei benutzerdefinierter Dauer: {e}")
+        await send_telegram_message(session, chat_id, "❌ Fehler beim Aktivieren des Urlaubsmodus.", bot_token)
+
+
 
 async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     """Deaktiviert den Urlaubsmodus."""
@@ -291,7 +406,11 @@ async def send_unknown_command_message(session, chat_id, bot_token):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
     return await send_telegram_message(session, chat_id, "❓ Unbekannter Befehl. Verwende 'Hilfe' für eine Liste der Befehle.", bot_token)
 
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
+
+async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates,
+                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id,
+                                          bot_token, config, get_solax_data_func, state, get_temperature_history_func,
+                                          get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     try:
         if updates:
@@ -299,9 +418,11 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                 message = update.get('message', {})
                 message_text = message.get('text')
                 chat_id_from_update = message.get('chat', {}).get('id')
+
                 if message_text and chat_id_from_update:
                     message_text = message_text.strip()
                     logging.info(f"Empfangene Telegram-Nachricht: '{message_text}' von chat_id {chat_id_from_update}")
+
                     try:
                         chat_id_from_update = int(chat_id_from_update)
                         expected_chat_id = int(chat_id)
@@ -309,31 +430,63 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                             logging.warning(f"Ungültige chat_id: {chat_id_from_update}, erwartet: {expected_chat_id}")
                             continue
                     except (ValueError, TypeError) as e:
-                        logging.error(f"Fehler bei der chat_id-Konvertierung: {e}, chat_id_from_update={chat_id_from_update}, chat_id={chat_id}")
+                        logging.error(
+                            f"Fehler bei der chat_id-Konvertierung: {e}, chat_id_from_update={chat_id_from_update}, chat_id={chat_id}")
                         continue
+
                     message_text_lower = message_text.lower()
+
+                    # Urlaubsmodus-Dauer-Auswahl behandeln
+                    if hasattr(state, 'awaiting_urlaub_duration') and state.awaiting_urlaub_duration:
+                        await set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, message_text)
+                        continue
+
+                    # Benutzerdefinierte Dauer behandeln
+                    if hasattr(state, 'awaiting_custom_duration') and state.awaiting_custom_duration:
+                        await handle_custom_duration(session, chat_id, bot_token, config, state, message_text)
+                        continue
+
                     if message_text_lower in ("🌡️ temperaturen", "temperaturen"):
-                        await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token)
+                        await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd,
+                                                        chat_id, bot_token)
                     elif message_text_lower in ("📊 status", "status"):
                         await send_status_telegram(
                             session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status,
                             aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, chat_id, bot_token, state,
                             is_nighttime_func, is_solar_window_func
                         )
-                    elif message_text_lower in ("🆘 hilfe", "hilfe"):
-                        await send_help_message(session, chat_id, bot_token)
                     elif message_text_lower in ("🌴 urlaub", "urlaub"):
                         if state.urlaubsmodus_aktiv:
-                            await send_telegram_message(session, chat_id, "🌴 Urlaubsmodus ist bereits aktiviert.", bot_token)
+                            if hasattr(state, 'urlaubsmodus_ende') and state.urlaubsmodus_ende:
+                                remaining_time = state.urlaubsmodus_ende - datetime.now(state.local_tz)
+                                remaining_hours = int(remaining_time.total_seconds() / 3600)
+                                remaining_days = remaining_hours // 24
+                                remaining_hours %= 24
+
+                                if remaining_days > 0:
+                                    time_str = f"{remaining_days} Tage und {remaining_hours} Stunden"
+                                else:
+                                    time_str = f"{remaining_hours} Stunden"
+
+                                await send_telegram_message(
+                                    session, chat_id,
+                                    f"🌴 Urlaubsmodus ist bereits aktiviert. Noch {time_str} verbleibend.",
+                                    bot_token
+                                )
+                            else:
+                                await send_telegram_message(session, chat_id, "🌴 Urlaubsmodus ist bereits aktiviert.",
+                                                            bot_token)
                         else:
                             await aktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
                     elif message_text_lower in ("🏠 urlaub aus", "urlaub aus"):
                         if not state.urlaubsmodus_aktiv:
-                            await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus ist bereits deaktiviert.", bot_token)
+                            await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus ist bereits deaktiviert.",
+                                                        bot_token)
                         else:
                             await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
                     elif message_text_lower in ("🛁 bademodus", "bademodus"):
-                        await send_telegram_message(session, chat_id, "🛁 Bademodus ist noch nicht implementiert.", bot_token)
+                        await send_telegram_message(session, chat_id, "🛁 Bademodus ist noch nicht implementiert.",
+                                                    bot_token)
                     elif message_text_lower in ("📈 verlauf 6h", "verlauf 6h"):
                         await get_temperature_history_func(session, 6, state, config)
                     elif message_text_lower in ("📉 verlauf 24h", "verlauf 24h"):
@@ -356,6 +509,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
     except Exception as e:
         logging.error(f"Fehler in process_telegram_messages_async: {e}", exc_info=True)
         return last_update_id
+
 
 async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func):
     """Telegram-Task zur Verarbeitung von Nachrichten."""
