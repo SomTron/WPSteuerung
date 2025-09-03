@@ -183,14 +183,14 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
             duration_days = 3
         elif duration_text == "🌴 7 Tage":
             duration_days = 7
-
         elif duration_text == "🌴 14 Tage":
             duration_days = 14
         elif duration_text == "🌴 Benutzerdefiniert":
             # WICHTIG: Normale Tastatur sofort zurücksetzen!
             keyboard = get_keyboard(state)
             await send_telegram_message(
-                session, chat_id,"📅 Bitte sende die Anzahl der Tage (z.B. '5' für 5 Tage):",
+                session, chat_id,
+                "📅 Bitte sende die Anzahl der Tage (z.B. '5' für 5 Tage):",
                 bot_token,
                 reply_markup=keyboard  # Normale Tastatur verwenden!
             )
@@ -198,7 +198,7 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
             state.awaiting_urlaub_duration = False
             return
         else:
-        # Versuche, eine Zahl aus dem Text zu extrahieren
+            # Versuche, eine Zahl aus dem Text zu extrahieren
             try:
                 duration_days = int(duration_text.replace("🌴 ", "").replace(" Tage", "").strip())
             except ValueError:
@@ -220,14 +220,14 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
 
         urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-        keyboard = get_keyboard(state)  # Normale Tastatur wiederherstellen
+        keyboard = get_keyboard(state)
 
         await send_telegram_message(
             session, chat_id,
             f"🌴 Urlaubsmodus aktiviert für {duration_days} Tage (-{urlaubsabsenkung}°C).\n"
             f"Endet am: {state.urlaubsmodus_ende.strftime('%d.%m.%Y um %H:%M')}",
             bot_token,
-            reply_markup=keyboard  # Normale Tastatur verwenden
+            reply_markup=keyboard
         )
         logging.info(f"Urlaubsmodus aktiviert für {duration_days} Tage")
 
@@ -236,7 +236,7 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
 
     except Exception as e:
         logging.error(f"Fehler beim Setzen der Urlaubsmodus-Dauer: {e}")
-        keyboard = get_keyboard(state)  # Normale Tastatur wiederherstellen
+        keyboard = get_keyboard(state)
         await send_telegram_message(
             session, chat_id,
             "❌ Fehler beim Aktivieren des Urlaubsmodus.",
@@ -248,9 +248,15 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
 async def handle_custom_duration(session, chat_id, bot_token, config, state, message_text):
     """Behandelt benutzerdefinierte Dauer-Eingabe."""
     try:
+        # Prüfen, ob es sich um einen Button-Text handelt
+        if message_text in ["🌴 Benutzerdefiniert", "❌ Abbrechen", "🌴 1 Tag", "🌴 3 Tage", "🌴 7 Tage", "🌴 14 Tage"]:
+            # Ignoriere Button-Klicks, die nachträglich kommen
+            logging.debug(f"Ignoriere Button-Klick nach Urlaubsmodus-Aktivierung: {message_text}")
+            return
+
         duration_days = int(message_text.strip())
         if duration_days <= 0:
-            keyboard = get_keyboard(state)  # Normale Tastatur wiederherstellen
+            keyboard = get_keyboard(state)
             await send_telegram_message(
                 session, chat_id,
                 "❌ Bitte eine positive Zahl eingeben.",
@@ -266,14 +272,14 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
 
         urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
-        keyboard = get_keyboard(state)  # Normale Tastatur wiederherstellen
+        keyboard = get_keyboard(state)
 
         await send_telegram_message(
             session, chat_id,
             f"🌴 Urlaubsmodus aktiviert für {duration_days} Tage (-{urlaubsabsenkung}°C).\n"
             f"Endet am: {state.urlaubsmodus_ende.strftime('%d.%m.%Y um %H:%M')}",
             bot_token,
-            reply_markup=keyboard  # Normale Tastatur verwenden
+            reply_markup=keyboard
         )
         logging.info(f"Urlaubsmodus aktiviert für {duration_days} Tage (benutzerdefiniert)")
 
@@ -281,16 +287,18 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
         state.awaiting_custom_duration = False
 
     except ValueError:
-        keyboard = get_keyboard(state)  # Normale Tastatur wiederherstellen
-        await send_telegram_message(
-            session, chat_id,
-            "❌ Bitte eine gültige Zahl eingeben.",
-            bot_token,
-            reply_markup=keyboard
-        )
+        # Ignoriere Button-Texte, die wie Zahlen aussehen könnten
+        if message_text not in ["🌴 Benutzerdefiniert", "❌ Abbrechen", "🌴 1 Tag", "🌴 3 Tage", "🌴 7 Tage", "🌴 14 Tage"]:
+            keyboard = get_keyboard(state)
+            await send_telegram_message(
+                session, chat_id,
+                "❌ Bitte eine gültige Zahl eingeben.",
+                bot_token,
+                reply_markup=keyboard
+            )
     except Exception as e:
         logging.error(f"Fehler bei benutzerdefinierter Dauer: {e}")
-        keyboard = get_keyboard(state)  # Normale Tastatur wiederherstellen
+        keyboard = get_keyboard(state)
         await send_telegram_message(
             session, chat_id,
             "❌ Fehler beim Aktivieren des Urlaubsmodus.",
