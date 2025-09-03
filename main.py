@@ -24,7 +24,7 @@ import numpy as np
 from typing import Optional
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
-                              get_boiler_temperature_history)
+                              get_boiler_temperature_history, deaktivere_urlaubsmodus)
 
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
@@ -154,6 +154,13 @@ class State:
         self.gpio_lock = asyncio.Lock()
         self.session = None
         self.config = config
+        self.local_tz = local_tz
+
+        # --- Urlaubsmodus-Zeitsteuerung ---  # ← HIER EINFÜGEN
+        self.urlaubsmodus_start = None
+        self.urlaubsmodus_ende = None
+        self.awaiting_urlaub_duration = False
+        self.awaiting_custom_duration = False
 
         # --- Laufzeitstatistik ---
         self.current_runtime = timedelta()
@@ -1602,6 +1609,18 @@ async def main_loop(config, state, session):
         while True:
             try:
                 now = datetime.now(local_tz)
+
+                # Urlaubsmodus-Ablauf prüfen
+                if (state.urlaubsmodus_aktiv and
+                        hasattr(state, 'urlaubsmodus_ende') and
+                        state.urlaubsmodus_ende and
+                        now >= state.urlaubsmodus_ende):
+                    await deaktivere_urlaubsmodus(session, state.chat_id, state.bot_token, config, state)
+                    await send_telegram_message(
+                        session, state.chat_id,
+                        "🌴 Urlaubsmodus wurde automatisch beendet (Zeit abgelaufen).",
+                        state.bot_token
+                    )
 
                 # Sensorwerte lesen
                 t_boiler_oben = await read_temperature_cached(SENSOR_IDS["oben"])
