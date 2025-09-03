@@ -76,9 +76,12 @@ class TelegramHandler(logging.Handler):
         self.session = session
         self.queue = asyncio.Queue()
         self.task = None
+        self.loop = None
+        self._loop_owner = False
 
     async def send_message(self, message):
         if not self.bot_token or not self.chat_id:
+            logging.debug("Telegram BOT_TOKEN or CHAT_ID missing, skipping message send.")
             return
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {"chat_id": self.chat_id, "text": message}
@@ -87,43 +90,58 @@ class TelegramHandler(logging.Handler):
                 if response.status != 200:
                     logging.error(f"Telegram send failed: {await response.text()}")
         except Exception as e:
-            logging.error(f"Fehler beim Senden an Telegram: {e}", exc_info=True)
+            logging.error(f"Error sending to Telegram: {e}", exc_info=True)
 
     def emit(self, record):
         try:
             msg = self.format(record)
+            # Skip if session is closed
+            if self.session and self.session.closed:
+                logging.debug("Session is closed, skipping Telegram message")
+                return
+            # Get or set the event loop
+            if self.loop is None:
+                try:
+                    self.loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    logging.debug("No running loop, skipping Telegram message")
+                    return
 
-            # Prüfe, ob ein Event Loop für diesen Thread existiert
-            try:
-                loop = asyncio.get_event_loop_policy().get_event_loop()
-            except RuntimeError:
-                # Kein Loop verfügbar → ignorieren
+            # Check if loop is closed
+            if self.loop.is_closed():
+                logging.debug("Event loop is closed, skipping message")
                 return
 
-            if loop and loop.is_running():
-                # Nachricht in die Queue legen
-                self.queue.put_nowait(msg)
+            # Put message in queue
+            self.queue.put_nowait(msg)
 
-                # Task zur Verarbeitung starten oder neu erstellen
-                if not self.task or self.task.done():
-                    self.task = asyncio.run_coroutine_threadsafe(self.process_queue(), loop)
-            else:
-                # Optional: Log-Nachricht puffern oder ignorieren
-                pass
-
+            # Schedule queue processing if not already running
+            if not self.task or self.task.done():
+                self.task = self.loop.create_task(self.process_queue())
         except Exception as e:
-            logging.error(f"Fehler in TelegramHandler.emit: {e}", exc_info=True)
+            logging.error(f"Error in TelegramHandler.emit: {e}", exc_info=True)
 
     async def process_queue(self):
         while not self.queue.empty():
-            msg = await self.queue.get()
-            await self.send_message(msg)
-            self.queue.task_done()
+            try:
+                msg = await self.queue.get()
+                await self.send_message(msg)
+                self.queue.task_done()
+            except Exception as e:
+                logging.error(f"Error processing queue in TelegramHandler: {e}", exc_info=True)
 
     def close(self):
-        if self.task and not self.task.done():
-            self.task.cancel()
-        super().close()
+        try:
+            if self.task and not self.task.done():
+                self.task.cancel()
+            if self._loop_owner and self.loop and not self.loop.is_closed():
+                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+                self.loop.close()
+            self.loop = None
+        except Exception as e:
+            logging.error(f"Error closing TelegramHandler: {e}", exc_info=True)
+        finally:
+            super().close()
 
 
 class State:
@@ -303,7 +321,7 @@ async def setup_logging(session, state):
         # --- StreamHandler für Konsolenausgabe ---
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setLevel(logging.INFO)
-        stream_handler.setFormatter(file_formatter)  # Gleiche Formatierung wie im File
+        stream_handler.setFormatter(file_formatter)
         root_logger.addHandler(stream_handler)
 
         # --- TelegramHandler nur hinzufügen, wenn Token und Chat-ID vorhanden ---
@@ -585,7 +603,7 @@ async def send_runtimes_telegram(session, state):  # Nimm 'state' als Argument e
 
 
 # test.py (angepasste shutdown-Funktion)
-async def shutdown(session, state):  # Nimm 'state' als Argument entgegen
+async def shutdown(session, state):
     """Führt die Abschaltprozedur durch und informiert über Telegram."""
     try:
         local_tz = pytz.timezone("Europe/Berlin")
@@ -593,14 +611,16 @@ async def shutdown(session, state):  # Nimm 'state' als Argument entgegen
         logging.debug(f"shutdown: now={now}, tzinfo={now.tzinfo}")
 
         # Nur GPIO.output aufrufen, wenn GPIO noch initialisiert ist
-        if GPIO.getmode() is not None:  # Prüft, ob ein Modus (BCM oder BOARD) gesetzt ist
+        if GPIO.getmode() is not None:
             GPIO.output(GIO21_PIN, GPIO.LOW)
             logging.info("Kompressor GPIO auf LOW gesetzt")
         else:
             logging.warning("GPIO-Modus nicht gesetzt, überspringe GPIO.output")
 
-        message = f"🛑 Programm beendet um {now.strftime('%d.%m.%Y um %H:%M:%S')}"
-        await send_telegram_message(session, state.chat_id, message, state.bot_token)  # Verwende state.chat_id und state.bot_token
+        # Telegram-Nachricht senden, bevor die Session geschlossen wird
+        if state.bot_token and state.chat_id:
+            message = f"🛑 Programm beendet um {now.strftime('%d.%m.%Y um %H:%M:%S')}"
+            await send_telegram_message(session, state.chat_id, message, state.bot_token)
 
         # LCD nur schließen, wenn es existiert
         if lcd is not None:
@@ -621,6 +641,12 @@ async def shutdown(session, state):  # Nimm 'state' als Argument entgegen
     except Exception as e:
         logging.error(f"Fehler beim Herunterfahren: {e}", exc_info=True)
     finally:
+        # Ensure all pending Telegram tasks are completed before closing the session
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers:
+            if isinstance(handler, TelegramHandler):
+                await handler.process_queue()  # Process any remaining messages
+                handler.close()  # Explicitly close the handler
         logging.info("System heruntergefahren")
 
 
@@ -1452,13 +1478,13 @@ async def main_loop(config, state, session):
     NOTIFICATION_COOLDOWN = 600
     PRESSURE_ERROR_DELAY = timedelta(minutes=5)
     WATCHDOG_MAX_WARNINGS = 3
-    SENSOR_READ_INTERVAL = timedelta(seconds=10)  # Erhöht auf 10 Sekunden für Sensor-Cache
+    SENSOR_READ_INTERVAL = timedelta(seconds=10)
     csv_lock = asyncio.Lock()
     now = datetime.now(local_tz)
     state.last_debug_log_time = None
     min_laufzeit = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_LAUFZEIT_S", 900)))
     min_pause = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_AUSZEIT_S", 900)))
-    PAUSE_NOTIFICATION_INTERVAL = timedelta(minutes=5)  # Intervall für Pause-Meldungen
+    PAUSE_NOTIFICATION_INTERVAL = timedelta(minutes=5)
 
     try:
         # GPIO-Initialisierung
@@ -1508,7 +1534,21 @@ async def main_loop(config, state, session):
                     state.bot_token
             ):
                 logging.warning("Startnachricht konnte nicht gesendet werden, fahre fort.")
-            if not await send_welcome_message(session, state.chat_id, state.bot_token):
+            # Updated call to include state parameter
+            if not await send_welcome_message(session, state.chat_id, state.bot_token, state):
+                logging.warning("Willkommensnachricht konnte nicht gesendet werden, fahre fort.")
+        else:
+            logging.warning("Telegram-Konfiguration fehlt, überspringe Startnachrichten.")
+
+        # Startnachrichten
+        if state.bot_token and state.chat_id:
+            if not await send_telegram_message(
+                    session, state.chat_id,
+                    f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
+                    state.bot_token
+            ):
+                logging.warning("Startnachricht konnte nicht gesendet werden, fahre fort.")
+            if not await send_welcome_message(session, state.chat_id, state.bot_token, state):
                 logging.warning("Willkommensnachricht konnte nicht gesendet werden, fahre fort.")
         else:
             logging.warning("Telegram-Konfiguration fehlt, überspringe Startnachrichten.")
@@ -1516,7 +1556,6 @@ async def main_loop(config, state, session):
         # Telegram-Task starten
         logging.info("Initialisiere telegram_task")
         telegram_task_handle = asyncio.create_task(telegram_task(
-            session=session,
             read_temperature_func=read_temperature,
             sensor_ids=SENSOR_IDS,
             kompressor_status_func=lambda: state.kompressor_ein,
@@ -1925,6 +1964,7 @@ async def run_program():
             raise
 
         state = State(config)
+        state.session = session
 
         # CSV-Initialisierung
         if not os.path.exists("heizungsdaten.csv"):
@@ -1946,8 +1986,20 @@ async def run_program():
             logging.info("Hauptschleife abgebrochen.")
         except Exception as e:
             logging.error(f"Unerwarteter Fehler in run_program: {e}", exc_info=True)
+            # Process remaining Telegram messages before raising
+            root_logger = logging.getLogger()
+            for handler in root_logger.handlers:
+                if isinstance(handler, TelegramHandler):
+                    await handler.process_queue()
+                    handler.close()
             raise
         finally:
+            # Process remaining Telegram messages and close handlers
+            root_logger = logging.getLogger()
+            for handler in root_logger.handlers:
+                if isinstance(handler, TelegramHandler):
+                    await handler.process_queue()
+                    handler.close()
             await shutdown(session, state)
 
 
