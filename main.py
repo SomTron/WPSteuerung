@@ -1762,25 +1762,28 @@ async def main_loop(config, state, session):
                         logging.info("Wechsel von Bademodus zu Normalmodus")
                     is_night = await asyncio.to_thread(is_nighttime, state.config)
                     within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
-                    nacht_reduction = float(state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-                    urlaubs_reduction = float(state.config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
+                    nacht_reduction = float(
+                        state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+                    urlaubs_reduction = float(
+                        state.config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
                     total_reduction = nacht_reduction + urlaubs_reduction
 
-                    if within_solar_window:
-                        state.solar_ueberschuss_aktiv = (
+                    # Prüfe Solarüberschuss-Bedingungen immer
+                    state.solar_ueberschuss_aktiv = (
                             state.batpower > 600.0 or
                             (state.soc >= 95.0 and state.feedinpower > 600.0)
-                        )
-                        if state.solar_ueberschuss_aktiv:
-                            ausschaltpunkt = state.ausschaltpunkt_erhoeht
-                            einschaltpunkt = state.einschaltpunkt_erhoeht
-                            regelfuehler = t_boiler_unten
-                            modus = "Solarüberschuss"
-                        else:
-                            ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
-                            einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
-                            regelfuehler = t_boiler_mittig
-                            modus = "Übergangsmodus"
+                    )
+
+                    if state.solar_ueberschuss_aktiv:
+                        ausschaltpunkt = state.ausschaltpunkt_erhoeht
+                        einschaltpunkt = state.einschaltpunkt_erhoeht
+                        regelfuehler = t_boiler_unten
+                        modus = "Solarüberschuss"
+                    elif within_solar_window:
+                        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
+                        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
+                        regelfuehler = t_boiler_mittig
+                        modus = "Übergangsmodus"
                     elif is_night:
                         ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
                         einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
@@ -1791,6 +1794,7 @@ async def main_loop(config, state, session):
                         einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
                         regelfuehler = t_boiler_mittig
                         modus = "Normalmodus"
+
                     if state.previous_modus != modus:
                         logging.info(f"Wechsel zu Modus: {modus}")
                         state.previous_modus = modus
@@ -1861,12 +1865,12 @@ async def main_loop(config, state, session):
 
                 # --- Solar-Fenster prüfen ---
                 solar_window_conditions_met_to_start = True
-                if not state.bademodus_aktiv and within_solar_window and power_source != "Direkter PV-Strom":
+                if not state.bademodus_aktiv and within_solar_window and not state.solar_ueberschuss_aktiv:
                     solar_window_conditions_met_to_start = False
                     if (state.last_no_start_log is None or
                             safe_timedelta(now, state.last_no_start_log) >= NO_START_LOG_INTERVAL):
                         state.ausschluss_grund = (
-                            f"Warte auf direkten Solarstrom im Solarfenster "
+                            f"[{modus}] Kein Einschalten im Übergangsmodus: Solarüberschuss nicht aktiv "
                             f"({state.uebergangsmodus_start.strftime('%H:%M')}–{state.uebergangsmodus_ende.strftime('%H:%M')})"
                         )
                         logging.debug(state.ausschluss_grund)
