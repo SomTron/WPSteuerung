@@ -50,14 +50,11 @@ def is_solar_window(config):
         logging.error(f"Fehler in is_solar_window: {e}")
         return False
 
-async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5, parse_mode="Markdown"):
+async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5, parse_mode=None):
     """Sendet eine Nachricht über Telegram mit Fehlerbehandlung und Wiederholungslogik."""
     if len(message) > 4096:
         message = message[:4093] + "..."
         logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
-    # Maskiere Sonderzeichen, wenn parse_mode Markdown ist
-    if parse_mode == "Markdown":
-        message = escape_markdown(message)
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -67,7 +64,6 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
         payload["parse_mode"] = parse_mode
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    logging.debug(f"Sende Telegram-Nachricht: chat_id={chat_id}, message={message[:150]}... (Länge={len(message)})")
     for attempt in range(1, retries + 1):
         try:
             async with session.post(url, json=payload, timeout=20) as response:
@@ -77,6 +73,7 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                 else:
                     error_text = await response.text()
                     logging.error(f"Fehler beim Senden der Telegram-Nachricht (Status {response.status}): {error_text}")
+                    logging.debug(f"Fehlgeschlagene Nachricht: '{message}' (Länge={len(message)})")
                     return False
         except aiohttp.ClientConnectionError as e:
             logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
@@ -96,6 +93,7 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                 return False
         except Exception as e:
             logging.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}", exc_info=True)
+            logging.debug(f"Fehlgeschlagene Nachricht: '{message}' (Länge={len(message)})")
             return False
     return False
 
