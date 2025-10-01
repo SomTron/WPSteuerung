@@ -337,6 +337,11 @@ async def setup_logging(session, state):
 
         # Setze Basis-Level
         root_logger.setLevel(logging.DEBUG)
+        # Unterdrücke Matplotlib-Debug-Meldungen
+        logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+        matplotlib.set_loglevel("warning")
+
 
         # --- FileHandler: RotatingFileHandler mit UTF-8 ---
         file_handler = RotatingFileHandler(
@@ -1819,7 +1824,7 @@ async def main_loop(config, state, session):
 
                 # --- Kompressor ausschalten ---
                 can_turn_off = True
-                if state.kompressor_ein:
+                if state.kompressor_ein and abschalten:
                     elapsed_time = safe_timedelta(now,
                                                   state.start_time if state.start_time else state.last_compressor_on_time)
                     if elapsed_time.total_seconds() < min_laufzeit.total_seconds() - 0.5:
@@ -1834,7 +1839,7 @@ async def main_loop(config, state, session):
                         set_last_compressor_off_time(state, now)
                         state.last_runtime = safe_timedelta(now, state.last_compressor_on_time)
                         state.total_runtime_today += state.last_runtime
-                        state.last_completed_cycle = now  # Markiere den abgeschlossenen Zyklus
+                        state.last_completed_cycle = now
                         logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
                     else:
                         logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
