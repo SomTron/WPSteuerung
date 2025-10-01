@@ -50,17 +50,21 @@ def is_solar_window(config):
         logging.error(f"Fehler in is_solar_window: {e}")
         return False
 
-async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5):
+async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5, parse_mode="Markdown"):
     """Sendet eine Nachricht über Telegram mit Fehlerbehandlung und Wiederholungslogik."""
     if len(message) > 4096:
         message = message[:4093] + "..."
         logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
+    # Maskiere Sonderzeichen, wenn parse_mode Markdown ist
+    if parse_mode == "Markdown":
+        message = escape_markdown(message)
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown"
+        "text": message
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     if reply_markup:
         payload["reply_markup"] = reply_markup
     logging.debug(f"Sende Telegram-Nachricht: chat_id={chat_id}, message={message[:150]}... (Länge={len(message)})")
@@ -97,13 +101,14 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
 
 
 def get_keyboard(state):
-    """Erstellt das dynamische Keyboard basierend auf dem Urlaubsmodus."""
+    """Erstellt das dynamische Keyboard basierend auf dem Urlaubsmodus und Bademodus."""
     urlaub_button = "🌴 Urlaub" if not state.urlaubsmodus_aktiv else "🌴 Urlaub Ende"
+    bademodus_button = "🛁 Bademodus" if not state.bademodus_aktiv else "🛁 Bademodus aus"
     keyboard = {
         "keyboard": [
             ["🌡️ Temperaturen", "📊 Status"],
             ["📈 Verlauf 6h", "📉 Verlauf 24h"],
-            [urlaub_button, "🛁 Bademodus"],
+            [urlaub_button, bademodus_button],
             ["🆘 Hilfe", "⏱️ Laufzeiten"]
         ],
         "resize_keyboard": True,
@@ -143,6 +148,22 @@ async def get_telegram_updates(session, bot_token, offset=None):
         logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
         return None
 
+
+async def aktivere_bademodus(session, chat_id, bot_token, state):
+    """Aktiviert den Bademodus."""
+    state.bademodus_aktiv = True
+    keyboard = get_keyboard(state)
+    message = "🛁 Bademodus aktiviert. Kompressor steuert nach erhöhtem Sollwert (untere Temperatur)."
+    logging.info("Bademodus aktiviert")
+    return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode=None)
+
+async def deaktivere_bademodus(session, chat_id, bot_token, state):
+    """Deaktiviert den Bademodus."""
+    state.bademodus_aktiv = False
+    keyboard = get_keyboard(state)
+    message = "🛁 Bademodus deaktiviert."
+    logging.info("Bademodus deaktiviert")
+    return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode=None)
 
 async def aktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     """Aktiviert den Urlaubsmodus mit Zeitauswahl."""
@@ -403,10 +424,12 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
             return f"{hours}h {minutes}min"
         except (ValueError, TypeError):
             return "0h 0min"
-    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func and is_nighttime_func(config) else 0
+    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func and is_nighttime_func(config) and not state.bademodus_aktiv else 0
     is_solar_window_active = is_solar_window_func and is_solar_window_func(config)
-    if state.urlaubsmodus_aktiv:
-        mode_str = f"Urlaub (-{int(config['Urlaubsmodus'].get('URLAUBSABSENKUNG', 6))}°C)"
+    if state.bademodus_aktiv:
+        mode_str = "🛁 Bademodus"
+    elif state.urlaubsmodus_aktiv:
+        mode_str = f"🌴 Urlaub (-{int(config['Urlaubsmodus'].get('URLAUBSABSENKUNG', 6))}°C)"
     elif is_solar_window_active:
         mode_str = "Übergangszeit (Solarfenster)"
         if state.solar_ueberschuss_aktiv:
@@ -435,13 +458,14 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         "🎯 **Sollwerte**",
         f" • Einschaltpunkt: {state.aktueller_einschaltpunkt}°C",
         f" • Ausschaltpunkt: {state.aktueller_ausschaltpunkt}°C",
-        f" • Gilt für: {'Unten' if state.solar_ueberschuss_aktiv else 'Oben, Mitte'}",
+        f" • Gilt für: {'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Oben, Mitte'}",
         "⚙️ **Betriebsmodus**",
         f" • {mode_str}",
         "ℹ️ **Zusatzinfo**",
         f" • Solarüberschuss: {feedinpower:.1f} W",
         f" • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})",
-        f" • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}"
+        f" • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}",
+        f" • Bademodus aktiv: {'Ja' if state.bademodus_aktiv else 'Nein'}"
     ]
     if state.ausschluss_grund:
         escaped_ausschluss_grund = escape_markdown(state.ausschluss_grund)
@@ -456,9 +480,9 @@ async def send_unknown_command_message(session, chat_id, bot_token):
 
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates,
-                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id,
-                                          bot_token, config, get_solax_data_func, state, get_temperature_history_func,
-                                          get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
+                                         last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id,
+                                         bot_token, config, get_solax_data_func, state, get_temperature_history_func,
+                                         get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     try:
         if updates:
@@ -497,7 +521,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     # Temperaturabfrage
                     if message_text_lower in ("🌡️ temperaturen", "temperaturen"):
                         await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd,
-                                                        chat_id, bot_token)
+                                                       chat_id, bot_token)
 
                     # Statusabfrage
                     elif message_text_lower in ("📊 status", "status"):
@@ -528,7 +552,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                                 )
                             else:
                                 await send_telegram_message(session, chat_id, "🌴 Urlaubsmodus ist bereits aktiviert.",
-                                                            bot_token)
+                                                           bot_token)
                         else:
                             await aktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
 
@@ -536,14 +560,25 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     elif message_text_lower in ("🌴 urlaub ende", "urlaub ende"):
                         if not state.urlaubsmodus_aktiv:
                             await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus ist bereits deaktiviert.",
-                                                        bot_token)
+                                                       bot_token)
                         else:
                             await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
 
-                    # Bademodus (noch nicht implementiert)
+                    # Bademodus aktivieren
                     elif message_text_lower in ("🛁 bademodus", "bademodus"):
-                        await send_telegram_message(session, chat_id, "🛁 Bademodus ist noch nicht implementiert.",
-                                                    bot_token)
+                        if state.bademodus_aktiv:
+                            await send_telegram_message(session, chat_id, "🛁 Bademodus ist bereits aktiviert.",
+                                                       bot_token)
+                        else:
+                            await aktivere_bademodus(session, chat_id, bot_token, state)
+
+                    # Bademodus deaktivieren
+                    elif message_text_lower in ("🛁 bademodus aus", "bademodus aus"):
+                        if not state.bademodus_aktiv:
+                            await send_telegram_message(session, chat_id, "🛁 Bademodus ist bereits deaktiviert.",
+                                                       bot_token)
+                        else:
+                            await deaktivere_bademodus(session, chat_id, bot_token, state)
 
                     # Temperaturverlauf 6h
                     elif message_text_lower in ("📈 verlauf 6h", "verlauf 6h"):
@@ -579,6 +614,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
     except Exception as e:
         logging.error(f"Fehler in process_telegram_messages_async: {e}", exc_info=True)
         return last_update_id
+
 
 
 async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func):
@@ -632,8 +668,9 @@ async def send_help_message(session, chat_id, bot_token):
         "📊 **Status**: Zeigt den vollständigen Systemstatus an.\n"
         "🆘 **Hilfe**: Zeigt diese Hilfenachricht an.\n"
         "🌴 **Urlaub**: Aktiviert den Urlaubsmodus.\n"
-        "🏠 **Urlaub aus**: Deaktiviert den Urlaubsmodus.\n"
-        "🛁 **Bademodus**: Noch nicht implementiert.\n"
+        "🌴 **Urlaub Ende**: Deaktiviert den Urlaubsmodus.\n"
+        "🛁 **Bademodus**: Aktiviert den Bademodus (Kompressor steuert nach T_Unten).\n"
+        "🛁 **Bademodus aus**: Deaktiviert den Bademodus.\n"
         "📈 **Verlauf 6h**: Zeigt den Temperaturverlauf der letzten 6 Stunden.\n"
         "📉 **Verlauf 24h**: Zeigt den Temperaturverlauf der letzten 24 Stunden.\n"
         "⏱️ **Laufzeiten [Tage]**: Zeigt die Laufzeiten der letzten X Tage (Standard: 7).\n"
