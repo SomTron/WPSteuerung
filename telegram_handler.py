@@ -11,6 +11,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
+#git-test
+
 # Logging-Konfiguration wird in main.py definiert
 # Empfehlung: Stelle sicher, dass logger.setLevel(logging.DEBUG) in main.py gesetzt ist
 
