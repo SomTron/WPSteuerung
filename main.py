@@ -284,6 +284,7 @@ class State:
         self.current_pause_reason = None
         self.previous_pressure_state = None
         self.last_no_start_log = None
+        self.last_completed_cycle = None
 
 
         # --- Sensorwerte ---
@@ -1833,6 +1834,7 @@ async def main_loop(config, state, session):
                         set_last_compressor_off_time(state, now)
                         state.last_runtime = safe_timedelta(now, state.last_compressor_on_time)
                         state.total_runtime_today += state.last_runtime
+                        state.last_completed_cycle = now  # Markiere den abgeschlossenen Zyklus
                         logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
                     else:
                         logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
@@ -1907,17 +1909,27 @@ async def main_loop(config, state, session):
 
                 # --- Kompressor einschalten ---
                 if not state.kompressor_ein and temp_conditions_met_to_start and pause_ok and solar_window_conditions_met_to_start:
-                    logging.info(f"Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten (Modus: {modus}).")
-                    result = await set_kompressor_status(state, True, t_boiler_oben=t_boiler_oben)
-                    if result:
-                        state.kompressor_ein = True
-                        state.start_time = now
-                        state.last_compressor_on_time = now
-                        logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
-                        state.ausschluss_grund = None
-                    else:
-                        state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler beim Einschalten"
-                        logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
+                    # Prüfe, ob ein vollständiger Zyklus abgeschlossen ist
+                    can_start_new_cycle = True
+                    if state.last_completed_cycle and safe_timedelta(now,
+                                                                     state.last_completed_cycle).total_seconds() < min_laufzeit.total_seconds() + min_pause.total_seconds():
+                        can_start_new_cycle = False
+                        state.ausschluss_grund = f"Neuer Zyklus nicht erlaubt: Warte auf Abschluss von Mindestlaufzeit + Mindestpause ({min_laufzeit.total_seconds() + min_pause.total_seconds() - safe_timedelta(now, state.last_completed_cycle).total_seconds():.1f}s)"
+                        logging.debug(state.ausschluss_grund)
+
+                    if can_start_new_cycle:
+                        logging.info(
+                            f"Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten (Modus: {modus}).")
+                        result = await set_kompressor_status(state, True, t_boiler_oben=t_boiler_oben)
+                        if result:
+                            state.kompressor_ein = True
+                            state.start_time = now
+                            state.last_compressor_on_time = now
+                            logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
+                            state.ausschluss_grund = None
+                        else:
+                            state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler beim Einschalten"
+                            logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
 
                 # --- Moduswechsel prüfen ---
                 if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv and not state.bademodus_aktiv:
