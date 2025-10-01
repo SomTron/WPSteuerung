@@ -24,7 +24,7 @@ import numpy as np
 from typing import Optional
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
-                              get_boiler_temperature_history, deaktivere_urlaubsmodus)
+                              get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
 
 #git-test
 
@@ -176,6 +176,9 @@ class State:
         self.urlaubsmodus_ende = None
         self.awaiting_urlaub_duration = False
         self.awaiting_custom_duration = False
+
+        # --- Bademodus ---
+        self.bademodus_aktiv = False  # Neues Attribut für Bademodus
 
         # --- Laufzeitstatistik ---
         self.current_runtime = timedelta()
@@ -1555,7 +1558,8 @@ async def main_loop(config, state, session):
             if not await send_telegram_message(
                     session, state.chat_id,
                     f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
-                    state.bot_token
+                    state.bot_token,
+                    parse_mode=None
             ):
                 logging.warning("Startnachricht konnte nicht gesendet werden, fahre fort.")
             logging.debug(f"Versuche, Willkommensnachricht zu senden an chat_id={state.chat_id}")
@@ -1563,8 +1567,6 @@ async def main_loop(config, state, session):
                 logging.warning("Willkommensnachricht konnte nicht gesendet werden, fahre fort.")
         else:
             logging.warning("Telegram-Konfiguration fehlt, überspringe Startnachrichten.")
-
-
 
         # Telegram-Task starten
         logging.info("Initialisiere telegram_task")
@@ -1615,6 +1617,7 @@ async def main_loop(config, state, session):
         while True:
             try:
                 now = datetime.now(local_tz)
+                logging.debug(f"State.bademodus_aktiv: {state.bademodus_aktiv}")
 
                 # Urlaubsmodus-Ablauf prüfen
                 if (state.urlaubsmodus_aktiv and
@@ -1625,7 +1628,8 @@ async def main_loop(config, state, session):
                     await send_telegram_message(
                         session, state.chat_id,
                         "🌴 Urlaubsmodus wurde automatisch beendet (Zeit abgelaufen).",
-                        state.bot_token
+                        state.bot_token,
+                        parse_mode=None
                     )
 
                 # Sensorwerte lesen
@@ -1639,6 +1643,10 @@ async def main_loop(config, state, session):
                     else None
                 )
                 state.t_boiler = t_boiler
+                state.t_oben = t_boiler_oben
+                state.t_unten = t_boiler_unten
+                state.t_mittig = t_boiler_mittig
+                state.t_verd = t_verd
 
                 # Sensorfehler prüfen
                 sensor_ok = await check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
@@ -1653,9 +1661,9 @@ async def main_loop(config, state, session):
                 # Sicherheitsabschaltung
                 if t_boiler_oben is not None and t_boiler_unten is not None:
                     if t_boiler_oben >= state.sicherheits_temp or t_boiler_unten >= state.sicherheits_temp:
-                        state.ausschluss_grund = f"Übertemperatur (>= {state.sicherheits_temp}°C)"
+                        state.ausschluss_grund = f"Übertemperatur (>= {state.sicherheits_temp} Grad)"
                         logging.error(
-                            f"Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {state.sicherheits_temp}°C"
+                            f"Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f} Grad, T_Unten={t_boiler_unten:.1f} Grad >= {state.sicherheits_temp} Grad"
                         )
                         if state.kompressor_ein:
                             result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
@@ -1671,14 +1679,16 @@ async def main_loop(config, state, session):
                                     "Kritischer Fehler: Kompressor konnte trotz Übertemperatur nicht ausgeschaltet werden!")
                                 await send_telegram_message(
                                     session, state.chat_id,
-                                    "🚨 KRITISCHER FEHLER: Kompressor bleibt trotz Übertemperatur eingeschaltet!",
-                                    state.bot_token
+                                    f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz Übertemperatur eingeschaltet!",
+                                    state.bot_token,
+                                    parse_mode=None
                                 )
                         if state.bot_token and state.chat_id:
                             await send_telegram_message(
                                 session, state.chat_id,
-                                f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f}°C, T_Unten={t_boiler_unten:.1f}°C >= {state.sicherheits_temp}°C",
-                                state.bot_token
+                                f"⚠️ Sicherheitsabschaltung: T_Oben={t_boiler_oben:.1f} Grad, T_Unten={t_boiler_unten:.1f} Grad >= {state.sicherheits_temp} Grad",
+                                state.bot_token,
+                                parse_mode=None
                             )
                         await asyncio.sleep(2)
                         continue
@@ -1686,7 +1696,7 @@ async def main_loop(config, state, session):
                 # Verdampfertemperatur prüfen
                 VERDAMFER_NOTIFICATION_INTERVAL = timedelta(minutes=5)
                 if t_verd is not None and t_verd < state.verdampfertemperatur:
-                    state.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f}°C < {state.verdampfertemperatur}°C)"
+                    state.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {state.verdampfertemperatur} Grad)"
                     logging.warning(state.ausschluss_grund)
                     if state.bot_token and state.chat_id and (
                             state.last_verdampfer_notification is None or
@@ -1694,7 +1704,8 @@ async def main_loop(config, state, session):
                         await send_telegram_message(
                             session, state.chat_id,
                             f"⚠️ Kompressor bleibt aus oder wird ausgeschaltet: {state.ausschluss_grund}",
-                            state.bot_token
+                            state.bot_token,
+                            parse_mode=None
                         )
                         state.last_verdampfer_notification = now
                     if state.kompressor_ein:
@@ -1709,8 +1720,9 @@ async def main_loop(config, state, session):
                             logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
                             await send_telegram_message(
                                 session, state.chat_id,
-                                "🚨 KRITISCHER FEHLER: Kompressor bleibt trotz niedriger Verdampfertemperatur eingeschaltet!",
-                                state.bot_token
+                                f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz niedriger Verdampfertemperatur eingeschaltet!",
+                                state.bot_token,
+                                parse_mode=None
                             )
                     await asyncio.sleep(2)
                     continue
@@ -1737,63 +1749,71 @@ async def main_loop(config, state, session):
                 solax_result = await fetch_solax_data(session, state, now)
                 solax_data = solax_result["solax_data"]
                 power_source = get_power_source(solax_data) if solax_data else "Unbekannt"
+                state.acpower = solax_result.get("acpower", 0)
+                state.feedinpower = solax_result.get("feedinpower", 0)
+                state.batpower = solax_result.get("batPower", 0)
+                state.soc = solax_result.get("soc", 0)
+                state.powerdc1 = solax_result.get("powerdc1", 0)
+                state.powerdc2 = solax_result.get("powerdc2", 0)
+                state.consumeenergy = solax_result.get("consumeenergy", 0)
+                state.solarueberschuss = state.powerdc1 + state.powerdc2
+                state.power_source = power_source
 
-                # Sollwerte berechnen
-                try:
-                    is_night = await asyncio.to_thread(is_nighttime, state.config)
-                    ausschaltpunkt, einschaltpunkt, solar_ueberschuss_aktiv, feedin_power, nacht_reduction, urlaubs_reduction = await asyncio.to_thread(
-                        calculate_shutdown_point, state.config, is_night, solax_data, state)
-                    state.aktueller_ausschaltpunkt = ausschaltpunkt
-                    state.aktueller_einschaltpunkt = einschaltpunkt
-                    state.solar_ueberschuss_aktiv = solar_ueberschuss_aktiv
-                    state.feedin_power = feedin_power
-                except Exception as e:
-                    logging.error(f"Fehler in calculate_shutdown_point: {e}", exc_info=True)
-                    is_night = False
-                    nacht_reduction = 0.0
-                    urlaubs_reduction = 0.0
-                    state.aktueller_ausschaltpunkt = int(
-                        state.config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
-                    state.aktueller_einschaltpunkt = int(
-                        state.config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 50))
+                # Bademodus-Logik
+                if state.bademodus_aktiv:
+                    logging.debug("Bademodus aktiv, steuere nach T_Unten")
+                    ausschaltpunkt = state.ausschaltpunkt_erhoeht
+                    einschaltpunkt = state.ausschaltpunkt_erhoeht - 3  # 3 Grad unter Ausschaltpunkt
+                    regelfuehler = t_boiler_unten
+                    modus = "Bademodus"
+                    nacht_reduction = 0
+                    urlaubs_reduction = 0
                     state.solar_ueberschuss_aktiv = False
-                    state.feedin_power = 0.0
+                else:
+                    # Bestehende Logik für andere Modi
+                    is_night = await asyncio.to_thread(is_nighttime, state.config)
+                    within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
+                    nacht_reduction = float(
+                        state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
+                    urlaubs_reduction = float(
+                        state.config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
+                    total_reduction = nacht_reduction + urlaubs_reduction
 
-                # Übergangsmodus aktiv?
-                within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
+                    if is_solar_window(state.config):
+                        state.solar_ueberschuss_aktiv = (
+                                state.batpower > 600.0 or
+                                (state.soc >= 95.0 and state.feedinpower > 600.0)
+                        )
+                        if state.solar_ueberschuss_aktiv:
+                            ausschaltpunkt = state.ausschaltpunkt_erhoeht
+                            einschaltpunkt = state.einschaltpunkt_erhoeht
+                            regelfuehler = t_boiler_unten
+                            modus = "Solarüberschuss"
+                        else:
+                            ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
+                            einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
+                            regelfuehler = t_boiler_mittig
+                            modus = "Übergangsmodus"
+                    elif is_night:
+                        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
+                        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
+                        regelfuehler = t_boiler_mittig
+                        modus = "Nachtmodus"
+                    else:
+                        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
+                        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
+                        regelfuehler = t_boiler_mittig
+                        modus = "Normalmodus"
 
-                # Debug-Log aufrufen
-                if state.last_debug_log_time is None or safe_timedelta(now, state.last_debug_log_time) >= timedelta(
-                        seconds=120):
-                    await log_debug_state(
-                        state,
-                        t_boiler_oben,
-                        t_boiler_mittig,
-                        t_boiler_unten,
-                        t_verd,
-                        solax_data,
-                        is_night,
-                        within_uebergangsmodus,
-                        power_source,
-                        False,  # temp_conditions_met_to_start wird später gesetzt
-                        nacht_reduction,
-                        urlaubs_reduction
-                    )
-                    state.last_debug_log_time = now
+                state.aktueller_ausschaltpunkt = ausschaltpunkt
+                state.aktueller_einschaltpunkt = einschaltpunkt
 
                 # Abschaltbedingung prüfen
                 abschalten = False
-                if state.solar_ueberschuss_aktiv:
-                    if t_boiler_unten is not None and t_boiler_unten >= state.aktueller_ausschaltpunkt:
-                        abschalten = True
-                        state.ausschluss_grund = (
-                            f"[Solarmodus] Abschaltbedingung erreicht: T_Unten={t_boiler_unten:.1f}°C >= {state.aktueller_ausschaltpunkt:.1f}°C"
-                        )
-                        logging.info(state.ausschluss_grund)
-                elif t_boiler_mittig is not None and t_boiler_mittig >= state.aktueller_ausschaltpunkt:
+                if regelfuehler is not None and regelfuehler >= state.aktueller_ausschaltpunkt:
                     abschalten = True
                     state.ausschluss_grund = (
-                        f"[Normalmodus] Abschaltbedingung erreicht: T_Mittig={t_boiler_mittig:.1f}°C >= {state.aktueller_ausschaltpunkt:.1f}°C"
+                        f"[{modus}] Abschaltbedingung erreicht: {'T_Unten' if modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}={regelfuehler:.1f} Grad >= {state.aktueller_ausschaltpunkt:.1f} Grad"
                     )
                     logging.info(state.ausschluss_grund)
 
@@ -1819,36 +1839,32 @@ async def main_loop(config, state, session):
                         logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
                         await send_telegram_message(
                             session, state.chat_id,
-                            "🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet!",
-                            state.bot_token
+                            f"🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet!",
+                            state.bot_token,
+                            parse_mode=None
                         )
                     await asyncio.sleep(2)
                     continue
 
                 # Temperaturbedingungen für Start prüfen
                 temp_conditions_met_to_start = False
-                if state.solar_ueberschuss_aktiv:
-                    if t_boiler_unten is not None:
-                        temp_conditions_met_to_start = t_boiler_unten < state.aktueller_einschaltpunkt
-                        if not temp_conditions_met_to_start:
-                            state.ausschluss_grund = (
-                                f"[Solarmodus] Kein Einschalten: T_Unten={t_boiler_unten:.1f}°C >= {state.aktueller_einschaltpunkt:.1f}°C"
-                            )
-                            #logging.debug(state.ausschluss_grund)
-                elif t_boiler_mittig is not None:
-                    temp_conditions_met_to_start = t_boiler_mittig < state.aktueller_einschaltpunkt
-                    if not temp_conditions_met_to_start:
-                        state.ausschluss_grund = (
-                            f"[Normalmodus] Kein Einschalten: T_Mittig={t_boiler_mittig:.1f}°C >= {state.aktueller_einschaltpunkt:.1f}°C"
-                        )
-                        logging.debug(state.ausschluss_grund)
+                if regelfuehler is not None and regelfuehler <= state.aktueller_einschaltpunkt:
+                    temp_conditions_met_to_start = True
+                    logging.info(
+                        f"[{modus}] Einschaltbedingung erreicht: {'T_Unten' if modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}={regelfuehler:.1f} Grad <= {state.aktueller_einschaltpunkt:.1f} Grad"
+                    )
+                else:
+                    state.ausschluss_grund = (
+                        f"[{modus}] Kein Einschalten: {'T_Unten' if modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}={regelfuehler:.1f} Grad > {state.aktueller_einschaltpunkt:.1f} Grad"
+                    )
+                    logging.debug(state.ausschluss_grund)
 
-                # Solar-Fenster prüfen
+                # Solar-Fenster prüfen (nur für Nicht-Bademodus)
                 solar_window_conditions_met_to_start = True
-                if within_uebergangsmodus and power_source != "Direkter PV-Strom":
+                if not state.bademodus_aktiv and is_solar_window(state.config) and power_source != "Direkter PV-Strom":
                     solar_window_conditions_met_to_start = False
                     state.ausschluss_grund = (
-                        f"Warte auf direkten Solarstrom im Übergangsmodus "
+                        f"Warte auf direkten Solarstrom im Solarfenster "
                         f"({state.uebergangsmodus_start.strftime('%H:%M')}–{state.uebergangsmodus_ende.strftime('%H:%M')})"
                     )
                     logging.debug(state.ausschluss_grund)
@@ -1869,7 +1885,8 @@ async def main_loop(config, state, session):
                                     await send_telegram_message(
                                         session, state.chat_id,
                                         f"⚠️ Kompressor bleibt aus: {reason}...",
-                                        state.bot_token
+                                        state.bot_token,
+                                        parse_mode=None
                                     )
                                     state.last_pause_telegram_notification = now
                                 state.last_pause_reason = reason
@@ -1883,7 +1900,7 @@ async def main_loop(config, state, session):
 
                 # Kompressor einschalten
                 if not state.kompressor_ein and temp_conditions_met_to_start and pause_ok and solar_window_conditions_met_to_start:
-                    logging.info("Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten.")
+                    logging.info(f"Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten (Modus: {modus}).")
                     result = await set_kompressor_status(state, True, t_boiler_oben=t_boiler_oben)
                     if result:
                         state.kompressor_ein = True
@@ -1896,7 +1913,7 @@ async def main_loop(config, state, session):
                         logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
 
                 # Moduswechsel prüfen
-                if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv:
+                if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv and not state.bademodus_aktiv:
                     effective_ausschaltpunkt = state.previous_ausschaltpunkt or state.aktueller_ausschaltpunkt
                     if not state.solar_ueberschuss_aktiv and t_boiler_oben is not None and t_boiler_mittig is not None:
                         if t_boiler_oben >= effective_ausschaltpunkt or t_boiler_mittig >= effective_ausschaltpunkt:
@@ -1915,8 +1932,9 @@ async def main_loop(config, state, session):
                                     "Kritischer Fehler: Kompressor konnte bei Moduswechsel nicht ausgeschaltet werden!")
                                 await send_telegram_message(
                                     session, state.chat_id,
-                                    "🚨 KRITISCHER FEHLER: Kompressor bleibt bei Moduswechsel eingeschaltet!",
-                                    state.bot_token
+                                    f"🚨 KRITISCHER FEHLER: Kompressor bleibt bei Moduswechsel eingeschaltet!",
+                                    state.bot_token,
+                                    parse_mode=None
                                 )
 
                 # Laufzeit aktualisieren
@@ -1950,7 +1968,9 @@ async def main_loop(config, state, session):
                         result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_boiler_oben)
                         await send_telegram_message(
                             session, state.chat_id,
-                            "🚨 Watchdog-Fehler: Programm beendet.", state.bot_token
+                            f"🚨 Watchdog-Fehler: Programm beendet.",
+                            state.bot_token,
+                            parse_mode=None
                         )
                         await shutdown(session, state)
                         raise SystemExit("Watchdog-Exit")
