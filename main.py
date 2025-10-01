@@ -80,17 +80,31 @@ class TelegramHandler(logging.Handler):
         self._loop_owner = False
 
     async def send_message(self, message):
-        if not self.bot_token or not self.chat_id:
-            logging.debug("Telegram BOT_TOKEN or CHAT_ID missing, skipping message send.")
-            return
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        payload = {"chat_id": self.chat_id, "text": message}
-        try:
-            async with self.session.post(url, json=payload) as response:
-                if response.status != 200:
-                    logging.error(f"Telegram send failed: {await response.text()}")
-        except Exception as e:
-            logging.error(f"Error sending to Telegram: {e}", exc_info=True)
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "Markdown"  # Optional, wenn Markdown benötigt wird
+        }
+        async with aiohttp.ClientSession() as session:  # Neue Sitzung pro Anfrage
+            try:
+                async with session.post(url, json=payload, timeout=20) as response:
+                    if response.status == 200:
+                        logging.info(f"Telegram-Nachricht gesendet: {message[:100]}...")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logging.error(f"Fehler beim Senden an Telegram: {response.status} - {error_text}")
+                        return False
+            except aiohttp.ClientConnectionError as e:
+                logging.error(f"Netzwerkfehler beim Senden an Telegram: {e}")
+                return False
+            except asyncio.TimeoutError:
+                logging.error("Timeout beim Senden an Telegram")
+                return False
+            except Exception as e:
+                logging.error(f"Unerwarteter Fehler beim Senden an Telegram: {e}", exc_info=True)
+                return False
 
     def emit(self, record):
         try:
@@ -1534,31 +1548,22 @@ async def main_loop(config, state, session):
             logging.error("Keine Netzwerkverbindung nach mehreren Versuchen. Überspringe Startnachrichten.")
 
         # Startnachrichten
+        logging.info("Sende Start- und Willkommensnachrichten...")
         if state.bot_token and state.chat_id:
+            logging.debug(f"Versuche, Startnachricht zu senden an chat_id={state.chat_id}")
             if not await send_telegram_message(
                     session, state.chat_id,
                     f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
                     state.bot_token
             ):
                 logging.warning("Startnachricht konnte nicht gesendet werden, fahre fort.")
-            # Updated call to include state parameter
+            logging.debug(f"Versuche, Willkommensnachricht zu senden an chat_id={state.chat_id}")
             if not await send_welcome_message(session, state.chat_id, state.bot_token, state):
                 logging.warning("Willkommensnachricht konnte nicht gesendet werden, fahre fort.")
         else:
             logging.warning("Telegram-Konfiguration fehlt, überspringe Startnachrichten.")
 
-        # Startnachrichten
-        if state.bot_token and state.chat_id:
-            if not await send_telegram_message(
-                    session, state.chat_id,
-                    f"✅ Programm gestartet am {now.strftime('%d.%m.%Y um %H:%M:%S')}",
-                    state.bot_token
-            ):
-                logging.warning("Startnachricht konnte nicht gesendet werden, fahre fort.")
-            if not await send_welcome_message(session, state.chat_id, state.bot_token, state):
-                logging.warning("Willkommensnachricht konnte nicht gesendet werden, fahre fort.")
-        else:
-            logging.warning("Telegram-Konfiguration fehlt, überspringe Startnachrichten.")
+
 
         # Telegram-Task starten
         logging.info("Initialisiere telegram_task")
@@ -1975,6 +1980,7 @@ async def run_program():
     async with aiohttp.ClientSession() as session:
         config = configparser.ConfigParser()
         try:
+            logging.info("Lese Konfigurationsdatei...")
             config.read("config.ini")
             if not config.sections():
                 raise ValueError("Konfiguration konnte nicht geladen werden")
@@ -1984,8 +1990,10 @@ async def run_program():
 
         state = State(config)
         state.session = session
+        logging.info("State-Objekt initialisiert")
 
         # CSV-Initialisierung
+        logging.info("Initialisiere CSV-Datei...")
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
                 header = (
@@ -1997,7 +2005,9 @@ async def run_program():
                 logging.info("CSV-Header geschrieben: " + header.strip())
 
         try:
+            logging.info("Richte Logging ein...")
             await setup_logging(session, state)
+            logging.info("Starte main_loop...")
             await main_loop(config, state, session)
         except KeyboardInterrupt:
             logging.info("Programm durch Benutzer abgebrochen (Ctrl+C).")
@@ -2013,6 +2023,7 @@ async def run_program():
                     handler.close()
             raise
         finally:
+            logging.info("Führe shutdown aus...")
             # Process remaining Telegram messages and close handlers
             root_logger = logging.getLogger()
             for handler in root_logger.handlers:
