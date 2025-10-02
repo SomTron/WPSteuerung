@@ -944,7 +944,11 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
             else:
                 state.start_time = None
                 set_last_compressor_off_time(state, now)
-                state.last_runtime = safe_timedelta(now, state.last_compressor_on_time)
+                if state.last_compressor_on_time is not None:
+                    state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, local_tz)
+                else:
+                    state.last_runtime = timedelta()
+                    logging.debug("last_compressor_on_time ist None, setze last_runtime auf 0")
                 state.total_runtime_today += state.last_runtime
                 logging.info(f"KOMPRESSOR AUSGESCHALTET um {now.strftime('%H:%M:%S')}. Laufzeit: {state.last_runtime}")
             state.ausschluss_grund = None
