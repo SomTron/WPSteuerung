@@ -965,7 +965,7 @@ def load_and_validate_config():
         }
     }
 
-    config = configparser.ConfigParser()
+    config = ConfigParser()
     read_ok = config.read("config.ini")
 
     if not read_ok:
