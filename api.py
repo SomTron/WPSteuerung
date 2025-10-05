@@ -5,10 +5,13 @@ from configparser import ConfigParser
 import logging
 import asyncio
 import aiohttp
+import RPi.GPIO as GPIO
+import json
+import os
+from datetime import datetime, timedelta  # Added timedelta
 from WW_skript import State, set_kompressor_status, read_temperature, read_temperature_cached, kompressor_status_func, current_runtime_func, total_runtime_func
 from telegram_handler import send_status_telegram, is_solar_window, is_nighttime_func, fetch_solax_data
 from utils import safe_timedelta
-from datetime import datetime, timedelta
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -16,7 +19,7 @@ app = FastAPI()
 # CORS for Android app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,6 +27,11 @@ app.add_middleware(
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s")
+
+# Initialize GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(21, GPIO.OUT)
 
 # Load config and initialize state
 config = ConfigParser()
@@ -37,8 +45,40 @@ sensor_ids = {
     "temp_verd": config["Sensors"].get("temp_verd", "28-213bd4460d65")
 }
 
+# State file path
+STATE_FILE = "/home/patrik/state.json"
+
+# Load or initialize state from file
+def load_state():
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                data = json.load(f)
+                return data
+        else:
+            logging.warning("state.json not found, creating with default values")
+            default_state = {"bademodus_aktiv": False, "urlaubsmodus_aktiv": False, "last_updated": None}
+            save_state(default_state)
+            return default_state
+    except Exception as e:
+        logging.error(f"Fehler beim Laden von state.json: {e}", exc_info=True)
+        return {"bademodus_aktiv": False, "urlaubsmodus_aktiv": False, "last_updated": None}
+
+# Save state to file
+def save_state(state_data):
+    try:
+        state_data["last_updated"] = datetime.now().isoformat()
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state_data, f)
+        logging.info("State saved to state.json")
+    except Exception as e:
+        logging.error(f"Fehler beim Speichern von state.json: {e}", exc_info=True)
+
 # Initialize State
 state = State(config)
+state_data = load_state()
+state.bademodus_aktiv = state_data.get("bademodus_aktiv", False)
+state.urlaubsmodus_aktiv = state_data.get("urlaubsmodus_aktiv", False)
 
 class CommandRequest(BaseModel):
     command: str
@@ -65,26 +105,22 @@ class StatusResponse(BaseModel):
 async def get_status():
     try:
         async with aiohttp.ClientSession() as session:
-            # Read temperatures asynchronously using read_temperature_cached
             sensor_tasks = [
                 asyncio.create_task(read_temperature_cached(sensor_ids[key]))
                 for key in ["temp_oben", "temp_mittig", "temp_unten", "temp_verd"]
             ]
             t_oben, t_mittig, t_unten, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
 
-            # Handle potential exceptions from temperature readings
             for temp, key in zip([t_oben, t_mittig, t_unten, t_verd],
                                  ["temp_oben", "temp_mittig", "temp_unten", "temp_verd"]):
                 if isinstance(temp, Exception):
-                    logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {temp}")
+                    logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {str(temp)}", exc_info=True)
                     temp = None
 
-            # Get compressor status and runtime using state
             kompressor_status = kompressor_status_func(state)
             current_runtime = current_runtime_func(state)
             total_runtime = total_runtime_func(state)
 
-            # Send status to Telegram
             await send_status_telegram(
                 session, t_oben, t_unten, t_mittig, t_verd, kompressor_status,
                 current_runtime, total_runtime, config, state.chat_id, state.bot_token, state
@@ -97,7 +133,6 @@ async def get_status():
                 minutes = (seconds % 3600) // 60
                 return f"{hours}h {minutes}min"
 
-            # Fetch Solax data
             solax_data = await fetch_solax_data(session, state, datetime.now(state.local_tz)) or {
                 "feedinpower": 0,
                 "batPower": 0,
@@ -146,19 +181,29 @@ async def get_status():
 @app.post("/command")
 async def execute_command(request: CommandRequest):
     try:
+        state_data = load_state()
         if request.command == "bademodus":
             state.bademodus_aktiv = True
             state.urlaubsmodus_aktiv = False
+            state_data["bademodus_aktiv"] = True
+            state_data["urlaubsmodus_aktiv"] = False
+            save_state(state_data)
             await set_kompressor_status(state, True)
             return {"status": "ok", "message": "Bademodus aktiviert"}
         elif request.command == "urlaub":
-            state.urlaubsmodus_aktiv = True
             state.bademodus_aktiv = False
+            state.urlaubsmodus_aktiv = True
+            state_data["bademodus_aktiv"] = False
+            state_data["urlaubsmodus_aktiv"] = True
+            save_state(state_data)
             await set_kompressor_status(state, False)
             return {"status": "ok", "message": "Urlaubsmodus aktiviert"}
         elif request.command == "normal":
             state.bademodus_aktiv = False
             state.urlaubsmodus_aktiv = False
+            state_data["bademodus_aktiv"] = False
+            state_data["urlaubsmodus_aktiv"] = False
+            save_state(state_data)
             return {"status": "ok", "message": "Normalmodus aktiviert"}
         else:
             raise HTTPException(status_code=400, detail="Unbekannter Befehl")
@@ -178,7 +223,7 @@ async def get_temperatures():
         for temp, key in zip([t_oben, t_mittig, t_unten, t_verd],
                              ["temp_oben", "temp_mittig", "temp_unten", "temp_verd"]):
             if isinstance(temp, Exception):
-                logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {temp}")
+                logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {str(temp)}", exc_info=True)
                 temp = None
 
         return {

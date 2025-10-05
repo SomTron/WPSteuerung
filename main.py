@@ -11,6 +11,7 @@ from logging.handlers import RotatingFileHandler
 from configparser import ConfigParser
 import aiohttp
 import hashlib
+import json
 from telegram import ReplyKeyboardMarkup
 import asyncio
 import aiofiles
@@ -33,6 +34,9 @@ from telegram_handler import (
     deaktivere_urlaubsmodus,
     is_solar_window
 )
+
+# State file path
+STATE_FILE = "/home/patrik/state.json"
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -383,6 +387,32 @@ async def setup_logging(session, state):
     except Exception as e:
         print(f"Fehler bei Logging-Setup: {e}", file=sys.stderr)
         raise
+
+# Load state from file
+def load_state():
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                data = json.load(f)
+                return data
+        else:
+            logging.warning("state.json not found, creating with default values")
+            default_state = {"bademodus_aktiv": False, "urlaubsmodus_aktiv": False, "last_updated": None}
+            save_state(default_state)
+            return default_state
+    except Exception as e:
+        logging.error(f"Fehler beim Laden von state.json: {e}", exc_info=True)
+        return {"bademodus_aktiv": False, "urlaubsmodus_aktiv": False, "last_updated": None}
+
+# Save state to file
+def save_state(state_data):
+    try:
+        state_data["last_updated"] = datetime.now().isoformat()
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state_data, f)
+        logging.info("State saved to state.json")
+    except Exception as e:
+        logging.error(f"Fehler beim Speichern von state.json: {e}", exc_info=True)
 
 
 # Neue Hilfsfunktion für sichere Zeitdifferenzberechnung
@@ -871,7 +901,7 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
     max_attempts = 3
-    attempt_delay = float(state.config["Heizungssteuerung"].get("GPIO_ATTEMPT_DELAY", 0.2))
+    attempt_delay = float(state.config["Heizungssteuerung"].get("GPIO_ATTEMPT_DELAY", 0.5))  # Increased to 0.5s
 
     try:
         SICHERHEITS_TEMP = float(state.config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 52.0))
@@ -879,7 +909,6 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
         async with state.gpio_lock:
             logging.debug(f"Aufruf set_kompressor_status: Ziel={'EIN' if ein else 'AUS'}, Force={force}, "
                           f"Aktuell kompressor_ein={state.kompressor_ein}")
-            current_physical_state = GPIO.input(21)
 
             if force:
                 logging.debug("Force=True: Sicherheitsprüfung übersprungen.")
@@ -887,6 +916,10 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
                 logging.warning(f"Übertemperatur: T_Oben={t_boiler_oben:.1f}°C >= {SICHERHEITS_TEMP}°C")
                 state.ausschluss_grund = f"Übertemperatur (>= {SICHERHEITS_TEMP}°C)"
                 return False
+
+            if state.kompressor_ein == ein and not force:
+                logging.debug(f"Kompressorstatus unverändert: {'Ein' if ein else 'Aus'}")
+                return True
 
             target_gpio = GPIO.HIGH if ein else GPIO.LOW
             success = False
@@ -898,17 +931,24 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
                 if readback == target_gpio:
                     success = True
                     break
+                else:
+                    logging.warning(f"GPIO-Inkonsistenz im Versuch {attempt + 1}: Ziel={'HIGH' if ein else 'LOW'}, Gelesen={readback}")
 
             if not success:
                 logging.critical(
-                    f"Konnte GPIO 21 nicht auf {'HIGH' if ein else 'LOW'} setzen nach {max_attempts} Versuchen!")
+                    f"Konnte GPIO 21 nicht auf {'HIGH' if ein else 'LOW'} setzen nach {max_attempts} Versuchen! Aktueller GPIO-Wert: {GPIO.input(21)}")
                 if state.bot_token and state.chat_id and state.session:
                     await send_telegram_message(
                         state.session, state.chat_id,
                         f"🚨 KRITISCHER FEHLER: Kompressor konnte nicht {'eingeschaltet' if ein else 'ausgeschaltet'} werden!",
-                        state.bot_token
+                        state.bot_token,
+                        parse_mode=None
                     )
                 return False
+
+            # Check for inconsistency after setting
+            if state.kompressor_ein != ein:
+                logging.warning(f"State-Inkonsistenz korrigiert: state.kompressor_ein={state.kompressor_ein}, Ziel={ein}")
 
             # Status aktualisieren
             state.kompressor_ein = ein
@@ -936,7 +976,6 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
         state.kompressor_ein = (current_physical_state == GPIO.HIGH) if current_physical_state is not None else False
         state.start_time = None
         return False
-
 
 
 def load_and_validate_config():
@@ -985,7 +1024,8 @@ def load_and_validate_config():
 # Asynchrone Funktion zum Neuladen der Konfiguration
 async def reload_config(session, state):
     try:
-        new_config = load_and_validate_config()
+        new_config = ConfigParser()
+        new_config.read('config.ini')
         current_hash = calculate_file_hash("config.ini")
 
         if hasattr(state, "last_config_hash") and state.last_config_hash == current_hash:
@@ -1046,6 +1086,12 @@ async def reload_config(session, state):
 
         if state.bot_token and state.chat_id and (old_token != state.bot_token or old_chat_id != state.chat_id):
             await send_telegram_message(session, state.chat_id, "🔧 Konfiguration neu geladen.", state.bot_token)
+
+        # --- Load mode from state.json ---
+        state_data = load_state()
+        state.bademodus_aktiv = state_data.get("bademodus_aktiv", False)
+        state.urlaubsmodus_aktiv = state_data.get("urlaubsmodus_aktiv", False)
+        logging.info(f"Mode loaded from state.json: bademodus_aktiv={state.bademodus_aktiv}, urlaubsmodus_aktiv={state.urlaubsmodus_aktiv}")
 
         # --- Abschluss ---
         state.last_config_hash = current_hash
@@ -1528,6 +1574,8 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     state.t_mittig = t_mittig
     state.t_verd = t_verd
     state.t_boiler = (t_oben + t_unten) / 2 if t_oben is not None and t_unten is not None else None
+    local_tz = pytz.timezone("Europe/Berlin")
+    now = datetime.now(local_tz)
 
     if not await check_for_sensor_errors(session, state, t_oben, t_unten):
         state.ausschluss_grund = "Sensorfehler: Ungültige Werte"
@@ -1538,63 +1586,67 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
 
     if t_oben is not None and t_unten is not None and (
             t_oben >= state.sicherheits_temp or t_unten >= state.sicherheits_temp):
-        state.ausschluss_grund = f"Übertemperatur (>= {state.sicherheits_temp} Grad)"
-        logging.error(f"Sicherheitsabschaltung: T_Oben={t_oben:.1f} Grad, T_Unten={t_unten:.1f} Grad")
+        state.ausschluss_grund = f"Uebertemperatur (>= {state.sicherheits_temp} Grad)"
+        logging.error(f"Sicherheitsabschaltung: T-Oben={t_oben:.1f} Grad, T-Unten={t_unten:.1f} Grad")
         if state.kompressor_ein:
             result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_oben)
             if result:
                 state.kompressor_ein = False
-                state.last_runtime = safe_timedelta(datetime.now(state.local_tz), state.last_compressor_on_time, state.local_tz)
+                state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, local_tz)
                 state.total_runtime_today += state.last_runtime
                 logging.info(f"Kompressor ausgeschaltet (Sicherheitsabschaltung). Laufzeit: {state.last_runtime}")
             else:
-                logging.critical(
-                    "Kritischer Fehler: Kompressor konnte trotz Übertemperatur nicht ausgeschaltet werden!")
-                await send_telegram_message(
-                    session, state.chat_id,
-                    f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz Übertemperatur eingeschaltet!",
-                    state.bot_token,
-                    parse_mode=None
-                )
-        await send_telegram_message(
-            session, state.chat_id,
-            f"⚠️ Sicherheitsabschaltung: T_Oben={t_oben:.1f} Grad, T_Unten={t_unten:.1f} Grad >= {state.sicherheits_temp} Grad",
-            state.bot_token,
-            parse_mode=None
-        )
+                logging.critical("Kritischer Fehler: Kompressor konnte trotz Übertemperatur nicht ausgeschaltet werden!")
+                if state.last_overtemp_notification is None or safe_timedelta(now, state.last_overtemp_notification, local_tz) > timedelta(minutes=5):
+                    await send_telegram_message(
+                        session, state.chat_id,
+                        f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz Übertemperatur eingeschaltet!",
+                        state.bot_token,
+                        parse_mode=None
+                    )
+                    state.last_overtemp_notification = now
+        if state.last_overtemp_notification is None or safe_timedelta(now, state.last_overtemp_notification, local_tz) > timedelta(minutes=5):
+            await send_telegram_message(
+                session, state.chat_id,
+                f"⚠️ Sicherheitsabschaltung: T-Oben={t_oben:.1f} Grad, T-Unten={t_unten:.1f} Grad >= {state.sicherheits_temp} Grad",
+                state.bot_token,
+                parse_mode=None
+            )
+            state.last_overtemp_notification = now
         return False
 
     if t_verd is not None and t_verd < state.verdampfertemperatur:
         state.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {state.verdampfertemperatur} Grad)"
         logging.warning(state.ausschluss_grund)
-        if state.last_verdampfer_notification is None or safe_timedelta(datetime.now(state.local_tz),
-                                                                        state.last_verdampfer_notification, state.local_tz) > timedelta(minutes=5):
+        if state.last_verdampfer_notification is None or safe_timedelta(now, state.last_verdampfer_notification, local_tz) > timedelta(minutes=5):
             await send_telegram_message(
                 session, state.chat_id,
                 f"⚠️ Kompressor bleibt aus oder wird ausgeschaltet: {state.ausschluss_grund}",
                 state.bot_token,
                 parse_mode=None
             )
-            state.last_verdampfer_notification = datetime.now(state.local_tz)
+            state.last_verdampfer_notification = now
         if state.kompressor_ein:
             result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_oben)
             if result:
                 state.kompressor_ein = False
-                state.last_runtime = safe_timedelta(datetime.now(state.local_tz), state.last_compressor_on_time, state.local_tz)
+                state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, local_tz)
                 state.total_runtime_today += state.last_runtime
-                logging.info(
-                    f"Kompressor ausgeschaltet wegen zu niedriger Verdampfertemperatur. Laufzeit: {state.last_runtime}")
+                logging.info(f"Kompressor ausgeschaltet wegen zu niedriger Verdampfertemperatur. Laufzeit: {state.last_runtime}")
             else:
                 logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
-                await send_telegram_message(
-                    session, state.chat_id,
-                    f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz niedriger Verdampfertemperatur eingeschaltet!",
-                    state.bot_token,
-                    parse_mode=None
-                )
+                if state.last_overtemp_notification is None or safe_timedelta(now, state.last_overtemp_notification, local_tz) > timedelta(minutes=5):
+                    await send_telegram_message(
+                        session, state.chat_id,
+                        f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz niedriger Verdampfertemperatur eingeschaltet!",
+                        state.bot_token,
+                        parse_mode=None
+                    )
+                    state.last_overtemp_notification = now
         return False
-    return True
 
+    #logging.debug(f"Safety checks passed: T-Oben={t_oben:.1f}, T-Unten={t_unten:.1f}, T-Verd={t_verd:.1f}")
+    return True
 
 async def check_pressure_and_config(session, state):
     """Prüft Druckschalter und aktualisiert Konfiguration bei Bedarf."""
@@ -1620,9 +1672,9 @@ async def check_pressure_and_config(session, state):
 
 async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     """Bestimmt den Betriebsmodus und setzt Sollwerte."""
-    from telegram_handler import is_solar_window  # Import hier, um Zirkelimporte zu vermeiden
+    from utils import is_nighttime  # Use is_nighttime from utils
     now = datetime.now(state.local_tz)
-    is_night = await asyncio.to_thread(is_nighttime, state.config)
+    is_night = is_nighttime(state.config)  # Updated to use is_nighttime
 
     # Prüfe Solarfenster nur alle 5 Minuten
     within_solar_window = state.last_solar_window_status
@@ -1933,6 +1985,11 @@ async def main_loop(config, state, session):
         while True:
             try:
                 now = datetime.now(local_tz)
+                # Load mode from state.json
+                state_data = load_state()
+                state.bademodus_aktiv = state_data.get("bademodus_aktiv", False)
+                state.urlaubsmodus_aktiv = state_data.get("urlaubsmodus_aktiv", False)
+                logging.debug(f"Mode updated: bademodus_aktiv={state.bademodus_aktiv}, urlaubsmodus_aktiv={state.urlaubsmodus_aktiv}")
 
                 # Bademodus-Änderung prüfen
                 if state.bademodus_aktiv != state.previous_bademodus_aktiv:
@@ -1983,6 +2040,7 @@ async def main_loop(config, state, session):
                 state.aktueller_einschaltpunkt = mode_info["einschaltpunkt"]
                 state.nacht_reduction = mode_info["nacht_reduction"]
                 state.solar_ueberschuss_aktiv = mode_info["solar_ueberschuss_aktiv"]
+                state.previous_modus = mode_info["modus"]  # Update state.previous_modus
 
                 # Kompressor ausschalten
                 if await handle_compressor_off(state, session, mode_info["regelfuehler"], mode_info["ausschaltpunkt"], min_laufzeit, t_oben):
