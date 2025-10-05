@@ -888,20 +888,11 @@ async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config):
 async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_oben: Optional[float] = None):
     """
     Setzt den Zustand des Kompressors (GPIO 21) sicher und robust.
-
-    Args:
-        state: Das State-Objekt mit allen relevanten Zuständen und Konfigurationen.
-        ein (bool): True, um den Kompressor einzuschalten, False zum Ausschalten.
-        force (bool): Wenn True, werden Sicherheitsprüfungen übersprungen (z.B. bei Fehlern).
-        t_boiler_oben (Optional[float]): Aktuelle obere Boilertemperatur für Sicherheitsabschaltung.
-
-    Returns:
-        bool: True bei Erfolg, False bei Fehlschlag oder wenn Aktion nicht durchgeführt wurde.
     """
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
     max_attempts = 3
-    attempt_delay = float(state.config["Heizungssteuerung"].get("GPIO_ATTEMPT_DELAY", 0.5))  # Increased to 0.5s
+    attempt_delay = float(state.config["Heizungssteuerung"].get("GPIO_ATTEMPT_DELAY", 0.5))
 
     try:
         SICHERHEITS_TEMP = float(state.config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 52.0))
@@ -910,14 +901,42 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
             logging.debug(f"Aufruf set_kompressor_status: Ziel={'EIN' if ein else 'AUS'}, Force={force}, "
                           f"Aktuell kompressor_ein={state.kompressor_ein}")
 
-            if force:
-                logging.debug("Force=True: Sicherheitsprüfung übersprungen.")
-            elif t_boiler_oben is not None and t_boiler_oben >= SICHERHEITS_TEMP:
+            # Prüfe zuerst den aktuellen physischen Zustand
+            current_physical_state = GPIO.input(21)
+            logging.debug(f"Aktueller physischer GPIO-Zustand: {current_physical_state}")
+
+            if not force:
+                # Wenn der gewünschte Zustand bereits physisch aktiv ist, aktualisiere nur den State
+                if ein and current_physical_state == GPIO.HIGH:
+                    logging.debug("Kompressor ist bereits physisch eingeschaltet - aktualisiere nur State")
+                    if not state.kompressor_ein:
+                        state.kompressor_ein = True
+                        state.start_time = now
+                        state.last_compressor_on_time = now
+                        state.current_runtime = timedelta()
+                        logging.info(f"State korrigiert: Kompressor als EIN gesetzt (war bereits physisch EIN)")
+                    return True
+                elif not ein and current_physical_state == GPIO.LOW:
+                    logging.debug("Kompressor ist bereits physisch ausgeschaltet - aktualisiere nur State")
+                    if state.kompressor_ein:
+                        state.kompressor_ein = False
+                        set_last_compressor_off_time(state, now)
+                        if state.last_compressor_on_time is not None:
+                            state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, local_tz)
+                        else:
+                            state.last_runtime = timedelta()
+                        state.total_runtime_today += state.last_runtime
+                        logging.info(f"State korrigiert: Kompressor als AUS gesetzt (war bereits physisch AUS)")
+                    return True
+
+            # Sicherheitsprüfung (nur wenn Force=False)
+            if not force and t_boiler_oben is not None and t_boiler_oben >= SICHERHEITS_TEMP:
                 logging.warning(f"Übertemperatur: T_Oben={t_boiler_oben:.1f}°C >= {SICHERHEITS_TEMP}°C")
                 state.ausschluss_grund = f"Übertemperatur (>= {SICHERHEITS_TEMP}°C)"
                 return False
 
-            if state.kompressor_ein == ein and not force:
+            # Nur ändern, wenn sich der Zustand tatsächlich ändern soll
+            if state.kompressor_ein == ein and current_physical_state == (GPIO.HIGH if ein else GPIO.LOW) and not force:
                 logging.debug(f"Kompressorstatus unverändert: {'Ein' if ein else 'Aus'}")
                 return True
 
@@ -932,7 +951,8 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
                     success = True
                     break
                 else:
-                    logging.warning(f"GPIO-Inkonsistenz im Versuch {attempt + 1}: Ziel={'HIGH' if ein else 'LOW'}, Gelesen={readback}")
+                    logging.warning(
+                        f"GPIO-Inkonsistenz im Versuch {attempt + 1}: Ziel={'HIGH' if ein else 'LOW'}, Gelesen={readback}")
 
             if not success:
                 logging.critical(
@@ -942,15 +962,11 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
                         state.session, state.chat_id,
                         f"🚨 KRITISCHER FEHLER: Kompressor konnte nicht {'eingeschaltet' if ein else 'ausgeschaltet'} werden!",
                         state.bot_token,
-                        parse_mode=None
+                        parse_mode=None  # Kein Markdown für Fehlermeldungen
                     )
                 return False
 
-            # Check for inconsistency after setting
-            if state.kompressor_ein != ein:
-                logging.warning(f"State-Inkonsistenz korrigiert: state.kompressor_ein={state.kompressor_ein}, Ziel={ein}")
-
-            # Status aktualisieren
+            # Status erfolgreich aktualisieren
             state.kompressor_ein = ein
             if ein:
                 state.start_time = now
@@ -967,16 +983,17 @@ async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_
                     logging.debug("last_compressor_on_time ist None, setze last_runtime auf 0")
                 state.total_runtime_today += state.last_runtime
                 logging.info(f"KOMPRESSOR AUSGESCHALTET um {now.strftime('%H:%M:%S')}. Laufzeit: {state.last_runtime}")
+
             state.ausschluss_grund = None
             return True
 
     except Exception as e:
         logging.error(f"Unerwarteter Fehler in set_kompressor_status: {e}", exc_info=True)
+        # Fallback: Aktuellen physischen Zustand lesen und State anpassen
         current_physical_state = GPIO.input(21) if GPIO.getmode() is not None else None
         state.kompressor_ein = (current_physical_state == GPIO.HIGH) if current_physical_state is not None else False
         state.start_time = None
         return False
-
 
 def load_and_validate_config():
     defaults = {
@@ -1461,32 +1478,49 @@ async def watchdog_gpio(state):
         try:
             actual_gpio = GPIO.input(21)
             expected_gpio = GPIO.HIGH if state.kompressor_ein else GPIO.LOW
+
+            # Erlaube eine Toleranz von 5 Minuten für Mindestlaufzeit
             if actual_gpio != expected_gpio:
-                # Prüfe Mindestlaufzeit, bevor eine Inkonsistenz gemeldet wird
-                if not state.kompressor_ein:
-                    now = datetime.now(pytz.timezone("Europe/Berlin"))
-                    elapsed_time = safe_timedelta(now, state.start_time if state.start_time else state.last_compressor_on_time, state.local_tz)
+                now = datetime.now(pytz.timezone("Europe/Berlin"))
+                if state.kompressor_ein and state.start_time:
+                    elapsed_time = safe_timedelta(now, state.start_time, state.local_tz)
                     min_laufzeit = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_LAUFZEIT_S", 900)))
-                    if state.kompressor_ein and elapsed_time.total_seconds() < min_laufzeit.total_seconds():
-                        logging.debug(f"Keine Inkonsistenz: Mindestlaufzeit ({min_laufzeit.total_seconds()}s) nicht erreicht, verbleibend: {min_laufzeit.total_seconds() - elapsed_time.total_seconds():.1f}s")
+
+                    # Wenn Mindestlaufzeit noch nicht erreicht, ist dies normal
+                    if elapsed_time.total_seconds() < min_laufzeit.total_seconds():
+                        logging.debug(
+                            f"GPIO-Überwachung: Mindestlaufzeit noch nicht erreicht ({elapsed_time.total_seconds():.1f}s von {min_laufzeit.total_seconds()}s)")
                         await asyncio.sleep(10)
                         continue
-                logging.critical(f"GPIO-Inkonsistenz: state.kompressor_ein={state.kompressor_ein}, GPIO={actual_gpio}")
-                result = await set_kompressor_status(state, state.kompressor_ein, force=True)
-                if not result:
-                    logging.critical("GPIO-Inkonsistenz konnte nicht behoben werden!")
-                    if state.session and state.bot_token and state.chat_id:
-                        await send_telegram_message(
-                            state.session, state.chat_id,
-                            f"🚨 KRITISCHER FEHLER: GPIO-Inkonsistenz konnte nicht behoben werden!",
-                            state.bot_token
-                        )
+
+                # Echte Inkonsistenz melden
+                logging.warning(
+                    f"GPIO-Inkonsistenz erkannt: state.kompressor_ein={state.kompressor_ein}, GPIO={actual_gpio}")
+
+                # Versuche State an physischen Zustand anzupassen
+                if actual_gpio == GPIO.HIGH and not state.kompressor_ein:
+                    logging.info("Passe State an: Kompressor ist physisch EIN, setze state.kompressor_ein=True")
+                    state.kompressor_ein = True
+                    state.start_time = now
+                    state.last_compressor_on_time = now
+                    state.current_runtime = timedelta()
+                elif actual_gpio == GPIO.LOW and state.kompressor_ein:
+                    logging.info("Passe State an: Kompressor ist physisch AUS, setze state.kompressor_ein=False")
+                    state.kompressor_ein = False
+                    set_last_compressor_off_time(state, now)
+                    if state.last_compressor_on_time is not None:
+                        state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, state.local_tz)
+                    else:
+                        state.last_runtime = timedelta()
+                    state.total_runtime_today += state.last_runtime
+
         except Exception as e:
             logging.error("Fehler im GPIO-Watchdog", exc_info=True)
             if state.session and state.bot_token and state.chat_id:
                 await send_telegram_message(
                     state.session, state.chat_id,
-                    f"🚨 Fehler im GPIO-Watchdog:\n{e}", state.bot_token
+                    f"Fehler im GPIO-Watchdog: {str(e)}", state.bot_token,
+                    parse_mode=None  # Kein Markdown für Fehlermeldungen
                 )
         await asyncio.sleep(60)
 
