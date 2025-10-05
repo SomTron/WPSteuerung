@@ -91,23 +91,34 @@ async def fetch_solax_data(session, state, now):
             "api_fehler": True
         }
 
+
 async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5,
-                               parse_mode=None):
+                                parse_mode=None):
+
+    analyze_message_problem(message)
     """Sendet eine Nachricht über Telegram mit Fehlerbehandlung und Wiederholungslogik."""
+    logging.debug(f"Telegram-Nachricht wird gesendet (parse_mode={parse_mode}): {message[:100]}...")
+
     if len(message) > 4096:
         message = message[:4093] + "..."
         logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
-    if parse_mode == "Markdown":
-        message = escape_markdown(message)
+
+    # MARKDOWN KOMPLETT DEAKTIVIEREN
+    parse_mode = None
+
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
         "text": message
     }
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
+
+    # parse_mode komplett weglassen
+    # if parse_mode:
+    #     payload["parse_mode"] = parse_mode
+
     if reply_markup:
         payload["reply_markup"] = reply_markup
+
     for attempt in range(1, retries + 1):
         try:
             async with session.post(url, json=payload, timeout=20) as response:
@@ -388,18 +399,47 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_bo
     logging.debug(f"Vollständige Temperaturen-Nachricht (Länge={len(message)}): {message}")
     return await send_telegram_message(session, chat_id, message, bot_token)
 
+
+def analyze_message_problem(message):
+    """Analysiert eine Nachricht auf problematische Zeichen."""
+    if len(message) >= 43:
+        char_at_43 = message[42]  # Byte offset 43 = Index 42
+        logging.error(f"🔍 PROBLEM-ZEICHEN an Position 43: '{char_at_43}' (ASCII: {ord(char_at_43)})")
+
+    if len(message) >= 56:
+        char_at_56 = message[55]  # Byte offset 56 = Index 55
+        logging.error(f"🔍 PROBLEM-ZEICHEN an Position 56: '{char_at_56}' (ASCII: {ord(char_at_56)})")
+
+    # Finde alle potenziell problematischen Zeichen
+    problematic_chars = []
+    for i, char in enumerate(message):
+        if char in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+            problematic_chars.append((i, char))
+
+    if problematic_chars:
+        logging.error(f"🔍 POTENZIELL PROBLEMATISCHE ZEICHEN: {problematic_chars}")
+
 def escape_markdown(text):
-    """Maskiert Markdown-Sonderzeichen, um Parse-Fehler zu vermeiden."""
+    """Maskiert alle Markdown-Sonderzeichen sicher."""
     if not isinstance(text, str):
         text = str(text)
+
+    # Liste aller Markdown-Sonderzeichen die escaped werden müssen
     markdown_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+
     for char in markdown_chars:
         text = text.replace(char, f'\\{char}')
+
     return text
 
-async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, chat_id, bot_token, state):
+
+async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime,
+                               total_runtime, config, chat_id, bot_token, state):
     """Sendet den aktuellen Systemstatus über Telegram."""
-    logging.debug(f"Generiere Status-Nachricht: t_oben={t_oben}, t_unten={t_unten}, t_mittig={t_mittig}, t_verd={t_verd}")
+    logging.debug(
+        f"Generiere Status-Nachricht: t_oben={t_oben}, t_unten={t_unten}, t_mittig={t_mittig}, t_verd={t_verd}")
+
+    # Temperaturwerte sicher konvertieren
     try:
         t_oben = float(t_oben) if t_oben is not None else None
     except (ValueError, TypeError) as e:
@@ -420,6 +460,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     except (ValueError, TypeError) as e:
         logging.warning(f"Ungültiger Wert für t_verd: {t_verd}, Fehler: {e}")
         t_verd = None
+
     solax_data = await fetch_solax_data(session, state, datetime.now(state.local_tz)) or {
         "feedinpower": 0,
         "batPower": 0,
@@ -428,6 +469,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     }
     feedinpower = solax_data.get("feedinpower", 0)
     bat_power = solax_data.get("batPower", 0)
+
     def format_time(seconds_str):
         try:
             if isinstance(seconds_str, timedelta):
@@ -439,8 +481,11 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
             return f"{hours}h {minutes}min"
         except (ValueError, TypeError):
             return "0h 0min"
-    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime(config) and not state.bademodus_aktiv else 0
+
+    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime(
+        config) and not state.bademodus_aktiv else 0
     is_solar_window_active = ist_uebergangsmodus_aktiv(state)
+
     if state.bademodus_aktiv:
         mode_str = "🛁 Bademodus"
     elif state.urlaubsmodus_aktiv:
@@ -457,37 +502,47 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         mode_str = f"Nachtabsenkung (-{nacht_reduction}°C)"
     else:
         mode_str = "Normal"
+
     compressor_status_str = "EIN" if kompressor_status else "AUS"
+
+    # Verwende einfachen Text ohne Markdown-Formatierung für bessere Kompatibilität
     status_lines = [
-        "📊 **Systemstatus**",
-        "🌡️ **Temperaturen**",
+        "📊 Systemstatus",
+        "🌡️ Temperaturen",
         f" • Oben: {'N/A' if t_oben is None else f'{t_oben:.1f}°C'}",
         f" • Mittig: {'N/A' if t_mittig is None else f'{t_mittig:.1f}°C'}",
         f" • Unten: {'N/A' if t_unten is None else f'{t_unten:.1f}°C'}",
         f" • Verdampfer: {'N/A' if t_verd is None else f'{t_verd:.1f}°C'}",
-        "🛠️ **Kompressor**",
+        "🛠️ Kompressor",
         f" • Status: {compressor_status_str}",
         f" • Aktuelle Laufzeit: {format_time(current_runtime)}",
         f" • Gesamtlaufzeit heute: {format_time(total_runtime)}",
         f" • Letzte Laufzeit: {format_time(state.last_runtime)}",
-        "🎯 **Sollwerte**",
+        "🎯 Sollwerte",
         f" • Einschaltpunkt: {state.aktueller_einschaltpunkt}°C",
         f" • Ausschaltpunkt: {state.aktueller_ausschaltpunkt}°C",
         f" • Gilt für: {'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Oben, Mitte'}",
-        "⚙️ **Betriebsmodus**",
+        "⚙️ Betriebsmodus",
         f" • {mode_str}",
-        "ℹ️ **Zusatzinfo**",
+        "ℹ️ Zusatzinfo",
         f" • Solarüberschuss: {feedinpower:.1f} W",
         f" • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})",
         f" • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}",
         f" • Bademodus aktiv: {'Ja' if state.bademodus_aktiv else 'Nein'}"
     ]
+
     if state.ausschluss_grund:
-        escaped_ausschluss_grund = escape_markdown(str(state.ausschluss_grund))
-        status_lines.append(f" • Ausschlussgrund: {escaped_ausschluss_grund}")
+        # Entferne alle Markdown-Zeichen aus dem Ausschlussgrund
+        ausschluss_grund_clean = str(state.ausschluss_grund).replace('*', '').replace('_', '').replace('`', '').replace(
+            '[', '').replace(']', '')
+        status_lines.append(f" • Ausschlussgrund: {ausschluss_grund_clean}")
+
     message = "\n".join(status_lines)
     logging.debug(f"Vollständige Status-Nachricht (Länge={len(message)}): {message}")
-    return await send_telegram_message(session, chat_id, message, bot_token, parse_mode="Markdown")
+
+    # Sende ohne Markdown-Parsing für bessere Kompatibilität
+    return await send_telegram_message(session, chat_id, message, bot_token, parse_mode=None)
+
 
 async def send_unknown_command_message(session, chat_id, bot_token):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
@@ -652,7 +707,7 @@ async def send_help_message(session, chat_id, bot_token):
         "📉 **Verlauf 24h**: Zeigt den Temperaturverlauf der letzten 24 Stunden.\n"
         "⏱️ **Laufzeiten [Tage]**: Zeigt die Laufzeiten der letzten X Tage (Standard: 7).\n"
     )
-    return await send_telegram_message(session, chat_id, message, bot_token)
+    return await send_telegram_message(session, chat_id, message, bot_token, parse_mode=None)
 
 def prefilter_csv_lines(file_path, days, tz):
     now = datetime.now(tz)
