@@ -1,12 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import configparser
+from configparser import ConfigParser
 import logging
 import asyncio
 import aiohttp
-from WW_skript import State, set_kompressor_status, read_temperature, kompressor_status_func, current_runtime_func, \
-    total_runtime_func
+from WW_skript import State, set_kompressor_status, read_temperature, kompressor_status_func, current_runtime_func, total_runtime_func
 from telegram_handler import send_status_telegram, is_solar_window, is_nighttime_func, fetch_solax_data
 from utils import safe_timedelta
 from datetime import datetime, timedelta
@@ -26,8 +25,8 @@ app.add_middleware(
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s")
 
-# Load config
-config = configparser.ConfigParser()
+# Load config and initialize state
+config = ConfigParser()
 config.read('config.ini')
 
 # Sensor IDs from config.ini
@@ -39,14 +38,10 @@ sensor_ids = {
 }
 
 # Initialize State
-config = ConfigParser()
-config.read('config.ini')
 state = State(config)
-
 
 class CommandRequest(BaseModel):
     command: str
-
 
 class StatusResponse(BaseModel):
     temp_oben: float | None
@@ -65,7 +60,6 @@ class StatusResponse(BaseModel):
     solar_ueberschuss_aktiv: bool
     bademodus_aktiv: bool
     ausschluss_grund: str | None
-
 
 @app.get("/status", response_model=StatusResponse)
 async def get_status():
@@ -149,7 +143,6 @@ async def get_status():
         logging.error(f"Error in get_status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/command")
 async def execute_command(request: CommandRequest):
     try:
@@ -173,7 +166,6 @@ async def execute_command(request: CommandRequest):
         logging.error(f"Error in execute_command: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/temperatures")
 async def get_temperatures():
     try:
@@ -183,7 +175,6 @@ async def get_temperatures():
         ]
         t_oben, t_mittig, t_unten, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
 
-        # Handle potential exceptions from temperature readings
         for temp, key in zip([t_oben, t_mittig, t_unten, t_verd],
                              ["temp_oben", "temp_mittig", "temp_unten", "temp_verd"]):
             if isinstance(temp, Exception):
@@ -200,8 +191,6 @@ async def get_temperatures():
         logging.error(f"Error in get_temperatures: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)
