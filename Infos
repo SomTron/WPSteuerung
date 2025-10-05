@@ -20,6 +20,7 @@ grep -i "info" heizungssteuerung.log
 wpsteuerung.ddns.net
 
 sudo systemctl restart my_script.service
+sudo systemctl stop my_script.service
 
 source myenv/bin/activate
 Venv: myenv starten
@@ -29,6 +30,14 @@ DATUM=$(date +%Y%m%d_%H%M%S)
 cp WW_skript.py WW_skript.py_$(date +%Y%m%d_%H%M%S).bak
 cp telegram_handler.py telegram_handler.py_$(date +%Y%m%d_%H%M%S).bak
 
+cp WW_skript.py WW_skript.py_telegram_031025.bak
+cp telegram_handler.py telegram_handler.py_telegram_031025.bak
+cp utils.py utils.py_telegram_031025.bak
+
+
+cp WW_skript.py_telegram_031025.bak WW_skript.py
+cp telegram_handler.py_telegram_031025.bak telegram_handler.py
+cp utils.py_telegram_031025.bak utils.py
 Logik:
 
 Bei PV soll so lange geheizt werden bis einer der Fühler 50 Grad erreicht, fällt einer der Fühler unter 45 Grad soll der Kompressor heizen. Ohne PV: der mittlere und obere Fühler sollen über 42 Grad gehalten werden.

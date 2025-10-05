@@ -8,7 +8,7 @@ from RPLCD.i2c import CharLCD
 import RPi.GPIO as GPIO
 import logging
 from logging.handlers import RotatingFileHandler
-import configparser
+from configparser import ConfigParser
 import aiohttp
 import hashlib
 from telegram import ReplyKeyboardMarkup
@@ -22,12 +22,17 @@ from aiohttp import FormData
 import pandas as pd
 import numpy as np
 from typing import Optional
-from utils import safe_timedelta
+from utils import safe_timedelta, read_temperature, is_nighttime, ist_uebergangsmodus_aktiv
 from dateutil.relativedelta import relativedelta
-from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
-                              get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
-
-#git-test
+from telegram_handler import (
+    send_telegram_message,
+    send_welcome_message,
+    telegram_task,
+    get_runtime_bar_chart,
+    get_boiler_temperature_history,
+    deaktivere_urlaubsmodus,
+    is_solar_window
+)
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -48,10 +53,8 @@ GIO21_PIN = 21  # Ausgang für Kompressor
 PRESSURE_SENSOR_PIN = 17  # Eingang für Druckschalter
 
 # Konfigurationsdatei einlesen
-config = configparser.ConfigParser()
+config = ConfigParser()
 config.read("config.ini")
-
-
 
 # Globale Variablen für den Programmstatus
 last_update_id = None
@@ -63,8 +66,6 @@ SENSOR_READ_INTERVAL = timedelta(seconds=5)
 
 NOTIFICATION_COOLDOWN = 600
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
-
-
 
 local_tz = pytz.timezone("Europe/Berlin")
 logging.info(f"Programm gestartet: {datetime.now(local_tz)}")
@@ -159,13 +160,12 @@ class TelegramHandler(logging.Handler):
         finally:
             super().close()
 
-
+# Define State class
 class State:
     def __init__(self, config):
         local_tz = pytz.timezone("Europe/Berlin")
         self.local_tz = local_tz
         now = datetime.now(local_tz)
-        self.local_tz = pytz.timezone("Europe/Berlin")
         self.last_solar_window_log = None
         self.last_solar_window_status = False
         self.last_solar_window_check = None
@@ -254,8 +254,8 @@ class State:
             ).time()
         except Exception as e:
             logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
-            self.uebergangsmodus_start = time(0, 0)
-            self.uebergangsmodus_ende = time(0, 0)
+            self.uebergangsmodus_start = datetime.strptime("00:00", "%H:%M").time()
+            self.uebergangsmodus_ende = datetime.strptime("00:00", "%H:%M").time()
 
         # --- Schwellwerte ---
         try:
@@ -280,7 +280,7 @@ class State:
         self.ausschaltpunkt = self.aktueller_ausschaltpunkt
 
         # --- Fehler- und Statuszustände ---
-        self.last_config_hash = calculate_file_hash("config.ini")
+        self.last_config_hash = hashlib.md5(open("config.ini", "rb").read()).hexdigest()
         self.pressure_error_sent = False
         self.last_pressure_error_time = now
         self.last_pressure_state = None
@@ -289,7 +289,6 @@ class State:
         self.previous_pressure_state = None
         self.last_no_start_log = None
         self.last_completed_cycle = None
-
 
         # --- Sensorwerte ---
         self.t_oben = None
@@ -325,6 +324,8 @@ class State:
                       f"verdampfertemperatur={self.verdampfertemperatur}, "
                       f"letzte_abschaltung={self.last_compressor_off_time}")
 
+# Initialize global state object
+state = State(config)
 
 # Logging einrichten mit Telegram-Handler
 async def setup_logging(session, state):
@@ -693,42 +694,17 @@ async def shutdown(session, state):
                 handler.close()  # Explicitly close the handler
         logging.info("System heruntergefahren")
 
+def kompressor_status_func(state):
+    """Returns the current compressor status from the state object."""
+    return state.kompressor_ein
 
+def current_runtime_func(state):
+    """Returns the current runtime from the state object."""
+    return state.current_runtime
 
-# Synchron bleibende Funktionen
-def read_temperature(sensor_id):
-    """Liest die Temperatur von einem DS18B20-Sensor.
-
-    Args:
-        sensor_id (str): Die ID des Sensors (z.B. '28-0bd6d4461d84').
-
-    Returns:
-        float or None: Die Temperatur in °C oder None bei Fehlern.
-    """
-    device_file = os.path.join(BASE_DIR, sensor_id, "w1_slave")
-    try:
-        with open(device_file, "r") as f:
-            lines = f.readlines()
-            if len(lines) < 2:
-                logging.error(f"Sensor {sensor_id}: Zu wenige Zeilen in w1_slave ({len(lines)})")
-                return None
-            if lines[0].strip()[-3:] == "YES":
-                temp_data = lines[1].split("=")[-1]
-                temp = float(temp_data) / 1000.0
-                if temp < -20 or temp > 100:
-                    logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
-                    return None
-                #logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
-                return temp
-            else:
-                logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")
-                return None
-    except FileNotFoundError:
-        logging.error(f"Sensor-Datei nicht gefunden: {device_file}")
-        return None
-    except Exception as e:
-        logging.error(f"Fehler beim Lesen des Sensors {sensor_id}: {str(e)}")
-        return None
+def total_runtime_func(state):
+    """Returns the total runtime for today from the state object."""
+    return state.total_runtime_today
 
 
 def check_pressure(state):
@@ -1225,46 +1201,6 @@ async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten,
     # Zeit des letzten Logs aktualisieren
     state.last_debug_log_time = now
 
-
-def is_nighttime(config):
-    """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
-    local_tz = pytz.timezone("Europe/Berlin")
-    now = datetime.now(local_tz)
-    #logging.debug(f"is_nighttime: now={now}, tzinfo={now.tzinfo}")
-    try:
-        start_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "22:00")
-        end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
-        start_hour, start_minute = map(int, start_time_str.split(':'))
-        end_hour, end_minute = map(int, end_time_str.split(':'))
-
-        # Aktuelle Zeit in Stunden und Minuten umrechnen
-        now_time = now.hour * 60 + now.minute
-        start_time_minutes = start_hour * 60 + start_minute
-        end_time_minutes = end_hour * 60 + end_minute
-
-        if start_time_minutes > end_time_minutes:  # Über Mitternacht
-            is_night = now_time >= start_time_minutes or now_time <= end_time_minutes
-        else:
-            is_night = start_time_minutes <= now_time <= end_time_minutes
-
-        #logging.debug(
-        #    f"Nachtzeitprüfung: Jetzt={now_time}, Start={start_time_minutes}, Ende={end_time_minutes}, Ist Nacht={is_night}")
-        return is_night
-    except Exception as e:
-        logging.error(f"Fehler in is_nighttime: {e}")
-        return False
-
-def ist_uebergangsmodus_aktiv(state) -> bool:
-    """Prüft, ob aktuell Übergangsmodus aktiv ist, basierend auf Uhrzeit im State."""
-    now = datetime.now(pytz.timezone("Europe/Berlin")).time()
-    start = state.uebergangsmodus_start
-    ende = state.uebergangsmodus_ende
-
-    if start < ende:
-        return start <= now <= ende
-    else:
-        # z. B. 22:00 – 03:00
-        return now >= start or now <= ende
 
 
 def calculate_shutdown_point(config, is_night, solax_data, state):
@@ -1960,7 +1896,7 @@ async def check_watchdog(state, session, last_cycle_time):
     return now
 
 async def main_loop(config, state, session):
-    """Hauptschleife des Programms mit State-Objekt."""
+    """Hauptschleife des Programms mit globalem State-Objekt."""
     local_tz = pytz.timezone("Europe/Berlin")
     min_laufzeit = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_LAUFZEIT_S", 900)))
     min_pause = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_AUSZEIT_S", 900)))
@@ -1972,19 +1908,22 @@ async def main_loop(config, state, session):
             await asyncio.sleep(30)
             return
 
+        # Map SENSOR_IDS keys to those expected by telegram_task
+        telegram_sensor_ids = {
+            "temp_oben": SENSOR_IDS["oben"],
+            "temp_unten": SENSOR_IDS["unten"],
+            "temp_mittig": SENSOR_IDS["mittig"],
+            "temp_verd": SENSOR_IDS["verd"]
+        }
+
         # Starte Telegram-Task
         telegram_task_handle = asyncio.create_task(telegram_task(
             read_temperature_func=read_temperature,
-            sensor_ids=SENSOR_IDS,
-            kompressor_status_func=lambda: state.kompressor_ein,
-            current_runtime_func=lambda: state.current_runtime,
-            total_runtime_func=lambda: state.total_runtime_today,
+            sensor_ids=telegram_sensor_ids,
             config=config,
-            get_solax_data_func=get_solax_data,
             state=state,
             get_temperature_history_func=get_boiler_temperature_history,
-            get_runtime_bar_chart_func=get_runtime_bar_chart,
-            is_nighttime_func=is_nighttime
+            get_runtime_bar_chart_func=get_runtime_bar_chart
         ))
 
         # Watchdog-Variablen
@@ -2080,7 +2019,7 @@ async def main_loop(config, state, session):
 
 async def run_program():
     async with aiohttp.ClientSession() as session:
-        config = configparser.ConfigParser()
+        config = ConfigParser()
         try:
             logging.info("Lese Konfigurationsdatei...")
             config.read("config.ini")
@@ -2133,6 +2072,7 @@ async def run_program():
                     await handler.process_queue()
                     handler.close()
             await shutdown(session, state)
+
 
 
 if __name__ == "__main__":
