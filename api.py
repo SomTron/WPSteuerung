@@ -5,7 +5,7 @@ from configparser import ConfigParser
 import logging
 import asyncio
 import aiohttp
-from WW_skript import State, set_kompressor_status, read_temperature, kompressor_status_func, current_runtime_func, total_runtime_func
+from WW_skript import State, set_kompressor_status, read_temperature, read_temperature_cached, kompressor_status_func, current_runtime_func, total_runtime_func
 from telegram_handler import send_status_telegram, is_solar_window, is_nighttime_func, fetch_solax_data
 from utils import safe_timedelta
 from datetime import datetime, timedelta
@@ -65,9 +65,9 @@ class StatusResponse(BaseModel):
 async def get_status():
     try:
         async with aiohttp.ClientSession() as session:
-            # Read temperatures asynchronously
+            # Read temperatures asynchronously using read_temperature_cached
             sensor_tasks = [
-                asyncio.create_task(read_temperature(sensor_ids[key]))
+                asyncio.create_task(read_temperature_cached(sensor_ids[key]))
                 for key in ["temp_oben", "temp_mittig", "temp_unten", "temp_verd"]
             ]
             t_oben, t_mittig, t_unten, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
@@ -170,7 +170,7 @@ async def execute_command(request: CommandRequest):
 async def get_temperatures():
     try:
         sensor_tasks = [
-            asyncio.create_task(read_temperature(sensor_ids[key]))
+            asyncio.create_task(read_temperature_cached(sensor_ids[key]))
             for key in ["temp_oben", "temp_mittig", "temp_unten", "temp_verd"]
         ]
         t_oben, t_mittig, t_unten, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
