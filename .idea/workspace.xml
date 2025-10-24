@@ -4,7 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="gitignore testen" />
+    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase">
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WPSteuerung/telegram_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/WPSteuerung/telegram_handler.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -18,25 +22,46 @@
     </option>
   </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="aa9f834d79213fb12c21cff07fe869d794cafcad" />
+        <entry key="$PROJECT_DIR$/WPSteuerung" value="master" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RESET_MODE" value="MIXED" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 3
-}]]></component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;SomTron&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/SomTron/WPSteuerung&quot;,
+    &quot;accountId&quot;: &quot;12c69841-28d0-4b84-a964-dca61f6f8b01&quot;
+  }
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3
+}</component>
   <component name="ProjectId" id="2swC1IJcXM9fRU1ydCUMcnYCM7d" />
-  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_MARK_IGNORED_FILES_AS_EXCLUDED": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master",
-    "last_opened_file_path": "C:/Users/Patrik/PycharmProjects/WPSteuerungGit"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_MARK_IGNORED_FILES_AS_EXCLUDED&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/Patrik/PycharmProjects/WPSteuerungGit&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\Patrik\PycharmProjects\WPSteuerungGit" />
@@ -69,7 +94,7 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-python-sdk-babbdf50b680-746f403e7f0c-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-241.15989.155" />
+        <option value="bundled-python-sdk-f69e5c277ee4-cbfc7b97e6b2-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-252.27397.106" />
       </set>
     </attachedChunks>
   </component>
@@ -114,7 +139,47 @@
       <option name="project" value="LOCAL" />
       <updated>1739358712501</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="richtig api">
+      <option name="closed" value="true" />
+      <created>1759493538013</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1759493538013</updated>
+    </task>
+    <task id="LOCAL-00006" summary="aktuelle api">
+      <option name="closed" value="true" />
+      <created>1759493786879</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1759493786879</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Übergangszeit auch am Abend definiert.">
+      <option name="closed" value="true" />
+      <created>1761292979330</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1761292979330</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck">
+      <option name="closed" value="true" />
+      <created>1763559971146</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1763559971146</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase">
+      <option name="closed" value="true" />
+      <created>1763561979723</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1763561979723</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -122,7 +187,19 @@
       <map>
         <entry key="MAIN">
           <value>
-            <State />
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="origin/master" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
           </value>
         </entry>
       </map>
@@ -131,17 +208,11 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="initiales uploaden auf Github" />
     <MESSAGE value="gitignore testen" />
-    <option name="LAST_COMMIT_MESSAGE" value="gitignore testen" />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/main.py</url>
-          <line>302</line>
-          <option name="timeStamp" value="1" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
+    <MESSAGE value="richtig api" />
+    <MESSAGE value="aktuelle api" />
+    <MESSAGE value="Übergangszeit auch am Abend definiert." />
+    <MESSAGE value="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck" />
+    <MESSAGE value="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase" />
+    <option name="LAST_COMMIT_MESSAGE" value="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase" />
   </component>
 </project>
