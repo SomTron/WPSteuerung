@@ -679,7 +679,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
 async def telegram_task(
     read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func,
     config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func,
-    is_nighttime_func
+    is_nighttime_func, is_solar_window_func
 ):
     """Telegram-Task mit vollständiger Heartbeat-Überwachung (Start + Internet-Wiederkehr)"""
     logging.info("Starte telegram_task mit erweiterter Heartbeat-Überwachung")
@@ -763,8 +763,8 @@ async def telegram_task(
                         updates, last_update_id, kompressor_status, aktuelle_laufzeit,
                         gesamtlaufzeit, state.chat_id, state.bot_token, config,
                         get_solax_data_func, state, get_temperature_history_func,
-                        get_runtime_bar_chart_func, is_nighttime_func, is_solar_window
-                    )
+                        get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func
+                        )
                 else:
                     logging.warning("Telegram-Updates waren None")
 
