@@ -247,15 +247,23 @@ class State:
         # --- Übergangsmodus-Zeitpunkte ---
         try:
             self.uebergangsmodus_start = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "00:00"), "%H:%M"
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "06:00"), "%H:%M"
             ).time()
             self.uebergangsmodus_ende = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "00:00"), "%H:%M"
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "08:00"), "%H:%M"
+            ).time()
+            self.uebergangsmodus_abend_start = datetime.strptime(
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00"), "%H:%M"
+            ).time()
+            self.uebergangsmodus_abend_ende = datetime.strptime(
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00"), "%H:%M"
             ).time()
         except Exception as e:
             logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
-            self.uebergangsmodus_start = time(0, 0)
-            self.uebergangsmodus_ende = time(0, 0)
+            self.uebergangsmodus_start = time(6, 0)
+            self.uebergangsmodus_ende = time(8, 0)
+            self.uebergangsmodus_abend_start = time(17, 0)
+            self.uebergangsmodus_abend_ende = time(19, 0)
 
         # --- Schwellwerte ---
         try:
@@ -1013,7 +1021,6 @@ async def reload_config(session, state):
         current_hash = calculate_file_hash("config.ini")
 
         if hasattr(state, "last_config_hash") and state.last_config_hash == current_hash:
-            #logging.debug("Keine Änderung an der Konfigurationsdatei festgestellt.")
             return
 
         logging.info("Neue Konfiguration erkannt – wird geladen...")
@@ -1047,15 +1054,24 @@ async def reload_config(session, state):
         state.sicherheits_temp = get_int_checked("Heizungssteuerung", "SICHERHEITS_TEMP", 65, 50, 90)
         state.verdampfertemperatur = get_int_checked("Heizungssteuerung", "VERDAMPFERTEMPERATUR", -10, -30, 10)
 
-        # --- Übergangsmodus-Zeiten ---
+        # --- Übergangsmodus-Zeiten (morgens und abends) ---
         try:
             start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "06:00")
             ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "08:00")
+            abend_start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00")
+            abend_ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00")
             start_time = datetime.strptime(start_str, "%H:%M").time()
             end_time = datetime.strptime(ende_str, "%H:%M").time()
+            abend_start_time = datetime.strptime(abend_start_str, "%H:%M").time()
+            abend_end_time = datetime.strptime(abend_ende_str, "%H:%M").time()
             state.uebergangsmodus_start = start_time
             state.uebergangsmodus_ende = end_time
-            logging.info(f"Übergangsmodus-Zeiten neu geladen: Start={start_time}, Ende={end_time}")
+            state.uebergangsmodus_abend_start = abend_start_time
+            state.uebergangsmodus_abend_ende = abend_end_time
+            logging.info(
+                f"Übergangsmodus-Zeiten neu geladen: Morgen={start_time}–{end_time}, "
+                f"Abend={abend_start_time}–{abend_end_time}"
+            )
         except Exception as e:
             logging.error(f"Ungültige Übergangsmodus-Zeitangaben – behalte alte Werte: {e}")
 
@@ -1143,63 +1159,54 @@ async def log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig,
 async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten, t_verd, solax_data,
                           is_night, within_uebergangsmodus, power_source, temp_conditions_met_to_start,
                           nacht_reduction, urlaubs_reduction):
-    """
-    Protokolliert den aktuellen Zustand der Heizungssteuerung im Debug-Log, aber nur einmal pro Minute.
-
-    Args:
-        state: Das State-Objekt mit den aktuellen Zustandsvariablen.
-        t_boiler_oben: Temperatur oben im Boiler (°C).
-        t_boiler_mittig: Temperatur mittig im Boiler (°C).
-        t_boiler_unten: Temperatur unten im Boiler (°C).
-        t_verd: Verdampfertemperatur (°C).
-        solax_data: Solax-Daten (Dictionary).
-        is_night: Boolean, ob Nachtzeit aktiv ist.
-        within_uebergangsmodus: Boolean, ob Übergangsmodus aktiv ist.
-        power_source: String, aktuelle Stromquelle (z.B. "Direkter PV-Strom").
-        temp_conditions_met_to_start: Boolean, ob Temperaturbedingungen für Kompressorstart erfüllt sind.
-        nacht_reduction: Float, Absenkung durch Nachtmodus.
-        urlaubs_reduction: Float, Absenkung durch Urlaubsmodus.
-    """
-    # Zeitprüfung: Log nur schreiben, wenn mindestens 1 Minute seit dem letzten Log vergangen ist
     now = datetime.now(pytz.timezone("Europe/Berlin"))
     if hasattr(state, 'last_debug_log_time') and state.last_debug_log_time is not None:
         time_since_last_log = safe_timedelta(now, state.last_debug_log_time, state.local_tz)
         if time_since_last_log.total_seconds() < 60:
-            return  # Kein Log, wenn weniger als 1 Minute vergangen ist
+            return
 
-    # --- Bestimme den aktuellen Modus ---
+    # Bestimme den aktuellen Modus
     if state.solar_ueberschuss_aktiv:
         modus = "Solarmodus"
     elif is_night:
         modus = "Nachtmodus"
     elif within_uebergangsmodus:
-        modus = "Übergangsmodus"
+        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus
+        now_time = now.time()
+        start_morgen = state.uebergangsmodus_start
+        ende_morgen = state.uebergangsmodus_ende
+        start_abend = state.uebergangsmodus_abend_start
+        ende_abend = state.uebergangsmodus_abend_ende
+        if start_morgen < ende_morgen:
+            morgen_aktiv = start_morgen <= now_time <= ende_morgen
+        else:
+            morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
+        if start_abend < ende_abend:
+            abend_aktiv = start_abend <= now_time <= ende_abend
+        else:
+            abend_aktiv = now_time >= start_abend or now_time <= ende_abend
+        modus = "Übergangsmodus (Morgen)" if morgen_aktiv else "Übergangsmodus (Abend)"
     else:
         modus = "Normalmodus"
 
-    # --- Bestimme den regelnden Fühler basierend auf dem Modus ---
-    if modus == "Solarmodus":
-        regelfuehler = "unten"
-    elif modus in ["Nachtmodus", "Normalmodus", "Übergangsmodus"]:
-        regelfuehler = "mittig"
-    else:
-        regelfuehler = "unbekannt"
+    # Bestimme den regelnden Fühler
+    regelfuehler = "unten" if modus.startswith("Solarmodus") else "mittig"
 
-    # --- Temperaturwerte formatieren ---
+    # Temperaturwerte formatieren
     t_oben_log = f"{t_boiler_oben:.1f}" if t_boiler_oben is not None else "N/A"
     t_mitte_log = f"{t_boiler_mittig:.1f}" if t_boiler_mittig is not None else "N/A"
     t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
     t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
 
-    # --- Solax-Daten formatieren ---
+    # Solax-Daten formatieren
     bat_power_str = f"{solax_data.get('batPower', 0.0):.1f}" if solax_data else "0.0"
     soc_str = f"{solax_data.get('soc', 0.0):.1f}" if solax_data else "0.0"
     feedin_str = f"{state.feedin_power:.1f}" if hasattr(state, 'feedin_power') and state.feedin_power is not None else "0.0"
 
-    # --- Kombinierte Absenkung für den Log ---
+    # Kombinierte Absenkung
     reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({urlaubs_reduction:.1f})"
 
-    # --- Debug-Log erzeugen ---
+    # Debug-Log
     logging.debug(
         f"[Modus: {modus}] "
         f"Regel-Fühler: {regelfuehler} | "
@@ -1222,7 +1229,6 @@ async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten,
         f"Power Source={power_source}"
     )
 
-    # Zeit des letzten Logs aktualisieren
     state.last_debug_log_time = now
 
 
@@ -1254,17 +1260,57 @@ def is_nighttime(config):
         logging.error(f"Fehler in is_nighttime: {e}")
         return False
 
-def ist_uebergangsmodus_aktiv(state) -> bool:
-    """Prüft, ob aktuell Übergangsmodus aktiv ist, basierend auf Uhrzeit im State."""
-    now = datetime.now(pytz.timezone("Europe/Berlin")).time()
-    start = state.uebergangsmodus_start
-    ende = state.uebergangsmodus_ende
 
-    if start < ende:
-        return start <= now <= ende
+def ist_uebergangsmodus_aktiv(state) -> bool:
+    """Prüft, ob aktuell der Übergangsmodus (morgens oder abends) aktiv ist, basierend auf Uhrzeit im State."""
+    now = datetime.now(pytz.timezone("Europe/Berlin"))
+    now_time = now.time()
+
+    # Morgen-Übergangsmodus
+    start_morgen = state.uebergangsmodus_start
+    ende_morgen = state.uebergangsmodus_ende
+
+    # Abend-Übergangsmodus
+    start_abend = state.uebergangsmodus_abend_start
+    ende_abend = state.uebergangsmodus_abend_ende
+
+    # Prüfe Morgen-Zeitfenster
+    if start_morgen < ende_morgen:
+        morgen_aktiv = start_morgen <= now_time <= ende_morgen
     else:
-        # z. B. 22:00 – 03:00
-        return now >= start or now <= ende
+        # Über Mitternacht (z. B. 22:00 – 03:00)
+        morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
+
+    # Prüfe Abend-Zeitfenster
+    if start_abend < ende_abend:
+        abend_aktiv = start_abend <= now_time <= ende_abend
+    else:
+        # Über Mitternacht (z. B. 22:00 – 03:00)
+        abend_aktiv = now_time >= start_abend or now_time <= ende_abend
+
+    # Übergangsmodus ist aktiv, wenn eines der beiden Zeitfenster zutrifft
+    is_active = morgen_aktiv or abend_aktiv
+
+    # Logging nur bei Statusänderung oder alle 5 Minuten
+    if not hasattr(ist_uebergangsmodus_aktiv, 'last_status'):
+        ist_uebergangsmodus_aktiv.last_status = (False, False, False)  # (is_active, morgen_aktiv, abend_aktiv)
+    if not hasattr(state, 'last_uebergangsmodus_log'):
+        state.last_uebergangsmodus_log = None
+
+    current_status = (is_active, morgen_aktiv, abend_aktiv)
+    time_since_last_log = safe_timedelta(now, state.last_uebergangsmodus_log,
+                                         state.local_tz) if state.last_uebergangsmodus_log else timedelta(minutes=6)
+
+    if (current_status != ist_uebergangsmodus_aktiv.last_status or
+            time_since_last_log >= timedelta(minutes=15)):
+        logging.debug(
+            f"Übergangsmodus-Prüfung: Morgen ({start_morgen}–{ende_morgen})={morgen_aktiv}, "
+            f"Abend ({start_abend}–{ende_abend})={abend_aktiv}, Gesamt={is_active}"
+        )
+        state.last_uebergangsmodus_log = now
+        ist_uebergangsmodus_aktiv.last_status = current_status
+
+    return is_active
 
 
 def calculate_shutdown_point(config, is_night, solax_data, state):
@@ -1706,6 +1752,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
             (state.soc >= 95.0 and state.feedinpower > 600.0)
     )
 
+    # Prüfe Übergangsmodus (morgens oder abends)
+    within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
+
     if state.bademodus_aktiv:
         if state.previous_modus != "Bademodus":
             logging.info("Wechsel zu Bademodus – steuere nach T_Unten")
@@ -1728,7 +1777,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         ausschaltpunkt = state.ausschaltpunkt_erhoeht
         einschaltpunkt = state.einschaltpunkt_erhoeht
         regelfuehler = t_unten
-    elif within_solar_window:
+    elif within_uebergangsmodus:
         modus = "Übergangsmodus"
         ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
         einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction

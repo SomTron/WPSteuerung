@@ -393,9 +393,27 @@ def escape_markdown(text):
         text = text.replace(char, f'\\{char}')
     return text
 
-async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
+
+async def send_status_telegram(
+        session,
+        t_oben,
+        t_unten,
+        t_mittig,
+        t_verd,
+        kompressor_status,
+        current_runtime,
+        total_runtime,
+        config,
+        get_solax_data_func,
+        chat_id,
+        bot_token,
+        state,
+        is_nighttime_func=None,
+        is_solar_window_func=None
+):
     """Sendet den aktuellen Systemstatus über Telegram."""
-    logging.debug(f"Generiere Status-Nachricht: t_oben={t_oben}, t_unten={t_unten}, t_mittig={t_mittig}, t_verd={t_verd}")
+    logging.debug(
+        f"Generiere Status-Nachricht: t_oben={t_oben}, t_unten={t_unten}, t_mittig={t_mittig}, t_verd={t_verd}")
     try:
         t_oben = float(t_oben) if t_oben is not None else None
     except (ValueError, TypeError) as e:
@@ -424,6 +442,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     }
     feedinpower = solax_data.get("feedinpower", 0)
     bat_power = solax_data.get("batPower", 0)
+
     def format_time(seconds_str):
         try:
             if isinstance(seconds_str, timedelta):
@@ -435,14 +454,45 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
             return f"{hours}h {minutes}min"
         except (ValueError, TypeError):
             return "0h 0min"
-    nacht_reduction = int(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func and is_nighttime_func(config) and not state.bademodus_aktiv else 0
+
+    nacht_reduction = int(
+        config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func and is_nighttime_func(
+        config) and not state.bademodus_aktiv else 0
     is_solar_window_active = is_solar_window_func(config, state) if is_solar_window_func else False
+
+    # Prüfe Übergangsmodus (morgens oder abends)
+    try:
+        from WW_skript import ist_uebergangsmodus_aktiv  # Korrigierter Import
+    except ImportError as e:
+        logging.error(f"Fehler beim Import von ist_uebergangsmodus_aktiv: {e}")
+        within_uebergangsmodus = False
+        morgen_aktiv = False
+        abend_aktiv = False
+        mode_str = "Normal (Übergangsmodus-Prüfung fehlgeschlagen)"
+    else:
+        within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
+        now_time = datetime.now(state.local_tz).time()
+
+        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus
+        start_morgen = state.uebergangsmodus_start
+        ende_morgen = state.uebergangsmodus_ende
+        start_abend = state.uebergangsmodus_abend_start
+        ende_abend = state.uebergangsmodus_abend_ende
+        if start_morgen < ende_morgen:
+            morgen_aktiv = start_morgen <= now_time <= ende_morgen
+        else:
+            morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
+        if start_abend < ende_abend:
+            abend_aktiv = start_abend <= now_time <= ende_abend
+        else:
+            abend_aktiv = now_time >= start_abend or now_time <= ende_abend
+
     if state.bademodus_aktiv:
         mode_str = "🛁 Bademodus"
     elif state.urlaubsmodus_aktiv:
         mode_str = f"🌴 Urlaub (-{int(config['Urlaubsmodus'].get('URLAUBSABSENKUNG', 6))}°C)"
-    elif is_solar_window_active:
-        mode_str = "Übergangszeit (Solarfenster)"
+    elif within_uebergangsmodus:
+        mode_str = "Übergangsmodus (Morgen)" if morgen_aktiv else "Übergangsmodus (Abend)"
         if state.solar_ueberschuss_aktiv:
             mode_str += " + Solarüberschuss"
     elif state.solar_ueberschuss_aktiv and is_nighttime_func and is_nighttime_func(config):
@@ -453,6 +503,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         mode_str = f"Nachtabsenkung (-{nacht_reduction}°C)"
     else:
         mode_str = "Normal"
+
     compressor_status_str = "EIN" if kompressor_status else "AUS"
     status_lines = [
         "📊 **Systemstatus**",
@@ -469,7 +520,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         "🎯 **Sollwerte**",
         f" • Einschaltpunkt: {state.aktueller_einschaltpunkt}°C",
         f" • Ausschaltpunkt: {state.aktueller_ausschaltpunkt}°C",
-        f" • Gilt für: {'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Oben, Mitte'}",
+        f" • Gilt für: {'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Mittig'}",
         "⚙️ **Betriebsmodus**",
         f" • {mode_str}",
         "ℹ️ **Zusatzinfo**",
