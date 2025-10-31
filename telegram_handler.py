@@ -676,48 +676,108 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         logging.error(f"Fehler in process_telegram_messages_async: {e}", exc_info=True)
         return last_update_id
 
-async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func):
-    """Telegram-Task zur Verarbeitung von Nachrichten."""
-    logging.info("Starte telegram_task")
+async def telegram_task(
+    read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func,
+    config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func,
+    is_nighttime_func
+):
+    """Telegram-Task mit vollständiger Heartbeat-Überwachung (Start + Internet-Wiederkehr)"""
+    logging.info("Starte telegram_task mit erweiterter Heartbeat-Überwachung")
+
+    # Healthcheck URL aus Config
+    HEALTHCHECK_URL = config.get("Monitoring", {}).get("HEALTHCHECK_URL", "").strip()
+    if not HEALTHCHECK_URL:
+        logging.warning("HEALTHCHECK_URL nicht in Config – Heartbeat deaktiviert")
+        HEALTHCHECK_URL = None
+
     last_update_id = None
-    while True:
-        async with aiohttp.ClientSession() as session:
+    heartbeat_task = None
+    internet_was_down = False  # Merkt sich, ob Internet weg war
+
+    async with aiohttp.ClientSession() as session:
+        # === 1. START-PING beim Programmstart ===
+        if HEALTHCHECK_URL:
+            start_url = HEALTHCHECK_URL + "/start"
+            if await send_heartbeat(session, start_url):
+                logging.info("Start-Ping an Healthchecks.io gesendet (Bot gestartet)")
+            else:
+                logging.warning("Start-Ping fehlgeschlagen – Healthchecks.io nicht erreichbar")
+
+            # Starte periodischen Heartbeat
+            async def heartbeat_loop():
+                while True:
+                    await send_heartbeat(session, HEALTHCHECK_URL)
+                    await asyncio.sleep(300)  # Alle 5 Minuten
+
+            heartbeat_task = asyncio.create_task(heartbeat_loop())
+            logging.info("Heartbeat-Task gestartet (alle 5 Min)")
+
+        # === 2. HAUPTSCHLEIFE ===
+        while True:
             try:
                 if not state.bot_token or not state.chat_id:
-                    logging.warning(f"Telegram bot_token oder chat_id fehlt (bot_token={state.bot_token}, chat_id={state.chat_id}). Überspringe telegram_task.")
+                    logging.warning("bot_token oder chat_id fehlt. Warte...")
                     await asyncio.sleep(60)
                     continue
+
+                # === 3. Telegram-Updates abrufen ===
                 updates = await get_telegram_updates(session, state.bot_token, last_update_id)
+
+                # === 4. Internet-Wiederherstellung erkennen ===
                 if updates is not None:
+                    # Erfolgreich Updates erhalten → Internet ist da
+                    if internet_was_down and HEALTHCHECK_URL:
+                        # Internet war weg → jetzt wieder da → neuer Start-Ping!
+                        start_url = HEALTHCHECK_URL + "/start"
+                        if await send_heartbeat(session, start_url):
+                            logging.info("Internet wiederhergestellt → Start-Ping gesendet")
+                        internet_was_down = False
+                else:
+                    # Keine Updates → möglicherweise Netzwerkproblem
+                    if not internet_was_down:
+                        logging.warning("Keine Telegram-Updates → Internet möglicherweise unterbrochen")
+                        internet_was_down = True
+
+                # === 5. Nur bei gültigen Updates weiterverarbeiten ===
+                if updates is not None:
+                    # Sensordaten parallel lesen
                     sensor_tasks = [
                         asyncio.to_thread(read_temperature_func, sensor_ids[key])
                         for key in ["oben", "unten", "mittig", "verd"]
                     ]
-                    t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
-                    for temp, key in zip([t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd], ["oben", "unten", "mittig", "verd"]):
+                    t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd = await asyncio.gather(
+                        *sensor_tasks, return_exceptions=True
+                    )
+                    for temp, key in zip([t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd],
+                                        ["oben", "unten", "mittig", "verd"]):
                         if isinstance(temp, Exception) or temp is None:
-                            logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {temp or 'Kein Wert'}")
+                            logging.error(f"Sensorfehler {key}: {temp}")
                             temp = None
+
                     kompressor_status = kompressor_status_func()
                     aktuelle_laufzeit = current_runtime_func()
                     gesamtlaufzeit = total_runtime_func()
+
                     last_update_id = await process_telegram_messages_async(
-                        session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id,
-                        kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, state.chat_id, state.bot_token, config,
-                        get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func,
-                        is_nighttime_func, is_solar_window
+                        session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd,
+                        updates, last_update_id, kompressor_status, aktuelle_laufzeit,
+                        gesamtlaufzeit, state.chat_id, state.bot_token, config,
+                        get_solax_data_func, state, get_temperature_history_func,
+                        get_runtime_bar_chart_func, is_nighttime_func, is_solar_window
                     )
                 else:
                     logging.warning("Telegram-Updates waren None")
+
                 await asyncio.sleep(0.1)
+
             except aiohttp.ClientError as e:
-                logging.error(f"Netzwerkfehler in telegram_task: {e}")
-                await asyncio.sleep(1)
-                continue
+                if not internet_was_down:
+                    logging.error(f"Netzwerkfehler in telegram_task: {e} → Internet unterbrochen")
+                    internet_was_down = True
+                await asyncio.sleep(5)
             except Exception as e:
-                logging.error(f"Fehler in telegram_task: {str(e)}", exc_info=True)
+                logging.error(f"Unbekannter Fehler in telegram_task: {e}", exc_info=True)
                 await asyncio.sleep(10)
-                continue
 
 async def send_help_message(session, chat_id, bot_token):
     """Sendet eine Hilfenachricht mit verfügbaren Befehlen über Telegram."""
@@ -926,6 +986,23 @@ async def get_boiler_temperature_history(session, hours, state, config):
         await send_telegram_message(
             session, state.chat_id, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}", state.bot_token
         )
+
+async def send_heartbeat(session, healthcheck_url):
+    """Sendet einen asynchronen Heartbeat an Healthchecks.io"""
+    try:
+        async with session.get(healthcheck_url, timeout=10) as response:
+            if response.status == 200:
+                logging.debug("Heartbeat gesendet")
+                return True
+            else:
+                logging.warning(f"Heartbeat fehlgeschlagen: Status {response.status}")
+                return False
+    except asyncio.TimeoutError:
+        logging.warning("Heartbeat Timeout")
+        return False
+    except Exception as e:
+        logging.error(f"Heartbeat Fehler: {e}")
+        return False
 
 async def get_runtime_bar_chart(session, days=7, state=None):
     """Erstellt ein Balkendiagramm der Kompressorlaufzeiten nach Energiequelle (nur wenn Kompressor == 'EIN')"""
