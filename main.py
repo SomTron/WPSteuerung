@@ -244,21 +244,30 @@ class State:
             self.einschaltpunkt_erhoeht = 42
             self.ausschaltpunkt_erhoeht = 48
 
-        # --- Übergangsmodus-Zeitpunkte ---
+# --- Übergangsmodus-Zeitpunkte (Morgens & Abends) ---
         try:
+            # Morgens
             self.uebergangsmodus_start = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "06:00"), "%H:%M"
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "08:00"), "%H:%M"
             ).time()
             self.uebergangsmodus_ende = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "08:00"), "%H:%M"
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "10:00"), "%H:%M"
             ).time()
+            
+            # Abends
             self.uebergangsmodus_abend_start = datetime.strptime(
                 config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00"), "%H:%M"
             ).time()
             self.uebergangsmodus_abend_ende = datetime.strptime(
                 config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00"), "%H:%M"
             ).time()
+
         except Exception as e:
+            logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
+            self.uebergangsmodus_start = time(0, 0)
+            self.uebergangsmodus_ende = time(0, 0)
+            self.uebergangsmodus_abend_start = time(0, 0)
+            self.uebergangsmodus_abend_ende = time(0, 0)
             logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
             self.uebergangsmodus_start = time(6, 0)
             self.uebergangsmodus_ende = time(8, 0)
@@ -2191,3 +2200,5 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Fehler beim Starten des Skripts: {e}", exc_info=True)
         raise
+
+#End
