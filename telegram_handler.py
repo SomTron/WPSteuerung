@@ -12,78 +12,49 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from utils import safe_timedelta
 
-#rebase2
-
 # Logging-Konfiguration wird in main.py definiert
 # Empfehlung: Stelle sicher, dass logger.setLevel(logging.DEBUG) in main.py gesetzt ist
 
 def is_solar_window(config, state):
-    """Prüft, ob die aktuelle Uhrzeit im Übergangsmodus (Morgens oder Abends) liegt."""
-    # Zeitzone sicherstellen
-    if hasattr(state, 'local_tz'):
-        tz = state.local_tz
-    else:
-        tz = pytz.timezone("Europe/Berlin")
-
-    now = datetime.now(tz)
-    now_time = now.time()
-
+    """Prüft, ob die aktuelle Uhrzeit im Solarfenster nach der Nachtabsenkung liegt."""
+    now = datetime.now(state.local_tz)
     try:
-        # --- Morgens ---
-        m_start_str = config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "08:00")
-        m_end_str = config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "10:00")
-        m_start = datetime.strptime(m_start_str, "%H:%M").time()
-        m_end = datetime.strptime(m_end_str, "%H:%M").time()
-
-        # --- Abends ---
-        a_start_str = config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00")
-        a_end_str = config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00")
-        a_start = datetime.strptime(a_start_str, "%H:%M").time()
-        a_end = datetime.strptime(a_end_str, "%H:%M").time()
-
-        # --- Prüfung ---
-        def in_window(curr, start, end):
-            if start < end:
-                return start <= curr <= end
-            return curr >= start or curr <= end  # Geht über Mitternacht
-
-        is_morgen = in_window(now_time, m_start, m_end)
-        is_abend = in_window(now_time, a_start, a_end)
-        within_solar_only_window = is_morgen or is_abend
-
-        # --- Logging mit Throttling ---
-        # Wir nutzen state.last_solar_window_log, falls vorhanden, um Logs nicht zu fluten
-
-        # Initialisiere Attribute falls nicht vorhanden
-        if not hasattr(is_solar_window, 'last_status'):
-            is_solar_window.last_status = None
-        if not hasattr(state, 'last_solar_window_log'):
-            state.last_solar_window_log = None
-
-        # Zeitdifferenz berechnen (Hilfsfunktion safe_timedelta vorausgesetzt oder manuell)
-        should_log = False
-        if is_solar_window.last_status != within_solar_only_window:
-            should_log = True
-        elif state.last_solar_window_log is None:
-            should_log = True
+        end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
+        if not isinstance(end_time_str, str):
+            raise ValueError("NACHTABSENKUNG_END muss ein String sein")
+        try:
+            end_hour, end_minute = map(int, end_time_str.split(':'))
+        except ValueError:
+            raise ValueError(f"Ungültiges Zeitformat: NACHTABSENKUNG_END={end_time_str}")
+        if not (0 <= end_hour < 24 and 0 <= end_minute < 60):
+            raise ValueError(f"Ungültige Zeitwerte: Ende={end_time_str}")
+        potential_night_setback_end_today = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+        if now < potential_night_setback_end_today + timedelta(hours=2):
+            night_setback_end_time_today = potential_night_setback_end_today
         else:
-            # Manuelle Zeitdifferenz falls safe_timedelta hier nicht importiert ist
-            diff = now - state.last_solar_window_log
-            if diff >= timedelta(minutes=5):
-                should_log = True
+            night_setback_end_time_today = potential_night_setback_end_today + timedelta(days=1)
+        solar_only_window_start_time_today = night_setback_end_time_today
+        solar_only_window_end_time_today = night_setback_end_time_today + timedelta(hours=2)
+        within_solar_only_window = solar_only_window_start_time_today <= now < solar_only_window_end_time_today
 
-        if should_log:
+        # Logge nur bei Statusänderung oder alle 5 Minuten
+        if (not hasattr(is_solar_window, 'last_status') or
+                is_solar_window.last_status != within_solar_only_window or
+                state.last_solar_window_log is None or
+                safe_timedelta(now, state.last_solar_window_log, state.local_tz) >= timedelta(minutes=5)):
+            logging.debug(f"is_solar_window: now={now}, tzinfo={state.local_tz}")
             logging.debug(
-                f"Telegram-Status Check: Übergangszeit aktiv? {within_solar_only_window} "
-                f"(Morgen: {is_morgen} [{m_start}-{m_end}], Abend: {is_abend} [{a_start}-{a_end}])"
+                f"Solarfensterprüfung: Jetzt={now.strftime('%H:%M')}, "
+                f"Start={solar_only_window_start_time_today.strftime('%H:%M')}, "
+                f"Ende={solar_only_window_end_time_today.strftime('%H:%M')}, "
+                f"Ist Solarfenster={within_solar_only_window}"
             )
             state.last_solar_window_log = now
-            is_solar_window.last_status = within_solar_only_window
 
+        is_solar_window.last_status = within_solar_only_window
         return within_solar_only_window
-
     except Exception as e:
-        logging.error(f"Fehler in is_solar_window (Telegram Handler): {e}")
+        logging.error(f"Fehler in is_solar_window: {e}")
         return False
 
 
@@ -140,7 +111,6 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
             return False
     return False
 
-
 def get_keyboard(state):
     """Erstellt das dynamische Keyboard basierend auf dem Urlaubsmodus und Bademodus."""
     urlaub_button = "🌴 Urlaub" if not state.urlaubsmodus_aktiv else "🌴 Urlaub Ende"
@@ -157,13 +127,11 @@ def get_keyboard(state):
     }
     return keyboard
 
-
 async def send_welcome_message(session, chat_id, bot_token, state):
     """Sendet die Willkommensnachricht mit benutzerdefiniertem Keyboard."""
     message = "Willkommen! Verwende die Schaltflächen unten, um das System zu steuern."
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
-
 
 async def get_telegram_updates(session, bot_token, offset=None):
     """Ruft Telegram-Updates ab."""
@@ -179,8 +147,7 @@ async def get_telegram_updates(session, bot_token, offset=None):
                 return updates
             else:
                 error_text = await response.text()
-                logging.error(
-                    f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}, Details: {error_text}")
+                logging.error(f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}, Details: {error_text}")
                 return None
     except aiohttp.ClientConnectionError as e:
         logging.error(f"Netzwerkfehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
@@ -201,7 +168,6 @@ async def aktivere_bademodus(session, chat_id, bot_token, state):
     logging.info("Bademodus aktiviert")
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode=None)
 
-
 async def deaktivere_bademodus(session, chat_id, bot_token, state):
     """Deaktiviert den Bademodus."""
     state.bademodus_aktiv = False
@@ -209,7 +175,6 @@ async def deaktivere_bademodus(session, chat_id, bot_token, state):
     message = "🛁 Bademodus deaktiviert."
     logging.info("Bademodus deaktiviert")
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode=None)
-
 
 async def aktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     """Aktiviert den Urlaubsmodus mit Zeitauswahl."""
@@ -377,6 +342,7 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
         )
 
 
+
 async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     """Deaktiviert den Urlaubsmodus."""
     state.urlaubsmodus_aktiv = False
@@ -384,12 +350,9 @@ async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus deaktiviert.", bot_token, reply_markup=keyboard)
     logging.info("Urlaubsmodus deaktiviert")
 
-
-async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id,
-                                    bot_token):
+async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token):
     """Sendet die aktuellen Temperaturen über Telegram."""
-    logging.debug(
-        f"Generiere Temperaturen-Nachricht: t_oben={t_boiler_oben}, t_unten={t_boiler_unten}, t_mittig={t_boiler_mittig}, t_verd={t_verd}")
+    logging.debug(f"Generiere Temperaturen-Nachricht: t_oben={t_boiler_oben}, t_unten={t_boiler_unten}, t_mittig={t_boiler_mittig}, t_verd={t_verd}")
     try:
         t_oben = float(t_boiler_oben) if t_boiler_oben is not None else None
     except (ValueError, TypeError) as e:
@@ -420,7 +383,6 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_bo
     message = "\n".join(temp_lines)
     logging.debug(f"Vollständige Temperaturen-Nachricht (Länge={len(message)}): {message}")
     return await send_telegram_message(session, chat_id, message, bot_token)
-
 
 def escape_markdown(text):
     """Maskiert Markdown-Sonderzeichen, um Parse-Fehler zu vermeiden."""
@@ -574,17 +536,14 @@ async def send_status_telegram(
     logging.debug(f"Vollständige Status-Nachricht (Länge={len(message)}): {message}")
     return await send_telegram_message(session, chat_id, message, bot_token, parse_mode="Markdown")
 
-
 async def send_unknown_command_message(session, chat_id, bot_token):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
-    return await send_telegram_message(session, chat_id,
-                                       "❓ Unbekannter Befehl. Verwende 'Hilfe' für eine Liste der Befehle.", bot_token)
-
+    return await send_telegram_message(session, chat_id, "❓ Unbekannter Befehl. Verwende 'Hilfe' für eine Liste der Befehle.", bot_token)
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates,
-                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id,
-                                          bot_token, config, get_solax_data_func, state, get_temperature_history_func,
-                                          get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
+                                         last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id,
+                                         bot_token, config, get_solax_data_func, state, get_temperature_history_func,
+                                         get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     try:
         if updates:
@@ -623,7 +582,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     # Temperaturabfrage
                     if message_text_lower in ("🌡️ temperaturen", "temperaturen"):
                         await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd,
-                                                        chat_id, bot_token)
+                                                       chat_id, bot_token)
 
                     # Statusabfrage
                     elif message_text_lower in ("📊 status", "status"):
@@ -637,8 +596,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     elif message_text_lower in ("🌴 urlaub", "urlaub"):
                         if state.urlaubsmodus_aktiv:
                             if hasattr(state, 'urlaubsmodus_ende') and state.urlaubsmodus_ende:
-                                remaining_time = safe_timedelta(datetime.now(state.local_tz), state.urlaubsmodus_ende,
-                                                                state.local_tz)
+                                remaining_time = safe_timedelta(datetime.now(state.local_tz), state.urlaubsmodus_ende, state.local_tz)
                                 remaining_hours = int(remaining_time.total_seconds() / 3600)
                                 remaining_days = remaining_hours // 24
                                 remaining_hours %= 24
@@ -655,7 +613,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                                 )
                             else:
                                 await send_telegram_message(session, chat_id, "🌴 Urlaubsmodus ist bereits aktiviert.",
-                                                            bot_token)
+                                                           bot_token)
                         else:
                             await aktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
 
@@ -663,7 +621,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     elif message_text_lower in ("🌴 urlaub ende", "urlaub ende"):
                         if not state.urlaubsmodus_aktiv:
                             await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus ist bereits deaktiviert.",
-                                                        bot_token)
+                                                       bot_token)
                         else:
                             await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
 
@@ -671,7 +629,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     elif message_text_lower in ("🛁 bademodus", "bademodus"):
                         if state.bademodus_aktiv:
                             await send_telegram_message(session, chat_id, "🛁 Bademodus ist bereits aktiviert.",
-                                                        bot_token)
+                                                       bot_token)
                         else:
                             await aktivere_bademodus(session, chat_id, bot_token, state)
 
@@ -679,7 +637,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     elif message_text_lower in ("🛁 bademodus aus", "bademodus aus"):
                         if not state.bademodus_aktiv:
                             await send_telegram_message(session, chat_id, "🛁 Bademodus ist bereits deaktiviert.",
-                                                        bot_token)
+                                                       bot_token)
                         else:
                             await deaktivere_bademodus(session, chat_id, bot_token, state)
 
@@ -718,10 +676,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         logging.error(f"Fehler in process_telegram_messages_async: {e}", exc_info=True)
         return last_update_id
 
-
-async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func,
-                        total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func,
-                        get_runtime_bar_chart_func, is_nighttime_func):
+async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func):
     """Telegram-Task zur Verarbeitung von Nachrichten."""
     logging.info("Starte telegram_task")
     last_update_id = None
@@ -729,8 +684,7 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
         async with aiohttp.ClientSession() as session:
             try:
                 if not state.bot_token or not state.chat_id:
-                    logging.warning(
-                        f"Telegram bot_token oder chat_id fehlt (bot_token={state.bot_token}, chat_id={state.chat_id}). Überspringe telegram_task.")
+                    logging.warning(f"Telegram bot_token oder chat_id fehlt (bot_token={state.bot_token}, chat_id={state.chat_id}). Überspringe telegram_task.")
                     await asyncio.sleep(60)
                     continue
                 updates = await get_telegram_updates(session, state.bot_token, last_update_id)
@@ -739,10 +693,8 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                         asyncio.to_thread(read_temperature_func, sensor_ids[key])
                         for key in ["oben", "unten", "mittig", "verd"]
                     ]
-                    t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd = await asyncio.gather(*sensor_tasks,
-                                                                                                  return_exceptions=True)
-                    for temp, key in zip([t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd],
-                                         ["oben", "unten", "mittig", "verd"]):
+                    t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
+                    for temp, key in zip([t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd], ["oben", "unten", "mittig", "verd"]):
                         if isinstance(temp, Exception) or temp is None:
                             logging.error(f"Fehler beim Lesen des Sensors {sensor_ids[key]}: {temp or 'Kein Wert'}")
                             temp = None
@@ -767,7 +719,6 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                 await asyncio.sleep(10)
                 continue
 
-
 async def send_help_message(session, chat_id, bot_token):
     """Sendet eine Hilfenachricht mit verfügbaren Befehlen über Telegram."""
     message = (
@@ -784,7 +735,6 @@ async def send_help_message(session, chat_id, bot_token):
         "⏱️ **Laufzeiten [Tage]**: Zeigt die Laufzeiten der letzten X Tage (Standard: 7).\n"
     )
     return await send_telegram_message(session, chat_id, message, bot_token)
-
 
 def prefilter_csv_lines(file_path, days, tz):
     now = datetime.now(tz)
@@ -817,7 +767,6 @@ def prefilter_csv_lines(file_path, days, tz):
         logging.error(f"❌ Fehler beim Lesen der CSV-Zeilen: {e}", exc_info=True)
         return []
 
-
 async def get_boiler_temperature_history(session, hours, state, config):
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
     try:
@@ -842,8 +791,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
             return
         if "Zeitstempel" not in df.columns:
             logging.error("❌ Spalte 'Zeitstempel' fehlt in der CSV.")
-            await send_telegram_message(session, state.chat_id, "Spalte 'Zeitstempel' fehlt in der CSV.",
-                                        state.bot_token)
+            await send_telegram_message(session, state.chat_id, "Spalte 'Zeitstempel' fehlt in der CSV.", state.bot_token)
             return
         try:
             df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce')
@@ -861,8 +809,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
             try:
                 latest_data = pd.read_csv(file_path, usecols=["Zeitstempel"])
                 latest_data["Zeitstempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
-                latest_time = latest_data["Zeitstempel"].dropna().max() if not latest_data[
-                    "Zeitstempel"].dropna().empty else "unbekannt"
+                latest_time = latest_data["Zeitstempel"].dropna().max() if not latest_data["Zeitstempel"].dropna().empty else "unbekannt"
                 await send_telegram_message(
                     session, state.chat_id,
                     f"Keine gültigen Daten für die letzten {hours} Stunden vorhanden. Letzter Eintrag: {latest_time}.",
@@ -877,8 +824,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
                 )
             return
         try:
-            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer',
-                                                                 nonexistent='shift_forward')
+            df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
         except Exception as e:
             logging.error(f"❌ Fehler beim Hinzufügen der Zeitzone: {e}", exc_info=True)
             await send_telegram_message(session, state.chat_id, "Fehler beim Hinzufügen der Zeitzone.", state.bot_token)
@@ -889,8 +835,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
             try:
                 latest_data = pd.read_csv(file_path, usecols=["Zeitstempel"])
                 latest_data["Zeitstempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
-                latest_time = latest_data["Zeitstempel"].dropna().max() if not latest_data[
-                    "Zeitstempel"].dropna().empty else "unbekannt"
+                latest_time = latest_data["Zeitstempel"].dropna().max() if not latest_data["Zeitstempel"].dropna().empty else "unbekannt"
                 await send_telegram_message(
                     session, state.chat_id,
                     f"Keine Daten für die letzten {hours} Stunden vorhanden. Letzter Eintrag: {latest_time}.",
@@ -931,8 +876,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
                 if mask.any():
                     label = f"Kompressor EIN ({source})"
                     if label not in shown_labels:
-                        plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3,
-                                         label=label)
+                        plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3, label=label)
                         shown_labels.add(label)
                     else:
                         plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3)
@@ -946,12 +890,10 @@ async def get_boiler_temperature_history(session, hours, state, config):
                 plt.plot(df["Zeitstempel"], df[col], label=col, color=color, linestyle=linestyle, linewidth=1.2)
         if "Einschaltpunkt" in df.columns:
             df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").ffill()
-            plt.plot(df["Zeitstempel"], df["Einschaltpunkt"], label="Einschaltpunkt (historisch)", linestyle="--",
-                     color="green")
+            plt.plot(df["Zeitstempel"], df["Einschaltpunkt"], label="Einschaltpunkt (historisch)", linestyle="--", color="green")
         if "Ausschaltpunkt" in df.columns:
             df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").ffill()
-            plt.plot(df["Zeitstempel"], df["Ausschaltpunkt"], label="Ausschaltpunkt (historisch)", linestyle="--",
-                     color="orange")
+            plt.plot(df["Zeitstempel"], df["Ausschaltpunkt"], label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
         plt.xlim(time_ago, now)
         plt.ylim(y_min, y_max)
         plt.xlabel("Zeit")
@@ -977,8 +919,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
             else:
                 error_text = await response.text()
                 logging.error(f"Fehler beim Senden des Diagramms: {response.status} – {error_text}")
-                await send_telegram_message(session, state.chat_id, "Fehler beim Senden des Diagramms.",
-                                            state.bot_token)
+                await send_telegram_message(session, state.chat_id, "Fehler beim Senden des Diagramms.", state.bot_token)
         buf.close()
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Temperaturverlaufs: {e}", exc_info=True)
@@ -986,119 +927,72 @@ async def get_boiler_temperature_history(session, hours, state, config):
             session, state.chat_id, f"Fehler beim Abrufen des {hours}h-Verlaufs: {str(e)}", state.bot_token
         )
 
-
 async def get_runtime_bar_chart(session, days=7, state=None):
+    """Erstellt ein Balkendiagramm der Kompressorlaufzeiten nach Energiequelle (nur wenn Kompressor == 'EIN')"""
+    if state is None:
+        logging.error("State-Objekt nicht übergeben.")
+        return
     try:
-        if state is None:
-            logging.error("State-Objekt nicht übergeben.")
-            return
-
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
         today = now.date()
         start_date = today - timedelta(days=days - 1)
-
+        date_range = [start_date + timedelta(days=i) for i in range(days)]
+        runtimes = {
+            "PV": [timedelta() for _ in date_range],
+            "Battery": [timedelta() for _ in date_range],
+            "Grid": [timedelta() for _ in date_range],
+            "Unbekannt": [timedelta() for _ in date_range]
+        }
         file_path = "heizungsdaten.csv"
         if not os.path.isfile(file_path):
-            await send_telegram_message(session, state.chat_id,
-                                        "CSV-Datei nicht gefunden.", state.bot_token)
+            await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
             return
-
-        # --------------------------------------------------------
-        # 🔥 STREAM-CSV: Nur relevante Zeilen einlesen!
-        # --------------------------------------------------------
-        header = None
-        rows = []
-
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-
-                if not header:
-                    header = line.split(",")
-                    continue
-
-                parts = line.split(",")
-                try:
-                    ts = datetime.fromisoformat(parts[0])
-                except:
-                    continue
-
-                # Nur Zeilen der letzten X Tage laden
-                if start_date <= ts.date() <= today:
-                    rows.append(parts)
-
-        if not rows:
-            await send_telegram_message(session, state.chat_id,
-                                        f"Keine Daten für die letzten {days} Tage vorhanden.",
-                                        state.bot_token)
+        relevant_lines = prefilter_csv_lines(file_path, days, local_tz)
+        if len(relevant_lines) < 2:
+            await send_telegram_message(session, state.chat_id, f"Keine Daten für die letzten {days} Tage vorhanden.", state.bot_token)
             return
-
-        # --------------------------------------------------------
-        # Jetzt ist die Tabelle WINZIG → Pandas superschnell
-        # --------------------------------------------------------
-        df = pd.DataFrame(rows, columns=header)
-
+        df = pd.DataFrame([line.split(",") for line in relevant_lines[1:]], columns=relevant_lines[0].split(","))
+        if "Zeitstempel" not in df.columns or "Kompressor" not in df.columns or "PowerSource" not in df.columns:
+            raise ValueError("Notwendige Spalten fehlen in der CSV.")
         df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
-        df = df.dropna(subset=["Zeitstempel"])
-        df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(
-            local_tz, nonexistent='shift_forward', ambiguous='infer'
-        )
+        df = df[df["Zeitstempel"].notna()].copy()
+        df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
         df["Datum"] = df["Zeitstempel"].dt.date
-
-        map_k = {"EIN": 1, "AUS": 0}
-
-        df["Kompressor"] = (
-            df["Kompressor"].astype(str).str.strip().map(map_k).fillna(0).astype(int))
-        active = df[df["Kompressor"] == 1]
-
-        if active.empty:
-            await send_telegram_message(session, state.chat_id,
-                                        f"Keine Laufzeiten mit Kompressor=EIN gefunden.",
-                                        state.bot_token)
+        df = df[(df["Datum"] >= start_date) & (df["Datum"] <= today)]
+        df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0).astype(int)
+        active_rows = df[df["Kompressor"] == 1]
+        if active_rows.empty:
+            await send_telegram_message(
+                session, state.chat_id,
+                f"Keine Laufzeiten mit Kompressor=EIN in den letzten {days} Tagen gefunden.",
+                state.bot_token
+            )
             return
-
-        # Kategorie mapping
-        map_src = {
+        power_source_to_category = {
             "Direkter PV-Strom": "PV",
             "Strom aus der Batterie": "Battery",
             "Strom vom Netz": "Grid"
         }
-        active["Kategorie"] = active["PowerSource"].map(map_src).fillna("Unbekannt")
-
-        # Minuten gruppieren
-        runtime_hours = (
-                active.groupby(["Datum", "Kategorie"])
-                .size()
-                .unstack(fill_value=0)
-                / 60.0
-        )
-
-        # Fehlende Tage ergänzen
-        date_range = pd.date_range(start_date, today).date
-        runtime_hours = runtime_hours.reindex(date_range, fill_value=0)
-
-        # Fehlende Kategorien ergänzen
-        for c in ["Unbekannt", "PV", "Battery", "Grid"]:
-            if c not in runtime_hours.columns:
-                runtime_hours[c] = 0.0
-
-        runtime_hours = runtime_hours[["Unbekannt", "PV", "Battery", "Grid"]]
-
-        # --------------------------------------------------------
-        # PLOTTEN (gleich wie vorher)
-        # --------------------------------------------------------
+        for _, row in active_rows.iterrows():
+            date = row["Datum"]
+            source = row["PowerSource"]
+            category = power_source_to_category.get(source, "Unbekannt")
+            idx = (date - start_date).days
+            if 0 <= idx < days:
+                runtimes[category][idx] += timedelta(minutes=1)
+        runtime_pv_hours = [rt.total_seconds() / 3600 for rt in runtimes['PV']]
+        runtime_battery_hours = [rt.total_seconds() / 3600 for rt in runtimes['Battery']]
+        runtime_grid_hours = [rt.total_seconds() / 3600 for rt in runtimes['Grid']]
+        runtime_unknown_hours = [rt.total_seconds() / 3600 for rt in runtimes['Unbekannt']]
         fig, ax = plt.subplots(figsize=(10, 6))
-
-        bottom0 = runtime_hours["Unbekannt"]
-        bottom1 = bottom0 + runtime_hours["PV"]
-        bottom2 = bottom1 + runtime_hours["Battery"]
-
-        ax.bar(date_range, runtime_hours["Unbekannt"], label="Unbekannt", color="gray", alpha=0.5)
-        ax.bar(date_range, runtime_hours["PV"], bottom=bottom0, label="PV", color="green")
-        ax.bar(date_range, runtime_hours["Battery"], bottom=bottom1, label="Batterie", color="orange")
-        ax.bar(date_range, runtime_hours["Grid"], bottom=bottom2, label="Netz", color="red")
-
+        bottom_unk = [0] * len(date_range)
+        bottom_pv = [u + p for u, p in zip(bottom_unk, runtime_unknown_hours)]
+        bottom_bat = [u + p for u, p in zip(bottom_pv, runtime_pv_hours)]
+        ax.bar(date_range, runtime_unknown_hours, label="Unbekannt / Kein Eintrag", color="gray", alpha=0.5)
+        ax.bar(date_range, runtime_pv_hours, bottom=bottom_unk, label="PV-Strom", color="green")
+        ax.bar(date_range, runtime_battery_hours, bottom=bottom_pv, label="Batterie", color="orange")
+        ax.bar(date_range, runtime_grid_hours, bottom=bottom_bat, label="Netz", color="red")
         ax.set_title(f"Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
         ax.set_xlabel("Datum")
         ax.set_ylabel("Laufzeit (h)")
@@ -1106,27 +1000,21 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         ax.legend(loc="upper left")
         plt.xticks(rotation=45)
         plt.tight_layout()
-
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
         plt.close()
-
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
         form.add_field("caption", f"📊 Laufzeiten nach Quelle – Letzte {days} Tage")
         form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
-
         async with session.post(url, data=form) as response:
             response.raise_for_status()
-
+            logging.info(f"Laufzeitdiagramm für {days} Tage gesendet.")
         buf.close()
-
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {e}", exc_info=True)
         await send_telegram_message(
             session, state.chat_id, f"Fehler beim Abrufen der Laufzeiten: {str(e)}", state.bot_token
         )
-
-# End
