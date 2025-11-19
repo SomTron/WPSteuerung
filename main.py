@@ -28,7 +28,7 @@ from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
                               get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
 
-#rebase
+#rebase2
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
