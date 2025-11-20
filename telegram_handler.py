@@ -395,6 +395,66 @@ def escape_markdown(text):
         text = text.replace(char, f'\\{char}')
     return text
 
+# ──────────────────────────────────────────────────────────────
+# Healthcheck – periodischer Ping (Healthchecks.io, hc-ping.com, etc.)
+# ──────────────────────────────────────────────────────────────
+
+async def _send_healthcheck_ping(session: aiohttp.ClientSession, url: str) -> bool:
+    """Sendet einen einzelnen Ping. Gibt True bei Erfolg zurück."""
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+            if resp.status == 200:
+                logging.debug(f"Healthcheck-Ping erfolgreich: {url}")
+                return True
+            else:
+                text = await resp.text()
+                logging.warning(f"Healthcheck-Ping fehlgeschlagen (Status {resp.status}): {text}")
+    except Exception as e:
+        logging.error(f"Healthcheck-Ping Fehler: {e} → {url}", exc_info=False)
+    return False
+
+
+async def start_healthcheck_task(session: aiohttp.ClientSession, state):
+    """
+    Hintergrund-Task: Pinged periodisch die HEALTHCHECK_URL aus dem State.
+    Wird einmal vom WP-Skript gestartet.
+    """
+    local_tz = pytz.timezone("Europe/Berlin")
+
+    # Optional: Start-Ping senden (Healthchecks.io unterstützt /start)
+    start_url = state.healthcheck_url if state.healthcheck_url.endswith("/start") else state.healthcheck_url + "/start"
+    await _send_healthcheck_ping(session, start_url)
+
+    while True:
+        try:
+            now = datetime.now(local_tz)
+            interval = timedelta(minutes=state.healthcheck_interval)
+
+            # Zeit für nächsten Ping?
+            if state.last_healthcheck_ping is None or (now - state.last_healthcheck_ping) >= interval:
+                success = await _send_healthcheck_ping(session, state.healthcheck_url)
+                state.last_healthcheck_ping = now
+
+                if not success:
+                    # Bei Fehler etwas öfter versuchen
+                    await asyncio.sleep(60)
+                    continue
+
+            # Intelligentes Warten bis zum nächsten Ping
+            next_ping_at = (state.last_healthcheck_ping or now) + interval
+            sleep_sec = max(10, (next_ping_at - now).total_seconds() + 5)
+            await asyncio.sleep(sleep_sec)
+
+        except asyncio.CancelledError:
+            # Beim Programmende → Fail-Ping senden
+            fail_url = state.healthcheck_url + "/fail"
+            await _send_healthcheck_ping(session, fail_url)
+            logging.info("Healthcheck-Task beendet – Fail-Ping gesendet")
+            break
+
+        except Exception as e:
+            logging.error(f"Unbekannter Fehler im Healthcheck-Task: {e}", exc_info=True)
+            await asyncio.sleep(60)
 
 async def send_status_telegram(
         session,

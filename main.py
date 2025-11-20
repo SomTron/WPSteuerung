@@ -26,7 +26,7 @@ from typing import Optional
 from utils import safe_timedelta
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
-                              get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
+                              get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window, start_healthcheck_task)
 
 #rebase2
 
@@ -210,6 +210,20 @@ class State:
         self.last_pause_telegram_notification = None
         self.last_verdampfer_notification = None
         self.last_overtemp_notification = now
+
+        # --- Healthcheck (wird vom telegram_handler verwendet) ---
+        try:
+            self.healthcheck_url = config.get("Healthcheck", "HEALTHCHECK_URL", fallback="").strip()
+            self.healthcheck_interval = config.getint("Healthcheck", "HEALTHCHECK_INTERVAL_MINUTES", fallback=15)
+            if self.healthcheck_interval <= 0:
+                self.healthcheck_interval = 15
+        except Exception as e:
+            logging.warning(f"Fehler beim Lesen von Healthcheck-Config: {e}")
+            self.healthcheck_url = ""
+            self.healthcheck_interval = 15
+
+        # Zeitstempel wann zuletzt gepingt wurde (wird vom telegram_handler gesetzt)
+        self.last_healthcheck_ping = None
 
         # --- SolaxCloud-Konfiguration ---
         self.token_id = config["SolaxCloud"].get("TOKEN_ID", "")
