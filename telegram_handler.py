@@ -981,71 +981,122 @@ async def get_boiler_temperature_history(session, hours, state, config):
         )
 
 async def get_runtime_bar_chart(session, days=7, state=None):
-    """Erstellt ein Balkendiagramm der Kompressorlaufzeiten nach Energiequelle (nur wenn Kompressor == 'EIN')"""
-    if state is None:
-        logging.error("State-Objekt nicht übergeben.")
-        return
     try:
+        if state is None:
+            logging.error("State-Objekt nicht übergeben.")
+            return
+
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
         today = now.date()
         start_date = today - timedelta(days=days - 1)
-        date_range = [start_date + timedelta(days=i) for i in range(days)]
-        runtimes = {
-            "PV": [timedelta() for _ in date_range],
-            "Battery": [timedelta() for _ in date_range],
-            "Grid": [timedelta() for _ in date_range],
-            "Unbekannt": [timedelta() for _ in date_range]
-        }
+
         file_path = "heizungsdaten.csv"
         if not os.path.isfile(file_path):
-            await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
+            await send_telegram_message(session, state.chat_id,
+                                        "CSV-Datei nicht gefunden.", state.bot_token)
             return
-        relevant_lines = prefilter_csv_lines(file_path, days, local_tz)
-        if len(relevant_lines) < 2:
-            await send_telegram_message(session, state.chat_id, f"Keine Daten für die letzten {days} Tage vorhanden.", state.bot_token)
+
+        # --------------------------------------------------------
+        # 🔥 STREAM-CSV: Nur relevante Zeilen einlesen!
+        # --------------------------------------------------------
+        header = None
+        rows = []
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                if not header:
+                    header = line.split(",")
+                    continue
+
+                parts = line.split(",")
+                try:
+                    ts = datetime.fromisoformat(parts[0])
+                except:
+                    continue
+
+                # Nur Zeilen der letzten X Tage laden
+                if start_date <= ts.date() <= today:
+                    rows.append(parts)
+
+        if not rows:
+            await send_telegram_message(session, state.chat_id,
+                                        f"Keine Daten für die letzten {days} Tage vorhanden.",
+                                        state.bot_token)
             return
-        df = pd.DataFrame([line.split(",") for line in relevant_lines[1:]], columns=relevant_lines[0].split(","))
-        if "Zeitstempel" not in df.columns or "Kompressor" not in df.columns or "PowerSource" not in df.columns:
-            raise ValueError("Notwendige Spalten fehlen in der CSV.")
+
+        # --------------------------------------------------------
+        # Jetzt ist die Tabelle WINZIG → Pandas superschnell
+        # --------------------------------------------------------
+        df = pd.DataFrame(rows, columns=header)
+
         df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
-        df = df[df["Zeitstempel"].notna()].copy()
-        df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(local_tz, ambiguous='infer', nonexistent='shift_forward')
+        df = df.dropna(subset=["Zeitstempel"])
+        df["Zeitstempel"] = df["Zeitstempel"].dt.tz_localize(
+            local_tz, nonexistent='shift_forward', ambiguous='infer'
+        )
         df["Datum"] = df["Zeitstempel"].dt.date
-        df = df[(df["Datum"] >= start_date) & (df["Datum"] <= today)]
-        df["Kompressor"] = df["Kompressor"].replace({"EIN": 1, "AUS": 0}).fillna(0).astype(int)
-        active_rows = df[df["Kompressor"] == 1]
-        if active_rows.empty:
-            await send_telegram_message(
-                session, state.chat_id,
-                f"Keine Laufzeiten mit Kompressor=EIN in den letzten {days} Tagen gefunden.",
-                state.bot_token
-            )
+
+        df["Kompressor"] = (
+            df["Kompressor"]
+            .astype(str)
+            .str.strip()
+            .replace({"EIN": 1, "AUS": 0, "": 0, "None": 0})
+        )
+
+        df["Kompressor"] = pd.to_numeric(df["Kompressor"], errors="coerce").fillna(0).astype(int)
+
+        active = df[df["Kompressor"] == 1]
+
+        if active.empty:
+            await send_telegram_message(session, state.chat_id,
+                                        f"Keine Laufzeiten mit Kompressor=EIN gefunden.",
+                                        state.bot_token)
             return
-        power_source_to_category = {
+
+        # Kategorie mapping
+        map_src = {
             "Direkter PV-Strom": "PV",
             "Strom aus der Batterie": "Battery",
             "Strom vom Netz": "Grid"
         }
-        for _, row in active_rows.iterrows():
-            date = row["Datum"]
-            source = row["PowerSource"]
-            category = power_source_to_category.get(source, "Unbekannt")
-            idx = (date - start_date).days
-            if 0 <= idx < days:
-                runtimes[category][idx] += timedelta(minutes=1)
-        runtime_pv_hours = [rt.total_seconds() / 3600 for rt in runtimes['PV']]
-        runtime_battery_hours = [rt.total_seconds() / 3600 for rt in runtimes['Battery']]
-        runtime_grid_hours = [rt.total_seconds() / 3600 for rt in runtimes['Grid']]
-        runtime_unknown_hours = [rt.total_seconds() / 3600 for rt in runtimes['Unbekannt']]
+        active["Kategorie"] = active["PowerSource"].map(map_src).fillna("Unbekannt")
+
+        # Minuten gruppieren
+        runtime_hours = (
+            active.groupby(["Datum", "Kategorie"])
+            .size()
+            .unstack(fill_value=0)
+            / 60.0
+        )
+
+        # Fehlende Tage ergänzen
+        date_range = pd.date_range(start_date, today).date
+        runtime_hours = runtime_hours.reindex(date_range, fill_value=0)
+
+        # Fehlende Kategorien ergänzen
+        for c in ["Unbekannt", "PV", "Battery", "Grid"]:
+            if c not in runtime_hours.columns:
+                runtime_hours[c] = 0.0
+
+        runtime_hours = runtime_hours[["Unbekannt", "PV", "Battery", "Grid"]]
+
+        # --------------------------------------------------------
+        # PLOTTEN (gleich wie vorher)
+        # --------------------------------------------------------
         fig, ax = plt.subplots(figsize=(10, 6))
-        bottom_unk = [0] * len(date_range)
-        bottom_pv = [u + p for u, p in zip(bottom_unk, runtime_unknown_hours)]
-        bottom_bat = [u + p for u, p in zip(bottom_pv, runtime_pv_hours)]
-        ax.bar(date_range, runtime_unknown_hours, label="Unbekannt / Kein Eintrag", color="gray", alpha=0.5)
-        ax.bar(date_range, runtime_pv_hours, bottom=bottom_unk, label="PV-Strom", color="green")
-        ax.bar(date_range, runtime_battery_hours, bottom=bottom_pv, label="Batterie", color="orange")
-        ax.bar(date_range, runtime_grid_hours, bottom=bottom_bat, label="Netz", color="red")
+
+        bottom0 = runtime_hours["Unbekannt"]
+        bottom1 = bottom0 + runtime_hours["PV"]
+        bottom2 = bottom1 + runtime_hours["Battery"]
+
+        ax.bar(date_range, runtime_hours["Unbekannt"], label="Unbekannt", color="gray", alpha=0.5)
+        ax.bar(date_range, runtime_hours["PV"], bottom=bottom0, label="PV", color="green")
+        ax.bar(date_range, runtime_hours["Battery"], bottom=bottom1, label="Batterie", color="orange")
+        ax.bar(date_range, runtime_hours["Grid"], bottom=bottom2, label="Netz", color="red")
+
         ax.set_title(f"Kompressorlaufzeiten nach Energiequelle (letzte {days} Tage)")
         ax.set_xlabel("Datum")
         ax.set_ylabel("Laufzeit (h)")
@@ -1053,19 +1104,23 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         ax.legend(loc="upper left")
         plt.xticks(rotation=45)
         plt.tight_layout()
+
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
         plt.close()
+
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
         form.add_field("caption", f"📊 Laufzeiten nach Quelle – Letzte {days} Tage")
         form.add_field("photo", buf, filename="runtime_chart.png", content_type="image/png")
+
         async with session.post(url, data=form) as response:
             response.raise_for_status()
-            logging.info(f"Laufzeitdiagramm für {days} Tage gesendet.")
+
         buf.close()
+
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Laufzeitdiagramms: {e}", exc_info=True)
         await send_telegram_message(
