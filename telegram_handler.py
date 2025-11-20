@@ -535,19 +535,9 @@ async def send_status_telegram(
         within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
         now_time = datetime.now(state.local_tz).time()
 
-        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus
-        start_morgen = state.uebergangsmodus_start
-        ende_morgen = state.uebergangsmodus_ende
-        start_abend = state.uebergangsmodus_abend_start
-        ende_abend = state.uebergangsmodus_abend_ende
-        if start_morgen < ende_morgen:
-            morgen_aktiv = start_morgen <= now_time <= ende_morgen
-        else:
-            morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
-        if start_abend < ende_abend:
-            abend_aktiv = start_abend <= now_time <= ende_abend
-        else:
-            abend_aktiv = now_time >= start_abend or now_time <= ende_abend
+        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus (angepasst an neue Variablen)
+        morgen_aktiv = state.nachtabsenkung_ende <= now_time <= state.uebergangsmodus_morgens_ende
+        abend_aktiv = state.uebergangsmodus_abends_start <= now_time <= state.nachtabsenkung_start
 
     if state.bademodus_aktiv:
         mode_str = "🛁 Bademodus"
@@ -597,6 +587,7 @@ async def send_status_telegram(
     message = "\n".join(status_lines)
     logging.debug(f"Vollständige Status-Nachricht (Länge={len(message)}): {message}")
     return await send_telegram_message(session, chat_id, message, bot_token, parse_mode="Markdown")
+
 
 async def send_unknown_command_message(session, chat_id, bot_token):
     """Sendet eine Nachricht bei unbekanntem Befehl."""

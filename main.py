@@ -256,35 +256,36 @@ class State:
             self.einschaltpunkt_erhoeht = 42
             self.ausschaltpunkt_erhoeht = 48
 
-        # --- Übergangsmodus-Zeitpunkte (Morgens & Abends) ---
+        # --- Vereinfachter Übergangsmodus (nur 2 Werte nötig!) ---
         try:
-            # Morgens
-            self.uebergangsmodus_start = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "08:00"), "%H:%M"
-            ).time()
-            self.uebergangsmodus_ende = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "10:00"), "%H:%M"
+            # Ende des morgendlichen Übergangsmodus (z. B. 10:00)
+            self.uebergangsmodus_morgens_ende = datetime.strptime(
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_MORGENS_ENDE", "10:00"), "%H:%M"
             ).time()
 
-            # Abends
-            self.uebergangsmodus_abend_start = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00"), "%H:%M"
-            ).time()
-            self.uebergangsmodus_abend_ende = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00"), "%H:%M"
+            # Start des abendlichen Übergangsmodus (z. B. 17:00)
+            self.uebergangsmodus_abends_start = datetime.strptime(
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABENDS_START", "17:00"), "%H:%M"
             ).time()
 
+            # Nachtabsenkung (bleibt wie bisher – wir brauchen diese Werte für die Logik)
+            nacht_start_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "19:30")
+            nacht_ende_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "08:00")
+            self.nachtabsenkung_start = datetime.strptime(nacht_start_str, "%H:%M").time()
+            self.nachtabsenkung_ende = datetime.strptime(nacht_ende_str, "%H:%M").time()
+
+            logging.info(
+                f"Übergangsmodus vereinfacht geladen: "
+                f"Morgens von {self.nachtabsenkung_ende} bis {self.uebergangsmodus_morgens_ende}, "
+                f"Abends von {self.uebergangsmodus_abends_start} bis {self.nachtabsenkung_start}"
+            )
         except Exception as e:
-            logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
-            self.uebergangsmodus_start = time(0, 0)
-            self.uebergangsmodus_ende = time(0, 0)
-            self.uebergangsmodus_abend_start = time(0, 0)
-            self.uebergangsmodus_abend_ende = time(0, 0)
-            logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
-            self.uebergangsmodus_start = time(6, 0)
-            self.uebergangsmodus_ende = time(8, 0)
-            self.uebergangsmodus_abend_start = time(17, 0)
-            self.uebergangsmodus_abend_ende = time(19, 0)
+            logging.error(f"Fehler beim Einlesen der vereinfachten Übergangsmodus-Zeiten: {e}")
+            # Fallback-Werte (sicher und sinnvoll)
+            self.uebergangsmodus_morgens_ende = time(10, 0)
+            self.uebergangsmodus_abends_start = time(17, 0)
+            self.nachtabsenkung_start = time(19, 30)
+            self.nachtabsenkung_ende = time(8, 0)
 
         # --- Schwellwerte ---
         try:
@@ -1085,26 +1086,35 @@ async def reload_config(session, state):
         state.sicherheits_temp = get_int_checked("Heizungssteuerung", "SICHERHEITS_TEMP", 65, 50, 90)
         state.verdampfertemperatur = get_int_checked("Heizungssteuerung", "VERDAMPFERTEMPERATUR", -10, -30, 10)
 
-        # --- Übergangsmodus-Zeiten (morgens und abends) ---
+        # --- Vereinfachter Übergangsmodus (nur 2 Werte + Nachtabsenkung) ---
         try:
-            start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "06:00")
-            ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "08:00")
-            abend_start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00")
-            abend_ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00")
-            start_time = datetime.strptime(start_str, "%H:%M").time()
-            end_time = datetime.strptime(ende_str, "%H:%M").time()
-            abend_start_time = datetime.strptime(abend_start_str, "%H:%M").time()
-            abend_end_time = datetime.strptime(abend_ende_str, "%H:%M").time()
-            state.uebergangsmodus_start = start_time
-            state.uebergangsmodus_ende = end_time
-            state.uebergangsmodus_abend_start = abend_start_time
-            state.uebergangsmodus_abend_ende = abend_end_time
+            # Nur diese 2 neuen Werte aus config.ini lesen
+            morgens_ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
+            abends_start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABENDS_START", "17:00")
+
+            # Nachtabsenkung (wird weiterhin benötigt)
+            nacht_start_str = new_config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "19:30")
+            nacht_ende_str  = new_config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "08:00")
+
+            # Parsen
+            state.uebergangsmodus_morgens_ende = datetime.strptime(morgens_ende_str, "%H:%M").time()
+            state.uebergangsmodus_abends_start = datetime.strptime(abends_start_str, "%H:%M").time()
+            state.nachtabsenkung_start = datetime.strptime(nacht_start_str, "%H:%M").time()
+            state.nachtabsenkung_ende  = datetime.strptime(nacht_ende_str, "%H:%M").time()
+
             logging.info(
-                f"Übergangsmodus-Zeiten neu geladen: Morgen={start_time}–{end_time}, "
-                f"Abend={abend_start_time}–{abend_end_time}"
+                f"Übergangsmodus-Zeiten neu geladen: "
+                f"Morgens von {state.nachtabsenkung_ende} bis {state.uebergangsmodus_morgens_ende}, "
+                f"Abends von {state.uebergangsmodus_abends_start} bis {state.nachtabsenkung_start}"
             )
         except Exception as e:
-            logging.error(f"Ungültige Übergangsmodus-Zeitangaben – behalte alte Werte: {e}")
+            logging.error(f"Fehler beim Laden der vereinfachten Übergangsmodus-Zeiten – behalte alte Werte: {e}")
+            # Fallback-Werte (sicher)
+            if not hasattr(state, "uebergangsmodus_morgens_ende"):
+                state.uebergangsmodus_morgens_ende = time(10, 0)
+                state.uebergangsmodus_abends_start = time(17, 0)
+                state.nachtabsenkung_start = time(19, 30)
+                state.nachtabsenkung_ende  = time(8, 0)
 
         # --- Telegram ---
         old_token = state.bot_token
@@ -1194,54 +1204,45 @@ async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten,
                           is_night, within_uebergangsmodus, power_source, temp_conditions_met_to_start,
                           nacht_reduction, urlaubs_reduction):
     now = datetime.now(pytz.timezone("Europe/Berlin"))
+
+    # Nur alle 60 Sekunden loggen
     if hasattr(state, 'last_debug_log_time') and state.last_debug_log_time is not None:
         time_since_last_log = safe_timedelta(now, state.last_debug_log_time, state.local_tz)
         if time_since_last_log.total_seconds() < 60:
             return
 
-    # Bestimme den aktuellen Modus
+    # --- Aktuellen Modus bestimmen ---
     if state.solar_ueberschuss_aktiv:
         modus = "Solarmodus"
     elif is_night:
         modus = "Nachtmodus"
     elif within_uebergangsmodus:
-        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus
+        # Unterscheide Morgen vs. Abend – jetzt mit den neuen, korrekten Zeiten!
         now_time = now.time()
-        start_morgen = state.uebergangsmodus_start
-        ende_morgen = state.uebergangsmodus_ende
-        start_abend = state.uebergangsmodus_abend_start
-        ende_abend = state.uebergangsmodus_abend_ende
-        if start_morgen < ende_morgen:
-            morgen_aktiv = start_morgen <= now_time <= ende_morgen
-        else:
-            morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
-        if start_abend < ende_abend:
-            abend_aktiv = start_abend <= now_time <= ende_abend
-        else:
-            abend_aktiv = now_time >= start_abend or now_time <= ende_abend
+
+        morgen_aktiv = state.nachtabsenkung_ende <= now_time <= state.uebergangsmodus_morgens_ende
+        abend_aktiv  = state.uebergangsmodus_abends_start <= now_time <= state.nachtabsenkung_start
+
         modus = "Übergangsmodus (Morgen)" if morgen_aktiv else "Übergangsmodus (Abend)"
     else:
         modus = "Normalmodus"
 
-    # Bestimme den regelnden Fühler
-    regelfuehler = "unten" if modus.startswith("Solarmodus") else "mittig"
+    # Regel-Fühler (unten nur bei Solar/Bademodus)
+    regelfuehler = "unten" if modus.startswith("Solarmodus") or (hasattr(state, 'bademodus_aktiv') and state.bademodus_aktiv) else "mittig"
 
-    # Temperaturwerte formatieren
-    t_oben_log = f"{t_boiler_oben:.1f}" if t_boiler_oben is not None else "N/A"
+    # --- Werte formatieren ---
+    t_oben_log  = f"{t_boiler_oben:.1f}"  if t_boiler_oben  is not None else "N/A"
     t_mitte_log = f"{t_boiler_mittig:.1f}" if t_boiler_mittig is not None else "N/A"
     t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
-    t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
+    t_verd_log  = f"{t_verd:.1f}"        if t_verd         is not None else "N/A"
 
-    # Solax-Daten formatieren
     bat_power_str = f"{solax_data.get('batPower', 0.0):.1f}" if solax_data else "0.0"
-    soc_str = f"{solax_data.get('soc', 0.0):.1f}" if solax_data else "0.0"
-    feedin_str = f"{state.feedin_power:.1f}" if hasattr(state,
-                                                        'feedin_power') and state.feedin_power is not None else "0.0"
+    soc_str       = f"{solax_data.get('soc', 0.0):.1f}"       if solax_data else "0.0"
+    feedin_str    = f"{state.feedinpower:.1f}" if hasattr(state, 'feedinpower') and state.feedinpower is not None else "0.0"
 
-    # Kombinierte Absenkung
     reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({urlaubs_reduction:.1f})"
 
-    # Debug-Log
+    # --- Debug-Log ---
     logging.debug(
         f"[Modus: {modus}] "
         f"Regel-Fühler: {regelfuehler} | "
@@ -1251,15 +1252,14 @@ async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten,
         f"T_Verd={t_verd_log}°C | "
         f"Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}°C | "
         f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}°C | "
-        f"temp_conditions_met_to_start={temp_conditions_met_to_start} | "
-        f"Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv} | "
+        f"Startbed. erfüllt={temp_conditions_met_to_start} | "
+        f"Solarüberschuss: {state.solar_ueberschuss_aktiv} | "
         f"Nacht={is_night} | "
         f"Urlaub={state.urlaubsmodus_aktiv} | "
-        f"Solar={state.solar_ueberschuss_aktiv} | "
         f"Reduction={reduction} | "
         f"batPower={bat_power_str}W | "
-        f"soc={soc_str}% | "
-        f"feedin={feedin_str}W | "
+        f"SOC={soc_str}% | "
+        f"Feed-in={feedin_str}W | "
         f"Übergangsmodus={within_uebergangsmodus} | "
         f"Power Source={power_source}"
     )
@@ -1297,55 +1297,34 @@ def is_nighttime(config):
 
 
 def ist_uebergangsmodus_aktiv(state) -> bool:
-    """Prüft, ob aktuell der Übergangsmodus (morgens oder abends) aktiv ist, basierend auf Uhrzeit im State."""
-    now = datetime.now(pytz.timezone("Europe/Berlin"))
-    now_time = now.time()
+    """
+    Prüft, ob aktuell Übergangsmodus aktiv ist (morgens ODER abends)
+    – basierend auf den neuen, vereinfachten Konfigurationswerten!
+    """
+    now = datetime.now(state.local_tz).time()
 
-    # Morgen-Übergangsmodus
-    start_morgen = state.uebergangsmodus_start
-    ende_morgen = state.uebergangsmodus_ende
+    # Morgen: von NACHTABSENKUNG_END bis UEBERGANGSMODUS_MORGENS_ENDE
+    morgen_aktiv = state.nachtabsenkung_ende <= now <= state.uebergangsmodus_morgens_ende
 
-    # Abend-Übergangsmodus
-    start_abend = state.uebergangsmodus_abend_start
-    ende_abend = state.uebergangsmodus_abend_ende
+    # Abend: von UEBERGANGSMODUS_ABENDS_START bis NACHTABSENKUNG_START
+    abend_aktiv = state.uebergangsmodus_abends_start <= now <= state.nachtabsenkung_start
 
-    # Prüfe Morgen-Zeitfenster
-    if start_morgen < ende_morgen:
-        morgen_aktiv = start_morgen <= now_time <= ende_morgen
-    else:
-        # Über Mitternacht (z. B. 22:00 – 03:00)
-        morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
+    uebergang_aktiv = morgen_aktiv or abend_aktiv
 
-    # Prüfe Abend-Zeitfenster
-    if start_abend < ende_abend:
-        abend_aktiv = start_abend <= now_time <= ende_abend
-    else:
-        # Über Mitternacht (z. B. 22:00 – 03:00)
-        abend_aktiv = now_time >= start_abend or now_time <= ende_abend
+    # Logging nur bei Wechsel (sparsam, aber informativ)
+    if not hasattr(ist_uebergangsmodus_aktiv, "last_status"):
+        ist_uebergangsmodus_aktiv.last_status = None
 
-    # Übergangsmodus ist aktiv, wenn eines der beiden Zeitfenster zutrifft
-    is_active = morgen_aktiv or abend_aktiv
-
-    # Logging nur bei Statusänderung oder alle 5 Minuten
-    if not hasattr(ist_uebergangsmodus_aktiv, 'last_status'):
-        ist_uebergangsmodus_aktiv.last_status = (False, False, False)  # (is_active, morgen_aktiv, abend_aktiv)
-    if not hasattr(state, 'last_uebergangsmodus_log'):
-        state.last_uebergangsmodus_log = None
-
-    current_status = (is_active, morgen_aktiv, abend_aktiv)
-    time_since_last_log = safe_timedelta(now, state.last_uebergangsmodus_log,
-                                         state.local_tz) if state.last_uebergangsmodus_log else timedelta(minutes=6)
-
-    if (current_status != ist_uebergangsmodus_aktiv.last_status or
-            time_since_last_log >= timedelta(minutes=15)):
-        logging.debug(
-            f"Übergangsmodus-Prüfung: Morgen ({start_morgen}–{ende_morgen})={morgen_aktiv}, "
-            f"Abend ({start_abend}–{ende_abend})={abend_aktiv}, Gesamt={is_active}"
+    current_status = (morgen_aktiv, abend_aktiv)
+    if ist_uebergangsmodus_aktiv.last_status != current_status:
+        logging.info(
+            f"Übergangsmodus: {'AKTIV' if uebergang_aktiv else 'inaktiv'} "
+            f"| Morgen ({state.nachtabsenkung_ende}–{state.uebergangsmodus_morgens_ende}): {'ja' if morgen_aktiv else 'nein'} "
+            f"| Abend ({state.uebergangsmodus_abends_start}–{state.nachtabsenkung_start}): {'ja' if abend_aktiv else 'nein'}"
         )
-        state.last_uebergangsmodus_log = now
         ist_uebergangsmodus_aktiv.last_status = current_status
 
-    return is_active
+    return uebergang_aktiv
 
 
 def calculate_shutdown_point(config, is_night, solax_data, state):
@@ -1897,11 +1876,11 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
     return False
 
 
-async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min_laufzeit, min_pause,
-                               within_solar_window, t_oben):
+async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min_laufzeit, min_pause, within_solar_window, t_oben):
     """Prüft Einschaltbedingungen und schaltet Kompressor ein."""
     now = datetime.now(state.local_tz)
     temp_conditions_met = regelfuehler is not None and regelfuehler <= einschaltpunkt
+
     if temp_conditions_met and state.previous_temp_conditions != temp_conditions_met:
         logging.info(
             f"[{state.previous_modus}] Einschaltbedingung erreicht: "
@@ -1909,8 +1888,8 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             f"{regelfuehler:.1f} Grad <= {einschaltpunkt:.1f} Grad"
         )
     elif not temp_conditions_met and (
-            state.last_no_start_log is None or
-            safe_timedelta(now, state.last_no_start_log, state.local_tz) >= timedelta(minutes=5)):
+        state.last_no_start_log is None or safe_timedelta(now, state.last_no_start_log, state.local_tz) >= timedelta(minutes=5)
+    ):
         state.ausschluss_grund = (
             f"[{state.previous_modus}] Kein Einschalten: "
             f"{'T_Unten' if state.previous_modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}="
@@ -1918,15 +1897,16 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
         )
         logging.debug(state.ausschluss_grund)
         state.last_no_start_log = now
+
     state.previous_temp_conditions = temp_conditions_met
 
     solar_conditions_met = not (not state.bademodus_aktiv and within_solar_window and not state.solar_ueberschuss_aktiv)
     if not solar_conditions_met and (
-            state.last_no_start_log is None or
-            safe_timedelta(now, state.last_no_start_log, state.local_tz) >= timedelta(minutes=5)):
+        state.last_no_start_log is None or safe_timedelta(now, state.last_no_start_log, state.local_tz) >= timedelta(minutes=5)
+    ):
         state.ausschluss_grund = (
             f"[{state.previous_modus}] Kein Einschalten im Übergangsmodus: Solarüberschuss nicht aktiv "
-            f"({state.uebergangsmodus_start.strftime('%H:%M')}–{state.uebergangsmodus_ende.strftime('%H:%M')})"
+            f"({state.nachtabsenkung_ende.strftime('%H:%M')}–{state.uebergangsmodus_morgens_ende.strftime('%H:%M')})"
         )
         logging.debug(state.ausschluss_grund)
         state.last_no_start_log = now
@@ -1938,19 +1918,17 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             pause_ok = False
             pause_remaining = min_pause - time_since_off
             reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
-            if state.last_pause_log is None or safe_timedelta(now, state.last_pause_log, state.local_tz) > timedelta(
-                    minutes=5):
-                logging.info(f"Kompressor START VERHINDERT: {reason}")
+            state.ausschluss_grund = reason  # Setze Grund
+
+            # ─── Korrigierter Log: Nur alle 5 Minuten loggen ───
+            if state.last_pause_log is None or safe_timedelta(now, state.last_pause_log, state.local_tz) > timedelta(minutes=5):
+                logging.info(f"Kompressor nicht eingeschaltet: {reason}")  # ← Hierher verschoben
                 await send_telegram_message(
-                    session, state.chat_id,
-                    f"⚠️ Kompressor bleibt aus: {reason}...",
-                    state.bot_token,
-                    parse_mode=None
+                    session, state.chat_id, f"⚠️ Kompressor bleibt aus: {reason}...", state.bot_token, parse_mode=None
                 )
                 state.last_pause_telegram_notification = now
                 state.current_pause_reason = reason
                 state.last_pause_log = now
-            state.ausschluss_grund = reason
         else:
             state.current_pause_reason = None
             state.last_pause_log = None
@@ -1958,8 +1936,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
 
     if not state.kompressor_ein and temp_conditions_met and pause_ok and solar_conditions_met:
         can_start_new_cycle = True
-        if state.last_completed_cycle and safe_timedelta(now, state.last_completed_cycle,
-                                                         state.local_tz).total_seconds() < min_laufzeit.total_seconds() + min_pause.total_seconds():
+        if state.last_completed_cycle and safe_timedelta(now, state.last_completed_cycle, state.local_tz).total_seconds() < min_laufzeit.total_seconds() + min_pause.total_seconds():
             can_start_new_cycle = False
             state.ausschluss_grund = (
                 f"Neuer Zyklus nicht erlaubt: Warte auf Abschluss von Mindestlaufzeit + Mindestpause "
@@ -1968,8 +1945,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             logging.debug(state.ausschluss_grund)
 
         if can_start_new_cycle:
-            logging.info(
-                f"Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten (Modus: {state.previous_modus}).")
+            logging.info(f"Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten (Modus: {state.previous_modus}).")
             result = await set_kompressor_status(state, True, t_boiler_oben=t_oben)
             if result:
                 state.kompressor_ein = True
@@ -1978,8 +1954,9 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
                 logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
                 state.ausschluss_grund = None
                 return True
-            state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler beim Einschalten"
-            logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
+
+    # ─── Kein bedingungsloser Log mehr hier ───
+    # (Nur bei Bedarf oben geloggt – kein Spam alle 5 Sekunden)
     return False
 
 
