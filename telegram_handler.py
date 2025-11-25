@@ -524,7 +524,7 @@ async def send_status_telegram(
 
     # Prüfe Übergangsmodus (morgens oder abends)
     try:
-        from WW_skript import ist_uebergangsmodus_aktiv  # Korrigierter Import
+        from control_logic import ist_uebergangsmodus_aktiv  # Import from control_logic
     except ImportError as e:
         logging.error(f"Fehler beim Import von ist_uebergangsmodus_aktiv: {e}")
         within_uebergangsmodus = False
@@ -729,7 +729,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         logging.error(f"Fehler in process_telegram_messages_async: {e}", exc_info=True)
         return last_update_id
 
-async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func):
+async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Telegram-Task zur Verarbeitung von Nachrichten."""
     logging.info("Starte telegram_task")
     last_update_id = None
@@ -758,7 +758,7 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                         session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id,
                         kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, state.chat_id, state.bot_token, config,
                         get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func,
-                        is_nighttime_func, is_solar_window
+                        is_nighttime_func, is_solar_window_func
                     )
                 else:
                     logging.warning("Telegram-Updates waren None")

@@ -1137,18 +1137,6 @@ async def initialize_system(state, session, now):
     return True
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 async def update_runtime_and_log(state, session, t_oben, t_unten, t_mittig, t_verd, solax_data, power_source):
     """Aktualisiert Laufzeit und protokolliert Daten in CSV."""
     now = datetime.now(state.local_tz)
@@ -1455,7 +1443,8 @@ async def main_loop(config, state, session):
             state=state,
             get_temperature_history_func=get_boiler_temperature_history,
             get_runtime_bar_chart_func=get_runtime_bar_chart,
-            is_nighttime_func=control_logic.is_nighttime
+            is_nighttime_func=control_logic.is_nighttime,
+            is_solar_window_func=is_solar_window
         ))
 
         # Watchdog-Variablen

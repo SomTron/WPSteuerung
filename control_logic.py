@@ -30,11 +30,11 @@ def ist_uebergangsmodus_aktiv(state):
     try:
         now_time = datetime.now(state.local_tz).time()
         
-        # Morgens
-        morgens_aktiv = state.uebergangsmodus_start <= now_time <= state.uebergangsmodus_ende
+        # Morgens: Von Nachtende bis Morgenende
+        morgens_aktiv = state.nachtabsenkung_ende <= now_time <= state.uebergangsmodus_morgens_ende
         
-        # Abends
-        abends_aktiv = state.uebergangsmodus_abend_start <= now_time <= state.uebergangsmodus_abend_ende
+        # Abends: Von Abendstart bis Nachtstart
+        abends_aktiv = state.uebergangsmodus_abends_start <= now_time <= state.nachtabsenkung_start
         
         return morgens_aktiv or abends_aktiv
     except Exception as e:
@@ -173,9 +173,34 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         state.last_solar_window_check = now
         state.last_solar_window_status = within_solar_window
 
-    nacht_reduction = float(state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-    urlaubs_reduction = float(
-        state.config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
+    # Nacht- und Urlaubsabsenkung sicher abrufen (nur sinnvolle Temperaturwerte 0-20°C)
+    nacht_reduction = 0.0
+    urlaubs_reduction = 0.0
+    
+    if is_night:
+        try:
+            value = state.config["Heizungssteuerung"].get("NACHTABSENKUNG", "0")
+            nacht_reduction = float(value)
+            # Validierung: Absenkung sollte zwischen 0 und 20 Grad liegen
+            if nacht_reduction < 0 or nacht_reduction > 20:
+                logging.warning(f"NACHTABSENKUNG ({nacht_reduction}) außerhalb des gültigen Bereichs (0-20°C), setze auf 0")
+                nacht_reduction = 0.0
+        except (ValueError, TypeError) as e:
+            logging.error(f"Ungültiger Wert für NACHTABSENKUNG: {e}, verwende 0")
+            nacht_reduction = 0.0
+    
+    if state.urlaubsmodus_aktiv:
+        try:
+            value = state.config["Urlaubsmodus"].get("URLAUBSABSENKUNG", "0")
+            urlaubs_reduction = float(value)
+            # Validierung: Absenkung sollte zwischen 0 und 20 Grad liegen
+            if urlaubs_reduction < 0 or urlaubs_reduction > 20:
+                logging.warning(f"URLAUBSABSENKUNG ({urlaubs_reduction}) außerhalb des gültigen Bereichs (0-20°C), setze auf 0")
+                urlaubs_reduction = 0.0
+        except (ValueError, TypeError) as e:
+            logging.error(f"Ungültiger Wert für URLAUBSABSENKUNG: {e}, verwende 0")
+            urlaubs_reduction = 0.0
+    
     total_reduction = nacht_reduction + urlaubs_reduction
 
     state.solar_ueberschuss_aktiv = (
@@ -319,7 +344,10 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
 
     pause_ok = True
     if not state.kompressor_ein and temp_conditions_met and solar_conditions_met and state.last_compressor_off_time:
-        time_since_off = safe_timedelta(now, state.last_compressor_off_time, state.local_tz, default=timedelta.max)
+        if state.last_compressor_off_time is None:
+            time_since_off = timedelta.max
+        else:
+            time_since_off = safe_timedelta(now, state.last_compressor_off_time, state.local_tz)
         if time_since_off.total_seconds() < min_pause.total_seconds() - 0.5:
             pause_ok = False
             pause_remaining = min_pause - time_since_off
