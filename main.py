@@ -11,7 +11,9 @@ from logging.handlers import RotatingFileHandler
 import configparser
 import aiohttp
 import hashlib
-from telegram import ReplyKeyboardMarkup
+import hashlib
+# from telegram import ReplyKeyboardMarkup (removed)
+import asyncio
 import asyncio
 import aiofiles
 import matplotlib
@@ -25,9 +27,12 @@ import numpy as np
 from typing import Optional
 from utils import safe_timedelta
 from dateutil.relativedelta import relativedelta
-from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
-                              get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
+from utils import safe_timedelta
+from dateutil.relativedelta import relativedelta
+# from telegram_handler import ... (removed)
 import control_logic
+import uvicorn
+from api import init_api, app
 
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
@@ -67,94 +72,9 @@ local_tz = pytz.timezone("Europe/Berlin")
 logging.info(f"Programm gestartet: {datetime.now(local_tz)}")
 
 
-# Neuer Telegram-Handler für Logging
-class TelegramHandler(logging.Handler):
-    def __init__(self, bot_token, chat_id, session, level=logging.NOTSET):
-        super().__init__(level)
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.session = session
-        self.queue = asyncio.Queue()
-        self.task = None
-        self.loop = None
-        self._loop_owner = False
 
-    async def send_message(self, message):
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        payload = {
-            "chat_id": self.chat_id,
-            "text": message
-        }
-        async with aiohttp.ClientSession() as session:  # Neue Sitzung pro Anfrage
-            try:
-                async with session.post(url, json=payload, timeout=20) as response:
-                    if response.status == 200:
-                        logging.info(f"Telegram-Nachricht gesendet: {message[:100]}...")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logging.error(f"Fehler beim Senden an Telegram: {response.status} - {error_text}")
-                        return False
-            except aiohttp.ClientConnectionError as e:
-                logging.error(f"Netzwerkfehler beim Senden an Telegram: {e}")
-                return False
-            except asyncio.TimeoutError:
-                logging.error("Timeout beim Senden an Telegram")
-                return False
-            except Exception as e:
-                logging.error(f"Unerwarteter Fehler beim Senden an Telegram: {e}", exc_info=True)
-                return False
+# TelegramHandler removed
 
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            # Skip if session is closed
-            if self.session and self.session.closed:
-                logging.debug("Session is closed, skipping Telegram message")
-                return
-            # Get or set the event loop
-            if self.loop is None:
-                try:
-                    self.loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    logging.debug("No running loop, skipping Telegram message")
-                    return
-
-            # Check if loop is closed
-            if self.loop.is_closed():
-                logging.debug("Event loop is closed, skipping message")
-                return
-
-            # Put message in queue
-            self.queue.put_nowait(msg)
-
-            # Schedule queue processing if not already running
-            if not self.task or self.task.done():
-                self.task = self.loop.create_task(self.process_queue())
-        except Exception as e:
-            logging.error(f"Error in TelegramHandler.emit: {e}", exc_info=True)
-
-    async def process_queue(self):
-        while not self.queue.empty():
-            try:
-                msg = await self.queue.get()
-                await self.send_message(msg)
-                self.queue.task_done()
-            except Exception as e:
-                logging.error(f"Error processing queue in TelegramHandler: {e}", exc_info=True)
-
-    def close(self):
-        try:
-            if self.task and not self.task.done():
-                self.task.cancel()
-            if self._loop_owner and self.loop and not self.loop.is_closed():
-                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
-                self.loop.close()
-            self.loop = None
-        except Exception as e:
-            logging.error(f"Error closing TelegramHandler: {e}", exc_info=True)
-        finally:
-            super().close()
 
 
 class State:
@@ -201,14 +121,14 @@ class State:
         self.ausschluss_grund = None
         self.t_boiler = None
 
-        # --- Telegram-Konfiguration ---
-        self.bot_token = config["Telegram"].get("BOT_TOKEN", "")
-        self.chat_id = config["Telegram"].get("CHAT_ID", "")
-        if not self.bot_token or not self.chat_id:
-            logging.warning("Telegram BOT_TOKEN oder CHAT_ID fehlt. Telegram-Nachrichten deaktiviert.")
+
+        # --- Telegram-Konfiguration (Removed) ---
+        # self.bot_token = ...
+        # self.chat_id = ...
         self.last_pause_telegram_notification = None
         self.last_verdampfer_notification = None
         self.last_overtemp_notification = now
+
 
         # --- Healthcheck (wird vom telegram_handler verwendet) ---
         try:
