@@ -6,3 +6,6 @@ matplotlib
 pytz
 python-dateutil
 python-telegram-bot
+fastapi
+uvicorn[standard]
+pydantic
