@@ -15,6 +15,7 @@ from telegram import ReplyKeyboardMarkup
 import asyncio
 import aiofiles
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
@@ -26,8 +27,8 @@ from utils import safe_timedelta
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
                               get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
+import control_logic
 
-#git-test
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
 BASE_DIR = "/sys/bus/w1/devices/"
@@ -51,8 +52,6 @@ PRESSURE_SENSOR_PIN = 17  # Eingang für Druckschalter
 config = configparser.ConfigParser()
 config.read("config.ini")
 
-
-
 # Globale Variablen für den Programmstatus
 last_update_id = None
 lcd = None
@@ -64,10 +63,9 @@ SENSOR_READ_INTERVAL = timedelta(seconds=5)
 NOTIFICATION_COOLDOWN = 600
 PRESSURE_ERROR_DELAY = timedelta(minutes=5)  # 5 Minuten Verzögerung
 
-
-
 local_tz = pytz.timezone("Europe/Berlin")
 logging.info(f"Programm gestartet: {datetime.now(local_tz)}")
+
 
 # Neuer Telegram-Handler für Logging
 class TelegramHandler(logging.Handler):
@@ -85,8 +83,7 @@ class TelegramHandler(logging.Handler):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {
             "chat_id": self.chat_id,
-            "text": message,
-            "parse_mode": "Markdown"  # Optional, wenn Markdown benötigt wird
+            "text": message
         }
         async with aiohttp.ClientSession() as session:  # Neue Sitzung pro Anfrage
             try:
@@ -213,6 +210,20 @@ class State:
         self.last_verdampfer_notification = None
         self.last_overtemp_notification = now
 
+        # --- Healthcheck (wird vom telegram_handler verwendet) ---
+        try:
+            self.healthcheck_url = config.get("Healthcheck", "HEALTHCHECK_URL", fallback="").strip()
+            self.healthcheck_interval = config.getint("Healthcheck", "HEALTHCHECK_INTERVAL_MINUTES", fallback=15)
+            if self.healthcheck_interval <= 0:
+                self.healthcheck_interval = 15
+        except Exception as e:
+            logging.warning(f"Fehler beim Lesen von Healthcheck-Config: {e}")
+            self.healthcheck_url = ""
+            self.healthcheck_interval = 15
+
+        # Zeitstempel wann zuletzt gepingt wurde (wird vom telegram_handler gesetzt)
+        self.last_healthcheck_ping = None
+
         # --- SolaxCloud-Konfiguration ---
         self.token_id = config["SolaxCloud"].get("TOKEN_ID", "")
         self.sn = config["SolaxCloud"].get("SN", "")
@@ -307,7 +318,6 @@ class State:
         self.last_no_start_log = None
         self.last_completed_cycle = None
 
-
         # --- Sensorwerte ---
         self.t_oben = None
         self.t_unten = None
@@ -362,7 +372,6 @@ async def setup_logging(session, state):
         logging.getLogger('matplotlib').setLevel(logging.WARNING)
         logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
         matplotlib.set_loglevel("warning")
-
 
         # --- FileHandler: RotatingFileHandler mit UTF-8 ---
         file_handler = RotatingFileHandler(
@@ -427,11 +436,13 @@ def safe_timedelta(now, timestamp, local_tz, default=timedelta()):
         logging.error(f"Fehler bei Zeitdifferenzberechnung: {e}, now={now}, timestamp={timestamp}")
         return default
 
+
 def reset_sensor_cache():
     """Leert den Temperatur-Cache, um nach Fehlern frische Werte zu lesen."""
     global last_sensor_readings
     last_sensor_readings.clear()
     logging.debug("Sensor-Cache geleert (reset_sensor_cache())")
+
 
 async def read_temperature_cached(sensor_id):
     now = datetime.now(pytz.timezone("Europe/Berlin"))
@@ -444,6 +455,7 @@ async def read_temperature_cached(sensor_id):
     last_sensor_readings[sensor_id] = (now, temp)
     return temp
 
+
 # Funktion zur LCD-Initialisierung (angepasst)
 async def initialize_lcd(session):
     global lcd
@@ -454,6 +466,7 @@ async def initialize_lcd(session):
     except Exception as e:
         logging.error(f"Fehler bei der LCD-Initialisierung: {e}")
         lcd = None
+
 
 async def safe_send_telegram_message(bot_token, chat_id, message):
     if not bot_token or not chat_id:
@@ -471,19 +484,20 @@ async def safe_send_telegram_message(bot_token, chat_id, message):
         except Exception as e:
             logging.error(f"Fehler beim Senden an Telegram: {e}", exc_info=True)
 
+
 # Asynchrone Funktion zum Abrufen von Solax-Daten
 async def get_solax_data(session, state):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
-    #logging.debug(f"get_solax_data: now={now}, tzinfo={now.tzinfo}, last_api_call={state.last_api_call}, tzinfo={state.last_api_call.tzinfo if state.last_api_call else None}")
+    # logging.debug(f"get_solax_data: now={now}, tzinfo={now.tzinfo}, last_api_call={state.last_api_call}, tzinfo={state.last_api_call.tzinfo if state.last_api_call else None}")
 
     # Stelle sicher, dass state.last_api_call zeitzonenbewusst ist
     if state.last_api_call and state.last_api_call.tzinfo is None:
         state.last_api_call = local_tz.localize(state.last_api_call)
-        #logging.debug(f"state.last_api_call lokalisiert: {state.last_api_call}")
+        # logging.debug(f"state.last_api_call lokalisiert: {state.last_api_call}")
 
     if state.last_api_call and (now - state.last_api_call) < timedelta(minutes=5):
-        #logging.debug("Verwende zwischengespeicherte API-Daten.")
+        # logging.debug("Verwende zwischengespeicherte API-Daten.")
         return state.last_api_data
 
     max_retries = 3
@@ -498,7 +512,7 @@ async def get_solax_data(session, state):
                     state.last_api_data = data.get("result")
                     state.last_api_timestamp = now
                     state.last_api_call = now
-                    #logging.debug(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
+                    # logging.debug(f"Solax-Daten erfolgreich abgerufen: {state.last_api_data}")
                     return state.last_api_data
                 else:
                     logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
@@ -520,6 +534,7 @@ async def get_solax_data(session, state):
                     "api_fehler": True
                 }
                 return fallback_data
+
 
 async def fetch_solax_data(session, state, now):
     """
@@ -543,7 +558,7 @@ async def fetch_solax_data(session, state, now):
         if "utcDateTime" in solax_data:
             upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert("Europe/Berlin")
             delay = (now - upload_time).total_seconds()
-            #logging.debug(f"Solax-Datenverzögerung: {delay:.1f} Sekunden")
+            # logging.debug(f"Solax-Datenverzögerung: {delay:.1f} Sekunden")
 
         acpower = solax_data.get("acpower", "N/A")
         feedinpower = solax_data.get("feedinpower", "N/A")
@@ -578,6 +593,7 @@ async def fetch_solax_data(session, state, now):
             "powerdc2": "N/A",
             "consumeenergy": "N/A",
         }
+
 
 def get_power_source(solax_data):
     pv_production = solax_data.get("powerdc1", 0) + solax_data.get("powerdc2", 0)
@@ -661,7 +677,8 @@ async def send_runtimes_telegram(session, state):  # Nimm 'state' als Argument e
         )
         await send_telegram_message(session, state.chat_id, message)  # Verwende state.chat_id
     else:
-        await send_telegram_message(session, state.chat_id, "Fehler beim Abrufen der Laufzeiten.")  # Verwende state.chat_id
+        await send_telegram_message(session, state.chat_id,
+                                    "Fehler beim Abrufen der Laufzeiten.")  # Verwende state.chat_id
 
 
 async def shutdown(session, state):
@@ -711,7 +728,6 @@ async def shutdown(session, state):
         logging.info("System heruntergefahren")
 
 
-
 # Synchron bleibende Funktionen
 def read_temperature(sensor_id):
     """Liest die Temperatur von einem DS18B20-Sensor.
@@ -735,7 +751,7 @@ def read_temperature(sensor_id):
                 if temp < -20 or temp > 100:
                     logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                     return None
-                #logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
+                # logging.debug(f"Temperatur von Sensor {sensor_id} gelesen: {temp} °C")
                 return temp
             else:
                 logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")
@@ -760,566 +776,47 @@ def check_pressure(state):
 
     return pressure_ok
 
+
+async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
+    """Setzt den Status des Kompressors (GPIO)."""
+    try:
+        if status:
+            GPIO.output(GIO21_PIN, GPIO.HIGH)
+            if not state.kompressor_ein:
+                state.kompressor_ein = True
+                state.start_time = datetime.now(state.local_tz)
+                state.last_compressor_on_time = datetime.now(state.local_tz)
+                logging.info("Kompressor physisch EINGESCHALTET.")
+        else:
+            GPIO.output(GIO21_PIN, GPIO.LOW)
+            if state.kompressor_ein:
+                state.kompressor_ein = False
+                control_logic.set_last_compressor_off_time(state, datetime.now(state.local_tz))
+                logging.info("Kompressor physisch AUSGESCHALTET.")
+        return True
+    except Exception as e:
+        logging.error(f"Fehler beim Schalten des Kompressors: {e}")
+        return False
+
+
 async def handle_pressure_check(session, state):
+    """Prüft den Druckschalter und schaltet bei Fehler ab."""
     pressure_ok = await asyncio.to_thread(check_pressure, state)
+
     if state.previous_pressure_state is None or state.previous_pressure_state != pressure_ok:
         logging.info(f"Druckschalter geändert zu: {'OK' if pressure_ok else 'Fehler'}")
         state.previous_pressure_state = pressure_ok
 
     if not pressure_ok:
         if state.kompressor_ein:
-            result = await set_kompressor_status(state, False, force=True)
-            if result:
-                state.kompressor_ein = False
-                now_correct = datetime.now(local_tz)  # Sicherstellen, dass aktuelle Zeit verwendet wird
-                set_last_compressor_off_time(state, now_correct)  # Korrekte Zuweisung
-                state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time, state.local_tz)
-                state.total_runtime_today += state.last_runtime
-                logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
-                logging.info("Kompressor ausgeschaltet (Druckschalter offen).")
-
-        reset_sensor_cache()
-
-        state.ausschluss_grund = "Druckschalter offen"
-        if not state.pressure_error_sent:
-            if state.bot_token and state.chat_id:
-                await send_telegram_message(
-                    session, state.chat_id,
-                    "⚠️ Druckschalter offen!", state.bot_token
-                )
-                state.pressure_error_sent = True
-                state.last_pressure_error_time = datetime.now(state.local_tz)
-        return False
-
-    if state.pressure_error_sent and (
-        datetime.now(state.local_tz) - state.last_pressure_error_time
-    ) >= PRESSURE_ERROR_DELAY:
-        if state.bot_token and state.chat_id:
+            logging.warning("Druckfehler erkannt! Schalte Kompressor NOT-AUS.")
+            await set_kompressor_status(state, False, force=True)
             await send_telegram_message(
                 session, state.chat_id,
-                "✅ Druckschalter wieder normal.", state.bot_token
-            )
-            state.pressure_error_sent = False
-            state.last_pressure_error_time = None
-    return True
-
-async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten):
-    try:
-        SICHERHEITS_TEMP = int(state.config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 52))
-    except ValueError:
-        SICHERHEITS_TEMP = 52
-        logging.warning(f"SICHERHEITS_TEMP ungültig, verwende Standard: {SICHERHEITS_TEMP}")
-
-    fehler = None
-    is_overtemp = False
-    try:
-        if t_boiler_oben is None or t_boiler_unten is None:
-            fehler = "Fühlerfehler!"
-            logging.error(f"Fühlerfehler erkannt: oben={'N/A' if t_boiler_oben is None else t_boiler_oben}, "
-                          f"unten={'N/A' if t_boiler_unten is None else t_boiler_unten}")
-        elif t_boiler_oben >= SICHERHEITS_TEMP or t_boiler_unten >= SICHERHEITS_TEMP:
-            fehler = "Übertemperatur!"
-            is_overtemp = True
-            logging.error(
-                f"Übertemperatur erkannt: oben={t_boiler_oben:.1f}°C, unten={t_boiler_unten:.1f}°C, Grenze={SICHERHEITS_TEMP}°C")
-        elif abs(t_boiler_oben - t_boiler_unten) > 50:
-            fehler = "Fühlerdifferenz!"
-            logging.warning(
-                f"Fühlerdifferenz erkannt: oben={t_boiler_oben:.1f}°C, unten={t_boiler_unten:.1f}°C, "
-                f"Differenz={abs(t_boiler_oben - t_boiler_unten):.1f}°C")
-    except Exception as e:
-        fehler = "Sensorprüfungsfehler!"
-        logging.error(f"Fehler bei Sensorprüfung: {e}", exc_info=True)
-
-    if fehler:
-        if state.kompressor_ein:
-            result = await set_kompressor_status(state, False, force=True)
-            if result:
-                state.kompressor_ein = False
-                now_correct = datetime.now(state.local_tz)
-                set_last_compressor_off_time(state, now_correct)
-                state.last_runtime = safe_timedelta(now_correct, state.last_compressor_on_time, state.local_tz)
-                state.total_runtime_today += state.last_runtime
-                logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
-                logging.info(f"Kompressor ausgeschaltet (Sensorfehler: {fehler}).")
-            reset_sensor_cache()
-        state.ausschluss_grund = fehler
-
-        if is_overtemp:
-            now = datetime.now(state.local_tz)
-            if (state.last_overtemp_notification is None or
-                safe_timedelta(now, state.last_overtemp_notification, state.local_tz).total_seconds() >= NOTIFICATION_COOLDOWN):
-                if state.bot_token and state.chat_id:
-                    message = (
-                        f"⚠️ Sicherheitsabschaltung: "
-                        f"T_Oben={'N/A' if t_boiler_oben is None else t_boiler_oben:.1f}°C, "
-                        f"T_Unten={'N/A' if t_boiler_unten is None else t_boiler_unten:.1f}°C >= {SICHERHEITS_TEMP}°C"
-                    )
-                    await send_telegram_message(session, state.chat_id, message, state.bot_token)
-                    state.last_overtemp_notification = now
-        await asyncio.sleep(2)
-        return False
-    return True
-
-async def check_boiler_sensors(t_boiler_oben, t_boiler_unten, config):
-    try:
-        SICHERHEITS_TEMP = int(config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 52))
-        #logging.debug(f"SICHERHEITS_TEMP erfolgreich geladen: {SICHERHEITS_TEMP}")
-    except ValueError:
-        SICHERHEITS_TEMP = 52
-        logging.warning(f"SICHERHEITS_TEMP ungültig, verwende Standard: {SICHERHEITS_TEMP}")
-
-    fehler = None
-    is_overtemp = False
-    try:
-        if t_boiler_oben is None or t_boiler_unten is None:
-            fehler = "Fühlerfehler!"
-            logging.error(f"Fühlerfehler erkannt: oben={'N/A' if t_boiler_oben is None else t_boiler_oben}, "
-                          f"unten={'N/A' if t_boiler_unten is None else t_boiler_unten}")
-        elif t_boiler_oben >= SICHERHEITS_TEMP or t_boiler_unten >= SICHERHEITS_TEMP:
-            fehler = "Übertemperatur!"
-            is_overtemp = True
-            logging.error(
-                f"Übertemperatur erkannt: oben={t_boiler_oben:.1f}°C, unten={t_boiler_unten:.1f}°C, Grenze={SICHERHEITS_TEMP}°C")
-        elif abs(t_boiler_oben - t_boiler_unten) > 50:
-            fehler = "Fühlerdifferenz!"
-            logging.warning(
-                f"Fühlerdifferenz erkannt: oben={t_boiler_oben:.1f}°C, unten={t_boiler_unten:.1f}°C, "
-                f"Differenz={abs(t_boiler_oben - t_boiler_unten):.1f}°C")
-        #logging.debug(
-        #    f"Sensorprüfung: T_Oben={'N/A' if t_boiler_oben is None else t_boiler_oben:.1f}°C, "
-        #    f"T_Unten={'N/A' if t_boiler_unten is None else t_boiler_unten:.1f}°C, SICHERHEITS_TEMP={SICHERHEITS_TEMP}°C")
-    except Exception as e:
-        fehler = "Sensorprüfungsfehler!"
-        logging.error(f"Fehler bei Sensorprüfung: {e}", exc_info=True)
-
-    return fehler, is_overtemp
-
-
-async def set_kompressor_status(state, ein: bool, force: bool = False, t_boiler_oben: Optional[float] = None):
-    """
-    Setzt den Zustand des Kompressors (GPIO 21) sicher und robust.
-
-    Args:
-        state: Das State-Objekt mit allen relevanten Zuständen und Konfigurationen.
-        ein (bool): True, um den Kompressor einzuschalten, False zum Ausschalten.
-        force (bool): Wenn True, werden Sicherheitsprüfungen übersprungen (z.B. bei Fehlern).
-        t_boiler_oben (Optional[float]): Aktuelle obere Boilertemperatur für Sicherheitsabschaltung.
-
-    Returns:
-        bool: True bei Erfolg, False bei Fehlschlag oder wenn Aktion nicht durchgeführt wurde.
-    """
-    local_tz = pytz.timezone("Europe/Berlin")
-    now = datetime.now(local_tz)
-    max_attempts = 3
-    attempt_delay = float(state.config["Heizungssteuerung"].get("GPIO_ATTEMPT_DELAY", 0.2))
-
-    try:
-        SICHERHEITS_TEMP = float(state.config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 52.0))
-
-        async with state.gpio_lock:
-            logging.debug(f"Aufruf set_kompressor_status: Ziel={'EIN' if ein else 'AUS'}, Force={force}, "
-                          f"Aktuell kompressor_ein={state.kompressor_ein}")
-            current_physical_state = GPIO.input(21)
-
-            if force:
-                logging.debug("Force=True: Sicherheitsprüfung übersprungen.")
-            elif t_boiler_oben is not None and t_boiler_oben >= SICHERHEITS_TEMP:
-                logging.warning(f"Übertemperatur: T_Oben={t_boiler_oben:.1f}°C >= {SICHERHEITS_TEMP}°C")
-                state.ausschluss_grund = f"Übertemperatur (>= {SICHERHEITS_TEMP}°C)"
-                return False
-
-            target_gpio = GPIO.HIGH if ein else GPIO.LOW
-            success = False
-            for attempt in range(max_attempts):
-                GPIO.output(21, target_gpio)
-                await asyncio.sleep(attempt_delay)
-                readback = GPIO.input(21)
-                logging.debug(f"GPIO Schreibversuch {attempt + 1}: Ziel={target_gpio}, Gelesen={readback}")
-                if readback == target_gpio:
-                    success = True
-                    break
-
-            if not success:
-                logging.critical(
-                    f"Konnte GPIO 21 nicht auf {'HIGH' if ein else 'LOW'} setzen nach {max_attempts} Versuchen!")
-                if state.bot_token and state.chat_id and state.session:
-                    await send_telegram_message(
-                        state.session, state.chat_id,
-                        f"🚨 KRITISCHER FEHLER: Kompressor konnte nicht {'eingeschaltet' if ein else 'ausgeschaltet'} werden!",
-                        state.bot_token
-                    )
-                return False
-
-            # Status aktualisieren
-            state.kompressor_ein = ein
-            if ein:
-                state.start_time = now
-                state.last_compressor_on_time = now
-                state.current_runtime = timedelta()
-                logging.info(f"KOMPRESSOR EINGESCHALTET um {now.strftime('%H:%M:%S')}.")
-            else:
-                state.start_time = None
-                set_last_compressor_off_time(state, now)
-                if state.last_compressor_on_time is not None:
-                    state.last_runtime = safe_timedelta(now, state.last_compressor_on_time, local_tz)
-                else:
-                    state.last_runtime = timedelta()
-                    logging.debug("last_compressor_on_time ist None, setze last_runtime auf 0")
-                state.total_runtime_today += state.last_runtime
-                logging.info(f"KOMPRESSOR AUSGESCHALTET um {now.strftime('%H:%M:%S')}. Laufzeit: {state.last_runtime}")
-            state.ausschluss_grund = None
-            return True
-
-    except Exception as e:
-        logging.error(f"Unerwarteter Fehler in set_kompressor_status: {e}", exc_info=True)
-        current_physical_state = GPIO.input(21) if GPIO.getmode() is not None else None
-        state.kompressor_ein = (current_physical_state == GPIO.HIGH) if current_physical_state is not None else False
-        state.start_time = None
-        return False
-
-
-
-def load_and_validate_config():
-    defaults = {
-        "Heizungssteuerung": {
-            "AUSSCHALTPUNKT": "45",
-            "EINSCHALTPUNKT": "42",
-            "AUSSCHALTPUNKT_ERHOEHT": "50",
-            "EINSCHALTPUNKT_ERHOEHT": "46",
-            "NACHTABSENKUNG": "0",
-            "VERDAMPFERTEMPERATUR": "5",
-            "MIN_PAUSE": "5",
-            "SICHERHEITS_TEMP": "52",
-            "HYSTERESE_MIN": "2"
-        },
-        "Urlaubsmodus": {
-            "URLAUBSABSENKUNG": "0"
-        },
-        "Telegram": {
-            "CHAT_ID": "",
-            "BOT_TOKEN": ""
-        },
-        "SolaxCloud": {
-            "TOKEN_ID": "",
-            "SN": ""
-        }
-    }
-
-    config = configparser.ConfigParser()
-    read_ok = config.read("config.ini")
-
-    if not read_ok:
-        logging.warning("Konfigurationsdatei konnte nicht gefunden oder gelesen werden. Verwende Standardwerte.")
-
-    # Füge fehlende Sections/Werte hinzu
-    for section, keys in defaults.items():
-        if not config.has_section(section):
-            config.add_section(section)
-        for key, default in keys.items():
-            if not config.has_option(section, key):
-                config.set(section, key, default)
-                logging.debug(f"[{section}] {key} fehlt → Standardwert gesetzt: {default}")
-
-    return config
-
-# Asynchrone Funktion zum Neuladen der Konfiguration
-async def reload_config(session, state):
-    try:
-        new_config = load_and_validate_config()
-        current_hash = calculate_file_hash("config.ini")
-
-        if hasattr(state, "last_config_hash") and state.last_config_hash == current_hash:
-            return
-
-        logging.info("Neue Konfiguration erkannt – wird geladen...")
-
-        # --- Heizungsparameter mit Plausibilitätsprüfung ---
-        def get_int_checked(section, key, default, min_val=None, max_val=None):
-            try:
-                val = new_config.getint(section, key, fallback=default)
-                if (min_val is not None and val < min_val) or (max_val is not None and val > max_val):
-                    raise ValueError(f"{key} außerhalb gültiger Grenzen")
-                return val
-            except Exception as e:
-                logging.warning(f"Ungültiger Wert für {key}, verwende alten Wert ({getattr(state, key.lower(), default)}): {e}")
-                return getattr(state, key.lower(), default)
-
-        ausschalt = get_int_checked("Heizungssteuerung", "AUSSCHALTPUNKT", 55, 20, 90)
-        einschalt = get_int_checked("Heizungssteuerung", "EINSCHALTPUNKT", 50, 10, 85)
-        if einschalt >= ausschalt:
-            raise ValueError("EINSCHALTPUNKT muss kleiner als AUSSCHALTPUNKT sein.")
-
-        state.aktueller_ausschaltpunkt = ausschalt
-        state.aktueller_einschaltpunkt = einschalt
-
-        # --- Erhöhte Sollwerte ---
-        state.einschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42)
-        state.ausschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "AUSSCHALTPUNKT_ERHOEHT", 48)
-
-        min_pause_min = get_int_checked("Heizungssteuerung", "MIN_PAUSE", 20, 0, 1440)
-        state.min_pause = timedelta(minutes=min_pause_min)
-
-        state.sicherheits_temp = get_int_checked("Heizungssteuerung", "SICHERHEITS_TEMP", 65, 50, 90)
-        state.verdampfertemperatur = get_int_checked("Heizungssteuerung", "VERDAMPFERTEMPERATUR", -10, -30, 10)
-
-        # --- Übergangsmodus-Zeiten (morgens und abends) ---
-        try:
-            start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "06:00")
-            ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "08:00")
-            abend_start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00")
-            abend_ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00")
-            start_time = datetime.strptime(start_str, "%H:%M").time()
-            end_time = datetime.strptime(ende_str, "%H:%M").time()
-            abend_start_time = datetime.strptime(abend_start_str, "%H:%M").time()
-            abend_end_time = datetime.strptime(abend_ende_str, "%H:%M").time()
-            state.uebergangsmodus_start = start_time
-            state.uebergangsmodus_ende = end_time
-            state.uebergangsmodus_abend_start = abend_start_time
-            state.uebergangsmodus_abend_ende = abend_end_time
-            logging.info(
-                f"Übergangsmodus-Zeiten neu geladen: Morgen={start_time}–{end_time}, "
-                f"Abend={abend_start_time}–{abend_end_time}"
-            )
-        except Exception as e:
-            logging.error(f"Ungültige Übergangsmodus-Zeitangaben – behalte alte Werte: {e}")
-
-        # --- Telegram ---
-        old_token = state.bot_token
-        old_chat_id = state.chat_id
-        state.bot_token = new_config.get("Telegram", "BOT_TOKEN", fallback=state.bot_token)
-        state.chat_id = new_config.get("Telegram", "CHAT_ID", fallback=state.chat_id)
-
-        if not state.bot_token or not state.chat_id:
-            logging.warning("Telegram-Token oder Chat-ID fehlt. Nachrichten deaktiviert.")
-
-        if state.bot_token and state.chat_id and (old_token != state.bot_token or old_chat_id != state.chat_id):
-            await send_telegram_message(session, state.chat_id, "🔧 Konfiguration neu geladen.", state.bot_token)
-
-        # --- Abschluss ---
-        state.last_config_hash = current_hash
-        logging.info("Konfiguration erfolgreich neu geladen.")
-
-    except Exception as e:
-        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}", exc_info=True)
-        if state.bot_token and state.chat_id:
-            await send_telegram_message(
-                session, state.chat_id,
-                f"⚠️ Fehler beim Neuladen der Konfiguration: {str(e)}",
+                "🚨 ACHTUNG: Druckschalter hat ausgelöst! Kompressor wurde abgeschaltet.",
                 state.bot_token
             )
-
-
-def calculate_file_hash(file_path):
-    """Berechnet den SHA-256-Hash einer Datei."""
-    sha256_hash = hashlib.sha256()
-    try:
-        with open(file_path, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        hash_value = sha256_hash.hexdigest()
-        #logging.debug(f"Hash für {file_path} berechnet: {hash_value}")
-        return hash_value
-    except Exception as e:
-        logging.error(f"Fehler beim Berechnen des Hash-Werts für {file_path}: {e}")
-        return None
-
-async def check_network(session, timeout=5):
-    """Prüfe die Netzwerkverbindung durch eine Testanfrage."""
-    try:
-        async with session.get("https://www.google.com", timeout=timeout) as response:
-            return response.status == 200
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        logging.error(f"Netzwerkprüfung fehlgeschlagen: {e}")
-        return False
-
-async def log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, solax_data,
-                     aktueller_einschaltpunkt, aktueller_ausschaltpunkt, solar_ueberschuss_aktiv,
-                     nacht_reduction, power_source):
-    should_log = (state.last_log_time is None or
-                  (now - state.last_log_time) >= timedelta(minutes=1) or
-                  state.kompressor_ein != state.last_kompressor_status)
-
-    if should_log:
-        async with csv_lock:
-            async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
-                csv_line = (
-                    f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
-                    f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
-                    f"{t_boiler_unten if t_boiler_unten is not None else 'N/A'},"
-                    f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"
-                    f"{state.t_boiler if state.t_boiler != 'Fehler' else 'N/A'},"
-                    f"{t_verd if t_verd is not None else 'N/A'},"
-                    f"{'EIN' if state.kompressor_ein else 'AUS'},"
-                    f"{solax_data.get('acpower', 'N/A')},{solax_data.get('feedinpower', 'N/A')},"
-                    f"{solax_data.get('batPower', 'N/A')},{solax_data.get('soc', 'N/A')},"
-                    f"{solax_data.get('powerdc1', 'N/A')},{solax_data.get('powerdc2', 'N/A')},"
-                    f"{solax_data.get('consumeenergy', 'N/A')},"
-                    f"{state.aktueller_einschaltpunkt},{state.aktueller_ausschaltpunkt},"
-                    f"{int(state.solar_ueberschuss_aktiv)},"
-                    f"{nacht_reduction},"
-                    f"{power_source}\n"
-                )
-                await csvfile.write(csv_line)
-                await csvfile.flush()
-            state.last_log_time = now
-            state.last_kompressor_status = state.kompressor_ein
-
-async def log_debug_state(state, t_boiler_oben, t_boiler_mittig, t_boiler_unten, t_verd, solax_data,
-                          is_night, within_uebergangsmodus, power_source, temp_conditions_met_to_start,
-                          nacht_reduction, urlaubs_reduction):
-    now = datetime.now(pytz.timezone("Europe/Berlin"))
-    if hasattr(state, 'last_debug_log_time') and state.last_debug_log_time is not None:
-        time_since_last_log = safe_timedelta(now, state.last_debug_log_time, state.local_tz)
-        if time_since_last_log.total_seconds() < 60:
-            return
-
-    # Bestimme den aktuellen Modus
-    if state.solar_ueberschuss_aktiv:
-        modus = "Solarmodus"
-    elif is_night:
-        modus = "Nachtmodus"
-    elif within_uebergangsmodus:
-        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus
-        now_time = now.time()
-        start_morgen = state.uebergangsmodus_start
-        ende_morgen = state.uebergangsmodus_ende
-        start_abend = state.uebergangsmodus_abend_start
-        ende_abend = state.uebergangsmodus_abend_ende
-        if start_morgen < ende_morgen:
-            morgen_aktiv = start_morgen <= now_time <= ende_morgen
-        else:
-            morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
-        if start_abend < ende_abend:
-            abend_aktiv = start_abend <= now_time <= ende_abend
-        else:
-            abend_aktiv = now_time >= start_abend or now_time <= ende_abend
-        modus = "Übergangsmodus (Morgen)" if morgen_aktiv else "Übergangsmodus (Abend)"
-    else:
-        modus = "Normalmodus"
-
-    # Bestimme den regelnden Fühler
-    regelfuehler = "unten" if modus.startswith("Solarmodus") else "mittig"
-
-    # Temperaturwerte formatieren
-    t_oben_log = f"{t_boiler_oben:.1f}" if t_boiler_oben is not None else "N/A"
-    t_mitte_log = f"{t_boiler_mittig:.1f}" if t_boiler_mittig is not None else "N/A"
-    t_unten_log = f"{t_boiler_unten:.1f}" if t_boiler_unten is not None else "N/A"
-    t_verd_log = f"{t_verd:.1f}" if t_verd is not None else "N/A"
-
-    # Solax-Daten formatieren
-    bat_power_str = f"{solax_data.get('batPower', 0.0):.1f}" if solax_data else "0.0"
-    soc_str = f"{solax_data.get('soc', 0.0):.1f}" if solax_data else "0.0"
-    feedin_str = f"{state.feedin_power:.1f}" if hasattr(state, 'feedin_power') and state.feedin_power is not None else "0.0"
-
-    # Kombinierte Absenkung
-    reduction = f"Nacht({nacht_reduction:.1f})+Urlaub({urlaubs_reduction:.1f})"
-
-    # Debug-Log
-    logging.debug(
-        f"[Modus: {modus}] "
-        f"Regel-Fühler: {regelfuehler} | "
-        f"T_Oben={t_oben_log}°C | "
-        f"T_Mitte={t_mitte_log}°C | "
-        f"T_Unten={t_unten_log}°C | "
-        f"T_Verd={t_verd_log}°C | "
-        f"Einschaltpunkt={state.aktueller_einschaltpunkt:.1f}°C | "
-        f"Ausschaltpunkt={state.aktueller_ausschaltpunkt:.1f}°C | "
-        f"temp_conditions_met_to_start={temp_conditions_met_to_start} | "
-        f"Solarüberschuss aktiv: {state.solar_ueberschuss_aktiv} | "
-        f"Nacht={is_night} | "
-        f"Urlaub={state.urlaubsmodus_aktiv} | "
-        f"Solar={state.solar_ueberschuss_aktiv} | "
-        f"Reduction={reduction} | "
-        f"batPower={bat_power_str}W | "
-        f"soc={soc_str}% | "
-        f"feedin={feedin_str}W | "
-        f"Übergangsmodus={within_uebergangsmodus} | "
-        f"Power Source={power_source}"
-    )
-
-    state.last_debug_log_time = now
-
-
-def is_nighttime(config):
-    """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
-    local_tz = pytz.timezone("Europe/Berlin")
-    now = datetime.now(local_tz)
-    #logging.debug(f"is_nighttime: now={now}, tzinfo={now.tzinfo}")
-    try:
-        start_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "22:00")
-        end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
-        start_hour, start_minute = map(int, start_time_str.split(':'))
-        end_hour, end_minute = map(int, end_time_str.split(':'))
-
-        # Aktuelle Zeit in Stunden und Minuten umrechnen
-        now_time = now.hour * 60 + now.minute
-        start_time_minutes = start_hour * 60 + start_minute
-        end_time_minutes = end_hour * 60 + end_minute
-
-        if start_time_minutes > end_time_minutes:  # Über Mitternacht
-            is_night = now_time >= start_time_minutes or now_time <= end_time_minutes
-        else:
-            is_night = start_time_minutes <= now_time <= end_time_minutes
-
-        #logging.debug(
-        #    f"Nachtzeitprüfung: Jetzt={now_time}, Start={start_time_minutes}, Ende={end_time_minutes}, Ist Nacht={is_night}")
-        return is_night
-    except Exception as e:
-        logging.error(f"Fehler in is_nighttime: {e}")
-        return False
-
-
-def ist_uebergangsmodus_aktiv(state) -> bool:
-    """Prüft, ob aktuell der Übergangsmodus (morgens oder abends) aktiv ist, basierend auf Uhrzeit im State."""
-    now = datetime.now(pytz.timezone("Europe/Berlin"))
-    now_time = now.time()
-
-    # Morgen-Übergangsmodus
-    start_morgen = state.uebergangsmodus_start
-    ende_morgen = state.uebergangsmodus_ende
-
-    # Abend-Übergangsmodus
-    start_abend = state.uebergangsmodus_abend_start
-    ende_abend = state.uebergangsmodus_abend_ende
-
-    # Prüfe Morgen-Zeitfenster
-    if start_morgen < ende_morgen:
-        morgen_aktiv = start_morgen <= now_time <= ende_morgen
-    else:
-        # Über Mitternacht (z. B. 22:00 – 03:00)
-        morgen_aktiv = now_time >= start_morgen or now_time <= ende_morgen
-
-    # Prüfe Abend-Zeitfenster
-    if start_abend < ende_abend:
-        abend_aktiv = start_abend <= now_time <= ende_abend
-    else:
-        # Über Mitternacht (z. B. 22:00 – 03:00)
-        abend_aktiv = now_time >= start_abend or now_time <= ende_abend
-
-    # Übergangsmodus ist aktiv, wenn eines der beiden Zeitfenster zutrifft
-    is_active = morgen_aktiv or abend_aktiv
-
-    # Logging nur bei Statusänderung oder alle 5 Minuten
-    if not hasattr(ist_uebergangsmodus_aktiv, 'last_status'):
-        ist_uebergangsmodus_aktiv.last_status = (False, False, False)  # (is_active, morgen_aktiv, abend_aktiv)
-    if not hasattr(state, 'last_uebergangsmodus_log'):
-        state.last_uebergangsmodus_log = None
-
-    current_status = (is_active, morgen_aktiv, abend_aktiv)
-    time_since_last_log = safe_timedelta(now, state.last_uebergangsmodus_log,
-                                         state.local_tz) if state.last_uebergangsmodus_log else timedelta(minutes=6)
-
-    if (current_status != ist_uebergangsmodus_aktiv.last_status or
-            time_since_last_log >= timedelta(minutes=15)):
-        logging.debug(
-            f"Übergangsmodus-Prüfung: Morgen ({start_morgen}–{ende_morgen})={morgen_aktiv}, "
-            f"Abend ({start_abend}–{ende_abend})={abend_aktiv}, Gesamt={is_active}"
-        )
-        state.last_uebergangsmodus_log = now
-        ist_uebergangsmodus_aktiv.last_status = current_status
-
-    return is_active
+    return pressure_ok
 
 
 def calculate_shutdown_point(config, is_night, solax_data, state):
@@ -1407,6 +904,7 @@ def calculate_shutdown_point(config, is_night, solax_data, state):
         )
         return fallback_ausschaltpunkt, fallback_einschaltpunkt, state.solar_ueberschuss_aktiv, feedin_power, nacht_reduction, urlaubs_reduction
 
+
 def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
                 min_difference=None):
     """Überprüft und korrigiert einen Konfigurationswert."""
@@ -1425,7 +923,7 @@ def is_data_old(timestamp):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
     is_old = timestamp and (now - timestamp) > timedelta(minutes=15)
-    #logging.debug(f"Prüfe Solax-Datenalter: now={now}, tzinfo={now.tzinfo}, Zeitstempel={timestamp}, tzinfo={timestamp.tzinfo if timestamp else None}, Ist alt={is_old}")
+    # logging.debug(f"Prüfe Solax-Datenalter: now={now}, tzinfo={now.tzinfo}, Zeitstempel={timestamp}, tzinfo={timestamp.tzinfo if timestamp else None}, Ist alt={is_old}")
     return is_old
 
 
@@ -1538,10 +1036,13 @@ async def watchdog_gpio(state):
                 # Prüfe Mindestlaufzeit, bevor eine Inkonsistenz gemeldet wird
                 if not state.kompressor_ein:
                     now = datetime.now(pytz.timezone("Europe/Berlin"))
-                    elapsed_time = safe_timedelta(now, state.start_time if state.start_time else state.last_compressor_on_time, state.local_tz)
+                    elapsed_time = safe_timedelta(now,
+                                                  state.start_time if state.start_time else state.last_compressor_on_time,
+                                                  state.local_tz)
                     min_laufzeit = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_LAUFZEIT_S", 900)))
                     if state.kompressor_ein and elapsed_time.total_seconds() < min_laufzeit.total_seconds():
-                        logging.debug(f"Keine Inkonsistenz: Mindestlaufzeit ({min_laufzeit.total_seconds()}s) nicht erreicht, verbleibend: {min_laufzeit.total_seconds() - elapsed_time.total_seconds():.1f}s")
+                        logging.debug(
+                            f"Keine Inkonsistenz: Mindestlaufzeit ({min_laufzeit.total_seconds()}s) nicht erreicht, verbleibend: {min_laufzeit.total_seconds() - elapsed_time.total_seconds():.1f}s")
                         await asyncio.sleep(10)
                         continue
                 logging.critical(f"GPIO-Inkonsistenz: state.kompressor_ein={state.kompressor_ein}, GPIO={actual_gpio}")
@@ -1589,11 +1090,6 @@ async def initialize_gpio():
     logging.critical("GPIO-Initialisierung nach mehreren Versuchen fehlgeschlagen.")
     return False
 
-def set_last_compressor_off_time(state, value):
-    """Hilfsfunktion zum Setzen von last_compressor_off_time mit Debugging."""
-    logging.debug(f"Setze last_compressor_off_time: {state.last_compressor_off_time} -> {value}")
-    state.last_compressor_off_time = value
-
 
 async def initialize_system(state, session, now):
     """Initialisiert GPIO, Kompressorstatus, LCD und Telegram-Nachrichten."""
@@ -1611,7 +1107,7 @@ async def initialize_system(state, session, now):
     else:
         logging.info("Kompressor ist beim Start ausgeschaltet (GPIO LOW)")
         state.kompressor_ein = False
-        set_last_compressor_off_time(state, now)
+        control_logic.set_last_compressor_off_time(state, now)
 
     await initialize_lcd(session)
     logging.info("Starte GPIO-Watchdog zur Zustandsüberwachung")
@@ -1640,332 +1136,235 @@ async def initialize_system(state, session, now):
     return True
 
 
-async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_verd):
-    """Prüft Sensorwerte, Verdampfertemperatur und Sicherheitsabschaltung."""
-    state.t_oben = t_oben
-    state.t_unten = t_unten
-    state.t_mittig = t_mittig
-    state.t_verd = t_verd
-    state.t_boiler = (t_oben + t_unten) / 2 if t_oben is not None and t_unten is not None else None
-
-    if not await check_for_sensor_errors(session, state, t_oben, t_unten):
-        state.ausschluss_grund = "Sensorfehler: Ungültige Werte"
-        logging.info("Kompressor bleibt aus wegen Sensorfehler")
-        if state.kompressor_ein:
-            await set_kompressor_status(state, False, force=True, t_boiler_oben=t_oben)
-        return False
-
-    if t_oben is not None and t_unten is not None and (
-            t_oben >= state.sicherheits_temp or t_unten >= state.sicherheits_temp):
-        state.ausschluss_grund = f"Übertemperatur (>= {state.sicherheits_temp} Grad)"
-        logging.error(f"Sicherheitsabschaltung: T_Oben={t_oben:.1f} Grad, T_Unten={t_unten:.1f} Grad")
-        if state.kompressor_ein:
-            result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_oben)
-            if result:
-                state.kompressor_ein = False
-                state.last_runtime = safe_timedelta(datetime.now(state.local_tz), state.last_compressor_on_time, state.local_tz)
-                state.total_runtime_today += state.last_runtime
-                logging.info(f"Kompressor ausgeschaltet (Sicherheitsabschaltung). Laufzeit: {state.last_runtime}")
-            else:
-                logging.critical(
-                    "Kritischer Fehler: Kompressor konnte trotz Übertemperatur nicht ausgeschaltet werden!")
-                await send_telegram_message(
-                    session, state.chat_id,
-                    f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz Übertemperatur eingeschaltet!",
-                    state.bot_token,
-                    parse_mode=None
-                )
-        await send_telegram_message(
-            session, state.chat_id,
-            f"⚠️ Sicherheitsabschaltung: T_Oben={t_oben:.1f} Grad, T_Unten={t_unten:.1f} Grad >= {state.sicherheits_temp} Grad",
-            state.bot_token,
-            parse_mode=None
-        )
-        return False
-
-    if t_verd is not None and t_verd < state.verdampfertemperatur:
-        state.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {state.verdampfertemperatur} Grad)"
-        logging.warning(state.ausschluss_grund)
-        if state.last_verdampfer_notification is None or safe_timedelta(datetime.now(state.local_tz),
-                                                                        state.last_verdampfer_notification, state.local_tz) > timedelta(minutes=5):
-            await send_telegram_message(
-                session, state.chat_id,
-                f"⚠️ Kompressor bleibt aus oder wird ausgeschaltet: {state.ausschluss_grund}",
-                state.bot_token,
-                parse_mode=None
-            )
-            state.last_verdampfer_notification = datetime.now(state.local_tz)
-        if state.kompressor_ein:
-            result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_oben)
-            if result:
-                state.kompressor_ein = False
-                state.last_runtime = safe_timedelta(datetime.now(state.local_tz), state.last_compressor_on_time, state.local_tz)
-                state.total_runtime_today += state.last_runtime
-                logging.info(
-                    f"Kompressor ausgeschaltet wegen zu niedriger Verdampfertemperatur. Laufzeit: {state.last_runtime}")
-            else:
-                logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
-                await send_telegram_message(
-                    session, state.chat_id,
-                    f"🚨 KRITISCHER FEHLER: Kompressor bleibt trotz niedriger Verdampfertemperatur eingeschaltet!",
-                    state.bot_token,
-                    parse_mode=None
-                )
-        return False
-    return True
-
-
-async def check_pressure_and_config(session, state):
-    """Prüft Druckschalter und aktualisiert Konfiguration bei Bedarf."""
-    pressure_ok = await handle_pressure_check(session, state)
-    if state.last_pressure_state != pressure_ok:
-        logging.info(f"Druckschalter: {'OK' if pressure_ok else 'Fehler'}")
-        state.last_pressure_state = pressure_ok
-    if not pressure_ok:
-        state.ausschluss_grund = "Druckschalterfehler"
-        logging.info("Kompressor bleibt aus wegen Druckschalterfehler")
-        if state.kompressor_ein:
-            await set_kompressor_status(state, False, force=True)
-        return False
-
-    if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=60):
-        current_hash = calculate_file_hash("config.ini")
-        if current_hash != state.last_config_hash:
-            await reload_config(session, state)
-            state.last_config_hash = current_hash
-        state._last_config_check = datetime.now(state.local_tz)
-    return True
-
-
-async def determine_mode_and_setpoints(state, t_unten, t_mittig):
-    """Bestimmt den Betriebsmodus und setzt Sollwerte."""
-    from telegram_handler import is_solar_window  # Import hier, um Zirkelimporte zu vermeiden
+async def update_runtime_and_log(state, session, t_oben, t_unten, t_mittig, t_verd, solax_data, power_source):
+    """Aktualisiert Laufzeit und protokolliert Daten in CSV."""
     now = datetime.now(state.local_tz)
-    is_night = await asyncio.to_thread(is_nighttime, state.config)
-
-    # Prüfe Solarfenster nur alle 5 Minuten
-    within_solar_window = state.last_solar_window_status
-    if (state.last_solar_window_check is None or
-            safe_timedelta(now, state.last_solar_window_check, state.local_tz) >= timedelta(minutes=5)):
-        within_solar_window = is_solar_window(state.config, state)
-        state.last_solar_window_check = now
-        state.last_solar_window_status = within_solar_window
-
-    nacht_reduction = float(state.config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_night else 0
-    urlaubs_reduction = float(
-        state.config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 0)) if state.urlaubsmodus_aktiv else 0
-    total_reduction = nacht_reduction + urlaubs_reduction
-
-    state.solar_ueberschuss_aktiv = (
-            state.batpower > 600.0 or
-            (state.soc >= 95.0 and state.feedinpower > 600.0)
-    )
-
-    # Prüfe Übergangsmodus (morgens oder abends)
-    within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
-
-    if state.bademodus_aktiv:
-        if state.previous_modus != "Bademodus":
-            logging.info("Wechsel zu Bademodus – steuere nach T_Unten")
-            state.previous_modus = "Bademodus"
-        return {
-            "modus": "Bademodus",
-            "ausschaltpunkt": state.ausschaltpunkt_erhoeht,
-            "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4,
-            "regelfuehler": t_unten,
-            "nacht_reduction": 0,
-            "urlaubs_reduction": 0,
-            "solar_ueberschuss_aktiv": False
-        }
-
-    if state.previous_modus == "Bademodus":
-        logging.info("Wechsel von Bademodus zu Normalmodus")
-
-    if state.solar_ueberschuss_aktiv:
-        modus = "Solarüberschuss"
-        ausschaltpunkt = state.ausschaltpunkt_erhoeht
-        einschaltpunkt = state.einschaltpunkt_erhoeht
-        regelfuehler = t_unten
-    elif within_uebergangsmodus:
-        modus = "Übergangsmodus"
-        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
-        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
-        regelfuehler = t_mittig
-    elif is_night:
-        modus = "Nachtmodus"
-        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
-        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
-        regelfuehler = t_mittig
+    if state.kompressor_ein:
+        state.current_runtime = safe_timedelta(now, state.last_compressor_on_time, state.local_tz, default=timedelta())
     else:
-        modus = "Normalmodus"
-        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
-        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
-        regelfuehler = t_mittig
+        state.current_runtime = timedelta()
 
-    if state.previous_modus != modus:
-        logging.info(f"Wechsel zu Modus: {modus}")
-        state.previous_modus = modus
+    if state.last_log_time is None or safe_timedelta(now, state.last_log_time, state.local_tz) >= timedelta(seconds=60):
+        await log_to_csv(
+            state, now, t_oben, t_unten, t_mittig, t_verd, solax_data,
+            state.aktueller_einschaltpunkt, state.aktueller_ausschaltpunkt,
+            state.solar_ueberschuss_aktiv, state.nacht_reduction, power_source
+        )
+        state.last_log_time = now
 
-    return {
-        "modus": modus,
-        "ausschaltpunkt": ausschaltpunkt,
-        "einschaltpunkt": einschaltpunkt,
-        "regelfuehler": regelfuehler,
-        "nacht_reduction": nacht_reduction,
-        "urlaubs_reduction": urlaubs_reduction,
-        "solar_ueberschuss_aktiv": state.solar_ueberschuss_aktiv
+    if now.date() != state.last_day:
+        logging.info(f"Neuer Tag erkannt: {now.date()}. Setze Gesamtlaufzeit zurück.")
+        state.total_runtime_today = timedelta()
+        state.last_day = now.date()
+
+
+def load_and_validate_config():
+    defaults = {
+        "Heizungssteuerung": {
+            "AUSSCHALTPUNKT": "45",
+            "EINSCHALTPUNKT": "42",
+            "AUSSCHALTPUNKT_ERHOEHT": "50",
+            "EINSCHALTPUNKT_ERHOEHT": "46",
+            "NACHTABSENKUNG": "0",
+            "VERDAMPFERTEMPERATUR": "5",
+            "MIN_PAUSE": "5",
+            "SICHERHEITS_TEMP": "52",
+            "HYSTERESE_MIN": "2"
+        },
+        "Urlaubsmodus": {
+            "URLAUBSABSENKUNG": "0"
+        },
+        "Telegram": {
+            "CHAT_ID": "",
+            "BOT_TOKEN": ""
+        },
+        "SolaxCloud": {
+            "TOKEN_ID": "",
+            "SN": ""
+        }
     }
 
+    config = configparser.ConfigParser()
+    read_ok = config.read("config.ini")
 
-async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, min_laufzeit, t_oben):
-    """Prüft Abschaltbedingungen und schaltet Kompressor aus."""
-    abschalten = regelfuehler is not None and regelfuehler >= ausschaltpunkt
-    if abschalten and (state.previous_abschalten != abschalten or (
-            state.last_abschalt_log is None or
-            safe_timedelta(datetime.now(state.local_tz), state.last_abschalt_log, state.local_tz) >= timedelta(minutes=5))):
-        state.ausschluss_grund = (
-            f"[{state.previous_modus}] Abschaltbedingung erreicht: "
-            f"{'T_Unten' if state.previous_modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}="
-            f"{regelfuehler:.1f} Grad >= {ausschaltpunkt:.1f} Grad"
-        )
-        logging.info(state.ausschluss_grund)
-        state.last_abschalt_log = datetime.now(state.local_tz)
-    state.previous_abschalten = abschalten
+    if not read_ok:
+        logging.warning("Konfigurationsdatei konnte nicht gefunden oder gelesen werden. Verwende Standardwerte.")
 
-    can_turn_off = True
-    if state.kompressor_ein and abschalten:
-        elapsed_time = safe_timedelta(datetime.now(state.local_tz), state.start_time or state.last_compressor_on_time, state.local_tz)
-        if elapsed_time.total_seconds() < min_laufzeit.total_seconds() - 0.5:
-            can_turn_off = False
-            state.ausschluss_grund = f"Mindestlaufzeit nicht erreicht ({min_laufzeit.total_seconds() - elapsed_time.total_seconds():.1f}s)"
-            logging.debug(state.ausschluss_grund)
+    # Füge fehlende Sections/Werte hinzu
+    for section, keys in defaults.items():
+        if not config.has_section(section):
+            config.add_section(section)
+        for key, default in keys.items():
+            if not config.has_option(section, key):
+                config.set(section, key, default)
+                logging.debug(f"[{section}] {key} fehlt → Standardwert gesetzt: {default}")
 
-    if abschalten and state.kompressor_ein and can_turn_off:
-        result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_oben)
-        if result:
-            state.kompressor_ein = False
-            set_last_compressor_off_time(state, datetime.now(state.local_tz))
-            state.last_runtime = safe_timedelta(datetime.now(state.local_tz), state.last_compressor_on_time, state.local_tz)
-            state.total_runtime_today += state.last_runtime
-            state.last_completed_cycle = datetime.now(state.local_tz)
-            logging.info(f"Kompressor ausgeschaltet. Laufzeit: {state.last_runtime}")
-            return True
-        logging.critical("Kritischer Fehler: Kompressor konnte nicht ausgeschaltet werden!")
-        await send_telegram_message(
-            session, state.chat_id,
-            f"🚨 KRITISCHER FEHLER: Kompressor bleibt eingeschaltet!",
-            state.bot_token,
-            parse_mode=None
-        )
-    return False
+    return config
 
 
-async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min_laufzeit, min_pause, within_solar_window, t_oben):
-    """Prüft Einschaltbedingungen und schaltet Kompressor ein."""
-    now = datetime.now(state.local_tz)
-    temp_conditions_met = regelfuehler is not None and regelfuehler <= einschaltpunkt
-    if temp_conditions_met and state.previous_temp_conditions != temp_conditions_met:
-        logging.info(
-            f"[{state.previous_modus}] Einschaltbedingung erreicht: "
-            f"{'T_Unten' if state.previous_modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}="
-            f"{regelfuehler:.1f} Grad <= {einschaltpunkt:.1f} Grad"
-        )
-    elif not temp_conditions_met and (
-            state.last_no_start_log is None or
-            safe_timedelta(now, state.last_no_start_log, state.local_tz) >= timedelta(minutes=5)):
-        state.ausschluss_grund = (
-            f"[{state.previous_modus}] Kein Einschalten: "
-            f"{'T_Unten' if state.previous_modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}="
-            f"{regelfuehler:.1f} Grad > {einschaltpunkt:.1f} Grad"
-        )
-        logging.debug(state.ausschluss_grund)
-        state.last_no_start_log = now
-    state.previous_temp_conditions = temp_conditions_met
+async def reload_config(session, state):
+    try:
+        new_config = load_and_validate_config()
+        current_hash = calculate_file_hash("config.ini")
 
-    solar_conditions_met = not (not state.bademodus_aktiv and within_solar_window and not state.solar_ueberschuss_aktiv)
-    if not solar_conditions_met and (
-            state.last_no_start_log is None or
-            safe_timedelta(now, state.last_no_start_log, state.local_tz) >= timedelta(minutes=5)):
-        state.ausschluss_grund = (
-            f"[{state.previous_modus}] Kein Einschalten im Übergangsmodus: Solarüberschuss nicht aktiv "
-            f"({state.uebergangsmodus_start.strftime('%H:%M')}–{state.uebergangsmodus_ende.strftime('%H:%M')})"
-        )
-        logging.debug(state.ausschluss_grund)
-        state.last_no_start_log = now
+        if hasattr(state, "last_config_hash") and state.last_config_hash == current_hash:
+            return
 
-    pause_ok = True
-    if not state.kompressor_ein and temp_conditions_met and solar_conditions_met and state.last_compressor_off_time:
-        time_since_off = safe_timedelta(now, state.last_compressor_off_time, state.local_tz, default=timedelta.max)
-        if time_since_off.total_seconds() < min_pause.total_seconds() - 0.5:
-            pause_ok = False
-            pause_remaining = min_pause - time_since_off
-            reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
-            if state.last_pause_log is None or safe_timedelta(now, state.last_pause_log, state.local_tz) > timedelta(minutes=5):
-                logging.info(f"Kompressor START VERHINDERT: {reason}")
-                await send_telegram_message(
-                    session, state.chat_id,
-                    f"⚠️ Kompressor bleibt aus: {reason}...",
-                    state.bot_token,
-                    parse_mode=None
-                )
-                state.last_pause_telegram_notification = now
-                state.current_pause_reason = reason
-                state.last_pause_log = now
-            state.ausschluss_grund = reason
-        else:
-            state.current_pause_reason = None
-            state.last_pause_log = None
-            state.last_pause_telegram_notification = None
+        logging.info("Neue Konfiguration erkannt – wird geladen...")
 
-    if not state.kompressor_ein and temp_conditions_met and pause_ok and solar_conditions_met:
-        can_start_new_cycle = True
-        if state.last_completed_cycle and safe_timedelta(now, state.last_completed_cycle,
-                                                         state.local_tz).total_seconds() < min_laufzeit.total_seconds() + min_pause.total_seconds():
-            can_start_new_cycle = False
-            state.ausschluss_grund = (
-                f"Neuer Zyklus nicht erlaubt: Warte auf Abschluss von Mindestlaufzeit + Mindestpause "
-                f"({min_laufzeit.total_seconds() + min_pause.total_seconds() - safe_timedelta(now, state.last_completed_cycle, state.local_tz).total_seconds():.1f}s)"
+        # --- Heizungsparameter mit Plausibilitätsprüfung ---
+        def get_int_checked(section, key, default, min_val=None, max_val=None):
+            try:
+                val = new_config.getint(section, key, fallback=default)
+                if (min_val is not None and val < min_val) or (max_val is not None and val > max_val):
+                    raise ValueError(f"{key} außerhalb gültiger Grenzen")
+                return val
+            except Exception as e:
+                logging.warning(
+                    f"Ungültiger Wert für {key}, verwende alten Wert ({getattr(state, key.lower(), default)}): {e}")
+                return getattr(state, key.lower(), default)
+
+        ausschalt = get_int_checked("Heizungssteuerung", "AUSSCHALTPUNKT", 55, 20, 90)
+        einschalt = get_int_checked("Heizungssteuerung", "EINSCHALTPUNKT", 50, 10, 85)
+        if einschalt >= ausschalt:
+            raise ValueError("EINSCHALTPUNKT muss kleiner als AUSSCHALTPUNKT sein.")
+
+        state.aktueller_ausschaltpunkt = ausschalt
+        state.aktueller_einschaltpunkt = einschalt
+
+        # --- Erhöhte Sollwerte ---
+        state.einschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42)
+        state.ausschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "AUSSCHALTPUNKT_ERHOEHT", 48)
+
+        min_pause_min = get_int_checked("Heizungssteuerung", "MIN_PAUSE", 20, 0, 1440)
+        state.min_pause = timedelta(minutes=min_pause_min)
+
+        state.sicherheits_temp = get_int_checked("Heizungssteuerung", "SICHERHEITS_TEMP", 65, 50, 90)
+        state.verdampfertemperatur = get_int_checked("Heizungssteuerung", "VERDAMPFERTEMPERATUR", -10, -30, 10)
+
+        # --- Übergangsmodus-Zeiten (morgens und abends) ---
+        try:
+            start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "06:00")
+            ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "08:00")
+            abend_start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00")
+            abend_ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00")
+            start_time = datetime.strptime(start_str, "%H:%M").time()
+            end_time = datetime.strptime(ende_str, "%H:%M").time()
+            abend_start_time = datetime.strptime(abend_start_str, "%H:%M").time()
+            abend_end_time = datetime.strptime(abend_ende_str, "%H:%M").time()
+            state.uebergangsmodus_start = start_time
+            state.uebergangsmodus_ende = end_time
+            state.uebergangsmodus_abend_start = abend_start_time
+            state.uebergangsmodus_abend_ende = abend_end_time
+            logging.info(
+                f"Übergangsmodus-Zeiten neu geladen: Morgen={start_time}–{end_time}, "
+                f"Abend={abend_start_time}–{abend_end_time}"
             )
-            logging.debug(state.ausschluss_grund)
+        except Exception as e:
+            logging.error(f"Ungültige Übergangsmodus-Zeitangaben – behalte alte Werte: {e}")
 
-        if can_start_new_cycle:
-            logging.info(f"Alle Bedingungen für Kompressorstart erfüllt. Versuche einzuschalten (Modus: {state.previous_modus}).")
-            result = await set_kompressor_status(state, True, t_boiler_oben=t_oben)
-            if result:
-                state.kompressor_ein = True
-                state.start_time = now
-                state.last_compressor_on_time = now
-                logging.info(f"Kompressor eingeschaltet. Startzeit: {now}")
-                state.ausschluss_grund = None
-                return True
-            state.ausschluss_grund = state.ausschluss_grund or "Unbekannter Fehler beim Einschalten"
-            logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
-    return False
+        # --- Telegram ---
+        old_token = state.bot_token
+        old_chat_id = state.chat_id
+        state.bot_token = new_config.get("Telegram", "BOT_TOKEN", fallback=state.bot_token)
+        state.chat_id = new_config.get("Telegram", "CHAT_ID", fallback=state.chat_id)
+
+        if not state.bot_token or not state.chat_id:
+            logging.warning("Telegram-Token oder Chat-ID fehlt. Nachrichten deaktiviert.")
+
+        if state.bot_token and state.chat_id and (old_token != state.bot_token or old_chat_id != state.chat_id):
+            await send_telegram_message(session, state.chat_id, "🔧 Konfiguration neu geladen.", state.bot_token)
+
+        # --- Abschluss ---
+        state.last_config_hash = current_hash
+        logging.info("Konfiguration erfolgreich neu geladen.")
+
+    except Exception as e:
+        logging.error(f"Fehler beim Neuladen der Konfiguration: {e}", exc_info=True)
+        if state.bot_token and state.chat_id:
+            await send_telegram_message(
+                session, state.chat_id,
+                f"⚠️ Fehler beim Neuladen der Konfiguration: {str(e)}",
+                state.bot_token
+            )
 
 
-async def handle_mode_switch(state, session, t_oben, t_mittig):
-    """Prüft und behandelt Moduswechsel bei Solarüberschuss-Änderung."""
-    if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv and not state.bademodus_aktiv:
-        effective_ausschaltpunkt = state.previous_ausschaltpunkt or state.aktueller_ausschaltpunkt
-        if not state.solar_ueberschuss_aktiv and t_oben is not None and t_mittig is not None:
-            if t_oben >= effective_ausschaltpunkt or t_mittig >= effective_ausschaltpunkt:
-                result = await set_kompressor_status(state, False, force=True, t_boiler_oben=t_oben)
-                if result:
-                    state.kompressor_ein = False
-                    set_last_compressor_off_time(state, datetime.now(state.local_tz))
-                    state.last_runtime = safe_timedelta(datetime.now(state.local_tz), state.last_compressor_on_time)
-                    state.total_runtime_today += state.last_runtime
-                    logging.info(f"Kompressor ausgeschaltet bei Moduswechsel. Laufzeit: {state.last_runtime}")
-                    state.ausschluss_grund = None
-                    return True
-                logging.critical("Kritischer Fehler: Kompressor konnte bei Moduswechsel nicht ausgeschaltet werden!")
-                await send_telegram_message(
-                    session, state.chat_id,
-                    f"🚨 KRITISCHER FEHLER: Kompressor bleibt bei Moduswechsel eingeschaltet!",
-                    state.bot_token,
-                    parse_mode=None
+def calculate_file_hash(file_path):
+    """Berechnet den SHA-256-Hash einer Datei."""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        hash_value = sha256_hash.hexdigest()
+        return hash_value
+    except Exception as e:
+        logging.error(f"Fehler beim Berechnen des Hash-Werts für {file_path}: {e}")
+        return None
+
+
+async def check_network(session, timeout=5):
+    """Prüfe die Netzwerkverbindung durch eine Testanfrage."""
+    try:
+        async with session.get("https://www.google.com", timeout=timeout) as response:
+            return response.status == 200
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        logging.error(f"Netzwerkprüfung fehlgeschlagen: {e}")
+        return False
+
+
+async def log_to_csv(state, now, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, solax_data,
+                     aktueller_einschaltpunkt, aktueller_ausschaltpunkt, solar_ueberschuss_aktiv,
+                     nacht_reduction, power_source):
+    should_log = (state.last_log_time is None or
+                  (now - state.last_log_time) >= timedelta(minutes=1) or
+                  state.kompressor_ein != state.last_kompressor_status)
+
+    if should_log:
+        async with csv_lock:
+            async with aiofiles.open("heizungsdaten.csv", 'a', newline='') as csvfile:
+                csv_line = (
+                    f"{now.strftime('%Y-%m-%d %H:%M:%S')},"
+                    f"{t_boiler_oben if t_boiler_oben is not None else 'N/A'},"
+                    f"{t_boiler_unten if t_boiler_unten is not None else 'N/A'},"
+                    f"{t_boiler_mittig if t_boiler_mittig is not None else 'N/A'},"
+                    f"{state.t_boiler if state.t_boiler != 'Fehler' else 'N/A'},"
+                    f"{t_verd if t_verd is not None else 'N/A'},"
+                    f"{'EIN' if state.kompressor_ein else 'AUS'},"
+                    f"{solax_data.get('acpower', 'N/A')},{solax_data.get('feedinpower', 'N/A')},"
+                    f"{solax_data.get('batPower', 'N/A')},{solax_data.get('soc', 'N/A')},"
+                    f"{solax_data.get('powerdc1', 'N/A')},{solax_data.get('powerdc2', 'N/A')},"
+                    f"{solax_data.get('consumeenergy', 'N/A')},"
+                    f"{state.aktueller_einschaltpunkt},{state.aktueller_ausschaltpunkt},"
+                    f"{int(state.solar_ueberschuss_aktiv)},"
+                    f"{nacht_reduction},"
+                    f"{power_source}\n"
                 )
-    return False
+                await csvfile.write(csv_line)
+                await csvfile.flush()
+            state.last_log_time = now
+            state.last_kompressor_status = state.kompressor_ein
+
+
+def check_value(value, min_value, max_value, default_value, parameter_name, other_value=None, comparison=None,
+                min_difference=None):
+    """Überprüft und korrigiert einen Konfigurationswert."""
+    if not (min_value <= value <= max_value):
+        logging.warning(f"Ungültiger Wert für {parameter_name}: {value}. Verwende Standardwert: {default_value}.")
+        value = default_value
+    if other_value is not None and comparison == "<" and not (value < other_value):
+        logging.warning(
+            f"{parameter_name} ({value}) ungültig im Vergleich zu {other_value}, verwende Standardwert: {default_value}")
+        value = default_value
+    return value
+
+
+def is_data_old(timestamp):
+    """Prüft, ob Solax-Daten veraltet sind."""
+    local_tz = pytz.timezone("Europe/Berlin")
+    now = datetime.now(local_tz)
+    is_old = timestamp and (now - timestamp) > timedelta(minutes=15)
+    return is_old
 
 
 async def update_runtime_and_log(state, session, t_oben, t_unten, t_mittig, t_verd, solax_data, power_source):
@@ -2017,6 +1416,7 @@ async def check_watchdog(state, session, last_cycle_time):
         state.watchdog_warning_count = 0
     return now
 
+
 async def main_loop(config, state, session):
     """Hauptschleife des Programms mit State-Objekt."""
     local_tz = pytz.timezone("Europe/Berlin")
@@ -2042,7 +1442,8 @@ async def main_loop(config, state, session):
             state=state,
             get_temperature_history_func=get_boiler_temperature_history,
             get_runtime_bar_chart_func=get_runtime_bar_chart,
-            is_nighttime_func=is_nighttime
+            is_nighttime_func=control_logic.is_nighttime,
+            is_solar_window_func=is_solar_window
         ))
 
         # Watchdog-Variablen
@@ -2075,12 +1476,21 @@ async def main_loop(config, state, session):
                 t_verd = await read_temperature_cached(SENSOR_IDS["verd"])
 
                 # Sensor- und Sicherheitsprüfungen
-                if not await check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_verd):
+                if not await control_logic.check_sensors_and_safety(
+                        session, state, t_oben, t_unten, t_mittig, t_verd,
+                        set_kompressor_status
+                ):
                     await asyncio.sleep(2)
                     continue
 
                 # Druckschalter und Konfiguration prüfen
-                if not await check_pressure_and_config(session, state):
+                if not await control_logic.check_pressure_and_config(
+                        session, state,
+                        handle_pressure_check,
+                        set_kompressor_status,
+                        reload_config,
+                        calculate_file_hash
+                ):
                     await asyncio.sleep(2)
                     continue
 
@@ -2094,29 +1504,41 @@ async def main_loop(config, state, session):
                 state.powerdc2 = solax_result.get("powerdc2", 0)
                 state.consumeenergy = solax_result.get("consumeenergy", 0)
                 state.solarueberschuss = state.powerdc1 + state.powerdc2
-                state.power_source = get_power_source(solax_result["solax_data"]) if solax_result["solax_data"] else "Unbekannt"
+                state.power_source = get_power_source(solax_result["solax_data"]) if solax_result[
+                    "solax_data"] else "Unbekannt"
 
                 # Betriebsmodus bestimmen
-                mode_info = await determine_mode_and_setpoints(state, t_unten, t_mittig)
+                mode_info = await control_logic.determine_mode_and_setpoints(state, t_unten, t_mittig)
                 state.aktueller_ausschaltpunkt = mode_info["ausschaltpunkt"]
                 state.aktueller_einschaltpunkt = mode_info["einschaltpunkt"]
                 state.nacht_reduction = mode_info["nacht_reduction"]
                 state.solar_ueberschuss_aktiv = mode_info["solar_ueberschuss_aktiv"]
 
                 # Kompressor ausschalten
-                if await handle_compressor_off(state, session, mode_info["regelfuehler"], mode_info["ausschaltpunkt"], min_laufzeit, t_oben):
+                if await control_logic.handle_compressor_off(
+                        state, session, mode_info["regelfuehler"], mode_info["ausschaltpunkt"],
+                        min_laufzeit, t_oben,
+                        set_kompressor_status
+                ):
                     await asyncio.sleep(2)
                     continue
 
                 # Kompressor einschalten
-                await handle_compressor_on(state, session, mode_info["regelfuehler"], mode_info["einschaltpunkt"],
-                                           min_laufzeit, min_pause, state.last_solar_window_status, t_oben)
+                await control_logic.handle_compressor_on(
+                        state, session, mode_info["regelfuehler"], mode_info["einschaltpunkt"],
+                        min_laufzeit, min_pause, state.last_solar_window_status, t_oben,
+                        set_kompressor_status
+                )
 
                 # Moduswechsel behandeln
-                await handle_mode_switch(state, session, t_oben, t_mittig)
+                await control_logic.handle_mode_switch(
+                        state, session, t_oben, t_mittig,
+                        set_kompressor_status
+                )
 
                 # Laufzeit und CSV-Protokollierung
-                await update_runtime_and_log(state, session, t_oben, t_unten, t_mittig, t_verd, solax_result["solax_data"], state.power_source)
+                await update_runtime_and_log(state, session, t_oben, t_unten, t_mittig, t_verd,
+                                             solax_result["solax_data"], state.power_source)
 
                 # Watchdog prüfen
                 last_cycle_time = await check_watchdog(state, session, last_cycle_time)
