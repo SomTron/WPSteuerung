@@ -1,0 +1,237 @@
+import pytest
+from unittest.mock import MagicMock, patch, AsyncMock
+from datetime import datetime, time, timedelta
+import pytz
+import sys
+import os
+import asyncio
+import configparser
+
+# Ensure we can import from parent directory
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from control_logic import (
+    determine_mode_and_setpoints,
+    handle_compressor_on,
+    handle_compressor_off,
+    check_sensors_and_safety
+)
+
+# --- HELPER FUNCTIONS ---
+
+def load_simulation_config():
+    """Loads the simulation configuration from config_simulation.ini."""
+    config = configparser.ConfigParser()
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config_simulation.ini')
+    config.read(config_path)
+    return config
+
+def create_mock_state(config):
+    """Creates a mock state object based on the configuration."""
+    state = MagicMock()
+    state.local_tz = pytz.timezone("Europe/Berlin")
+    state.config = config
+    
+    # Parse times from config
+    def parse_time(section, key, default):
+        try:
+            return datetime.strptime(config[section].get(key, default), "%H:%M").time()
+        except:
+            return datetime.strptime(default, "%H:%M").time()
+
+    state.nachtabsenkung_ende = parse_time("Heizungssteuerung", "NACHTABSENKUNG_END", "06:00")
+    state.uebergangsmodus_morgens_ende = parse_time("Heizungssteuerung", "UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
+    state.uebergangsmodus_abends_start = parse_time("Heizungssteuerung", "UEBERGANGSMODUS_ABENDS_START", "18:00")
+    state.nachtabsenkung_start = parse_time("Heizungssteuerung", "NACHTABSENKUNG_START", "22:00")
+    
+    # Parse values from config
+    state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 50))
+    state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 40))
+    state.ausschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
+    state.einschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 45))
+    state.sicherheits_temp = float(config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 60.0))
+    state.verdampfertemperatur = float(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", -10.0))
+    
+    # Initial State
+    state.urlaubsmodus_aktiv = False
+    state.bademodus_aktiv = False
+    state.solar_ueberschuss_aktiv = False
+    state.previous_modus = None
+    state.kompressor_ein = False
+    state.last_compressor_on_time = datetime(2023, 1, 1, 0, 0, tzinfo=state.local_tz)
+    state.last_compressor_off_time = datetime(2023, 1, 1, 0, 0, tzinfo=state.local_tz)
+    state.last_completed_cycle = datetime(2023, 1, 1, 0, 0, tzinfo=state.local_tz)
+    state.last_solar_window_check = None
+    state.last_solar_window_status = False
+    state.previous_temp_conditions = False
+    state.previous_abschalten = False
+    state.last_no_start_log = None
+    state.last_pause_log = None
+    state.last_abschalt_log = None
+    state.batpower = 0
+    state.soc = 50
+    state.feedinpower = 0
+    state.ausschluss_grund = None
+    state.last_sensor_error_time = None
+    state.last_verdampfer_notification = None
+    state.chat_id = "mock_chat_id"
+    state.bot_token = "mock_token"
+    
+    return state
+
+async def run_simulation_scenario(scenario_name, steps, config):
+    """Runs a specific simulation scenario."""
+    print(f"\n\n=== SZENARIO: {scenario_name} ===")
+    print(f"{'UHRZEIT':<10} | {'MODUS':<20} | {'TEMP':<6} | {'SOLAR':<8} | {'KOMPRESSOR':<10} | {'INFO'}")
+    print("-" * 110)
+
+    mock_state = create_mock_state(config)
+    start_date = datetime(2024, 6, 15, 0, 0, 0) # Base date
+    local_tz = pytz.timezone("Europe/Berlin")
+    
+    # Mock functions
+    async def mock_set_kompressor(state, status, force=False, t_boiler_oben=None):
+        state.kompressor_ein = status
+        if status:
+            state.last_compressor_on_time = datetime.now(state.local_tz)
+        else:
+            state.last_compressor_off_time = datetime.now(state.local_tz)
+        return True
+        
+    async def mock_send_telegram(session, chat_id, message, token, parse_mode=None):
+        # print(f"  [TELEGRAM] {message}")
+        pass
+
+    with patch('control_logic.datetime') as mock_dt, \
+         patch('control_logic.is_nighttime') as mock_is_night, \
+         patch('control_logic.is_solar_window') as mock_is_solar, \
+         patch('control_logic.send_telegram_message', side_effect=mock_send_telegram): # Mock telegram
+        
+        # Setup mocks
+        mock_dt.now.side_effect = lambda tz=None: current_sim_time.replace(tzinfo=tz if tz else None)
+        
+        def update_mocks(sim_time):
+            t = sim_time.time()
+            # Use config values for night check
+            night_start = datetime.strptime(config["Heizungssteuerung"]["NACHT_START"], "%H:%M").time()
+            night_end = datetime.strptime(config["Heizungssteuerung"]["NACHT_ENDE"], "%H:%M").time()
+            
+            if night_start <= night_end:
+                is_night = night_start <= t <= night_end
+            else:
+                is_night = night_start <= t or t <= night_end
+            
+            mock_is_night.return_value = is_night
+            
+            # Simplified solar window (8-18)
+            is_solar = (t >= time(8,0) and t < time(18,0))
+            mock_is_solar.return_value = is_solar
+
+        for step in steps:
+            hour, minute, t_mittig, t_unten, bat_power, soc, desc = step[:7]
+            # Optional extra params for failures
+            t_oben = step[7] if len(step) > 7 else t_mittig 
+            t_verd = step[8] if len(step) > 8 else 10.0
+            
+            # 1. Update Time & State
+            current_sim_time = start_date.replace(hour=hour, minute=minute)
+            current_sim_time = local_tz.localize(current_sim_time)
+            update_mocks(current_sim_time)
+            
+            mock_state.batpower = bat_power
+            mock_state.soc = soc
+            mock_state.feedinpower = 0 
+            
+            # 2. Determine Mode
+            setpoints = await determine_mode_and_setpoints(mock_state, t_unten, t_mittig)
+            
+            # 3. Simulate Control Loop
+            # Check Safety
+            safety_ok = await check_sensors_and_safety(
+                None, mock_state, t_oben=t_oben, t_unten=t_unten, t_mittig=t_mittig, t_verd=t_verd, 
+                set_kompressor_status_func=mock_set_kompressor
+            )
+            
+            if safety_ok:
+                # Handle On/Off
+                if mock_state.kompressor_ein:
+                    await handle_compressor_off(
+                        mock_state, None, setpoints['regelfuehler'], setpoints['ausschaltpunkt'], 
+                        timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])), t_oben, mock_set_kompressor
+                    )
+                else:
+                    await handle_compressor_on(
+                        mock_state, None, setpoints['regelfuehler'], setpoints['einschaltpunkt'], 
+                        timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])), 
+                        timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"])), 
+                        mock_is_solar.return_value, t_oben, mock_set_kompressor
+                    )
+            
+            # 4. Output Result
+            time_str = current_sim_time.strftime("%H:%M")
+            comp_str = "AN" if mock_state.kompressor_ein else "AUS"
+            solar_str = f"{bat_power}W" if bat_power is not None else "N/A"
+            temp_str = f"{t_mittig}/{t_unten}" if t_mittig is not None and t_unten is not None else "ERR"
+            
+            # Add safety info to output if relevant
+            info_suffix = ""
+            if not safety_ok:
+                info_suffix = f" [SAFETY: {mock_state.ausschluss_grund}]"
+            
+            print(f"{time_str:<10} | {setpoints['modus']:<20} | {temp_str:<6} | {solar_str:<8} | {comp_str:<10} | {desc}{info_suffix}")
+
+    print("-" * 110)
+
+# --- SCENARIOS ---
+
+async def test_scenarios():
+    config = load_simulation_config()
+    
+    # Scenario 1: Standard Day + Fluctuations
+    steps_1 = [
+        (0,  0, 40, 35, 0, 20, "Start Nacht"),
+        (2,  0, 34, 30, 0, 15, "Temp < Einschalt (35) -> AN"),
+        (3,  0, 46, 42, 0, 15, "Temp > Ausschalt (45) -> AUS"),
+        (7,  0, 39, 36, 100, 25, "Morgen (Übergang)"),
+        (12, 0, 42, 40, 1000, 90, "Solarüberschuss -> Sollwerte hoch"),
+        (12, 15, 42, 40, 1000, 95, "Kompressor AN (Solarboost)"),
+        (13, 0, 48, 46, 200, 90, "Wolke! BatPower < 600 -> Normalmodus"),
+        (13, 15, 48, 46, 1200, 92, "Sonne da -> Solarüberschuss"),
+        (16, 0, 56, 54, 800, 100, "Speicher voll -> AUS"),
+        (23, 0, 45, 42, -200, 60, "Nacht"),
+    ]
+    await run_simulation_scenario("1. Standard Tag + Schwankungen", steps_1, config)
+
+    # Scenario 2: Transitions & Mode Switching
+    steps_2 = [
+        (9, 55, 45, 42, 100, 50, "Morgen Übergang (Ende 10:00)"),
+        (10, 5, 45, 42, 100, 50, "Normalmodus (nach 10:00)"),
+        (11, 0, 45, 42, 800, 96, "Direkt zu Solarüberschuss (>600W, SOC>95)"),
+        (11, 15, 45, 42, 800, 96, "Kompressor AN (Solar)"),
+        (14, 0, 50, 48, -100, 40, "Verbrauch hoch, Bat leer -> Normalmodus"),
+        (14, 15, 50, 48, -100, 40, "Kompressor bleibt AN (Hysterese)"),
+        (18, 5, 50, 48, -100, 40, "Abend Übergang (Start 18:00)"),
+    ]
+    await run_simulation_scenario("2. Übergänge & Moduswechsel", steps_2, config)
+
+    # Scenario 3: Failures & Edge Cases
+    # Format: (H, M, T_Mittig, T_Unten, Bat, SOC, Desc, T_Oben, T_Verd)
+    steps_3 = [
+        (10, 0, 40, 38, 0, 50, "Normalbetrieb", 40, 10),
+        (10, 15, 40, 38, 0, 50, "Kompressor AN", 40, 10),
+        (10, 30, None, 38, 0, 50, "SENSORFEHLER: T_Mittig ausgefallen", 40, 10),
+        (10, 45, 42, 40, 0, 50, "Sensor wieder da", 42, 10),
+        (11, 0, 45, 42, 0, 50, "Normalbetrieb", 45, 10),
+        (11, 15, 45, 42, 0, 50, "ÜBERTEMPERATUR T_Oben=65!", 65, 10),
+        (11, 30, 45, 42, 0, 50, "Abkühlung T_Oben=55", 55, 10),
+        (12, 0, 45, 42, 0, 50, "VERDAMPFER VEREIST (-15°C)", 45, -15),
+    ]
+    await run_simulation_scenario("3. Fehlerfälle & Edge Cases", steps_3, config)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(test_scenarios())
+    except Exception as e:
+        print(f"\nERROR: {e}")
+        import traceback
+        traceback.print_exc()
