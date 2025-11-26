@@ -1,5 +1,5 @@
-# Ignoriere Konfigurationsdateien
-config.ini
+# Ignoriere Konfigurationsdateien mit sensiblen Daten
+richtige_config.ini
 
 # Ignoriere Infodatepí
 Infos
