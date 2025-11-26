@@ -325,7 +325,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
         state.ausschluss_grund = (
             f"[{state.previous_modus}] Kein Einschalten: "
             f"{'T_Unten' if state.previous_modus in ['Bademodus', 'Solarüberschuss'] else 'T_Mittig'}="
-            f"{regelfuehler:.1f} Grad > {einschaltpunkt:.1f} Grad"
+            f"{f'{regelfuehler:.1f}' if regelfuehler is not None else 'N/A'} Grad > {einschaltpunkt:.1f} Grad"
         )
         logging.debug(state.ausschluss_grund)
         state.last_no_start_log = now

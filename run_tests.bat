@@ -1,4 +1,4 @@
 @echo off
 echo Running Tests...
-pytest tests/
+pytest -s tests/
 pause

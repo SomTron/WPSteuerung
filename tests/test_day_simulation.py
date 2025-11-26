@@ -82,8 +82,8 @@ def create_mock_state(config):
 async def run_simulation_scenario(scenario_name, steps, config):
     """Runs a specific simulation scenario."""
     print(f"\n\n=== SZENARIO: {scenario_name} ===")
-    print(f"{'UHRZEIT':<10} | {'MODUS':<20} | {'TEMP':<6} | {'SOLAR':<8} | {'KOMPRESSOR':<10} | {'INFO'}")
-    print("-" * 110)
+    print(f"{'UHRZEIT':<10} | {'MODUS':<20} | {'TEMP (O/M/U)':<12} | {'VERD':<6} | {'SOLAR':<8} | {'KOMPRESSOR':<10} | {'INFO'}")
+    print("-" * 120)
 
     mock_state = create_mock_state(config)
     start_date = datetime(2024, 6, 15, 0, 0, 0) # Base date
@@ -171,19 +171,21 @@ async def run_simulation_scenario(scenario_name, steps, config):
             time_str = current_sim_time.strftime("%H:%M")
             comp_str = "AN" if mock_state.kompressor_ein else "AUS"
             solar_str = f"{bat_power}W" if bat_power is not None else "N/A"
-            temp_str = f"{t_mittig}/{t_unten}" if t_mittig is not None and t_unten is not None else "ERR"
+            temp_str = f"{t_oben}/{t_mittig}/{t_unten}" if t_mittig is not None and t_unten is not None and t_oben is not None else "ERR"
+            verd_str = f"{t_verd}" if t_verd is not None else "ERR"
             
             # Add safety info to output if relevant
             info_suffix = ""
             if not safety_ok:
                 info_suffix = f" [SAFETY: {mock_state.ausschluss_grund}]"
             
-            print(f"{time_str:<10} | {setpoints['modus']:<20} | {temp_str:<6} | {solar_str:<8} | {comp_str:<10} | {desc}{info_suffix}")
+            print(f"{time_str:<10} | {setpoints['modus']:<20} | {temp_str:<12} | {verd_str:<6} | {solar_str:<8} | {comp_str:<10} | {desc}{info_suffix}")
 
     print("-" * 110)
 
 # --- SCENARIOS ---
 
+@pytest.mark.asyncio
 async def test_scenarios():
     config = load_simulation_config()
     
@@ -227,6 +229,18 @@ async def test_scenarios():
         (12, 0, 45, 42, 0, 50, "VERDAMPFER VEREIST (-15°C)", 45, -15),
     ]
     await run_simulation_scenario("3. Fehlerfälle & Edge Cases", steps_3, config)
+
+    # Scenario 4: Minimum Runtime & Pause
+    # Min Runtime = 10 min, Min Pause = 10 min
+    steps_4 = [
+        (8, 0, 40, 35, 0, 50, "Start (Normalmodus)"),
+        (8, 5, 34, 30, 0, 50, "Temp < Einschalt -> AN"),
+        (8, 10, 46, 42, 0, 50, "Temp > Ausschalt -> Bleibt AN (Min Laufzeit 5/10 min)"),
+        (8, 16, 46, 42, 0, 50, "Temp > Ausschalt -> AUS (Laufzeit > 10 min)"),
+        (8, 20, 34, 30, 0, 50, "Temp < Einschalt -> Bleibt AUS (Min Pause 4/10 min)"),
+        (8, 27, 34, 30, 0, 50, "Temp < Einschalt -> AN (Pause > 10 min)"),
+    ]
+    await run_simulation_scenario("4. Mindestlaufzeit & Pause", steps_4, config)
 
 if __name__ == "__main__":
     try:
