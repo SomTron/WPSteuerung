@@ -1,0 +1,8 @@
+aiohttp
+aiofiles
+pandas
+numpy
+matplotlib
+pytz
+python-dateutil
+python-telegram-bot
