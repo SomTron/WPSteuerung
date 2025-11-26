@@ -337,7 +337,8 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             safe_timedelta(now, state.last_no_start_log, state.local_tz) >= timedelta(minutes=5)):
         state.ausschluss_grund = (
             f"[{state.previous_modus}] Kein Einschalten im Übergangsmodus: Solarüberschuss nicht aktiv "
-            f"({state.uebergangsmodus_start.strftime('%H:%M')}–{state.uebergangsmodus_ende.strftime('%H:%M')})"
+            f"(Morgens: {state.nachtabsenkung_ende.strftime('%H:%M')}–{state.uebergangsmodus_morgens_ende.strftime('%H:%M')}, "
+            f"Abends: {state.uebergangsmodus_abends_start.strftime('%H:%M')}–{state.nachtabsenkung_start.strftime('%H:%M')})"
         )
         logging.debug(state.ausschluss_grund)
         state.last_no_start_log = now
