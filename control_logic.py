@@ -10,8 +10,11 @@ from telegram_handler import is_solar_window, send_telegram_message
 def is_nighttime(config):
     """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
     try:
-        start_str = config["Heizungssteuerung"].get("NACHT_START", "22:00")
-        end_str = config["Heizungssteuerung"].get("NACHT_ENDE", "06:00")
+        # Priorisiere NACHTABSENKUNG_START/END, Fallback auf NACHT_START/END
+        start_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", 
+                    config["Heizungssteuerung"].get("NACHT_START", "22:00"))
+        end_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", 
+                  config["Heizungssteuerung"].get("NACHT_ENDE", "06:00"))
         
         now = datetime.now().time()
         start = datetime.strptime(start_str, "%H:%M").time()
