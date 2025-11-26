@@ -255,35 +255,36 @@ class State:
             self.einschaltpunkt_erhoeht = 42
             self.ausschaltpunkt_erhoeht = 48
 
-# --- Übergangsmodus-Zeitpunkte (Morgens & Abends) ---
+        # --- Vereinfachter Übergangsmodus (nur 2 Werte nötig!) ---
         try:
-            # Morgens
-            self.uebergangsmodus_start = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "08:00"), "%H:%M"
-            ).time()
-            self.uebergangsmodus_ende = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "10:00"), "%H:%M"
-            ).time()
-            
-            # Abends
-            self.uebergangsmodus_abend_start = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00"), "%H:%M"
-            ).time()
-            self.uebergangsmodus_abend_ende = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00"), "%H:%M"
+            # Ende des morgendlichen Übergangsmodus (z. B. 10:00)
+            self.uebergangsmodus_morgens_ende = datetime.strptime(
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_MORGENS_ENDE", "10:00"), "%H:%M"
             ).time()
 
+            # Start des abendlichen Übergangsmodus (z. B. 17:00)
+            self.uebergangsmodus_abends_start = datetime.strptime(
+                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABENDS_START", "17:00"), "%H:%M"
+            ).time()
+
+            # Nachtabsenkung (bleibt wie bisher – wir brauchen diese Werte für die Logik)
+            nacht_start_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "19:30")
+            nacht_ende_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "08:00")
+            self.nachtabsenkung_start = datetime.strptime(nacht_start_str, "%H:%M").time()
+            self.nachtabsenkung_ende = datetime.strptime(nacht_ende_str, "%H:%M").time()
+
+            logging.info(
+                f"Übergangsmodus vereinfacht geladen: "
+                f"Morgens von {self.nachtabsenkung_ende} bis {self.uebergangsmodus_morgens_ende}, "
+                f"Abends von {self.uebergangsmodus_abends_start} bis {self.nachtabsenkung_start}"
+            )
         except Exception as e:
-            logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
-            self.uebergangsmodus_start = time(0, 0)
-            self.uebergangsmodus_ende = time(0, 0)
-            self.uebergangsmodus_abend_start = time(0, 0)
-            self.uebergangsmodus_abend_ende = time(0, 0)
-            logging.error(f"Fehler beim Einlesen der Übergangsmodus-Zeiten: {e}")
-            self.uebergangsmodus_start = time(6, 0)
-            self.uebergangsmodus_ende = time(8, 0)
-            self.uebergangsmodus_abend_start = time(17, 0)
-            self.uebergangsmodus_abend_ende = time(19, 0)
+            logging.error(f"Fehler beim Einlesen der vereinfachten Übergangsmodus-Zeiten: {e}")
+            # Fallback-Werte (sicher und sinnvoll)
+            self.uebergangsmodus_morgens_ende = time(10, 0)
+            self.uebergangsmodus_abends_start = time(17, 0)
+            self.nachtabsenkung_start = time(19, 30)
+            self.nachtabsenkung_ende = time(8, 0)
 
         # --- Schwellwerte ---
         try:
@@ -1623,4 +1624,4 @@ if __name__ == "__main__":
         logging.error(f"Fehler beim Starten des Skripts: {e}", exc_info=True)
         raise
 
-#End
+# End
