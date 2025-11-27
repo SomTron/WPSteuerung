@@ -278,9 +278,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     total_reduction = nacht_reduction + urlaubs_reduction
 
     # Solarüberschuss-Schwellwerte aus Konfiguration lesen
-    batpower_threshold = float(state.config.get("Solarueberschuss", {}).get("BATPOWER_THRESHOLD", 600.0))
-    soc_threshold = float(state.config.get("Solarueberschuss", {}).get("SOC_THRESHOLD", 95.0))
-    feedinpower_threshold = float(state.config.get("Solarueberschuss", {}).get("FEEDINPOWER_THRESHOLD", 600.0))
+    batpower_threshold = state.config.getfloat("Solarueberschuss", "BATPOWER_THRESHOLD", fallback=600.0)
+    soc_threshold = state.config.getfloat("Solarueberschuss", "SOC_THRESHOLD", fallback=95.0)
+    feedinpower_threshold = state.config.getfloat("Solarueberschuss", "FEEDINPOWER_THRESHOLD", fallback=600.0)
 
     state.solar_ueberschuss_aktiv = (
             state.batpower > batpower_threshold or
