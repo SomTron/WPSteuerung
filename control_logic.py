@@ -56,6 +56,10 @@ def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0
         return True
     return False
 
+def set_last_compressor_off_time(state, time_val):
+    """Setzt den Zeitpunkt des letzten Kompressor-Ausschaltens."""
+    state.last_compressor_off_time = time_val
+
 # Helper functions moved from main.py
 def is_nighttime(config):
     """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
