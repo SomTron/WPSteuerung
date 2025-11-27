@@ -226,14 +226,18 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     
     if t_verd < state.verdampfertemperatur:
         state.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {state.verdampfertemperatur} Grad)"
-        logging.warning(state.ausschluss_grund)
+        # Throttle Logging um Spam und Watchdog-Timeouts zu vermeiden
         if check_log_throttle(state, "last_verdampfer_notification"):
+            logging.warning(state.ausschluss_grund)
             await send_telegram_message(
                 session, state.chat_id,
                 f"⚠️ Kompressor bleibt aus oder wird ausgeschaltet: {state.ausschluss_grund}",
                 state.bot_token,
                 parse_mode=None
             )
+        else:
+            # Debug-Level für wiederholte Meldungen
+            logging.debug(state.ausschluss_grund)
         if state.kompressor_ein:
             result = await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben)
             if result:
@@ -272,7 +276,8 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
 async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     """Bestimmt den Betriebsmodus und setzt Sollwerte."""
     now = datetime.now(state.local_tz)
-    is_night = await asyncio.to_thread(is_nighttime, state.config)
+    # is_nighttime ist eine einfache Zeitvergleichsfunktion, kein Thread nötig
+    is_night = is_nighttime(state.config)
 
     # Prüfe Solarfenster nur alle 5 Minuten
     within_solar_window = state.last_solar_window_status
@@ -294,14 +299,19 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     
     total_reduction = nacht_reduction + urlaubs_reduction
 
-    # Solarüberschuss-Schwellwerte aus Konfiguration lesen
-    batpower_threshold = state.config.getfloat("Solarueberschuss", "BATPOWER_THRESHOLD", fallback=600.0)
-    soc_threshold = state.config.getfloat("Solarueberschuss", "SOC_THRESHOLD", fallback=95.0)
-    feedinpower_threshold = state.config.getfloat("Solarueberschuss", "FEEDINPOWER_THRESHOLD", fallback=600.0)
+    # Solarüberschuss-Schwellwerte aus Konfiguration lesen (nur bei Config-Änderung)
+    if not hasattr(state, '_cached_solar_thresholds') or state.last_config_hash != getattr(state, '_last_threshold_config_hash', None):
+        state._cached_solar_thresholds = {
+            'batpower': state.config.getfloat("Solarueberschuss", "BATPOWER_THRESHOLD", fallback=600.0),
+            'soc': state.config.getfloat("Solarueberschuss", "SOC_THRESHOLD", fallback=95.0),
+            'feedinpower': state.config.getfloat("Solarueberschuss", "FEEDINPOWER_THRESHOLD", fallback=600.0)
+        }
+        state._last_threshold_config_hash = state.last_config_hash
 
     state.solar_ueberschuss_aktiv = (
-            state.batpower > batpower_threshold or
-            (state.soc >= soc_threshold and state.feedinpower > feedinpower_threshold)
+            state.batpower > state._cached_solar_thresholds['batpower'] or
+            (state.soc >= state._cached_solar_thresholds['soc'] and 
+             state.feedinpower > state._cached_solar_thresholds['feedinpower'])
     )
 
     # Prüfe Übergangsmodus (morgens oder abends)
