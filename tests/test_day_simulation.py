@@ -82,8 +82,8 @@ def create_mock_state(config):
 async def run_simulation_scenario(scenario_name, steps, config):
     """Runs a specific simulation scenario."""
     print(f"\n\n=== SZENARIO: {scenario_name} ===")
-    print(f"{'UHRZEIT':<10} | {'MODUS':<20} | {'TEMP (O/M/U)':<12} | {'VERD':<6} | {'SOLAR':<8} | {'KOMPRESSOR':<10} | {'INFO'}")
-    print("-" * 120)
+    print(f"{'UHRZEIT':<10} | {'MODUS':<20} | {'TEMP (O/M/U)':<12} | {'REGEL':<6} | {'EIN':<4} | {'AUS':<4} | {'VERD':<6} | {'SOLAR':<8} | {'KOMPRESSOR':<10} | {'INFO'}")
+    print("-" * 140)
 
     mock_state = create_mock_state(config)
     start_date = datetime(2024, 6, 15, 0, 0, 0) # Base date
@@ -173,15 +173,18 @@ async def run_simulation_scenario(scenario_name, steps, config):
             solar_str = f"{bat_power}W" if bat_power is not None else "N/A"
             temp_str = f"{t_oben}/{t_mittig}/{t_unten}" if t_mittig is not None and t_unten is not None and t_oben is not None else "ERR"
             verd_str = f"{t_verd}" if t_verd is not None else "ERR"
+            regel_str = f"{setpoints['regelfuehler']}" if setpoints['regelfuehler'] is not None else "N/A"
+            ein_str = f"{setpoints['einschaltpunkt']}"
+            aus_str = f"{setpoints['ausschaltpunkt']}"
             
             # Add safety info to output if relevant
             info_suffix = ""
             if not safety_ok:
                 info_suffix = f" [SAFETY: {mock_state.ausschluss_grund}]"
             
-            print(f"{time_str:<10} | {setpoints['modus']:<20} | {temp_str:<12} | {verd_str:<6} | {solar_str:<8} | {comp_str:<10} | {desc}{info_suffix}")
+            print(f"{time_str:<10} | {setpoints['modus']:<20} | {temp_str:<12} | {regel_str:<6} | {ein_str:<4} | {aus_str:<4} | {verd_str:<6} | {solar_str:<8} | {comp_str:<10} | {desc}{info_suffix}")
 
-    print("-" * 110)
+    print("-" * 140)
 
 # --- SCENARIOS ---
 
