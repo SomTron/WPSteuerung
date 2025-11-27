@@ -1358,9 +1358,46 @@ async def check_watchdog(state, session, last_cycle_time):
     return now
 
 
+async def safety_watchdog(state, session):
+    """
+    Separater Task für sicherheitskritische Überwachungen mit hoher Frequenz (1s).
+    Überwacht Druckschalter und andere kritische Sensoren unabhängig vom Haupt-Loop.
+    """
+    logging.info("Starte Safety-Watchdog...")
+    while True:
+        try:
+            # 1. Druckschalter prüfen (kritisch!)
+            if not await control_logic.check_pressure_and_config(
+                    session, state,
+                    handle_pressure_check,
+                    set_kompressor_status,
+                    reload_config,
+                    calculate_file_hash,
+                    only_pressure=True # Neue Option, um nur Druck zu prüfen
+            ):
+                # Bei Fehler kurz warten, aber schneller als Main-Loop
+                await asyncio.sleep(1)
+                continue
+
+            # Hier können weitere schnelle Checks hinzugefügt werden
+
+            await asyncio.sleep(1) # 1 Sekunde Intervall für Sicherheit
+
+        except asyncio.CancelledError:
+            logging.info("Safety-Watchdog beendet.")
+            break
+        except Exception as e:
+            logging.error(f"Fehler im Safety-Watchdog: {e}", exc_info=True)
+            await asyncio.sleep(5) # Bei Fehler etwas länger warten
+
 async def main_loop(config, state, session):
     """Hauptschleife des Programms mit State-Objekt."""
     local_tz = pytz.timezone("Europe/Berlin")
+    
+    # Loop-Intervall aus Config laden (Default: 10s)
+    loop_interval = get_config_value(config, "Heizungssteuerung", "LOOP_INTERVAL", 10, int)
+    logging.info(f"Hauptschleife startet mit Intervall: {loop_interval} Sekunden")
+
     min_laufzeit = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_LAUFZEIT_S", 300)))
     min_pause = timedelta(seconds=int(state.config["Heizungssteuerung"].get("MIN_AUSZEIT_S", 300)))
 
@@ -1386,6 +1423,9 @@ async def main_loop(config, state, session):
             is_nighttime_func=control_logic.is_nighttime,
             is_solar_window_func=is_solar_window
         ))
+
+        # Starte Safety-Watchdog
+        asyncio.create_task(safety_watchdog(state, session))
 
         # Watchdog-Variablen
         last_cycle_time = now
@@ -1484,7 +1524,7 @@ async def main_loop(config, state, session):
                 # Watchdog prüfen
                 last_cycle_time = await check_watchdog(state, session, last_cycle_time)
 
-                await asyncio.sleep(2)
+                await asyncio.sleep(loop_interval)
 
             except Exception as e:
                 logging.error(f"Fehler in der Hauptschleife: {e}", exc_info=True)
