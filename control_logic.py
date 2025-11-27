@@ -349,6 +349,15 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         logging.info(f"Wechsel zu Modus: {modus}")
         state.previous_modus = modus
 
+    # DEBUG LOGGING für Config-Werte
+    logging.debug(
+        f"Modus-Ermittlung: {modus} | "
+        f"Basis-Werte (State): Ein={state.aktueller_einschaltpunkt}, Aus={state.aktueller_ausschaltpunkt} | "
+        f"Erhöht-Werte (State): Ein={state.einschaltpunkt_erhoeht}, Aus={state.ausschaltpunkt_erhoeht} | "
+        f"Reduktion: Nacht={nacht_reduction}, Urlaub={urlaubs_reduction}, Total={total_reduction} | "
+        f"Ergebnis: Ein={einschaltpunkt}, Aus={ausschaltpunkt}, Fühler={regelfuehler}"
+    )
+
     return {
         "modus": modus,
         "ausschaltpunkt": ausschaltpunkt,
