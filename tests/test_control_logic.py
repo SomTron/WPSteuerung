@@ -10,11 +10,16 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from control_logic import determine_mode_and_setpoints
 
+import configparser
+
 @pytest.fixture
 def mock_state():
     state = MagicMock()
     state.local_tz = pytz.timezone("Europe/Berlin")
-    state.config = {
+    
+    # Verwende echtes ConfigParser-Objekt statt Dictionary
+    config = configparser.ConfigParser()
+    config.read_dict({
         "Heizungssteuerung": {
             "NACHT_START": "22:00",
             "NACHT_ENDE": "06:00",
@@ -23,8 +28,14 @@ def mock_state():
         },
         "Urlaubsmodus": {
             "URLAUBSABSENKUNG": "10"
+        },
+        "Solarueberschuss": {
+            "BATPOWER_THRESHOLD": "600.0",
+            "SOC_THRESHOLD": "95.0",
+            "FEEDINPOWER_THRESHOLD": "600.0"
         }
-    }
+    })
+    state.config = config
     state.nachtabsenkung_ende = time(6, 0)
     state.uebergangsmodus_morgens_ende = time(10, 0)
     state.uebergangsmodus_abends_start = time(17, 0)
