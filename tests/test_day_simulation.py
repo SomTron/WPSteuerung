@@ -112,9 +112,13 @@ async def run_simulation_scenario(scenario_name, steps, config):
         
         def update_mocks(sim_time):
             t = sim_time.time()
-            # Use config values for night check
-            night_start = datetime.strptime(config["Heizungssteuerung"]["NACHT_START"], "%H:%M").time()
-            night_end = datetime.strptime(config["Heizungssteuerung"]["NACHT_ENDE"], "%H:%M").time()
+            # Use config values for night check (mit Fallback auf alte Schlüssel)
+            night_start = datetime.strptime(
+                config["Heizungssteuerung"].get("NACHTABSENKUNG_START", 
+                config["Heizungssteuerung"].get("NACHT_START", "22:00")), "%H:%M").time()
+            night_end = datetime.strptime(
+                config["Heizungssteuerung"].get("NACHTABSENKUNG_END", 
+                config["Heizungssteuerung"].get("NACHT_ENDE", "06:00")), "%H:%M").time()
             
             if night_start <= night_end:
                 is_night = night_start <= t <= night_end
