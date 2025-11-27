@@ -256,7 +256,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         return False
     return True
 
-async def check_pressure_and_config(session, state, handle_pressure_check_func: Callable, set_kompressor_status_func: Callable, reload_config_func: Callable, calculate_file_hash_func: Callable):
+async def check_pressure_and_config(session, state, handle_pressure_check_func: Callable, set_kompressor_status_func: Callable, reload_config_func: Callable, calculate_file_hash_func: Callable, only_pressure: bool = False):
     """Prüft Druckschalter und aktualisiert Konfiguration bei Bedarf."""
     pressure_ok = await handle_pressure_check_func(session, state)
     if state.last_pressure_state != pressure_ok:
@@ -269,12 +269,13 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
             await set_kompressor_status_func(state, False, force=True)
         return False
 
-    if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=60):
-        current_hash = calculate_file_hash_func("config.ini")
-        if current_hash != state.last_config_hash:
-            await reload_config_func(session, state)
-            state.last_config_hash = current_hash
-        state._last_config_check = datetime.now(state.local_tz)
+    if not only_pressure:
+        if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=60):
+            current_hash = calculate_file_hash_func("config.ini")
+            if current_hash != state.last_config_hash:
+                await reload_config_func(session, state)
+                state.last_config_hash = current_hash
+            state._last_config_check = datetime.now(state.local_tz)
     return True
 
 async def determine_mode_and_setpoints(state, t_unten, t_mittig):
