@@ -52,6 +52,40 @@ PRESSURE_SENSOR_PIN = 17  # Eingang für Druckschalter
 config = configparser.ConfigParser()
 config.read("config.ini")
 
+def get_config_value(config, section, key, default, type_func=str):
+    """
+    Liest einen Wert aus der Konfiguration und loggt Warnungen bei Fehlern.
+    
+    Args:
+        config: Das ConfigParser-Objekt
+        section: Die Sektion in der Config
+        key: Der Schlüssel
+        default: Der Standardwert, falls der Schlüssel fehlt oder ungültig ist
+        type_func: Die Funktion zur Typumwandlung (z.B. int, float, str)
+    
+    Returns:
+        Der konfigurierte Wert oder der Standardwert.
+    """
+    try:
+        if not config.has_section(section):
+            logging.warning(f"Konfigurations-Sektion '{section}' fehlt. Verwende Standardwert für '{key}': {default}")
+            return default
+            
+        if not config.has_option(section, key):
+            logging.warning(f"Konfigurationswert '{key}' in Sektion '{section}' fehlt. Verwende Standardwert: {default}")
+            return default
+            
+        value = config.get(section, key)
+        try:
+            return type_func(value)
+        except ValueError as e:
+            logging.error(f"Fehler beim Konvertieren von '{key}' in Sektion '{section}' (Wert: '{value}'): {e}. Verwende Standardwert: {default}")
+            return default
+    except Exception as e:
+        logging.error(f"Unerwarteter Fehler beim Lesen von '{key}' in Sektion '{section}': {e}. Verwende Standardwert: {default}")
+        return default
+
+
 # Globale Variablen für den Programmstatus
 last_update_id = None
 lcd = None
@@ -202,8 +236,9 @@ class State:
         self.t_boiler = None
 
         # --- Telegram-Konfiguration ---
-        self.bot_token = config["Telegram"].get("BOT_TOKEN", "")
-        self.chat_id = config["Telegram"].get("CHAT_ID", "")
+        # --- Telegram-Konfiguration ---
+        self.bot_token = get_config_value(config, "Telegram", "BOT_TOKEN", "")
+        self.chat_id = get_config_value(config, "Telegram", "CHAT_ID", "")
         if not self.bot_token or not self.chat_id:
             logging.warning("Telegram BOT_TOKEN oder CHAT_ID fehlt. Telegram-Nachrichten deaktiviert.")
         self.last_pause_telegram_notification = None
@@ -211,22 +246,18 @@ class State:
         self.last_overtemp_notification = now
 
         # --- Healthcheck (wird vom telegram_handler verwendet) ---
-        try:
-            self.healthcheck_url = config.get("Healthcheck", "HEALTHCHECK_URL", fallback="").strip()
-            self.healthcheck_interval = config.getint("Healthcheck", "HEALTHCHECK_INTERVAL_MINUTES", fallback=15)
-            if self.healthcheck_interval <= 0:
-                self.healthcheck_interval = 15
-        except Exception as e:
-            logging.warning(f"Fehler beim Lesen von Healthcheck-Config: {e}")
-            self.healthcheck_url = ""
+        self.healthcheck_url = get_config_value(config, "Healthcheck", "HEALTHCHECK_URL", "").strip()
+        self.healthcheck_interval = get_config_value(config, "Healthcheck", "HEALTHCHECK_INTERVAL_MINUTES", 15, int)
+        if self.healthcheck_interval <= 0:
             self.healthcheck_interval = 15
 
         # Zeitstempel wann zuletzt gepingt wurde (wird vom telegram_handler gesetzt)
         self.last_healthcheck_ping = None
 
         # --- SolaxCloud-Konfiguration ---
-        self.token_id = config["SolaxCloud"].get("TOKEN_ID", "")
-        self.sn = config["SolaxCloud"].get("SN", "")
+        # --- SolaxCloud-Konfiguration ---
+        self.token_id = get_config_value(config, "SolaxCloud", "TOKEN_ID", "")
+        self.sn = get_config_value(config, "SolaxCloud", "SN", "")
         if not self.token_id or not self.sn:
             logging.warning("SolaxCloud TOKEN_ID oder SN fehlt. Solax-Datenabruf eingeschränkt.")
         self.last_api_call = None
@@ -234,42 +265,28 @@ class State:
         self.last_api_timestamp = None
 
         # --- Heizungsparameter ---
-        try:
-            self.sicherheits_temp = float(config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 52.0))
-            self.min_laufzeit = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_LAUFZEIT", 10)))
-            self.min_pause = timedelta(minutes=int(config["Heizungssteuerung"].get("MIN_PAUSE", 20)))
-            self.verdampfertemperatur = float(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", 6.0))
-        except (KeyError, ValueError, configparser.Error) as e:
-            logging.error(f"Fehler beim Laden der Heizungsparameter: {e}. Verwende Standardwerte.")
-            self.sicherheits_temp = 52.0
-            self.min_laufzeit = timedelta(minutes=10)
-            self.min_pause = timedelta(minutes=20)
-            self.verdampfertemperatur = 6.0
+        self.sicherheits_temp = get_config_value(config, "Heizungssteuerung", "SICHERHEITS_TEMP", 52.0, float)
+        self.min_laufzeit = timedelta(minutes=get_config_value(config, "Heizungssteuerung", "MIN_LAUFZEIT", 10, int))
+        self.min_pause = timedelta(minutes=get_config_value(config, "Heizungssteuerung", "MIN_PAUSE", 20, int))
+        self.verdampfertemperatur = get_config_value(config, "Heizungssteuerung", "VERDAMPFERTEMPERATUR", 6.0, float)
 
         # --- Erhöhte Schwellwerte ---
-        try:
-            self.einschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 42))
-            self.ausschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 48))
-        except ValueError as e:
-            logging.warning(f"Fehler beim Einlesen der erhöhten Schwellwerte: {e}. Verwende Standardwerte.")
-            self.einschaltpunkt_erhoeht = 42
-            self.ausschaltpunkt_erhoeht = 48
+        self.einschaltpunkt_erhoeht = get_config_value(config, "Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42, int)
+        self.ausschaltpunkt_erhoeht = get_config_value(config, "Heizungssteuerung", "AUSSCHALTPUNKT_ERHOEHT", 48, int)
 
         # --- Vereinfachter Übergangsmodus (nur 2 Werte nötig!) ---
         try:
             # Ende des morgendlichen Übergangsmodus (z. B. 10:00)
-            self.uebergangsmodus_morgens_ende = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_MORGENS_ENDE", "10:00"), "%H:%M"
-            ).time()
+            uebergangsmodus_morgens_ende_str = get_config_value(config, "Heizungssteuerung", "UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
+            self.uebergangsmodus_morgens_ende = datetime.strptime(uebergangsmodus_morgens_ende_str, "%H:%M").time()
 
             # Start des abendlichen Übergangsmodus (z. B. 17:00)
-            self.uebergangsmodus_abends_start = datetime.strptime(
-                config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABENDS_START", "17:00"), "%H:%M"
-            ).time()
+            uebergangsmodus_abends_start_str = get_config_value(config, "Heizungssteuerung", "UEBERGANGSMODUS_ABENDS_START", "17:00")
+            self.uebergangsmodus_abends_start = datetime.strptime(uebergangsmodus_abends_start_str, "%H:%M").time()
 
             # Nachtabsenkung (bleibt wie bisher – wir brauchen diese Werte für die Logik)
-            nacht_start_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "19:30")
-            nacht_ende_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "08:00")
+            nacht_start_str = get_config_value(config, "Heizungssteuerung", "NACHTABSENKUNG_START", "19:30")
+            nacht_ende_str = get_config_value(config, "Heizungssteuerung", "NACHTABSENKUNG_END", "08:00")
             self.nachtabsenkung_start = datetime.strptime(nacht_start_str, "%H:%M").time()
             self.nachtabsenkung_ende = datetime.strptime(nacht_ende_str, "%H:%M").time()
 
@@ -287,20 +304,16 @@ class State:
             self.nachtabsenkung_ende = time(8, 0)
 
         # --- Schwellwerte ---
-        try:
-            self.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 45))
-            self.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 42))
-            min_hysteresis = int(config["Heizungssteuerung"].get("TEMP_OFFSET", 3))
-            if self.aktueller_ausschaltpunkt <= self.aktueller_einschaltpunkt:
-                logging.warning(
-                    f"Ausschaltpunkt ({self.aktueller_ausschaltpunkt}°C) <= Einschaltpunkt ({self.aktueller_einschaltpunkt}°C), "
-                    f"setze Ausschaltpunkt auf Einschaltpunkt + {min_hysteresis}°C"
-                )
-                self.aktueller_ausschaltpunkt = self.aktueller_einschaltpunkt + min_hysteresis
-        except (KeyError, ValueError) as e:
-            logging.error(f"Fehler beim Einlesen der Schwellwerte: {e}. Verwende Standardwerte.")
-            self.aktueller_ausschaltpunkt = 45
-            self.aktueller_einschaltpunkt = 42
+        self.aktueller_ausschaltpunkt = get_config_value(config, "Heizungssteuerung", "AUSSCHALTPUNKT", 45, int)
+        self.aktueller_einschaltpunkt = get_config_value(config, "Heizungssteuerung", "EINSCHALTPUNKT", 42, int)
+        min_hysteresis = get_config_value(config, "Heizungssteuerung", "TEMP_OFFSET", 3, int)
+        
+        if self.aktueller_ausschaltpunkt <= self.aktueller_einschaltpunkt:
+            logging.warning(
+                f"Ausschaltpunkt ({self.aktueller_ausschaltpunkt}°C) <= Einschaltpunkt ({self.aktueller_einschaltpunkt}°C), "
+                f"setze Ausschaltpunkt auf Einschaltpunkt + {min_hysteresis}°C"
+            )
+            self.aktueller_ausschaltpunkt = self.aktueller_einschaltpunkt + min_hysteresis
 
         self.previous_ausschaltpunkt = self.aktueller_ausschaltpunkt
         self.previous_einschaltpunkt = self.aktueller_einschaltpunkt
@@ -374,20 +387,37 @@ async def setup_logging(session, state):
         logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
         matplotlib.set_loglevel("warning")
 
-        # --- FileHandler: RotatingFileHandler mit UTF-8 ---
-        file_handler = RotatingFileHandler(
-            "heizungssteuerung.log",
-            maxBytes=100 * 1024 * 1024,  # 100 MB
+        # --- FileHandler: RotatingFileHandler für ERROR/WARNING (immer aktiv) ---
+        error_file_handler = RotatingFileHandler(
+            "error.log",
+            maxBytes=10 * 1024 * 1024,  # 10 MB
             backupCount=5,
             encoding="utf-8"
         )
-        file_handler.setLevel(logging.DEBUG)
+        error_file_handler.setLevel(logging.WARNING)
         file_formatter = logging.Formatter(
             "%(asctime)s %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S %z"
         )
-        file_handler.setFormatter(file_formatter)
-        root_logger.addHandler(file_handler)
+        error_file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(error_file_handler)
+
+        # --- FileHandler: RotatingFileHandler für alles (optional) ---
+        enable_full_log = get_config_value(state.config, "Logging", "ENABLE_FULL_LOG", "True") == "True"
+        
+        if enable_full_log:
+            file_handler = RotatingFileHandler(
+                "heizungssteuerung.log",
+                maxBytes=100 * 1024 * 1024,  # 100 MB
+                backupCount=5,
+                encoding="utf-8"
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(file_formatter)
+            root_logger.addHandler(file_handler)
+            logging.info("Vollständiges Logging aktiviert (heizungssteuerung.log)")
+        else:
+            logging.info("Vollständiges Logging deaktiviert (nur error.log aktiv)")
 
         # --- StreamHandler für Konsolenausgabe ---
         stream_handler = logging.StreamHandler(sys.stdout)
@@ -1182,6 +1212,9 @@ def load_and_validate_config():
         "SolaxCloud": {
             "TOKEN_ID": "",
             "SN": ""
+        },
+        "Logging": {
+            "ENABLE_FULL_LOG": "True"
         }
     }
 
@@ -1213,62 +1246,41 @@ async def reload_config(session, state):
 
         logging.info("Neue Konfiguration erkannt – wird geladen...")
 
-        # --- Heizungsparameter mit Plausibilitätsprüfung ---
-        def get_int_checked(section, key, default, min_val=None, max_val=None):
-            try:
-                val = new_config.getint(section, key, fallback=default)
-                if (min_val is not None and val < min_val) or (max_val is not None and val > max_val):
-                    raise ValueError(f"{key} außerhalb gültiger Grenzen")
-                return val
-            except Exception as e:
-                logging.warning(
-                    f"Ungültiger Wert für {key}, verwende alten Wert ({getattr(state, key.lower(), default)}): {e}")
-                return getattr(state, key.lower(), default)
-
-        ausschalt = get_int_checked("Heizungssteuerung", "AUSSCHALTPUNKT", 55, 20, 90)
-        einschalt = get_int_checked("Heizungssteuerung", "EINSCHALTPUNKT", 50, 10, 85)
-        if einschalt >= ausschalt:
-            raise ValueError("EINSCHALTPUNKT muss kleiner als AUSSCHALTPUNKT sein.")
-
-        state.aktueller_ausschaltpunkt = ausschalt
-        state.aktueller_einschaltpunkt = einschalt
+        # --- Heizungsparameter ---
+        # Verwende get_config_value für konsistentes Verhalten und Logging
+        state.aktueller_ausschaltpunkt = get_config_value(new_config, "Heizungssteuerung", "AUSSCHALTPUNKT", 45, int)
+        state.aktueller_einschaltpunkt = get_config_value(new_config, "Heizungssteuerung", "EINSCHALTPUNKT", 42, int)
+        
+        # Plausibilitätsprüfung
+        if state.aktueller_einschaltpunkt >= state.aktueller_ausschaltpunkt:
+            logging.warning(f"EINSCHALTPUNKT ({state.aktueller_einschaltpunkt}) >= AUSSCHALTPUNKT ({state.aktueller_ausschaltpunkt}). Korrigiere...")
+            state.aktueller_ausschaltpunkt = state.aktueller_einschaltpunkt + 3
 
         # --- Erhöhte Sollwerte ---
-        state.einschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42)
-        state.ausschaltpunkt_erhoeht = get_int_checked("Heizungssteuerung", "AUSSCHALTPUNKT_ERHOEHT", 48)
+        state.einschaltpunkt_erhoeht = get_config_value(new_config, "Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42, int)
+        state.ausschaltpunkt_erhoeht = get_config_value(new_config, "Heizungssteuerung", "AUSSCHALTPUNKT_ERHOEHT", 48, int)
 
-        min_pause_min = get_int_checked("Heizungssteuerung", "MIN_PAUSE", 20, 0, 1440)
-        state.min_pause = timedelta(minutes=min_pause_min)
-
-        state.sicherheits_temp = get_int_checked("Heizungssteuerung", "SICHERHEITS_TEMP", 65, 50, 90)
-        state.verdampfertemperatur = get_int_checked("Heizungssteuerung", "VERDAMPFERTEMPERATUR", -10, -30, 10)
+        state.min_pause = timedelta(minutes=get_config_value(new_config, "Heizungssteuerung", "MIN_PAUSE", 20, int))
+        state.sicherheits_temp = get_config_value(new_config, "Heizungssteuerung", "SICHERHEITS_TEMP", 52.0, float)
+        state.verdampfertemperatur = get_config_value(new_config, "Heizungssteuerung", "VERDAMPFERTEMPERATUR", 6.0, float)
 
         # --- Übergangsmodus-Zeiten (morgens und abends) ---
         try:
-            start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_START", "06:00")
-            ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ENDE", "08:00")
-            abend_start_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_START", "17:00")
-            abend_ende_str = new_config["Heizungssteuerung"].get("UEBERGANGSMODUS_ABEND_ENDE", "19:00")
-            start_time = datetime.strptime(start_str, "%H:%M").time()
-            end_time = datetime.strptime(ende_str, "%H:%M").time()
-            abend_start_time = datetime.strptime(abend_start_str, "%H:%M").time()
-            abend_end_time = datetime.strptime(abend_ende_str, "%H:%M").time()
-            state.uebergangsmodus_start = start_time
-            state.uebergangsmodus_ende = end_time
-            state.uebergangsmodus_abend_start = abend_start_time
-            state.uebergangsmodus_abend_ende = abend_end_time
-            logging.info(
-                f"Übergangsmodus-Zeiten neu geladen: Morgen={start_time}–{end_time}, "
-                f"Abend={abend_start_time}–{abend_end_time}"
-            )
+            uebergangsmodus_morgens_ende_str = get_config_value(new_config, "Heizungssteuerung", "UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
+            state.uebergangsmodus_morgens_ende = datetime.strptime(uebergangsmodus_morgens_ende_str, "%H:%M").time()
+
+            uebergangsmodus_abends_start_str = get_config_value(new_config, "Heizungssteuerung", "UEBERGANGSMODUS_ABENDS_START", "17:00")
+            state.uebergangsmodus_abends_start = datetime.strptime(uebergangsmodus_abends_start_str, "%H:%M").time()
+            
+            logging.info(f"Übergangsmodus-Zeiten neu geladen: Morgens bis {state.uebergangsmodus_morgens_ende}, Abends ab {state.uebergangsmodus_abends_start}")
         except Exception as e:
-            logging.error(f"Ungültige Übergangsmodus-Zeitangaben – behalte alte Werte: {e}")
+            logging.error(f"Fehler beim Neuladen der Übergangsmodus-Zeiten: {e}")
 
         # --- Telegram ---
         old_token = state.bot_token
         old_chat_id = state.chat_id
-        state.bot_token = new_config.get("Telegram", "BOT_TOKEN", fallback=state.bot_token)
-        state.chat_id = new_config.get("Telegram", "CHAT_ID", fallback=state.chat_id)
+        state.bot_token = get_config_value(new_config, "Telegram", "BOT_TOKEN", state.bot_token)
+        state.chat_id = get_config_value(new_config, "Telegram", "CHAT_ID", state.chat_id)
 
         if not state.bot_token or not state.chat_id:
             logging.warning("Telegram-Token oder Chat-ID fehlt. Nachrichten deaktiviert.")
@@ -1278,7 +1290,7 @@ async def reload_config(session, state):
 
         # --- Abschluss ---
         state.last_config_hash = current_hash
-        logging.info("Konfiguration erfolgreich neu geladen.")
+        logging.info(f"Konfiguration erfolgreich neu geladen. Normal: {state.aktueller_einschaltpunkt}/{state.aktueller_ausschaltpunkt}, Erhöht: {state.einschaltpunkt_erhoeht}/{state.ausschaltpunkt_erhoeht}")
 
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}", exc_info=True)
