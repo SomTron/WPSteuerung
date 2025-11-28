@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime, time, timedelta
 import pytz
 import sys
@@ -10,11 +10,16 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from control_logic import determine_mode_and_setpoints
 
+import configparser
+
 @pytest.fixture
 def mock_state():
     state = MagicMock()
     state.local_tz = pytz.timezone("Europe/Berlin")
-    state.config = {
+    
+    # Verwende echtes ConfigParser-Objekt statt Dictionary
+    config = configparser.ConfigParser()
+    config.read_dict({
         "Heizungssteuerung": {
             "NACHT_START": "22:00",
             "NACHT_ENDE": "06:00",
@@ -23,8 +28,14 @@ def mock_state():
         },
         "Urlaubsmodus": {
             "URLAUBSABSENKUNG": "10"
+        },
+        "Solarueberschuss": {
+            "BATPOWER_THRESHOLD": "600.0",
+            "SOC_THRESHOLD": "95.0",
+            "FEEDINPOWER_THRESHOLD": "600.0"
         }
-    }
+    })
+    state.config = config
     state.nachtabsenkung_ende = time(6, 0)
     state.uebergangsmodus_morgens_ende = time(10, 0)
     state.uebergangsmodus_abends_start = time(17, 0)
@@ -107,3 +118,39 @@ async def test_determine_mode_bademodus(mock_state):
         assert result['ausschaltpunkt'] == 55 # erhoeht
         assert result['einschaltpunkt'] == 51 # erhoeht - 4
         assert result['regelfuehler'] == 30 # t_unten
+        assert result['regelfuehler'] == 30 # t_unten
+
+from control_logic import check_pressure_and_config
+
+@pytest.mark.asyncio
+async def test_check_pressure_and_config_only_pressure(mock_state):
+    # Mock dependencies
+    handle_pressure = AsyncMock(return_value=True)
+    set_kompressor = AsyncMock()
+    reload_config = AsyncMock()
+    calc_hash = MagicMock(return_value="new_hash")
+    
+    # Setup state
+    mock_state.last_pressure_state = True
+    mock_state._last_config_check = datetime.now(mock_state.local_tz) - timedelta(minutes=5)
+    mock_state.last_config_hash = "old_hash"
+    
+    # Test with only_pressure=True
+    await check_pressure_and_config(
+        None, mock_state, handle_pressure, set_kompressor, reload_config, calc_hash, only_pressure=True
+    )
+    
+    # Assertions
+    handle_pressure.assert_called_once()
+    reload_config.assert_not_called() # Should be skipped
+    calc_hash.assert_not_called() # Should be skipped
+    
+    # Test with only_pressure=False (default)
+    await check_pressure_and_config(
+        None, mock_state, handle_pressure, set_kompressor, reload_config, calc_hash, only_pressure=False
+    )
+    
+    # Assertions
+    assert handle_pressure.call_count == 2
+    reload_config.assert_called_once() # Should be called
+    calc_hash.assert_called_once() # Should be called
