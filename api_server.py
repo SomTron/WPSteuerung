@@ -3,6 +3,7 @@ Standalone API Server für Entwicklung und Tests
 Kann auf dem PC ausgeführt werden, ohne Raspberry Pi Hardware
 """
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
@@ -23,6 +24,15 @@ app = FastAPI(
     title="WPSteuerung API", 
     description="API for Heat Pump Control - Development Mode", 
     version="1.0.0"
+)
+
+# CORS Middleware hinzufügen
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In Produktion spezifische Origins angeben
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Mock State (für Entwicklung)
@@ -80,6 +90,12 @@ def get_status():
             "runtime_current": str(mock_state.last_runtime).split('.')[0] if mock_state.kompressor_ein else "0:00:00",
             "runtime_today": str(mock_state.total_runtime_today).split('.')[0]
         },
+        "setpoints": {
+            "einschaltpunkt": 42,
+            "ausschaltpunkt": 45,
+            "sicherheits_temp": 52,
+            "verdampfertemperatur": 6.0
+        },
         "mode": {
             "current": mock_state.previous_modus,
             "solar_active": mock_state.solar_ueberschuss_aktiv,
@@ -135,6 +151,30 @@ def control_system(cmd: ControlCommand):
             raise HTTPException(status_code=400, detail=f"Unknown mode: {mode}")
     
     raise HTTPException(status_code=400, detail=f"Unknown command: {cmd.command}")
+
+@app.get("/history")
+def get_history(hours: int = 24):
+    """Get historical data from CSV (mock data for development)"""
+    import pandas as pd
+    from datetime import datetime, timedelta
+    
+    # Generate mock historical data
+    now = datetime.now()
+    data = []
+    
+    for i in range(hours * 12):  # 12 data points per hour (every 5 minutes)
+        timestamp = now - timedelta(minutes=i * 5)
+        data.append({
+            "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "t_oben": round(40 + random.uniform(-3, 3), 1),
+            "t_mittig": round(39 + random.uniform(-3, 3), 1),
+            "t_unten": round(38 + random.uniform(-3, 3), 1),
+            "t_verd": round(10 + random.uniform(-2, 2), 1),
+            "kompressor": random.choice(["EIN", "AUS"])
+        })
+    
+    data.reverse()  # Oldest first
+    return {"data": data, "count": len(data)}
 
 if __name__ == "__main__":
     import uvicorn

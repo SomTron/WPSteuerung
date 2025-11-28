@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
@@ -15,6 +16,15 @@ class ControlCommand(BaseModel):
     params: Optional[Dict[str, Any]] = None
 
 app = FastAPI(title="WPSteuerung API", description="API for Heat Pump Control Android App", version="1.0.0")
+
+# CORS Middleware hinzufügen
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In Produktion spezifische Origins angeben
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global state reference (will be injected from main.py)
 shared_state = None
@@ -42,6 +52,12 @@ def get_status():
             "status": "EIN" if shared_state.kompressor_ein else "AUS",
             "runtime_current": str(shared_state.last_runtime).split('.')[0] if shared_state.kompressor_ein else "0:00:00",
             "runtime_today": str(shared_state.total_runtime_today).split('.')[0]
+        },
+        "setpoints": {
+            "einschaltpunkt": shared_state.aktueller_einschaltpunkt,
+            "ausschaltpunkt": shared_state.aktueller_ausschaltpunkt,
+            "sicherheits_temp": shared_state.sicherheits_temp,
+            "verdampfertemperatur": shared_state.verdampfertemperatur
         },
         "mode": {
             "current": shared_state.previous_modus,
@@ -99,3 +115,36 @@ async def control_system(cmd: ControlCommand):
             return {"status": "success", "message": f"Urlaubsmodus set to {shared_state.urlaubsmodus_aktiv}"}
 
     raise HTTPException(status_code=400, detail="Unknown command")
+
+@app.get("/history")
+def get_history(hours: int = 24):
+    """Get historical data from CSV"""
+    import os
+    import pandas as pd
+    
+    csv_path = "heizungsdaten.csv"
+    if not os.path.exists(csv_path):
+        raise HTTPException(status_code=404, detail="No historical data available")
+    
+    try:
+        df = pd.read_csv(csv_path)
+        # Filter last N hours
+        df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'])
+        cutoff = datetime.now() - pd.Timedelta(hours=hours)
+        df = df[df['Zeitstempel'] >= cutoff]
+        
+        # Convert to JSON-friendly format
+        data = []
+        for _, row in df.iterrows():
+            data.append({
+                "timestamp": row['Zeitstempel'].strftime("%Y-%m-%d %H:%M:%S"),
+                "t_oben": row['T_Oben'],
+                "t_mittig": row['T_Mittig'],
+                "t_unten": row['T_Unten'],
+                "t_verd": row['T_Verd'],
+                "kompressor": row['Kompressor']
+            })
+        
+        return {"data": data, "count": len(data)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")

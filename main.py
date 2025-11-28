@@ -1562,6 +1562,23 @@ async def run_program():
         try:
             logging.info("Richte Logging ein...")
             await setup_logging(session, state)
+
+            # API Setup und Start
+            logging.info("Initialisiere API...")
+            control_funcs = {
+                "set_kompressor": set_kompressor_status
+            }
+            init_api(state, control_funcs)
+            
+            # Uvicorn Server konfigurieren
+            # log_config=None verhindert, dass Uvicorn das Logging komplett übernimmt/überschreibt
+            uvicorn_config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info", log_config=None)
+            server = uvicorn.Server(uvicorn_config)
+            
+            # API-Server als Hintergrund-Task starten und im State speichern
+            state.api_task = asyncio.create_task(server.serve())
+            logging.info("API-Server gestartet (Port 8000)")
+
             logging.info("Starte main_loop...")
             await main_loop(config, state, session)
         except KeyboardInterrupt:
@@ -1585,6 +1602,17 @@ async def run_program():
                 if isinstance(handler, TelegramHandler):
                     await handler.process_queue()
                     handler.close()
+            
+            # API-Server beenden
+            if hasattr(state, 'api_task') and state.api_task:
+                logging.info("Beende API-Server...")
+                state.api_task.cancel()
+                try:
+                    await state.api_task
+                except asyncio.CancelledError:
+                    pass
+                logging.info("API-Server beendet.")
+
             await shutdown(session, state)
 
 
