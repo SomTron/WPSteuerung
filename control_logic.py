@@ -113,12 +113,12 @@ async def handle_critical_compressor_error(session, state, error_context: str):
         error_context: Beschreibung des Fehlerkontexts (z.B. "trotz Übertemperatur")
     """
     logging.critical(f"Kritischer Fehler: Kompressor konnte {error_context} nicht ausgeschaltet werden!")
-    await send_telegram_message(
+    asyncio.create_task(send_telegram_message(
         session, state.chat_id,
         f"🚨 KRITISCHER FEHLER: Kompressor bleibt {error_context} eingeschaltet!",
         state.bot_token,
         parse_mode=None
-    )
+    ))
 
 def get_validated_reduction(config, section: str, key: str, default: float = 0.0) -> float:
     """
@@ -173,11 +173,11 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
         if check_log_throttle(state, "last_sensor_error_time"):
             error_msg = ", ".join(errors)
             logging.error(f"Sensorfehler: {error_msg}")
-            await send_telegram_message(
+            asyncio.create_task(send_telegram_message(
                 session, state.chat_id,
                 f"⚠️ Sensorfehler: {error_msg}",
                 state.bot_token
-            )
+            ))
         return False
     state.last_sensor_error_time = None
     return True
@@ -212,12 +212,12 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
                 logging.info(f"Kompressor ausgeschaltet (Sicherheitsabschaltung). Laufzeit: {state.last_runtime}")
             else:
                 await handle_critical_compressor_error(session, state, "trotz Übertemperatur")
-        await send_telegram_message(
+        asyncio.create_task(send_telegram_message(
             session, state.chat_id,
             f"⚠️ Sicherheitsabschaltung: T_Oben={t_oben:.1f} Grad, T_Unten={t_unten:.1f} Grad >= {state.sicherheits_temp} Grad",
             state.bot_token,
             parse_mode=None
-        )
+        ))
         return False
 
     # Prüfe Verdampfertemperatur mit robuster Validierung
@@ -233,12 +233,12 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         # Throttle Logging um Spam und Watchdog-Timeouts zu vermeiden
         if check_log_throttle(state, "last_verdampfer_notification"):
             logging.warning(state.ausschluss_grund)
-            await send_telegram_message(
+            asyncio.create_task(send_telegram_message(
                 session, state.chat_id,
                 f"⚠️ Kompressor bleibt aus oder wird ausgeschaltet: {state.ausschluss_grund}",
                 state.bot_token,
                 parse_mode=None
-            )
+            ))
         else:
             # Debug-Level für wiederholte Meldungen
             logging.debug(state.ausschluss_grund)
@@ -459,12 +459,12 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             reason = f"Zu kurze Pause ({pause_remaining.total_seconds():.1f}s verbleibend)"
             if check_log_throttle(state, "last_pause_log"):
                 logging.info(f"Kompressor START VERHINDERT: {reason}")
-                await send_telegram_message(
+                asyncio.create_task(send_telegram_message(
                     session, state.chat_id,
                     f"⚠️ Kompressor bleibt aus: {reason}...",
                     state.bot_token,
                     parse_mode=None
-                )
+                ))
                 state.last_pause_telegram_notification = now
                 state.current_pause_reason = reason
             state.ausschluss_grund = reason
