@@ -74,7 +74,8 @@ function Pull-Branch {
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "`nBranch '$selectedBranch' erfolgreich aktualisiert!" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "`nFehler beim Aktualisieren!" -ForegroundColor Red
     }
 }
@@ -118,20 +119,24 @@ function Push-Branch {
     Write-Host "`nAktueller Branch: $currentBranch" -ForegroundColor Yellow
     
     $branches = Get-LocalBranches
-    Write-Host "`nZu welchem Branch moechtest du pushen?" -ForegroundColor Cyan
+    Write-Host "`nZu welchem/welchen Branch(es) moechtest du pushen?" -ForegroundColor Cyan
     Write-Host "1. Gleicher Branch ($currentBranch)" -ForegroundColor Green
-    Write-Host "2. Anderen Branch waehlen"
+    Write-Host "2. Einen anderen Branch waehlen"
+    Write-Host "3. Mehrere Branches waehlen (z.B. master + android-api)" -ForegroundColor Yellow
     Write-Host "0. Abbrechen" -ForegroundColor Red
     
-    $choice = Read-Host "`nWaehle (0-2)"
+    $choice = Read-Host "`nWaehle (0-3)"
     
-    $targetBranch = $currentBranch
+    $targetBranches = @()
     
-    if ($choice -eq "2") {
+    if ($choice -eq "1") {
+        $targetBranches = @($currentBranch)
+    }
+    elseif ($choice -eq "2") {
         $targetBranch = Show-Menu -Title "Ziel-Branch waehlen" -Options $branches
         if ($targetBranch -eq $null) { return }
         
-        # Wenn anderer Branch, erst mergen/cherry-pick?
+        # Wenn anderer Branch, Warnung
         if ($targetBranch -ne $currentBranch) {
             Write-Host "`nWARNUNG: Du pushst zu einem anderen Branch!" -ForegroundColor Yellow
             $confirm = Read-Host "Moechtest du zu '$targetBranch' pushen? (j/n)"
@@ -140,20 +145,73 @@ function Push-Branch {
                 return
             }
         }
-    } elseif ($choice -eq "0") {
+        $targetBranches = @($targetBranch)
+    }
+    elseif ($choice -eq "3") {
+        # Multi-select
+        Write-Host "`nWaehle Branches (mit Komma getrennt, z.B. 1,2,3):" -ForegroundColor Cyan
+        for ($i = 0; $i -lt $branches.Length; $i++) {
+            Write-Host "$($i + 1). $($branches[$i])"
+        }
+        
+        $selections = Read-Host "`nNummern eingeben (z.B. 1,3)"
+        $numbers = $selections -split "," | ForEach-Object { $_.Trim() }
+        
+        foreach ($num in $numbers) {
+            $index = [int]$num - 1
+            if ($index -ge 0 -and $index -lt $branches.Length) {
+                $targetBranches += $branches[$index]
+            }
+        }
+        
+        if ($targetBranches.Count -eq 0) {
+            Write-Host "Keine gueltigen Branches gewaehlt!" -ForegroundColor Red
+            return
+        }
+        
+        Write-Host "`nPushe zu folgenden Branches:" -ForegroundColor Yellow
+        $targetBranches | ForEach-Object { Write-Host "  - $_" }
+        
+        $confirm = Read-Host "`nFortfahren? (j/n)"
+        if ($confirm -ne "j" -and $confirm -ne "J") {
+            Write-Host "Abgebrochen." -ForegroundColor Red
+            return
+        }
+    }
+    elseif ($choice -eq "0") {
         Write-Host "Abgebrochen." -ForegroundColor Yellow
         return
     }
-    
-    # Push
-    Write-Host "`nPushe zu GitHub (origin/$targetBranch)..." -ForegroundColor Cyan
-    git push origin HEAD:$targetBranch
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "`nErfolgreich zu '$targetBranch' gepusht!" -ForegroundColor Green
-    } else {
-        Write-Host "`nFehler beim Pushen!" -ForegroundColor Red
+    else {
+        Write-Host "Ungueltige Auswahl!" -ForegroundColor Red
+        return
     }
+    
+    # Push zu allen ausgewaehlten Branches
+    $successCount = 0
+    $failCount = 0
+    
+    foreach ($branch in $targetBranches) {
+        Write-Host "`nPushe zu GitHub (origin/$branch)..." -ForegroundColor Cyan
+        git push origin HEAD:$branch
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Erfolgreich zu '$branch' gepusht!" -ForegroundColor Green
+            $successCount++
+        }
+        else {
+            Write-Host "Fehler beim Pushen zu '$branch'!" -ForegroundColor Red
+            $failCount++
+        }
+    }
+    
+    # Zusammenfassung
+    Write-Host "`n=== Zusammenfassung ===" -ForegroundColor Cyan
+    Write-Host "Erfolgreich: $successCount" -ForegroundColor Green
+    if ($failCount -gt 0) {
+        Write-Host "Fehlgeschlagen: $failCount" -ForegroundColor Red
+    }
+
 }
 
 function Show-MainMenu {
@@ -205,14 +263,17 @@ try {
     # Wenn Parameter uebergeben wurden
     if ($Pull) {
         Pull-Branch
-    } elseif ($Push) {
+    }
+    elseif ($Push) {
         Push-Branch
-    } else {
+    }
+    else {
         # Interaktiver Modus
         Show-MainMenu
     }
     
-} catch {
+}
+catch {
     Write-Host "`nFehler: $_" -ForegroundColor Red
     exit 1
 }
