@@ -346,18 +346,18 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         regelfuehler = t_unten
     elif within_uebergangsmodus:
         modus = "Übergangsmodus"
-        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
-        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
+        ausschaltpunkt = state.basis_ausschaltpunkt - total_reduction
+        einschaltpunkt = state.basis_einschaltpunkt - total_reduction
         regelfuehler = t_mittig
     elif is_night:
         modus = "Nachtmodus"
-        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
-        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
+        ausschaltpunkt = state.basis_ausschaltpunkt - total_reduction
+        einschaltpunkt = state.basis_einschaltpunkt - total_reduction
         regelfuehler = t_mittig
     else:
         modus = "Normalmodus"
-        ausschaltpunkt = state.aktueller_ausschaltpunkt - total_reduction
-        einschaltpunkt = state.aktueller_einschaltpunkt - total_reduction
+        ausschaltpunkt = state.basis_ausschaltpunkt - total_reduction
+        einschaltpunkt = state.basis_einschaltpunkt - total_reduction
         regelfuehler = t_mittig
 
     if state.previous_modus != modus:
@@ -367,7 +367,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     # DEBUG LOGGING für Config-Werte
     logging.debug(
         f"Modus-Ermittlung: {modus} | "
-        f"Basis-Werte (State): Ein={state.aktueller_einschaltpunkt}, Aus={state.aktueller_ausschaltpunkt} | "
+        f"Basis-Werte (State): Ein={state.basis_einschaltpunkt}, Aus={state.basis_ausschaltpunkt} | "
         f"Erhöht-Werte (State): Ein={state.einschaltpunkt_erhoeht}, Aus={state.ausschaltpunkt_erhoeht} | "
         f"Reduktion: Nacht={nacht_reduction}, Urlaub={urlaubs_reduction}, Total={total_reduction} | "
         f"Ergebnis: Ein={einschaltpunkt}, Aus={ausschaltpunkt}, Fühler={regelfuehler}"
