@@ -232,16 +232,19 @@ class State:
             self.nachtabsenkung_ende = time(8, 0)
 
         # --- Schwellwerte ---
-        self.aktueller_ausschaltpunkt = get_config_value(config, "Heizungssteuerung", "AUSSCHALTPUNKT", 45, int)
-        self.aktueller_einschaltpunkt = get_config_value(config, "Heizungssteuerung", "EINSCHALTPUNKT", 42, int)
+        self.basis_ausschaltpunkt = get_config_value(config, "Heizungssteuerung", "AUSSCHALTPUNKT", 45, int)
+        self.basis_einschaltpunkt = get_config_value(config, "Heizungssteuerung", "EINSCHALTPUNKT", 42, int)
         min_hysteresis = get_config_value(config, "Heizungssteuerung", "TEMP_OFFSET", 3, int)
         
-        if self.aktueller_ausschaltpunkt <= self.aktueller_einschaltpunkt:
+        if self.basis_ausschaltpunkt <= self.basis_einschaltpunkt:
             logging.warning(
-                f"Ausschaltpunkt ({self.aktueller_ausschaltpunkt}°C) <= Einschaltpunkt ({self.aktueller_einschaltpunkt}°C), "
+                f"Ausschaltpunkt ({self.basis_ausschaltpunkt}°C) <= Einschaltpunkt ({self.basis_einschaltpunkt}°C), "
                 f"setze Ausschaltpunkt auf Einschaltpunkt + {min_hysteresis}°C"
             )
-            self.aktueller_ausschaltpunkt = self.aktueller_einschaltpunkt + min_hysteresis
+            self.basis_ausschaltpunkt = self.basis_einschaltpunkt + min_hysteresis
+
+        self.aktueller_ausschaltpunkt = self.basis_ausschaltpunkt
+        self.aktueller_einschaltpunkt = self.basis_einschaltpunkt
 
         self.previous_ausschaltpunkt = self.aktueller_ausschaltpunkt
         self.previous_einschaltpunkt = self.aktueller_einschaltpunkt
@@ -1176,13 +1179,17 @@ async def reload_config(session, state):
 
         # --- Heizungsparameter ---
         # Verwende get_config_value für konsistentes Verhalten und Logging
-        state.aktueller_ausschaltpunkt = get_config_value(new_config, "Heizungssteuerung", "AUSSCHALTPUNKT", 45, int)
-        state.aktueller_einschaltpunkt = get_config_value(new_config, "Heizungssteuerung", "EINSCHALTPUNKT", 42, int)
+        state.basis_ausschaltpunkt = get_config_value(new_config, "Heizungssteuerung", "AUSSCHALTPUNKT", 45, int)
+        state.basis_einschaltpunkt = get_config_value(new_config, "Heizungssteuerung", "EINSCHALTPUNKT", 42, int)
         
         # Plausibilitätsprüfung
-        if state.aktueller_einschaltpunkt >= state.aktueller_ausschaltpunkt:
-            logging.warning(f"EINSCHALTPUNKT ({state.aktueller_einschaltpunkt}) >= AUSSCHALTPUNKT ({state.aktueller_ausschaltpunkt}). Korrigiere...")
-            state.aktueller_ausschaltpunkt = state.aktueller_einschaltpunkt + 3
+        if state.basis_einschaltpunkt >= state.basis_ausschaltpunkt:
+            logging.warning(f"EINSCHALTPUNKT ({state.basis_einschaltpunkt}) >= AUSSCHALTPUNKT ({state.basis_ausschaltpunkt}). Korrigiere...")
+            state.basis_ausschaltpunkt = state.basis_einschaltpunkt + 3
+            
+        # Aktualisiere aktuelle Werte (werden im nächsten Loop-Durchlauf eh neu berechnet, aber sicherheitshalber)
+        state.aktueller_ausschaltpunkt = state.basis_ausschaltpunkt
+        state.aktueller_einschaltpunkt = state.basis_einschaltpunkt
 
         # --- Erhöhte Sollwerte ---
         state.einschaltpunkt_erhoeht = get_config_value(new_config, "Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42, int)
@@ -1218,7 +1225,7 @@ async def reload_config(session, state):
 
         # --- Abschluss ---
         state.last_config_hash = current_hash
-        logging.info(f"Konfiguration erfolgreich neu geladen. Normal: {state.aktueller_einschaltpunkt}/{state.aktueller_ausschaltpunkt}, Erhöht: {state.einschaltpunkt_erhoeht}/{state.ausschaltpunkt_erhoeht}")
+        logging.info(f"Konfiguration erfolgreich neu geladen. Normal: {state.basis_einschaltpunkt}/{state.basis_ausschaltpunkt}, Erhöht: {state.einschaltpunkt_erhoeht}/{state.ausschaltpunkt_erhoeht}")
 
     except Exception as e:
         logging.error(f"Fehler beim Neuladen der Konfiguration: {e}", exc_info=True)

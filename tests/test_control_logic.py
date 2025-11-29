@@ -43,6 +43,8 @@ def mock_state():
     
     state.aktueller_ausschaltpunkt = 50
     state.aktueller_einschaltpunkt = 40
+    state.basis_ausschaltpunkt = 50
+    state.basis_einschaltpunkt = 40
     state.ausschaltpunkt_erhoeht = 55
     state.einschaltpunkt_erhoeht = 45
     
