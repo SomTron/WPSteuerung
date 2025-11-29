@@ -47,6 +47,8 @@ def create_mock_state(config):
     # Parse values from config
     state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 50))
     state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 40))
+    state.basis_ausschaltpunkt = state.aktueller_ausschaltpunkt
+    state.basis_einschaltpunkt = state.aktueller_einschaltpunkt
     state.ausschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
     state.einschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 45))
     state.sicherheits_temp = float(config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 60.0))
