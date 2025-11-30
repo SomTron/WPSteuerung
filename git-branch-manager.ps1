@@ -256,6 +256,92 @@ function Push-Branch {
     }
     
     # Push zu allen ausgewaehlten Branches
+    $successCount = 0
+    $failCount = 0
+    
+    foreach ($branch in $targetBranches) {
+        Write-Host "`nPushe zu GitHub (origin/$branch)..." -ForegroundColor Cyan
+        
+        # Capture output to detect errors
+        $pushOutput = git push origin HEAD:$branch 2>&1 | Out-String
+        Write-Host $pushOutput
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Erfolgreich zu '$branch' gepusht!" -ForegroundColor Green
+            $successCount++
+        }
+        else {
+            Write-Host "Fehler beim Pushen zu '$branch'!" -ForegroundColor Red
+            
+            # Check for non-fast-forward
+            if ($pushOutput -match "non-fast-forward" -or $pushOutput -match "fetch first" -or $pushOutput -match "rejected") {
+                Write-Host "`nDer Remote-Branch '$branch' hat Aenderungen, die du nicht hast." -ForegroundColor Yellow
+                
+                if ($branch -ne $currentBranch) {
+                    $autoMerge = Read-Host "Moechtest du automatisch mergen? (Checkout $branch -> Merge $currentBranch -> Push -> Checkout back) (j/n)"
+                    if ($autoMerge -eq "j") {
+                        Write-Host "Versuche automatischen Merge..." -ForegroundColor Cyan
+                         
+                        # 1. Checkout target branch
+                        git checkout $branch
+                        if ($LASTEXITCODE -ne 0) { 
+                            Write-Host "Konnte nicht zu $branch wechseln. Versuche ihn lokal zu erstellen..."
+                            git checkout -b $branch origin/$branch
+                            if ($LASTEXITCODE -ne 0) { Write-Host "Fehler beim Checkout."; $failCount++; continue }
+                        }
+                         
+                        # 2. Pull remote changes
+                        git pull origin $branch
+                         
+                        # 3. Merge original branch
+                        git merge $currentBranch
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "MERGE KONFLIKT! Bitte manuell loesen." -ForegroundColor Red
+                            git merge --abort
+                            git checkout $currentBranch
+                            $failCount++
+                            continue
+                        }
+                         
+                        # 4. Push
+                        git push origin $branch
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Host "Erfolgreich gemerged und gepusht!" -ForegroundColor Green
+                            $successCount++
+                        }
+                        else {
+                            Write-Host "Push nach Merge immer noch fehlgeschlagen." -ForegroundColor Red
+                            $failCount++
+                        }
+                         
+                        # 5. Switch back
+                        git checkout $currentBranch
+                        continue
+                    }
+                }
+                else {
+                    # Same branch push failed
+                    $doPull = Read-Host "Moechtest du 'git pull --rebase' ausfuehren und nochmal pushen? (j/n)"
+                    if ($doPull -eq "j") {
+                        git pull origin $branch --rebase
+                        if ($LASTEXITCODE -eq 0) {
+                            git push origin HEAD:$branch
+                            if ($LASTEXITCODE -eq 0) {
+                                Write-Host "Erfolgreich gepusht!" -ForegroundColor Green
+                                $successCount++
+                                continue
+                            }
+                        }
+                    }
+                }
+            }
+            $failCount++
+        }
+    }
+    
+    # Zusammenfassung
+    Write-Host "`n=== Zusammenfassung ===" -ForegroundColor Cyan
+    Write-Host "Erfolgreich: $successCount" -ForegroundColor Green
     if ($failCount -gt 0) {
         Write-Host "Fehlgeschlagen: $failCount" -ForegroundColor Red
     }
