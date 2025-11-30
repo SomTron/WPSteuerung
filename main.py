@@ -1618,7 +1618,57 @@ async def main_loop(config, state, session):
         await shutdown(session, state)
 
 
+# --- API Integration ---
+from fastapi import FastAPI
+import uvicorn
+
+app = FastAPI()
+api_state = None  # Global reference to state for API access
+
+@app.get("/status")
+def get_status():
+    """Gibt den aktuellen Status der Wärmepumpe zurück."""
+    if not api_state:
+        return {"error": "System not initialized"}
+    
+    # Temperaturen sicher lesen (können None sein)
+    t_oben = api_state.last_sensor_readings.get("oben")
+    t_mittig = api_state.last_sensor_readings.get("mittig")
+    t_unten = api_state.last_sensor_readings.get("unten")
+    t_verd = api_state.last_sensor_readings.get("verd")
+
+    return {
+        "temperatures": {
+            "oben": t_oben,
+            "mittig": t_mittig,
+            "unten": t_unten,
+            "verdampfer": t_verd
+        },
+        "compressor": "EIN" if api_state.kompressor_ein else "AUS",
+        "power_source": api_state.power_source,
+        "current_runtime": str(api_state.current_runtime).split('.')[0] if api_state.kompressor_ein else None,
+        "last_runtime": str(api_state.last_runtime).split('.')[0] if not api_state.kompressor_ein else None,
+        "total_runtime_today": str(api_state.total_runtime_today).split('.')[0],
+        "mode": {
+            "solar_excess": api_state.solar_ueberschuss_aktiv,
+            "night_reduction": api_state.nacht_reduction,
+            "setpoints": {
+                "on": api_state.aktueller_einschaltpunkt,
+                "off": api_state.aktueller_ausschaltpunkt
+            }
+        }
+    }
+
+async def run_api_server():
+    """Startet den Uvicorn-Server für die API."""
+    config = uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+# --- Main Program ---
+
 async def run_program():
+    global api_state
     async with aiohttp.ClientSession() as session:
         config = configparser.ConfigParser()
         try:
@@ -1632,6 +1682,7 @@ async def run_program():
 
         state = State(config)
         state.session = session
+        api_state = state  # Set global reference for API
         logging.info("State-Objekt initialisiert")
 
         # CSV-Initialisierung
@@ -1649,8 +1700,17 @@ async def run_program():
         try:
             logging.info("Richte Logging ein...")
             await setup_logging(session, state)
+            
+            # Start API Server as background task
+            logging.info("Starte API-Server...")
+            api_task = asyncio.create_task(run_api_server())
+            
             logging.info("Starte main_loop...")
-            await main_loop(config, state, session)
+            await asyncio.gather(
+                main_loop(config, state, session),
+                api_task
+            )
+            
         except KeyboardInterrupt:
             logging.info("Programm durch Benutzer abgebrochen (Ctrl+C).")
         except asyncio.CancelledError:
