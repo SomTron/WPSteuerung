@@ -131,14 +131,14 @@ def get_validated_reduction(config, section: str, key: str, default: float = 0.0
         default: Der Standardwert, falls der Schlüssel nicht existiert oder ungültig ist
         
     Returns:
-        float: Der validierte Reduktionswert (0-20°C) oder der Standardwert
+        float: Der validierte Reduktionswert (0-35°C) oder der Standardwert
     """
     try:
         value = config[section].get(key, str(default))
         reduction = float(value)
-        # Validierung: Absenkung sollte zwischen 0 und 20 Grad liegen
-        if reduction < 0 or reduction > 20:
-            logging.warning(f"{key} ({reduction}) außerhalb des gültigen Bereichs (0-20°C), setze auf {default}")
+        # Validierung: Absenkung sollte zwischen 0 und 2 Grad liegen
+        if reduction < 0 or reduction > 35:
+            logging.warning(f"{key} ({reduction}) außerhalb des gültigen Bereichs (0-35°C), setze auf {default}")
             return default
         return reduction
     except (ValueError, TypeError) as e:
