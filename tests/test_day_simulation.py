@@ -258,7 +258,7 @@ async def test_scenarios():
         (8, 0, 35, 30, 0, 50, "Übergangsmodus START - KEIN Solar -> MUSS AUS bleiben!"),
         (8, 1, 35, 30, 0, 50, "Immer noch kein Solar -> MUSS AUS bleiben!"),
         (8, 5, 35, 30, 800, 96, "Solar aktiv -> DARF AN"),
-        (8, 10, 35, 30, 200, 50, "Solar weg -> MUSS AUS"),
+        (8, 16, 35, 30, 200, 50, "Solar weg (nach Min-Laufzeit) -> MUSS AUS"),
         (9, 0, 35, 30, 1000, 97, "Solar wieder da -> DARF AN"),
         (10, 0, 50, 46, 1000, 97, "Nach Übergangsmodus (Normal) -> Temperatur erreicht -> AUS"),
         (10, 15, 35, 30, 0, 50, "Normalmodus, keine Temp-Bedingung -> AUS"),
@@ -352,8 +352,13 @@ async def test_scenarios():
             has_solar = bat_power > 600 or (soc >= 95 and 0 > 600)
             
             # If in transition mode and temp < setpoint and NO solar excess -> compressor MUST be OFF
+            # BUT: Respect MIN_LAUFZEIT - if compressor just started, it must continue running
+            time_since_on = (current_sim_time - mock_state.last_compressor_on_time).total_seconds() / 60
+            min_runtime_minutes = int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])
+            
             if is_transition and t_mittig < setpoints['einschaltpunkt'] and not has_solar:
-                if mock_state.kompressor_ein:
+                # Only assert if minimum runtime has passed
+                if mock_state.kompressor_ein and time_since_on > min_runtime_minutes:
                     error_msg = (f"\n\n*** BUG DETECTED! ***\n"
                                 f"Zeit: {t}\n"
                                 f"Übergangsmodus: Ja\n"
