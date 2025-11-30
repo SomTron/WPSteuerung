@@ -9,3 +9,6 @@ python-telegram-bot
 fastapi
 uvicorn[standard]
 pydantic
+smbus2
+RPLCD
+RPi.GPIO
