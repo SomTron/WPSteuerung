@@ -250,6 +250,138 @@ async def test_scenarios():
         (8, 27, 34, 30, 0, 50, "Temp < Einschalt -> AN (Pause > 10 min)"),
     ]
     await run_simulation_scenario("4. Mindestlaufzeit & Pause", steps_4, config)
+    
+    # Scenario 5: Transition Mode Edge Cases (CRITICAL - catches the cached solar_window bug!)
+    steps_5 = [
+        # Morning Transition - Start at 08:00 exactly
+        (7, 59, 35, 30, 0, 50, "Vor Übergangsmodus (Nacht)"),
+        (8, 0, 35, 30, 0, 50, "Übergangsmodus START - KEIN Solar -> MUSS AUS bleiben!"),
+        (8, 1, 35, 30, 0, 50, "Immer noch kein Solar -> MUSS AUS bleiben!"),
+        (8, 5, 35, 30, 800, 96, "Solar aktiv -> DARF AN"),
+        (8, 10, 35, 30, 200, 50, "Solar weg -> MUSS AUS"),
+        (9, 0, 35, 30, 1000, 97, "Solar wieder da -> DARF AN"),
+        (10, 0, 50, 46, 1000, 97, "Nach Übergangsmodus (Normal) -> Temperatur erreicht -> AUS"),
+        (10, 15, 35, 30, 0, 50, "Normalmodus, keine Temp-Bedingung -> AUS"),
+        # Evening Transition - Start at 18:00 exactly  
+        (17, 59, 35, 30, 0, 50, "Vor Abend-Übergangsmodus"),
+        (18, 0, 35, 30, 0, 50, "Abend-Übergangsmodus START - KEIN Solar -> MUSS AUS!"),
+        (18, 1, 35, 30, 700, 96, "Solar aktiv -> DARF AN"),
+        (18, 30, 50, 46, 700, 96, "Temperatur erreicht -> AUS"),
+        (19, 30, 35, 30, 0, 50, "Nachtmodus -> Temperatur < Einschalt -> DARF AN (Nachtmodus erlaubt ohne Solar)"),
+    ]
+    
+    print("\n\n=== SZENARIO: 5. Übergangsmodus Edge Cases (Bug-Catching) ===")
+    print(f"{'UHRZEIT':<10} | {'MODUS':<20} | {'TEMP (O/M/U)':<12} | {'REGEL':<6} | {'EIN':<4} | {'AUS':<4} | {'VERD':<6} | {'SOLAR':<8} | {'KOMPRESSOR':<10} | {'INFO'}")
+    print("-" * 140)
+    
+    mock_state = create_mock_state(config)
+    start_date = datetime(2024, 6, 15, 0, 0, 0)
+    local_tz = pytz.timezone("Europe/Berlin")
+    
+    async def mock_set_kompressor(state, status, force=False, t_boiler_oben=None):
+        state.kompressor_ein = status
+        if status:
+            state.last_compressor_on_time = datetime.now(state.local_tz)
+        else:
+            state.last_compressor_off_time = datetime.now(state.local_tz)
+        return True
+        
+    async def mock_send_telegram(session, chat_id, message, token, parse_mode=None):
+        pass
+    
+    with patch('control_logic.datetime') as mock_dt, \
+         patch('control_logic.is_nighttime') as mock_is_night, \
+         patch('control_logic.is_solar_window') as mock_is_solar, \
+         patch('control_logic.send_telegram_message', side_effect=mock_send_telegram):
+        
+        mock_dt.now.side_effect = lambda tz=None: current_sim_time.replace(tzinfo=tz if tz else None)
+        
+        def update_mocks(sim_time):
+            t = sim_time.time()
+            night_start = datetime.strptime(
+                config["Heizungssteuerung"].get("NACHTABSENKUNG_START", "22:00"), "%H:%M").time()
+            night_end = datetime.strptime(
+                config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00"), "%H:%M").time()
+            
+            if night_start <= night_end:
+                is_night = night_start <= t <= night_end
+            else:
+                is_night = night_start <= t or t <= night_end
+            
+            mock_is_night.return_value = is_night
+            is_solar = (t >= time(8,0) and t < time(18,0))
+            mock_is_solar.return_value = is_solar
+        
+        for step in steps_5:
+            hour, minute, t_mittig, t_unten, bat_power, soc, desc = step[:7]
+            t_oben = step[7] if len(step) > 7 else t_mittig 
+            t_verd = step[8] if len(step) > 8 else 10.0
+            
+            current_sim_time = start_date.replace(hour=hour, minute=minute)
+            current_sim_time = local_tz.localize(current_sim_time)
+            update_mocks(current_sim_time)
+            
+            mock_state.batpower = bat_power
+            mock_state.soc = soc
+            mock_state.feedinpower = 0
+            
+            setpoints = await determine_mode_and_setpoints(mock_state, t_unten, t_mittig)
+            
+            safety_ok = await check_sensors_and_safety(
+                None, mock_state, t_oben=t_oben, t_unten=t_unten, t_mittig=t_mittig, t_verd=t_verd, 
+                set_kompressor_status_func=mock_set_kompressor
+            )
+            
+            if safety_ok:
+                if mock_state.kompressor_ein:
+                    await handle_compressor_off(
+                        mock_state, None, setpoints['regelfuehler'], setpoints['ausschaltpunkt'], 
+                        timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])), t_oben, mock_set_kompressor
+                    )
+                else:
+                    await handle_compressor_on(
+                        mock_state, None, setpoints['regelfuehler'], setpoints['einschaltpunkt'], 
+                        timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"])), 
+                        timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"])), 
+                        mock_is_solar.return_value, t_oben, mock_set_kompressor
+                    )
+            
+            # CRITICAL ASSERTIONS - Detect the bug!
+            t = current_sim_time.time()
+            is_transition = ((time(8,0) <= t <= time(10,0)) or (time(18,0) <= t <= time(19,30)))
+            has_solar = bat_power > 600 or (soc >= 95 and 0 > 600)
+            
+            # If in transition mode and temp < setpoint and NO solar excess -> compressor MUST be OFF
+            if is_transition and t_mittig < setpoints['einschaltpunkt'] and not has_solar:
+                if mock_state.kompressor_ein:
+                    error_msg = (f"\n\n*** BUG DETECTED! ***\n"
+                                f"Zeit: {t}\n"
+                                f"Übergangsmodus: Ja\n"
+                                f"Temperatur: {t_mittig} < {setpoints['einschaltpunkt']} (würde einschalten)\n"
+                                f"Solar: {bat_power}W (KEIN Überschuss!)\n"
+                                f"Kompressor: AN (SOLLTE AUS SEIN!)\n")
+                    print(error_msg)
+                    raise AssertionError(error_msg)
+            
+            time_str = current_sim_time.strftime("%H:%M")
+            comp_str = "AN" if mock_state.kompressor_ein else "AUS"
+            solar_str = f"{bat_power}W" if bat_power is not None else "N/A"
+            temp_str = f"{t_oben}/{t_mittig}/{t_unten}"
+            verd_str = f"{t_verd}"
+            regel_str = f"{setpoints['regelfuehler']}"
+            ein_str = f"{setpoints['einschaltpunkt']}"
+            aus_str = f"{setpoints['ausschaltpunkt']}"
+            
+            # Extra validation info
+            validation_suffix = ""
+            if is_transition and not has_solar and t_mittig < setpoints['einschaltpunkt']:
+                if not mock_state.kompressor_ein:
+                    validation_suffix = " [KORREKT: AUS trotz Temp-Bed.]"
+            
+            print(f"{time_str:<10} | {setpoints['modus']:<20} | {temp_str:<12} | {regel_str:<6} | {ein_str:<4} | {aus_str:<4} | {verd_str:<6} | {solar_str:<8} | {comp_str:<10} | {desc}{validation_suffix}")
+    
+    print("-" * 140)
+    print("\n=== TEST BESTANDEN! Kein Fehler gefunden. ===")
 
 if __name__ == "__main__":
     try:

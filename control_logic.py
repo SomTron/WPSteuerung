@@ -438,7 +438,11 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
         logging.debug(state.ausschluss_grund)
     state.previous_temp_conditions = temp_conditions_met
 
-    solar_conditions_met = not (not state.bademodus_aktiv and within_solar_window and not state.solar_ueberschuss_aktiv)
+    # Prüfe ob wir im Übergangsmodus sind (nicht gecachten within_solar_window nutzen!)
+    within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
+    
+    # Im Übergangsmodus nur heizen wenn Solarüberschuss aktiv ist (außer Bademodus)
+    solar_conditions_met = not (not state.bademodus_aktiv and within_uebergangsmodus and not state.solar_ueberschuss_aktiv)
     if not solar_conditions_met and check_log_throttle(state, "last_no_start_log"):
         state.ausschluss_grund = (
             f"[{state.previous_modus}] Kein Einschalten im Übergangsmodus: Solarüberschuss nicht aktiv "
