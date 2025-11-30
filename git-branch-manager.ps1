@@ -256,26 +256,6 @@ function Push-Branch {
     }
     
     # Push zu allen ausgewaehlten Branches
-    $successCount = 0
-    $failCount = 0
-    
-    foreach ($branch in $targetBranches) {
-        Write-Host "`nPushe zu GitHub (origin/$branch)..." -ForegroundColor Cyan
-        git push origin HEAD:$branch
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Erfolgreich zu '$branch' gepusht!" -ForegroundColor Green
-            $successCount++
-        }
-        else {
-            Write-Host "Fehler beim Pushen zu '$branch'!" -ForegroundColor Red
-            $failCount++
-        }
-    }
-    
-    # Zusammenfassung
-    Write-Host "`n=== Zusammenfassung ===" -ForegroundColor Cyan
-    Write-Host "Erfolgreich: $successCount" -ForegroundColor Green
     if ($failCount -gt 0) {
         Write-Host "Fehlgeschlagen: $failCount" -ForegroundColor Red
     }
