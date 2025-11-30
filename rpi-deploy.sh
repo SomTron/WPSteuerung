@@ -12,7 +12,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Konfiguration
-REPO_DIR="/home/pi/WPSteuerung/WPSteuerung"
+REPO_DIR="/home/patrik/WPSteuerung"
 SERVICE_NAME="wpsteuerung"  # Anpassen an deinen Service-Namen
 
 echo -e "${CYAN}=========================================${NC}"
