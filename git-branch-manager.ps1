@@ -83,9 +83,8 @@ function Pull-Branch {
 function Push-Branch {
     Write-Host "`n--- Aenderungen zu GitHub pushen ---" -ForegroundColor Green
     
-    # Status anzeigen
+    # Status mit Farben anzeigen
     Write-Host "`nGit Status:" -ForegroundColor Cyan
-    git status --short
     
     # Pruefen ob es Aenderungen gibt
     $status = git status --porcelain
@@ -94,15 +93,84 @@ function Push-Branch {
         return
     }
     
+    # Aenderungen kategorisieren
+    $modified = @()
+    $added = @()
+    $deleted = @()
+    $untracked = @()
+    
+    $status -split "`n" | ForEach-Object {
+        $line = $_.Trim()
+        if ($line) {
+            $statusCode = $line.Substring(0, 2)
+            $file = $line.Substring(3)
+            
+            if ($statusCode -match "^.D" -or $statusCode -match "^D.") {
+                $deleted += $file
+            }
+            elseif ($statusCode -match "^.M" -or $statusCode -match "^M.") {
+                $modified += $file
+            }
+            elseif ($statusCode -match "^A.") {
+                $added += $file
+            }
+            elseif ($statusCode -match "^\?\?") {
+                $untracked += $file
+            }
+        }
+    }
+    
+    # Aenderungen anzeigen
+    if ($modified.Count -gt 0) {
+        Write-Host "`nModifiziert ($($modified.Count)):" -ForegroundColor Yellow
+        $modified | ForEach-Object { Write-Host "  M $_" -ForegroundColor Yellow }
+    }
+    
+    if ($added.Count -gt 0) {
+        Write-Host "`nNeu ($($added.Count)):" -ForegroundColor Green
+        $added | ForEach-Object { Write-Host "  + $_" -ForegroundColor Green }
+    }
+    
+    if ($untracked.Count -gt 0) {
+        Write-Host "`nUntracked ($($untracked.Count)):" -ForegroundColor Cyan
+        $untracked | ForEach-Object { Write-Host "  ? $_" -ForegroundColor Cyan }
+    }
+    
+    # KRITISCH: Geloeschte Dateien hervorheben
+    if ($deleted.Count -gt 0) {
+        Write-Host "`n!!! ACHTUNG: GELOESCHTE DATEIEN ($($deleted.Count)) !!!" -ForegroundColor Red -BackgroundColor Black
+        $deleted | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+        
+        Write-Host "`nMoechtest du diese Loeschungen committen?" -ForegroundColor Yellow
+        Write-Host "1. Ja, alles committen (inkl. Loeschungen)"
+        Write-Host "2. Nein, Loeschungen nicht committen"
+        Write-Host "0. Abbrechen"
+        
+        $choice = Read-Host "`nWaehle (0-2)"
+        
+        if ($choice -eq "0") {
+            Write-Host "Abgebrochen." -ForegroundColor Yellow
+            return
+        }
+        elseif ($choice -eq "2") {
+            Write-Host "`nLoeschungen werden NICHT committed." -ForegroundColor Green
+            # Geloeschte Dateien aus Staging entfernen falls hinzugefuegt
+            $deleted | ForEach-Object {
+                git reset HEAD $_ 2>$null
+            }
+        }
+    }
+    
     # Commit Message
-    $commitMsg = Read-Host "`nCommit-Nachricht eingeben"
+    Write-Host ""
+    $commitMsg = Read-Host "Commit-Nachricht eingeben"
     if ([string]::IsNullOrWhiteSpace($commitMsg)) {
         Write-Host "Abgebrochen - keine Commit-Nachricht." -ForegroundColor Red
         return
     }
     
-    # Add all changes
-    Write-Host "`nFuege alle Aenderungen hinzu..." -ForegroundColor Cyan
+    # Add changes
+    Write-Host "`nFuege Aenderungen hinzu..." -ForegroundColor Cyan
     git add .
     
     # Commit
