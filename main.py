@@ -1631,11 +1631,11 @@ def get_status():
     if not api_state:
         return {"error": "System not initialized"}
     
-    # Temperaturen sicher lesen (können None sein)
-    t_oben = api_state.last_sensor_readings.get("oben")
-    t_mittig = api_state.last_sensor_readings.get("mittig")
-    t_unten = api_state.last_sensor_readings.get("unten")
-    t_verd = api_state.last_sensor_readings.get("verd")
+    # Temperaturen direkt aus State lesen (werden von check_sensors_and_safety gesetzt)
+    t_oben = getattr(api_state, 't_oben', None)
+    t_mittig = getattr(api_state, 't_mittig', None)
+    t_unten = getattr(api_state, 't_unten', None)
+    t_verd = getattr(api_state, 't_verd', None)
 
     return {
         "temperatures": {
@@ -1645,16 +1645,16 @@ def get_status():
             "verdampfer": t_verd
         },
         "compressor": "EIN" if api_state.kompressor_ein else "AUS",
-        "power_source": api_state.power_source,
+        "power_source": getattr(api_state, 'power_source', None),
         "current_runtime": str(api_state.current_runtime).split('.')[0] if api_state.kompressor_ein else None,
         "last_runtime": str(api_state.last_runtime).split('.')[0] if not api_state.kompressor_ein else None,
         "total_runtime_today": str(api_state.total_runtime_today).split('.')[0],
         "mode": {
             "solar_excess": api_state.solar_ueberschuss_aktiv,
-            "night_reduction": api_state.nacht_reduction,
+            "night_reduction": getattr(api_state, 'nacht_reduction', 0.0),
             "setpoints": {
-                "on": api_state.aktueller_einschaltpunkt,
-                "off": api_state.aktueller_ausschaltpunkt
+                "on": getattr(api_state, 'aktueller_einschaltpunkt', None),
+                "off": getattr(api_state, 'aktueller_ausschaltpunkt', None)
             }
         }
     }
