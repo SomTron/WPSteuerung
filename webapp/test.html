@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Test</title>
+</head>
+
+<body>
+    <h1>TEST</h1>
+    <div id="result">Warte...</div>
+    <script>
+        alert('JavaScript funktioniert!');
+
+        const API_BASE = `http://${window.location.hostname}:5000`;
+        alert('API_BASE: ' + API_BASE);
+
+        fetch(`${API_BASE}/status`)
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('result').innerHTML =
+                    '<h2>Daten empfangen!</h2>' +
+                    '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+            })
+            .catch(err => {
+                document.getElementById('result').innerHTML =
+                    '<h2 style="color: red;">FEHLER: ' + err + '</h2>';
+            });
+    </script>
+</body>
+
+</html>
