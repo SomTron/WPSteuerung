@@ -1619,12 +1619,28 @@ async def main_loop(config, state, session):
 
 
 # --- API Integration ---
-from fastapi import FastAPI
+from fastapi import FastAPI, Query, HTTPException
+from pydantic import BaseModel
+from typing import Optional, Literal
 import uvicorn
+import csv
+import os
 
 app = FastAPI()
 api_state = None  # Global reference to state for API access
 
+# --- Pydantic Models ---
+class ControlRequest(BaseModel):
+    action: Literal["bademodus", "urlaubsmodus", "reload_config"]
+    enabled: Optional[bool] = None
+    duration_hours: Optional[int] = None
+
+class ControlResponse(BaseModel):
+    success: bool
+    message: str
+    new_state: dict
+
+# --- API Endpoints ---
 @app.get("/status")
 def get_status():
     """Gibt den aktuellen Status der Wärmepumpe zurück."""
@@ -1658,6 +1674,135 @@ def get_status():
             }
         }
     }
+
+@app.get("/history")
+def get_history(hours: int = Query(default=6, ge=1, le=168), limit: int = Query(default=100, ge=1, le=1000)):
+    """
+    Gibt Temperatur- und Statusverlauf aus der CSV-Datei zurück.
+    
+    Args:
+        hours: Anzahl der Stunden (1-168 = 1 Woche)
+        limit: Maximale Anzahl Datenpunkte (1-1000)
+    """
+    csv_file = "heizungsdaten.csv"
+    
+    if not os.path.exists(csv_file):
+        raise HTTPException(status_code=404, detail="CSV-Datei nicht gefunden")
+    
+    try:
+        from datetime import datetime, timedelta
+        import pytz
+        
+        local_tz = pytz.timezone("Europe/Berlin")
+        cutoff_time = datetime.now(local_tz) - timedelta(hours=hours)
+        
+        data = []
+        with open(csv_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    # Parse timestamp
+                    ts_str = row.get('Zeitstempel', '')
+                    if not ts_str:
+                        continue
+                    
+                    ts = datetime.strptime(ts_str.split('+')[0].strip(), "%Y-%m-%d %H:%M:%S")
+                    ts = local_tz.localize(ts)
+                    
+                    # Filter by time
+                    if ts < cutoff_time:
+                        continue
+                    
+                    # Parse values
+                    data.append({
+                        "timestamp": ts.isoformat(),
+                        "temperatures": {
+                            "oben": float(row.get('T_Oben', 0)) if row.get('T_Oben') else None,
+                            "mittig": float(row.get('T_Mittig', 0)) if row.get('T_Mittig') and row.get('T_Mittig') != 'N/A' else None,
+                            "unten": float(row.get('T_Unten', 0)) if row.get('T_Unten') else None,
+                            "verdampfer": float(row.get('T_Verd', 0)) if row.get('T_Verd') else None
+                        },
+                        "compressor": row.get('Kompressor', 'AUS'),
+                        "setpoints": {
+                            "on": float(row.get('Einschaltpunkt', 0)) if row.get('Einschaltpunkt') else None,
+                            "off": float(row.get('Ausschaltpunkt', 0)) if row.get('Ausschaltpunkt') else None
+                        },
+                        "power_source": row.get('PowerSource', '')
+                    })
+                    
+                except (ValueError, KeyError) as e:
+                    # Skip malformed rows
+                    continue
+        
+        # Limit data points
+        if len(data) > limit:
+            # Sample evenly
+            step = len(data) // limit
+            data = data[::step][:limit]
+        
+        return {
+            "data": data,
+            "count": len(data)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Fehler beim Lesen der CSV: {str(e)}")
+
+@app.post("/control", response_model=ControlResponse)
+async def control_system(request: ControlRequest):
+    """
+    Steuert das System remote (Bademodus, Urlaubsmodus, Config-Reload).
+    """
+    if not api_state:
+        raise HTTPException(status_code=503, detail="System not initialized")
+    
+    try:
+        if request.action == "bademodus":
+            if request.enabled is None:
+                raise HTTPException(status_code=400, detail="'enabled' required for bademodus")
+            
+            api_state.bademodus_aktiv = request.enabled
+            message = f"Bademodus {'aktiviert' if request.enabled else 'deaktiviert'}"
+            logging.info(f"API: {message}")
+            
+        elif request.action == "urlaubsmodus":
+            if request.enabled is None:
+                raise HTTPException(status_code=400, detail="'enabled' required for urlaubsmodus")
+            
+            api_state.urlaubsmodus_aktiv = request.enabled
+            
+            if request.enabled and request.duration_hours:
+                from datetime import datetime, timedelta
+                now = datetime.now(api_state.local_tz)
+                api_state.urlaubsmodus_start = now
+                api_state.urlaubsmodus_ende = now + timedelta(hours=request.duration_hours)
+                message = f"Urlaubsmodus aktiviert für {request.duration_hours}h (bis {api_state.urlaubsmodus_ende.strftime('%d.%m. %H:%M')})"
+            else:
+                message = f"Urlaubsmodus {'aktiviert' if request.enabled else 'deaktiviert'}"
+            
+            logging.info(f"API: {message}")
+            
+        elif request.action == "reload_config":
+            # Trigger config reload by updating hash
+            api_state.last_config_hash = None
+            message = "Config-Reload getriggert (beim nächsten Zyklus)"
+            logging.info(f"API: {message}")
+        
+        return ControlResponse(
+            success=True,
+            message=message,
+            new_state={
+                "bademodus_aktiv": api_state.bademodus_aktiv,
+                "urlaubsmodus_aktiv": api_state.urlaubsmodus_aktiv,
+                "urlaubsmodus_ende": api_state.urlaubsmodus_ende.isoformat() if api_state.urlaubsmodus_ende else None
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"API Control Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def run_api_server():
     """Startet den Uvicorn-Server für die API."""
