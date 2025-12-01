@@ -28,6 +28,8 @@ from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
                               get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
 import control_logic
+from api import init_api, app
+import uvicorn
 
 
 # Basisverzeichnis für Temperatursensoren und Sensor-IDs
@@ -1618,200 +1620,6 @@ async def main_loop(config, state, session):
         await shutdown(session, state)
 
 
-# --- API Integration ---
-from fastapi import FastAPI, Query, HTTPException
-from pydantic import BaseModel
-from typing import Optional, Literal
-import uvicorn
-import csv
-import os
-
-app = FastAPI()
-api_state = None  # Global reference to state for API access
-
-# --- Pydantic Models ---
-class ControlRequest(BaseModel):
-    action: Literal["bademodus", "urlaubsmodus", "reload_config"]
-    enabled: Optional[bool] = None
-    duration_hours: Optional[int] = None
-
-class ControlResponse(BaseModel):
-    success: bool
-    message: str
-    new_state: dict
-
-# --- API Endpoints ---
-@app.get("/status")
-def get_status():
-    """Gibt den aktuellen Status der Wärmepumpe zurück."""
-    if not api_state:
-        return {"error": "System not initialized"}
-    
-    # Temperaturen direkt aus State lesen (werden von check_sensors_and_safety gesetzt)
-    t_oben = getattr(api_state, 't_oben', None)
-    t_mittig = getattr(api_state, 't_mittig', None)
-    t_unten = getattr(api_state, 't_unten', None)
-    t_verd = getattr(api_state, 't_verd', None)
-
-    return {
-        "temperatures": {
-            "oben": t_oben,
-            "mittig": t_mittig,
-            "unten": t_unten,
-            "verdampfer": t_verd
-        },
-        "compressor": "EIN" if api_state.kompressor_ein else "AUS",
-        "power_source": getattr(api_state, 'power_source', None),
-        "current_runtime": str(api_state.current_runtime).split('.')[0] if api_state.kompressor_ein else None,
-        "last_runtime": str(api_state.last_runtime).split('.')[0] if not api_state.kompressor_ein else None,
-        "total_runtime_today": str(api_state.total_runtime_today).split('.')[0],
-        "mode": {
-            "solar_excess": api_state.solar_ueberschuss_aktiv,
-            "night_reduction": getattr(api_state, 'nacht_reduction', 0.0),
-            "setpoints": {
-                "on": getattr(api_state, 'aktueller_einschaltpunkt', None),
-                "off": getattr(api_state, 'aktueller_ausschaltpunkt', None)
-            }
-        }
-    }
-
-@app.get("/history")
-def get_history(hours: int = Query(default=6, ge=1, le=168), limit: int = Query(default=100, ge=1, le=1000)):
-    """
-    Gibt Temperatur- und Statusverlauf aus der CSV-Datei zurück.
-    
-    Args:
-        hours: Anzahl der Stunden (1-168 = 1 Woche)
-        limit: Maximale Anzahl Datenpunkte (1-1000)
-    """
-    csv_file = "heizungsdaten.csv"
-    
-    if not os.path.exists(csv_file):
-        raise HTTPException(status_code=404, detail="CSV-Datei nicht gefunden")
-    
-    try:
-        from datetime import datetime, timedelta
-        import pytz
-        
-        local_tz = pytz.timezone("Europe/Berlin")
-        cutoff_time = datetime.now(local_tz) - timedelta(hours=hours)
-        
-        data = []
-        with open(csv_file, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                try:
-                    # Parse timestamp
-                    ts_str = row.get('Zeitstempel', '')
-                    if not ts_str:
-                        continue
-                    
-                    ts = datetime.strptime(ts_str.split('+')[0].strip(), "%Y-%m-%d %H:%M:%S")
-                    ts = local_tz.localize(ts)
-                    
-                    # Filter by time
-                    if ts < cutoff_time:
-                        continue
-                    
-                    # Parse values
-                    data.append({
-                        "timestamp": ts.isoformat(),
-                        "temperatures": {
-                            "oben": float(row.get('T_Oben', 0)) if row.get('T_Oben') else None,
-                            "mittig": float(row.get('T_Mittig', 0)) if row.get('T_Mittig') and row.get('T_Mittig') != 'N/A' else None,
-                            "unten": float(row.get('T_Unten', 0)) if row.get('T_Unten') else None,
-                            "verdampfer": float(row.get('T_Verd', 0)) if row.get('T_Verd') else None
-                        },
-                        "compressor": row.get('Kompressor', 'AUS'),
-                        "setpoints": {
-                            "on": float(row.get('Einschaltpunkt', 0)) if row.get('Einschaltpunkt') else None,
-                            "off": float(row.get('Ausschaltpunkt', 0)) if row.get('Ausschaltpunkt') else None
-                        },
-                        "power_source": row.get('PowerSource', '')
-                    })
-                    
-                except (ValueError, KeyError) as e:
-                    # Skip malformed rows
-                    continue
-        
-        # Limit data points
-        if len(data) > limit:
-            # Sample evenly
-            step = len(data) // limit
-            data = data[::step][:limit]
-        
-        return {
-            "data": data,
-            "count": len(data)
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Fehler beim Lesen der CSV: {str(e)}")
-
-@app.post("/control", response_model=ControlResponse)
-async def control_system(request: ControlRequest):
-    """
-    Steuert das System remote (Bademodus, Urlaubsmodus, Config-Reload).
-    """
-    if not api_state:
-        raise HTTPException(status_code=503, detail="System not initialized")
-    
-    try:
-        if request.action == "bademodus":
-            if request.enabled is None:
-                raise HTTPException(status_code=400, detail="'enabled' required for bademodus")
-            
-            api_state.bademodus_aktiv = request.enabled
-            message = f"Bademodus {'aktiviert' if request.enabled else 'deaktiviert'}"
-            logging.info(f"API: {message}")
-            
-        elif request.action == "urlaubsmodus":
-            if request.enabled is None:
-                raise HTTPException(status_code=400, detail="'enabled' required for urlaubsmodus")
-            
-            api_state.urlaubsmodus_aktiv = request.enabled
-            
-            if request.enabled and request.duration_hours:
-                from datetime import datetime, timedelta
-                now = datetime.now(api_state.local_tz)
-                api_state.urlaubsmodus_start = now
-                api_state.urlaubsmodus_ende = now + timedelta(hours=request.duration_hours)
-                message = f"Urlaubsmodus aktiviert für {request.duration_hours}h (bis {api_state.urlaubsmodus_ende.strftime('%d.%m. %H:%M')})"
-            else:
-                message = f"Urlaubsmodus {'aktiviert' if request.enabled else 'deaktiviert'}"
-            
-            logging.info(f"API: {message}")
-            
-        elif request.action == "reload_config":
-            # Trigger config reload by updating hash
-            api_state.last_config_hash = None
-            message = "Config-Reload getriggert (beim nächsten Zyklus)"
-            logging.info(f"API: {message}")
-        
-        return ControlResponse(
-            success=True,
-            message=message,
-            new_state={
-                "bademodus_aktiv": api_state.bademodus_aktiv,
-                "urlaubsmodus_aktiv": api_state.urlaubsmodus_aktiv,
-                "urlaubsmodus_ende": api_state.urlaubsmodus_ende.isoformat() if api_state.urlaubsmodus_ende else None
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"API Control Error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-async def run_api_server():
-    """Startet den Uvicorn-Server für die API."""
-    config = uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
-# --- Main Program ---
-
 async def run_program():
     global api_state
     async with aiohttp.ClientSession() as session:
@@ -1845,15 +1653,25 @@ async def run_program():
         try:
             logging.info("Richte Logging ein...")
             await setup_logging(session, state)
+
+            # API Initialisierung
+            control_funcs = {
+                "set_kompressor": set_kompressor_status,
+                "set_bademodus": lambda active: setattr(state, 'bademodus_aktiv', active),
+                "set_urlaubsmodus": lambda active: setattr(state, 'urlaubsmodus_aktiv', active),
+                "reload_config": reload_config
+            }
+            init_api(state, control_funcs)
             
-            # Start API Server as background task
-            logging.info("Starte API-Server...")
-            api_task = asyncio.create_task(run_api_server())
+            # Start API Server
+            config_uvicorn = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+            server = uvicorn.Server(config_uvicorn)
+            state.api_task = asyncio.create_task(server.serve())
             
             logging.info("Starte main_loop...")
             await asyncio.gather(
                 main_loop(config, state, session),
-                api_task
+                state.api_task
             )
             
         except KeyboardInterrupt:
@@ -1871,6 +1689,14 @@ async def run_program():
             raise
         finally:
             logging.info("Führe shutdown aus...")
+            # Cancel API task
+            if hasattr(state, 'api_task') and state.api_task:
+                state.api_task.cancel()
+                try:
+                    await state.api_task
+                except asyncio.CancelledError:
+                    pass
+            
             # Process remaining Telegram messages and close handlers
             root_logger = logging.getLogger()
             for handler in root_logger.handlers:
@@ -1888,4 +1714,6 @@ if __name__ == "__main__":
         logging.error(f"Fehler beim Starten des Skripts: {e}", exc_info=True)
         raise
 
-# End
+
+
+
