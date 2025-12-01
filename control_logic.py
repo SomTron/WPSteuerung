@@ -441,8 +441,17 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
     # Prüfe ob wir im Übergangsmodus sind (nicht gecachten within_solar_window nutzen!)
     within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
     
-    # Im Übergangsmodus nur heizen wenn Solarüberschuss aktiv ist (außer Bademodus)
-    solar_conditions_met = not (not state.bademodus_aktiv and within_uebergangsmodus and not state.solar_ueberschuss_aktiv)
+    # Kritische Kälte prüfen: Wenn Temperatur unter Nachtabsenkung fällt, trotzdem heizen!
+    nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
+    night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction
+    critical_cold = regelfuehler is not None and regelfuehler <= night_einschaltpunkt
+    
+    if within_uebergangsmodus and critical_cold and not state.solar_ueberschuss_aktiv:
+        logging.info(f"Übergangsmodus: Kritische Kälte ({regelfuehler} <= {night_einschaltpunkt}), erlaube Heizbetrieb trotz fehlendem Solarüberschuss.")
+
+    # Im Übergangsmodus nur heizen wenn Solarüberschuss aktiv ist (außer Bademodus oder kritische Kälte)
+    solar_conditions_met = not (not state.bademodus_aktiv and within_uebergangsmodus and not state.solar_ueberschuss_aktiv and not critical_cold)
+    
     if not solar_conditions_met and check_log_throttle(state, "last_no_start_log"):
         state.ausschluss_grund = (
             f"[{state.previous_modus}] Kein Einschalten im Übergangsmodus: Solarüberschuss nicht aktiv "
