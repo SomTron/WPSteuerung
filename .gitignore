@@ -6,14 +6,6 @@ config.ini
 Infos
 
 
-# Ignoriere Konfigurationsdateien mit sensiblen Daten
-richtige_config.ini
-config.ini
-
-# Ignoriere Infodatepí
-Infos
-
-
 # Ignoriere PyCharm-Projektdateien
 .idea/
 
@@ -23,7 +15,3 @@ Infos
 # Python Cache
 __pycache__/
 *.pyc
-
-# Logs and Data
-*.log
-*.csv
