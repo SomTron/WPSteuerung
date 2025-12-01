@@ -270,6 +270,18 @@ async def test_scenarios():
         (19, 30, 35, 30, 0, 50, "Nachtmodus -> Temperatur < Einschalt -> DARF AN (Nachtmodus erlaubt ohne Solar)"),
     ]
     
+    # Scenario 6: Evening Transition Cold Start (User Request)
+    # "Wenn die Temperaturen am Abend in der Übergangszeit unter die Einschalttemperaturen des Nachtmodus fallen, soll der Kompressor trotzdem anlaufen."
+    # Config: EINSCHALTPUNKT=43, NACHTABSENKUNG=15 => Night Setpoint = 28.
+    # We need to be BELOW 28 to trigger critical cold. Let's use 25.
+    steps_6 = [
+        (17, 59, 40, 38, 0, 50, "Vor Abend-Übergangsmodus"),
+        (18, 0, 25, 23, 0, 50, "Abend-Übergangsmodus START - Sehr Kalt (25°C) - KEIN Solar"),
+        # EXPECTATION: Compressor SHOULD turn ON because 25 < Night Setpoint (28)
+        (18, 15, 25, 23, 0, 50, "Sollte AN sein (Critical Cold)"),
+    ]
+    await run_simulation_scenario("6. Abend-Übergang Kaltstart", steps_6, config)
+    
     print("\n\n=== SZENARIO: 5. Übergangsmodus Edge Cases (Bug-Catching) ===")
     print(f"{'UHRZEIT':<10} | {'MODUS':<20} | {'TEMP (O/M/U)':<12} | {'REGEL':<6} | {'EIN':<4} | {'AUS':<4} | {'VERD':<6} | {'SOLAR':<8} | {'KOMPRESSOR':<10} | {'INFO'}")
     print("-" * 140)
@@ -312,7 +324,7 @@ async def test_scenarios():
             is_solar = (t >= time(8,0) and t < time(18,0))
             mock_is_solar.return_value = is_solar
         
-        for step in steps_5:
+        for step in steps_5 + steps_6:
             hour, minute, t_mittig, t_unten, bat_power, soc, desc = step[:7]
             t_oben = step[7] if len(step) > 7 else t_mittig 
             t_verd = step[8] if len(step) > 8 else 10.0
@@ -359,14 +371,26 @@ async def test_scenarios():
             if is_transition and t_mittig < setpoints['einschaltpunkt'] and not has_solar:
                 # Only assert if minimum runtime has passed
                 if mock_state.kompressor_ein and time_since_on > min_runtime_minutes:
-                    error_msg = (f"\n\n*** BUG DETECTED! ***\n"
-                                f"Zeit: {t}\n"
-                                f"Übergangsmodus: Ja\n"
-                                f"Temperatur: {t_mittig} < {setpoints['einschaltpunkt']} (würde einschalten)\n"
-                                f"Solar: {bat_power}W (KEIN Überschuss!)\n"
-                                f"Kompressor: AN (SOLLTE AUS SEIN!)\n")
-                    print(error_msg)
-                    raise AssertionError(error_msg)
+                    # Check for critical cold exception (Scenario 6)
+                    # Recalculate night setpoint based on actual config values
+                    basis = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 40))
+                    reduction = float(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0))
+                    night_setpoint = basis - reduction
+                    
+                    if t_mittig <= night_setpoint:
+                         # It IS critical cold, so it SHOULD be ON.
+                         # If it is ON, that's correct. If OFF, that's a bug (but handled by logic, so here we check if it IS ON)
+                         pass 
+                    else:
+                        # Not critical cold, so should be OFF.
+                        error_msg = (f"\n\n*** BUG DETECTED! ***\n"
+                                    f"Zeit: {t}\n"
+                                    f"Übergangsmodus: Ja\n"
+                                    f"Temperatur: {t_mittig} < {setpoints['einschaltpunkt']} (würde einschalten)\n"
+                                    f"Solar: {bat_power}W (KEIN Überschuss!)\n"
+                                    f"Kompressor: AN (SOLLTE AUS SEIN!)\n")
+                        print(error_msg)
+                        raise AssertionError(error_msg)
             
             time_str = current_sim_time.strftime("%H:%M")
             comp_str = "AN" if mock_state.kompressor_ein else "AUS"
@@ -380,7 +404,19 @@ async def test_scenarios():
             # Extra validation info
             validation_suffix = ""
             if is_transition and not has_solar and t_mittig < setpoints['einschaltpunkt']:
-                if not mock_state.kompressor_ein:
+                # Check for critical cold exception (Scenario 6)
+                basis = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 40))
+                reduction = float(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0))
+                night_setpoint = basis - reduction
+                
+                if t_mittig <= night_setpoint:
+                     if mock_state.kompressor_ein:
+                         validation_suffix = " [KORREKT: AN wegen Kälte]"
+                     else:
+                         error_msg = f"BUG: Kompressor AUS trotz kritischer Kälte ({t_mittig} <= {night_setpoint})"
+                         print(error_msg)
+                         raise AssertionError(error_msg)
+                elif not mock_state.kompressor_ein:
                     validation_suffix = " [KORREKT: AUS trotz Temp-Bed.]"
             
             print(f"{time_str:<10} | {setpoints['modus']:<20} | {temp_str:<12} | {regel_str:<6} | {ein_str:<4} | {aus_str:<4} | {verd_str:<6} | {solar_str:<8} | {comp_str:<10} | {desc}{validation_suffix}")
