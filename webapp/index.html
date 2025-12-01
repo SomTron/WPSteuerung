@@ -525,60 +525,6 @@
             chart.data.labels = temperatureHistory.timestamps;
             chart.data.datasets[0].data = temperatureHistory.oben;
             chart.data.datasets[1].data = temperatureHistory.mittig;
-            chart.data.datasets[2].data = temperatureHistory.unten;
-            chart.data.datasets[3].data = temperatureHistory.verdampfer;
-            chart.update('none');
-        }
-
-        function createChart() {
-            const ctx = document.getElementById('tempChart').getContext('2d');
-            chart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: temperatureHistory.timestamps,
-                    datasets: [
-                        {
-                            label: 'Oben',
-                            data: temperatureHistory.oben,
-                            borderColor: '#ff6b6b',
-                            backgroundColor: 'rgba(255, 107, 107, 0.1)',
-                            tension: 0.4,
-                            borderWidth: 2,
-                            pointRadius: 0
-                        },
-                        {
-                            label: 'Mitte',
-                            data: temperatureHistory.mittig,
-                            borderColor: '#ffd43b',
-                            backgroundColor: 'rgba(255, 212, 59, 0.1)',
-                            tension: 0.4,
-                            borderWidth: 2,
-                            pointRadius: 0
-                        },
-                        {
-                            label: 'Unten',
-                            data: temperatureHistory.unten,
-                            borderColor: '#00d4ff',
-                            backgroundColor: 'rgba(0, 212, 255, 0.1)',
-                            tension: 0.4,
-                            borderWidth: 2,
-                            pointRadius: 0
-                        },
-                        {
-                            label: 'Verdampfer',
-                            data: temperatureHistory.verdampfer,
-                            borderColor: '#51cf66',
-                            backgroundColor: 'rgba(81, 207, 102, 0.1)',
-                            tension: 0.4,
-                            borderWidth: 2,
-                            pointRadius: 0
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
                         legend: {
                             display: true,
                             position: 'top',
