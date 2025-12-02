@@ -194,24 +194,62 @@ function Push-Branch {
         return
     }
     
+    # Escape quotes in commit message
+    $commitMsg = $commitMsg -replace '"', '`"'
+    
     # Add changes
     Write-Host "`nFuege Aenderungen hinzu..." -ForegroundColor Cyan
-    git add .
-    
-    # Commit
-    Write-Host "Erstelle Commit..." -ForegroundColor Cyan
-    git commit -m $commitMsg
+    git add . 2>&1 | Out-Null
     
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Fehler beim Committen!" -ForegroundColor Red
+        Write-Host "Fehler beim Hinzufuegen der Aenderungen!" -ForegroundColor Red
+        return
+    }
+    
+    # Commit with properly quoted message
+    Write-Host "Erstelle Commit..." -ForegroundColor Cyan
+    try {
+        $commitOutput = git commit -m "$commitMsg" 2>&1 | Out-String
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Fehler beim Committen!" -ForegroundColor Red
+            Write-Host $commitOutput
+            return
+        }
+        
+        Write-Host "Commit erfolgreich erstellt!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Fehler beim Committen: $_" -ForegroundColor Red
         return
     }
     
     # Branch zum Pushen auswaehlen
-    $currentBranch = git branch --show-current
-    Write-Host "`nAktueller Branch: $currentBranch" -ForegroundColor Yellow
+    try {
+        $currentBranch = git branch --show-current 2>&1
+        if ([string]::IsNullOrWhiteSpace($currentBranch)) {
+            Write-Host "Fehler: Konnte aktuellen Branch nicht ermitteln!" -ForegroundColor Red
+            return
+        }
+        Write-Host "`nAktueller Branch: $currentBranch" -ForegroundColor Yellow
+    }
+    catch {
+        Write-Host "Fehler beim Ermitteln des aktuellen Branches: $_" -ForegroundColor Red
+        return
+    }
     
-    $branches = Get-LocalBranches
+    try {
+        $branches = Get-LocalBranches
+        if ($branches.Count -eq 0) {
+            Write-Host "Fehler: Keine Branches gefunden!" -ForegroundColor Red
+            return
+        }
+    }
+    catch {
+        Write-Host "Fehler beim Abrufen der Branches: $_" -ForegroundColor Red
+        return
+    }
+    
     Write-Host "`nZu welchem/welchen Branch(es) moechtest du pushen?" -ForegroundColor Cyan
     Write-Host "1. Gleicher Branch ($currentBranch)" -ForegroundColor Green
     Write-Host "2. Einen anderen Branch waehlen"
@@ -222,61 +260,81 @@ function Push-Branch {
     
     $targetBranches = @()
     
-    if ($choice -eq "1") {
-        $targetBranches = @($currentBranch)
-    }
-    elseif ($choice -eq "2") {
-        $targetBranch = Show-Menu -Title "Ziel-Branch waehlen" -Options $branches
-        if ($targetBranch -eq $null) { return }
-        
-        # Wenn anderer Branch, Warnung
-        if ($targetBranch -ne $currentBranch) {
-            Write-Host "`nWARNUNG: Du pushst zu einem anderen Branch!" -ForegroundColor Yellow
-            $confirm = Read-Host "Moechtest du zu '$targetBranch' pushen? (j/n)"
+    try {
+        if ($choice -eq "1") {
+            $targetBranches = @($currentBranch)
+        }
+        elseif ($choice -eq "2") {
+            $targetBranch = Show-Menu -Title "Ziel-Branch waehlen" -Options $branches
+            if ($targetBranch -eq $null) { 
+                Write-Host "Abgebrochen." -ForegroundColor Yellow
+                return 
+            }
+            
+            # Wenn anderer Branch, Warnung
+            if ($targetBranch -ne $currentBranch) {
+                Write-Host "`nWARNUNG: Du pushst zu einem anderen Branch!" -ForegroundColor Yellow
+                $confirm = Read-Host "Moechtest du zu '$targetBranch' pushen? (j/n)"
+                if ($confirm -ne "j" -and $confirm -ne "J") {
+                    Write-Host "Abgebrochen." -ForegroundColor Red
+                    return
+                }
+            }
+            $targetBranches = @($targetBranch)
+        }
+        elseif ($choice -eq "3") {
+            # Multi-select
+            Write-Host "`nWaehle Branches (mit Komma getrennt, z.B. 1,2,3):" -ForegroundColor Cyan
+            for ($i = 0; $i -lt $branches.Length; $i++) {
+                Write-Host "$($i + 1). $($branches[$i])"
+            }
+            
+            $selections = Read-Host "`nNummern eingeben (z.B. 1,3)"
+            if ([string]::IsNullOrWhiteSpace($selections)) {
+                Write-Host "Abgebrochen - keine Auswahl." -ForegroundColor Yellow
+                return
+            }
+            
+            $numbers = $selections -split "," | ForEach-Object { $_.Trim() }
+            
+            foreach ($num in $numbers) {
+                try {
+                    $index = [int]$num - 1
+                    if ($index -ge 0 -and $index -lt $branches.Length) {
+                        $targetBranches += $branches[$index]
+                    }
+                }
+                catch {
+                    Write-Host "Warnung: Ungueltige Nummer '$num' uebersprungen." -ForegroundColor Yellow
+                }
+            }
+            
+            if ($targetBranches.Count -eq 0) {
+                Write-Host "Keine gueltigen Branches gewaehlt!" -ForegroundColor Red
+                return
+            }
+            
+            Write-Host "`nPushe zu folgenden Branches:" -ForegroundColor Yellow
+            $targetBranches | ForEach-Object { Write-Host "  - $_" }
+            
+            $confirm = Read-Host "`nFortfahren? (j/n)"
             if ($confirm -ne "j" -and $confirm -ne "J") {
                 Write-Host "Abgebrochen." -ForegroundColor Red
                 return
             }
         }
-        $targetBranches = @($targetBranch)
-    }
-    elseif ($choice -eq "3") {
-        # Multi-select
-        Write-Host "`nWaehle Branches (mit Komma getrennt, z.B. 1,2,3):" -ForegroundColor Cyan
-        for ($i = 0; $i -lt $branches.Length; $i++) {
-            Write-Host "$($i + 1). $($branches[$i])"
-        }
-        
-        $selections = Read-Host "`nNummern eingeben (z.B. 1,3)"
-        $numbers = $selections -split "," | ForEach-Object { $_.Trim() }
-        
-        foreach ($num in $numbers) {
-            $index = [int]$num - 1
-            if ($index -ge 0 -and $index -lt $branches.Length) {
-                $targetBranches += $branches[$index]
-            }
-        }
-        
-        if ($targetBranches.Count -eq 0) {
-            Write-Host "Keine gueltigen Branches gewaehlt!" -ForegroundColor Red
+        elseif ($choice -eq "0") {
+            Write-Host "Abgebrochen." -ForegroundColor Yellow
             return
         }
-        
-        Write-Host "`nPushe zu folgenden Branches:" -ForegroundColor Yellow
-        $targetBranches | ForEach-Object { Write-Host "  - $_" }
-        
-        $confirm = Read-Host "`nFortfahren? (j/n)"
-        if ($confirm -ne "j" -and $confirm -ne "J") {
-            Write-Host "Abgebrochen." -ForegroundColor Red
+        else {
+            Write-Host "Ungueltige Auswahl!" -ForegroundColor Red
             return
         }
     }
-    elseif ($choice -eq "0") {
-        Write-Host "Abgebrochen." -ForegroundColor Yellow
-        return
-    }
-    else {
-        Write-Host "Ungueltige Auswahl!" -ForegroundColor Red
+    catch {
+        Write-Host "Fehler bei der Branch-Auswahl: $_" -ForegroundColor Red
+        Write-Host "Stack Trace: $($_.ScriptStackTrace)" -ForegroundColor Gray
         return
     }
     
@@ -285,82 +343,144 @@ function Push-Branch {
     $failCount = 0
     
     foreach ($branch in $targetBranches) {
-        Write-Host "`nPushe zu GitHub (origin/$branch)..." -ForegroundColor Cyan
-        
-        # Capture output to detect errors
-        $pushOutput = git push origin HEAD:$branch 2>&1 | Out-String
-        Write-Host $pushOutput
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Erfolgreich zu '$branch' gepusht!" -ForegroundColor Green
-            $successCount++
-        }
-        else {
-            Write-Host "Fehler beim Pushen zu '$branch'!" -ForegroundColor Red
+        try {
+            Write-Host "`nPushe zu GitHub (origin/$branch)..." -ForegroundColor Cyan
             
-            # Check for non-fast-forward
-            if ($pushOutput -match "non-fast-forward" -or $pushOutput -match "fetch first" -or $pushOutput -match "rejected") {
-                Write-Host "`nDer Remote-Branch '$branch' hat Aenderungen, die du nicht hast." -ForegroundColor Yellow
+            # Capture output to detect errors
+            $pushOutput = git push origin HEAD:$branch 2>&1 | Out-String
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Erfolgreich zu '$branch' gepusht!" -ForegroundColor Green
+                $successCount++
+            }
+            else {
+                Write-Host "Push fehlgeschlagen!" -ForegroundColor Red
+                Write-Host $pushOutput -ForegroundColor Gray
                 
-                if ($branch -ne $currentBranch) {
-                    $autoMerge = Read-Host "Moechtest du automatisch mergen? (Checkout $branch -> Merge $currentBranch -> Push -> Checkout back) (j/n)"
-                    if ($autoMerge -eq "j") {
-                        Write-Host "Versuche automatischen Merge..." -ForegroundColor Cyan
-                         
-                        # 1. Checkout target branch
-                        git checkout $branch
-                        if ($LASTEXITCODE -ne 0) { 
-                            Write-Host "Konnte nicht zu $branch wechseln. Versuche ihn lokal zu erstellen..."
-                            git checkout -b $branch origin/$branch
-                            if ($LASTEXITCODE -ne 0) { Write-Host "Fehler beim Checkout."; $failCount++; continue }
+                # Check for non-fast-forward
+                if ($pushOutput -match "non-fast-forward" -or $pushOutput -match "fetch first" -or $pushOutput -match "rejected") {
+                    Write-Host "`nDer Remote-Branch '$branch' hat Aenderungen, die du nicht hast." -ForegroundColor Yellow
+                    
+                    if ($branch -ne $currentBranch) {
+                        try {
+                            $autoMerge = Read-Host "Moechtest du automatisch mergen? (Checkout $branch -> Merge $currentBranch -> Push -> Checkout back) (j/n)"
+                            if ($autoMerge -eq "j" -or $autoMerge -eq "J") {
+                                Write-Host "Versuche automatischen Merge..." -ForegroundColor Cyan
+                                
+                                # 1. Checkout target branch
+                                Write-Host "1. Wechsle zu $branch..." -ForegroundColor Cyan
+                                git checkout $branch 2>&1 | Out-Null
+                                if ($LASTEXITCODE -ne 0) { 
+                                    Write-Host "Konnte nicht zu $branch wechseln. Versuche ihn lokal zu erstellen..." -ForegroundColor Yellow
+                                    git checkout -b $branch origin/$branch 2>&1 | Out-Null
+                                    if ($LASTEXITCODE -ne 0) { 
+                                        Write-Host "Fehler beim Checkout." -ForegroundColor Red
+                                        $failCount++
+                                        continue 
+                                    }
+                                }
+                                
+                                # 2. Pull remote changes
+                                Write-Host "2. Hole Remote-Aenderungen..." -ForegroundColor Cyan
+                                git pull origin $branch 2>&1 | Out-Null
+                                
+                                # 3. Merge original branch
+                                Write-Host "3. Merge $currentBranch..." -ForegroundColor Cyan
+                                $mergeOutput = git merge $currentBranch 2>&1 | Out-String
+                                if ($LASTEXITCODE -ne 0) {
+                                    Write-Host "MERGE KONFLIKT! Bitte manuell loesen." -ForegroundColor Red
+                                    Write-Host $mergeOutput -ForegroundColor Gray
+                                    git merge --abort 2>&1 | Out-Null
+                                    git checkout $currentBranch 2>&1 | Out-Null
+                                    $failCount++
+                                    continue
+                                }
+                                
+                                # 4. Push
+                                Write-Host "4. Pushe..." -ForegroundColor Cyan
+                                git push origin $branch 2>&1 | Out-Null
+                                if ($LASTEXITCODE -eq 0) {
+                                    Write-Host "Erfolgreich gemerged und gepusht!" -ForegroundColor Green
+                                    $successCount++
+                                }
+                                else {
+                                    Write-Host "Push nach Merge fehlgeschlagen." -ForegroundColor Red
+                                    $failCount++
+                                }
+                                
+                                # 5. Switch back
+                                Write-Host "5. Wechsle zurueck zu $currentBranch..." -ForegroundColor Cyan
+                                git checkout $currentBranch 2>&1 | Out-Null
+                                continue
+                            }
+                            else {
+                                Write-Host "Ueberspringe $branch." -ForegroundColor Yellow
+                                $failCount++
+                            }
                         }
-                         
-                        # 2. Pull remote changes
-                        git pull origin $branch
-                         
-                        # 3. Merge original branch
-                        git merge $currentBranch
-                        if ($LASTEXITCODE -ne 0) {
-                            Write-Host "MERGE KONFLIKT! Bitte manuell loesen." -ForegroundColor Red
-                            git merge --abort
-                            git checkout $currentBranch
+                        catch {
+                            Write-Host "Fehler beim Auto-Merge: $_" -ForegroundColor Red
+                            # Sicherstellen dass wir zum Original-Branch zurueckkehren
+                            git checkout $currentBranch 2>&1 | Out-Null
                             $failCount++
-                            continue
                         }
-                         
-                        # 4. Push
-                        git push origin $branch
-                        if ($LASTEXITCODE -eq 0) {
-                            Write-Host "Erfolgreich gemerged und gepusht!" -ForegroundColor Green
-                            $successCount++
+                    }
+                    else {
+                        # Same branch push failed
+                        try {
+                            $doPull = Read-Host "Moechtest du 'git pull --rebase' ausfuehren und nochmal pushen? (j/n)"
+                            if ($doPull -eq "j" -or $doPull -eq "J") {
+                                Write-Host "Fuehre Pull mit Rebase aus..." -ForegroundColor Cyan
+                                git pull origin $branch --rebase 2>&1 | Out-Null
+                                if ($LASTEXITCODE -eq 0) {
+                                    Write-Host "Versuche erneut zu pushen..." -ForegroundColor Cyan
+                                    git push origin HEAD:$branch 2>&1 | Out-Null
+                                    if ($LASTEXITCODE -eq 0) {
+                                        Write-Host "Erfolgreich gepusht!" -ForegroundColor Green
+                                        $successCount++
+                                        continue
+                                    }
+                                    else {
+                                        Write-Host "Push immer noch fehlgeschlagen." -ForegroundColor Red
+                                        $failCount++
+                                    }
+                                }
+                                else {
+                                    Write-Host "Pull mit Rebase fehlgeschlagen." -ForegroundColor Red
+                                    $failCount++
+                                }
+                            }
+                            else {
+                                $failCount++
+                            }
                         }
-                        else {
-                            Write-Host "Push nach Merge immer noch fehlgeschlagen." -ForegroundColor Red
+                        catch {
+                            Write-Host "Fehler beim Pull/Rebase: $_" -ForegroundColor Red
                             $failCount++
                         }
-                         
-                        # 5. Switch back
-                        git checkout $currentBranch
-                        continue
                     }
                 }
                 else {
-                    # Same branch push failed
-                    $doPull = Read-Host "Moechtest du 'git pull --rebase' ausfuehren und nochmal pushen? (j/n)"
-                    if ($doPull -eq "j") {
-                        git pull origin $branch --rebase
-                        if ($LASTEXITCODE -eq 0) {
-                            git push origin HEAD:$branch
-                            if ($LASTEXITCODE -eq 0) {
-                                Write-Host "Erfolgreich gepusht!" -ForegroundColor Green
-                                $successCount++
-                                continue
-                            }
-                        }
-                    }
+                    # Anderer Fehler
+                    $failCount++
                 }
             }
+        }
+        catch {
+            Write-Host "Unerwarteter Fehler beim Pushen zu '$branch': $_" -ForegroundColor Red
+            Write-Host "Stack Trace: $($_.ScriptStackTrace)" -ForegroundColor Gray
             $failCount++
+            # Sicherstellen dass wir zum Original-Branch zurueckkehren
+            try {
+                $currentCheck = git branch --show-current 2>&1
+                if ($currentCheck -ne $currentBranch) {
+                    Write-Host "Kehre zu $currentBranch zurueck..." -ForegroundColor Yellow
+                    git checkout $currentBranch 2>&1 | Out-Null
+                }
+            }
+            catch {
+                Write-Host "Warnung: Konnte nicht zu $currentBranch zurueckkehren." -ForegroundColor Red
+            }
         }
     }
     
@@ -370,6 +490,7 @@ function Push-Branch {
     if ($failCount -gt 0) {
         Write-Host "Fehlgeschlagen: $failCount" -ForegroundColor Red
     }
+    Write-Host "" # Leerzeile am Ende
 
 }
 

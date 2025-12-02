@@ -450,7 +450,14 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
         logging.info(f"Übergangsmodus: Kritische Kälte ({regelfuehler} <= {night_einschaltpunkt}), erlaube Heizbetrieb trotz fehlendem Solarüberschuss.")
 
     # Im Übergangsmodus nur heizen wenn Solarüberschuss aktiv ist (außer Bademodus oder kritische Kälte)
-    solar_conditions_met = not (not state.bademodus_aktiv and within_uebergangsmodus and not state.solar_ueberschuss_aktiv and not critical_cold)
+    # Explizite Logik für bessere Lesbarkeit und Fehlervermeidung
+    if within_uebergangsmodus and not state.bademodus_aktiv:
+        if not state.solar_ueberschuss_aktiv and not critical_cold:
+            solar_conditions_met = False
+        else:
+            solar_conditions_met = True
+    else:
+        solar_conditions_met = True
     
     if not solar_conditions_met and check_log_throttle(state, "last_no_start_log"):
         state.ausschluss_grund = (
