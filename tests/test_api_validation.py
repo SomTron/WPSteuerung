@@ -1,5 +1,5 @@
 import pytest
-from main import safe_float
+from utils import safe_float
 
 def test_safe_float_valid_numbers():
     assert safe_float(100) == 100.0

@@ -23,7 +23,7 @@ from aiohttp import FormData
 import pandas as pd
 import numpy as np
 from typing import Optional
-from utils import safe_timedelta
+from utils import safe_timedelta, safe_float
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
                               get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
@@ -85,40 +85,6 @@ def get_config_value(config, section, key, default, type_func=str):
             return default
     except Exception as e:
         logging.error(f"Unerwarteter Fehler beim Lesen von '{key}' in Sektion '{section}': {e}. Verwende Standardwert: {default}")
-        return default
-
-
-def safe_float(value, default=0.0, field_name="unknown"):
-    """
-    Safely convert value to float with comprehensive validation.
-    
-    Args:
-        value: Value to convert (int, float, str, None)
-        default: Fallback value if conversion fails
-        field_name: Field name for logging
-    
-    Returns:
-        float: Converted value or default
-    """
-    try:
-        if value is None:
-            logging.warning(f"API: {field_name} is None, using {default}")
-            return default
-        
-        if isinstance(value, (int, float)):
-            return float(value)
-        
-        if isinstance(value, str):
-            value = value.strip()
-            if not value or value.lower() in ['n/a', 'null', 'none', 'error', '-']:
-                logging.warning(f"API: {field_name}='{value}' invalid, using {default}")
-                return default
-            return float(value)
-        
-        logging.error(f"API: {field_name} unexpected type {type(value).__name__}, using {default}")
-        return default
-    except (ValueError, TypeError) as e:
-        logging.error(f"API: Cannot convert {field_name}='{value}': {e}, using {default}")
         return default
 
 
