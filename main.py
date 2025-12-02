@@ -1558,13 +1558,14 @@ async def main_loop(config, state, session):
 
                 # Solax-Daten abrufen
                 solax_result = await fetch_solax_data(session, state, now)
-                state.acpower = solax_result.get("acpower", 0)
-                state.feedinpower = solax_result.get("feedinpower", 0)
-                state.batpower = solax_result.get("batPower", 0)
-                state.soc = solax_result.get("soc", 0)
-                state.powerdc1 = solax_result.get("powerdc1", 0)
-                state.powerdc2 = solax_result.get("powerdc2", 0)
-                state.consumeenergy = solax_result.get("consumeenergy", 0)
+                # Ensure all numeric values are properly converted to float/int
+                state.acpower = float(solax_result.get("acpower", 0))
+                state.feedinpower = float(solax_result.get("feedinpower", 0))
+                state.batpower = float(solax_result.get("batPower", 0))
+                state.soc = float(solax_result.get("soc", 0))
+                state.powerdc1 = float(solax_result.get("powerdc1", 0))
+                state.powerdc2 = float(solax_result.get("powerdc2", 0))
+                state.consumeenergy = float(solax_result.get("consumeenergy", 0))
                 state.solarueberschuss = state.powerdc1 + state.powerdc2
                 state.power_source = get_power_source(solax_result["solax_data"]) if solax_result[
                     "solax_data"] else "Unbekannt"
