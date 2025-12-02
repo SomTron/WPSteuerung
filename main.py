@@ -88,6 +88,40 @@ def get_config_value(config, section, key, default, type_func=str):
         return default
 
 
+def safe_float(value, default=0.0, field_name="unknown"):
+    """
+    Safely convert value to float with comprehensive validation.
+    
+    Args:
+        value: Value to convert (int, float, str, None)
+        default: Fallback value if conversion fails
+        field_name: Field name for logging
+    
+    Returns:
+        float: Converted value or default
+    """
+    try:
+        if value is None:
+            logging.warning(f"API: {field_name} is None, using {default}")
+            return default
+        
+        if isinstance(value, (int, float)):
+            return float(value)
+        
+        if isinstance(value, str):
+            value = value.strip()
+            if not value or value.lower() in ['n/a', 'null', 'none', 'error', '-']:
+                logging.warning(f"API: {field_name}='{value}' invalid, using {default}")
+                return default
+            return float(value)
+        
+        logging.error(f"API: {field_name} unexpected type {type(value).__name__}, using {default}")
+        return default
+    except (ValueError, TypeError) as e:
+        logging.error(f"API: Cannot convert {field_name}='{value}': {e}, using {default}")
+        return default
+
+
 # Globale Variablen für den Programmstatus
 last_update_id = None
 lcd = None
@@ -1559,13 +1593,13 @@ async def main_loop(config, state, session):
                 # Solax-Daten abrufen
                 solax_result = await fetch_solax_data(session, state, now)
                 # Ensure all numeric values are properly converted to float/int
-                state.acpower = float(solax_result.get("acpower", 0))
-                state.feedinpower = float(solax_result.get("feedinpower", 0))
-                state.batpower = float(solax_result.get("batPower", 0))
-                state.soc = float(solax_result.get("soc", 0))
-                state.powerdc1 = float(solax_result.get("powerdc1", 0))
-                state.powerdc2 = float(solax_result.get("powerdc2", 0))
-                state.consumeenergy = float(solax_result.get("consumeenergy", 0))
+                state.acpower = safe_float(solax_result.get("acpower"), 0.0, "acpower")
+                state.feedinpower = safe_float(solax_result.get("feedinpower"), 0.0, "feedinpower")
+                state.batpower = safe_float(solax_result.get("batPower"), 0.0, "batPower")
+                state.soc = safe_float(solax_result.get("soc"), 0.0, "soc")
+                state.powerdc1 = safe_float(solax_result.get("powerdc1"), 0.0, "powerdc1")
+                state.powerdc2 = safe_float(solax_result.get("powerdc2"), 0.0, "powerdc2")
+                state.consumeenergy = safe_float(solax_result.get("consumeenergy"), 0.0, "consumeenergy")
                 state.solarueberschuss = state.powerdc1 + state.powerdc2
                 state.power_source = get_power_source(solax_result["solax_data"]) if solax_result[
                     "solax_data"] else "Unbekannt"
