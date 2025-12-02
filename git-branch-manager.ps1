@@ -70,13 +70,38 @@ function Pull-Branch {
     
     # Pull mit Rebase
     Write-Host "`nAktualisiere Branch '$selectedBranch' von GitHub..." -ForegroundColor Cyan
-    git pull origin $selectedBranch --rebase
+    
+    # Erst versuchen mit rebase
+    $pullOutput = git pull origin $selectedBranch --rebase 2>&1 | Out-String
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "`nBranch '$selectedBranch' erfolgreich aktualisiert!" -ForegroundColor Green
     }
     else {
-        Write-Host "`nFehler beim Aktualisieren!" -ForegroundColor Red
+        Write-Host "`nRebase fehlgeschlagen oder abgebrochen." -ForegroundColor Yellow
+        Write-Host $pullOutput
+        
+        # Rebase abbrechen falls haengengeblieben
+        git rebase --abort 2>$null
+        
+        # Alternative anbieten
+        Write-Host "`nMoechtest du stattdessen ein normales Merge versuchen? (j/n)" -ForegroundColor Cyan
+        $tryMerge = Read-Host
+        
+        if ($tryMerge -eq "j" -or $tryMerge -eq "J") {
+            Write-Host "`nVersuche normales Pull (Merge)..." -ForegroundColor Cyan
+            git pull origin $selectedBranch
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "`nBranch '$selectedBranch' erfolgreich aktualisiert!" -ForegroundColor Green
+            }
+            else {
+                Write-Host "`nFehler beim Aktualisieren!" -ForegroundColor Red
+            }
+        }
+        else {
+            Write-Host "`nAbgebrochen. Branch wurde NICHT aktualisiert." -ForegroundColor Red
+        }
     }
 }
 
