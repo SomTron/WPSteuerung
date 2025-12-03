@@ -5,6 +5,9 @@ config.ini
 # Ignoriere Infodatepí
 Infos
 
+# Ignoriere Runtime-Dateien (Logs und CSV)
+*.log
+heizungsdaten*.csv
 
 # Ignoriere PyCharm-Projektdateien
 .idea/
