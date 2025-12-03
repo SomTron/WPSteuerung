@@ -155,8 +155,8 @@ async def get_telegram_updates(session, bot_token, offset=None):
         logging.error(f"Netzwerkfehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
         return None
     except asyncio.TimeoutError:
-        logging.warning("Timeout beim Abrufen von Telegram-Updates")
-        return None
+        logging.debug("Timeout beim Abrufen von Telegram-Updates (Normal bei Long-Polling)")
+        return []
     except Exception as e:
         logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
         return None
@@ -761,7 +761,7 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                         is_nighttime_func, is_solar_window_func
                     )
                 else:
-                    logging.warning("Telegram-Updates waren None")
+                    logging.debug("Telegram-Updates waren None")
                 await asyncio.sleep(0.1)
             except aiohttp.ClientError as e:
                 logging.error(f"Netzwerkfehler in telegram_task: {e}")
