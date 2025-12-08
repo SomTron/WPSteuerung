@@ -4,7 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="gitignore testen" />
+    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="funktioniert wieder">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -18,25 +20,43 @@
     </option>
   </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="master" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RESET_MODE" value="HARD" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 3
-}]]></component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;SomTron&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/SomTron/WPSteuerung.git&quot;,
+    &quot;accountId&quot;: &quot;97cfe8e8-1b9d-4df8-8eef-ce437b69de49&quot;
+  }
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3
+}</component>
   <component name="ProjectId" id="2swC1IJcXM9fRU1ydCUMcnYCM7d" />
-  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_MARK_IGNORED_FILES_AS_EXCLUDED": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master",
-    "last_opened_file_path": "C:/Users/Patrik/PycharmProjects/WPSteuerungGit"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_MARK_IGNORED_FILES_AS_EXCLUDED&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;funktioniert&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/Patrik/PycharmProjects/WPSteuerungGit&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\Patrik\PycharmProjects\WPSteuerungGit" />
@@ -69,7 +89,7 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-python-sdk-babbdf50b680-746f403e7f0c-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-241.15989.155" />
+        <option value="bundled-python-sdk-82724e2b1abb-e2d783800521-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-251.28293.52" />
       </set>
     </attachedChunks>
   </component>
@@ -114,7 +134,23 @@
       <option name="project" value="LOCAL" />
       <updated>1739358712501</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="Too Many Requests: retry after 10 Fehler behoben mit neuen Code">
+      <option name="closed" value="true" />
+      <created>1757571848602</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1757571848602</updated>
+    </task>
+    <task id="LOCAL-00006" summary="funktioniert wieder">
+      <option name="closed" value="true" />
+      <created>1757878982377</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1757878982377</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -131,14 +167,16 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="initiales uploaden auf Github" />
     <MESSAGE value="gitignore testen" />
-    <option name="LAST_COMMIT_MESSAGE" value="gitignore testen" />
+    <MESSAGE value="Too Many Requests: retry after 10 Fehler behoben mit neuen Code" />
+    <MESSAGE value="funktioniert wieder" />
+    <option name="LAST_COMMIT_MESSAGE" value="funktioniert wieder" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/main.py</url>
-          <line>302</line>
+          <line>277</line>
           <option name="timeStamp" value="1" />
         </line-breakpoint>
       </breakpoints>
