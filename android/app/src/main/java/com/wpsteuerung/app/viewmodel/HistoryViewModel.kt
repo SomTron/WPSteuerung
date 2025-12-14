@@ -4,9 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wpsteuerung.app.data.model.HistoryResponse
 import com.wpsteuerung.app.data.repository.WPRepository
-import kotlinx.coroutines.flow.MutableState
-
-Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch

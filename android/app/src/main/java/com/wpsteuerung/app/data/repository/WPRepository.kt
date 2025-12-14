@@ -5,6 +5,7 @@ import com.wpsteuerung.app.data.model.ControlRequest
 import com.wpsteuerung.app.data.model.ControlResponse
 import com.wpsteuerung.app.data.model.HistoryResponse
 import com.wpsteuerung.app.data.model.SystemStatus
+import com.wpsteuerung.app.data.model.createModeRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -32,7 +33,7 @@ class WPRepository {
     
     suspend fun setBademodus(enabled: Boolean): Result<ControlResponse> = withContext(Dispatchers.IO) {
         try {
-            val request = ControlRequest(action = "bademodus", enabled = enabled)
+            val request = createModeRequest("bademodus", enabled)
             val response = apiService.control(request)
             Result.success(response)
         } catch (e: Exception) {
@@ -42,10 +43,15 @@ class WPRepository {
     
     suspend fun setUrlaubsmodus(enabled: Boolean, durationHours: Int? = null): Result<ControlResponse> = withContext(Dispatchers.IO) {
         try {
+            val params = mutableMapOf<String, Any>(
+                "mode" to "urlaubsmodus",
+                "active" to enabled
+            )
+            durationHours?.let { params["duration_hours"] = it }
+            
             val request = ControlRequest(
-                action = "urlaubsmodus",
-                enabled = enabled,
-                duration_hours = durationHours
+                command = "set_mode",
+                params = params
             )
             val response = apiService.control(request)
             Result.success(response)
@@ -54,9 +60,19 @@ class WPRepository {
         }
     }
     
-    suspend fun reloadConfig(): Result<ControlResponse> = withContext(Dispatchers.IO) {
+    suspend fun forceCompressorOn(): Result<ControlResponse> = withContext(Dispatchers.IO) {
         try {
-            val request = ControlRequest(action = "reload_config")
+            val request = ControlRequest(command = "force_on")
+            val response = apiService.control(request)
+            Result.success(response)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun forceCompressorOff(): Result<ControlResponse> = withContext(Dispatchers.IO) {
+        try {
+            val request = ControlRequest(command = "force_off")
             val response = apiService.control(request)
             Result.success(response)
         } catch (e: Exception) {

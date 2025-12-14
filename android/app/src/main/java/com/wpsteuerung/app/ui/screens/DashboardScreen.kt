@@ -65,6 +65,9 @@ fun DashboardScreen(
                         TemperatureRow("Mittig", status.temperatures.mittig)
                         TemperatureRow("Unten", status.temperatures.unten)
                         TemperatureRow("Verdampfer", status.temperatures.verdampfer)
+                        status.temperatures.boiler?.let {
+                            TemperatureRow("Boiler Ø", it)
+                        }
                     }
                 }
                 
@@ -74,7 +77,7 @@ fun DashboardScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (status.compressor == "EIN") 
+                        containerColor = if (status.compressor.status == "EIN") 
                             MaterialTheme.colorScheme.errorContainer 
                         else 
                             MaterialTheme.colorScheme.surfaceVariant
@@ -88,35 +91,73 @@ fun DashboardScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = status.compressor,
+                            text = status.compressor.status,
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold
                         )
-                        status.power_source?.let {
-                            Text(text = it, style = MaterialTheme.typography.bodyMedium)
-                        }
                         
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Heute: ${status.total_runtime_today}")
-                        status.current_runtime?.let { Text("Laufzeit: $it") }
-                        status.last_runtime?.let { Text("Letzte: $it") }
+                        Text("Heute: ${status.compressor.runtimeToday}")
+                        if (status.compressor.status == "EIN") {
+                            Text("Aktuelle Laufzeit: ${status.compressor.runtimeCurrent}")
+                        }
                     }
                 }
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                // Sollwerte Card
+                // Modus & Sollwerte Card
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Sollwerte",
+                            text = "Modus & Sollwerte",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Einschaltpunkt: ${status.mode.setpoints.on}°C")
-                        Text("Ausschaltpunkt: ${status.mode.setpoints.off}°C")
-                        Text("Solarüberschuss: ${if (status.mode.solar_excess) "Ja" else "Nein"}")
+                        
+                        Text(
+                            text = status.mode.current,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        status.setpoints.einschaltpunkt?.let {
+                            Text("Einschaltpunkt: ${String.format("%.1f°C", it)}")
+                        }
+                        status.setpoints.ausschaltpunkt?.let {
+                            Text("Ausschaltpunkt: ${String.format("%.1f°C", it)}")
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            StatusChip("Solar", status.mode.solarActive)
+                            StatusChip("Urlaub", status.mode.holidayActive)
+                            StatusChip("Baden", status.mode.bathActive)
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Energie Card
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Energie",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Batterie: ${status.energy.batteryPower}W")
+                        Text("SOC: ${status.energy.soc}%")
+                        Text("Einspeisung: ${status.energy.feedIn}W")
                     }
                 }
                 
@@ -139,9 +180,29 @@ fun DashboardScreen(
                         ) {
                             Text("Bademodus")
                             Switch(
-                                checked = isBademodus,
+                                checked = status.mode.bathActive,
                                 onCheckedChange = { viewModel.toggleBademodus() }
                             )
+                        }
+                    }
+                }
+                
+                // System Info (if exclusion reason exists)
+                status.system.exclusionReason?.let { reason ->
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "System-Info",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(text = reason, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
@@ -179,6 +240,21 @@ fun TemperatureRow(label: String, temp: Double?) {
         Text(
             text = if (temp != null) String.format("%.1f°C", temp) else "N/A",
             fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+fun StatusChip(label: String, active: Boolean) {
+    Surface(
+        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.small
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
