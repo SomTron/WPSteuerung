@@ -1542,6 +1542,7 @@ async def main_loop(config, state, session):
                         session, state, t_oben, t_unten, t_mittig, t_verd,
                         set_kompressor_status
                 ):
+                    last_cycle_time = now
                     await asyncio.sleep(2)
                     continue
 
@@ -1553,6 +1554,7 @@ async def main_loop(config, state, session):
                         reload_config,
                         calculate_file_hash
                 ):
+                    last_cycle_time = now
                     await asyncio.sleep(2)
                     continue
 
@@ -1583,6 +1585,7 @@ async def main_loop(config, state, session):
                         min_laufzeit, t_oben,
                         set_kompressor_status
                 ):
+                    last_cycle_time = now
                     await asyncio.sleep(2)
                     continue
 
