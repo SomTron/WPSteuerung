@@ -579,7 +579,9 @@ async def send_status_telegram(
         f" • Solarüberschuss: {feedinpower:.1f} W",
         f" • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})",
         f" • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}",
-        f" • Bademodus aktiv: {'Ja' if state.bademodus_aktiv else 'Nein'}"
+        f" • Bademodus aktiv: {'Ja' if state.bademodus_aktiv else 'Nein'}",
+        "🔒 **Netzwerk/VPN**",
+        f" • VPN: {'✅ Aktiv (' + state.vpn_ip + ')' if state.vpn_ip else '❌ Inaktiv'}"
     ]
     if state.ausschluss_grund:
         escaped_ausschluss_grund = escape_markdown(str(state.ausschluss_grund))

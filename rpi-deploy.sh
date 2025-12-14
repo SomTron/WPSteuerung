@@ -57,6 +57,7 @@ echo "2. Branch wechseln"
 echo "3. Branch wechseln UND aktualisieren"
 echo "4. Nur Service neu starten"
 echo "5. Status anzeigen"
+echo "6. WireGuard installieren/prüfen"
 echo "0. Abbrechen"
 
 read -p "Waehle (0-5): " choice
@@ -139,6 +140,45 @@ case $choice in
         
         echo -e "\n${CYAN}=== Letzte 20 Log-Zeilen ===${NC}"
         sudo journalctl -u $SERVICE_NAME -n 20 --no-pager
+        ;;
+
+    6)
+        # WireGuard Setup
+        echo -e "\n${CYAN}=== WireGuard Setup ===${NC}"
+        
+        if ! command -v wg &> /dev/null; then
+             echo -e "${YELLOW}WireGuard ist nicht installiert. Installiere...${NC}"
+             sudo apt-get update
+             sudo apt-get install -y wireguard
+             echo -e "${GREEN}WireGuard installiert.${NC}"
+        else
+             echo -e "${GREEN}WireGuard ist bereits installiert.${NC}"
+        fi
+        
+        if [ ! -f "/etc/wireguard/wg0.conf" ]; then
+            echo -e "${YELLOW}Konfiguration /etc/wireguard/wg0.conf nicht gefunden.${NC}"
+            echo "Du musst die Konfiguration manuell erstellen oder Schlüssel generieren."
+            echo "Beispiel:"
+            echo "  wg genkey | tee privatekey | wg pubkey > publickey"
+            echo "  sudo nano /etc/wireguard/wg0.conf"
+        else
+            echo -e "${GREEN}Konfiguration gefunden.${NC}"
+            read -p "WireGuard Service (re)starten? (j/n): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Jj]$ ]]; then
+                sudo systemctl enable wg-quick@wg0
+                sudo systemctl restart wg-quick@wg0
+                echo -e "${GREEN}WireGuard Service neu gestartet.${NC}"
+            fi
+        fi
+        
+        # Zeige Status
+        if command -v wg &> /dev/null; then
+             echo -e "\n${CYAN}WireGuard Status:${NC}"
+             sudo wg show
+             echo -e "\n${CYAN}IP-Adressen:${NC}"
+             ip -4 a show wg0 | grep inet
+        fi
         ;;
         
     0)

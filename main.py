@@ -352,7 +352,11 @@ class State:
         self.powerdc2 = None
         self.consumeenergy = None
         self.solarueberschuss = 0
+        self.solarueberschuss = 0
         self.power_source = "unbekannt"
+        
+        # --- VPN Status ---
+        self.vpn_ip = None
 
         # --- Nachtabsenkung ---
         self.nachtabsenkung = False
@@ -961,6 +965,33 @@ def is_data_old(timestamp):
     is_old = timestamp and (now - timestamp) > timedelta(minutes=15)
     # logging.debug(f"Prüfe Solax-Datenalter: now={now}, tzinfo={now.tzinfo}, Zeitstempel={timestamp}, tzinfo={timestamp.tzinfo if timestamp else None}, Ist alt={is_old}")
     return is_old
+
+
+async def check_vpn_status(state):
+    """Prüft den Status der WireGuard-Verbindung und speichert die IP."""
+    try:
+        # Nur unter Linux ausführen
+        if os.name != 'posix':
+            return
+
+        proc = await asyncio.create_subprocess_shell(
+            "ip -4 addr show wg0 | grep inet | awk '{print $2}' | cut -d/ -f1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode == 0 and stdout:
+            ip = stdout.decode().strip()
+            if ip:
+                state.vpn_ip = ip
+                # logging.debug(f"VPN aktiv: {state.vpn_ip}")
+            else:
+                state.vpn_ip = None
+        else:
+            state.vpn_ip = None
+    except Exception as e:
+        logging.error(f"Fehler beim Prüfen des VPN-Status: {e}")
+        state.vpn_ip = None
 
 
 # Asynchrone Task für Display-Updates
@@ -1608,6 +1639,10 @@ async def main_loop(config, state, session):
 
                 # Watchdog prüfen
                 last_cycle_time = await check_watchdog(state, session, last_cycle_time)
+                
+                # VPN-Status prüfen (alle 60s reicht)
+                if state.last_log_time and (now - state.last_log_time).seconds < 10:
+                    await check_vpn_status(state)
 
                 await asyncio.sleep(loop_interval)
 
