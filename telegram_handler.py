@@ -60,9 +60,18 @@ def is_solar_window(config, state):
         return False
 
 
+# Hilfsfunktion zum Erstellen einer robusten aiohttp-Session mit DNS-Fallback
+from aiohttp.resolver import AsyncResolver
+import socket
+
+def create_robust_aiohttp_session():
+    resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
+    connector = aiohttp.TCPConnector(resolver=resolver, limit_per_host=10)
+    return aiohttp.ClientSession(connector=connector)
+
 async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5,
                                 parse_mode=None):
-    """Sendet eine Nachricht über Telegram mit Fehlerbehandlung und Wiederholungslogik."""
+    """Sendet eine Nachricht über Telegram mit Fehlerbehandlung, Wiederholungslogik und DNS-Fallback."""
     if len(message) > 4096:
         message = message[:4093] + "..."
         logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
@@ -80,6 +89,15 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
         payload["parse_mode"] = parse_mode
     if reply_markup:
         payload["reply_markup"] = reply_markup
+
+    # Logge die aufgelöste IP von api.telegram.org
+    try:
+        addrs = socket.getaddrinfo("api.telegram.org", 443)
+        resolved_ips = {a[4][0] for a in addrs}
+        logging.debug(f"Resolved api.telegram.org -> {resolved_ips}")
+    except Exception as e:
+        logging.debug(f"DNS-Auflösung für api.telegram.org fehlgeschlagen: {e}")
+
     for attempt in range(1, retries + 1):
         try:
             async with session.post(url, json=payload, timeout=20) as response:
@@ -91,19 +109,21 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                     logging.error(f"Fehler beim Senden der Telegram-Nachricht (Status {response.status}): {error_text}")
                     logging.debug(f"Fehlgeschlagene Nachricht: '{message}' (Länge={len(message)})")
                     return False
-        except aiohttp.ClientConnectionError as e:
+        except (aiohttp.ClientConnectionError, OSError) as e:
             logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
             if attempt < retries:
-                logging.info(f"Warte {retry_delay} Sekunden vor dem nächsten Versuch...")
-                await asyncio.sleep(retry_delay)
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
             else:
                 logging.error("Alle Versuche fehlgeschlagen (Netzwerkfehler).")
                 return False
         except asyncio.TimeoutError:
             logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
             if attempt < retries:
-                logging.info(f"Warte {retry_delay} Sekunden vor dem nächsten Versuch...")
-                await asyncio.sleep(retry_delay)
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
             else:
                 logging.error("Alle Versuche fehlgeschlagen (Timeout).")
                 return False
@@ -135,31 +155,54 @@ async def send_welcome_message(session, chat_id, bot_token, state):
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
-async def get_telegram_updates(session, bot_token, offset=None):
-    """Ruft Telegram-Updates ab."""
+async def get_telegram_updates(session, bot_token, offset=None, retries=3, retry_delay=5):
+    """Ruft Telegram-Updates ab, mit Fehlerbehandlung, Retry und DNS-Fallback."""
     url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
     params = {"timeout": 60}
     if offset is not None:
         params["offset"] = offset
+
+    # Logge die aufgelöste IP von api.telegram.org
     try:
-        async with session.get(url, params=params, timeout=70) as response:
-            if response.status == 200:
-                data = await response.json()
-                updates = data.get("result", [])
-                return updates
-            else:
-                error_text = await response.text()
-                logging.error(f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}, Details: {error_text}")
-                return None
-    except aiohttp.ClientConnectionError as e:
-        logging.error(f"Netzwerkfehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
-        return None
-    except asyncio.TimeoutError:
-        logging.debug("Timeout beim Abrufen von Telegram-Updates (Normal bei Long-Polling)")
-        return []
+        addrs = socket.getaddrinfo("api.telegram.org", 443)
+        resolved_ips = {a[4][0] for a in addrs}
+        logging.debug(f"Resolved api.telegram.org -> {resolved_ips}")
     except Exception as e:
-        logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
-        return None
+        logging.debug(f"DNS-Auflösung für api.telegram.org fehlgeschlagen: {e}")
+
+    for attempt in range(1, retries + 1):
+        try:
+            async with session.get(url, params=params, timeout=70) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    updates = data.get("result", [])
+                    return updates
+                else:
+                    error_text = await response.text()
+                    logging.error(f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}, Details: {error_text}")
+                    return None
+        except (aiohttp.ClientConnectionError, OSError) as e:
+            logging.error(f"Netzwerkfehler beim Abrufen von Telegram-Updates (Versuch {attempt}/{retries}): {e}")
+            if attempt < retries:
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
+            else:
+                logging.error("Alle Versuche fehlgeschlagen (Netzwerkfehler).")
+                return None
+        except asyncio.TimeoutError:
+            logging.debug(f"Timeout beim Abrufen von Telegram-Updates (Versuch {attempt}/{retries})")
+            if attempt < retries:
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
+            else:
+                logging.error("Alle Versuche fehlgeschlagen (Timeout).")
+                return []
+        except Exception as e:
+            logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
+            return None
+    return None
 
 
 async def aktivere_bademodus(session, chat_id, bot_token, state):
