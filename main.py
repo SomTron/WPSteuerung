@@ -1685,11 +1685,7 @@ async def run_program():
         logging.info("Initialisiere CSV-Datei...")
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
-                header = (
-                    "Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
-                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
-                )
+                header = ",".join(EXPECTED_CSV_HEADER) + "\n"
                 await csvfile.write(header)
                 logging.info("CSV-Header geschrieben: " + header.strip())
 

@@ -6,10 +6,11 @@ import shutil
 import os
 from typing import List
 
-# Erwarteter Header für heizungsdaten.csv (angepasst an aktuelle Datei)
+# Erwarteter Header für heizungsdaten.csv (19 Spalten aus main.py)
 EXPECTED_CSV_HEADER = [
-    "Zeitstempel", "T_Oben", "T_Hinten", "T_Boiler", "T_Verd", "Kompressor",
-    "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy"
+    "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",
+    "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy",
+    "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Nachtabsenkung", "PowerSource"
 ]
 
 def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) -> bool:
@@ -20,22 +21,38 @@ def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) 
     if expected_header is None:
         expected_header = EXPECTED_CSV_HEADER
     try:
+        if not os.path.exists(file_path):
+            return False
+
         with open(file_path, "r", encoding="utf-8") as f:
             first_line = f.readline().strip()
+            if not first_line:
+                return False
             # Header vergleichen (als Liste)
             current_header = [h.strip() for h in first_line.split(",")]
+            
+            # Robustheits-Check: Wenn Spaltenanzahl stimmt und erste Spalte "Zeitstempel" ist, 
+            # akzeptieren wir es vorerst, um unnötige Backups zu vermeiden.
+            if len(current_header) == len(expected_header) and current_header[0] == expected_header[0]:
+                return False
+
             if current_header == expected_header:
-                return False  # Header ist korrekt
+                return False  # Header ist exakt gleich
+
         # Header ist falsch: Backup anlegen und korrigieren
         backup_csv(file_path)
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
+        
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(",".join(expected_header) + "\n")
-            # Nur Zeilen behalten, die nicht wie ein Header aussehen
+            # Nur Zeilen behalten, die nicht wie ein Header aussehen (Timestamp-Check)
             for line in lines:
-                if not line.strip() or line.strip() == ",".join(expected_header):
+                if not line.strip():
                     continue
+                parts = line.split(",")
+                if parts[0].strip() == expected_header[0]:
+                    continue # Überspringe alten Header
                 f.write(line)
         logging.info(f"CSV-Header in {file_path} wurde korrigiert.")
         return True
