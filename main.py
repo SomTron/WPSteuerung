@@ -229,6 +229,7 @@ class State:
         self.last_log_time = now - timedelta(minutes=1)
         self._last_config_check = now
         self.last_kompressor_status = None
+        self.verdampfer_blocked = False
 
         # --- Steuerungslogik ---
         self.kompressor_ein = False
@@ -271,6 +272,7 @@ class State:
         self.min_laufzeit = timedelta(minutes=get_config_value(config, "Heizungssteuerung", "MIN_LAUFZEIT", 10, int))
         self.min_pause = timedelta(minutes=get_config_value(config, "Heizungssteuerung", "MIN_PAUSE", 20, int))
         self.verdampfertemperatur = get_config_value(config, "Heizungssteuerung", "VERDAMPFERTEMPERATUR", 6.0, float)
+        self.verdampfer_restart_temp = get_config_value(config, "Heizungssteuerung", "VERDAMPFER_RESTART_TEMP", 9.0, float)
 
         # --- Erhöhte Schwellwerte ---
         self.einschaltpunkt_erhoeht = get_config_value(config, "Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42, int)
@@ -1234,6 +1236,7 @@ def load_and_validate_config():
             "EINSCHALTPUNKT_ERHOEHT": "46",
             "NACHTABSENKUNG": "0",
             "VERDAMPFERTEMPERATUR": "5",
+            "VERDAMPFER_RESTART_TEMP": "9",
             "MIN_PAUSE": "5",
             "SICHERHEITS_TEMP": "52",
             "HYSTERESE_MIN": "2"
@@ -1303,6 +1306,7 @@ async def reload_config(session, state):
         state.min_pause = timedelta(minutes=get_config_value(new_config, "Heizungssteuerung", "MIN_PAUSE", 20, int))
         state.sicherheits_temp = get_config_value(new_config, "Heizungssteuerung", "SICHERHEITS_TEMP", 52.0, float)
         state.verdampfertemperatur = get_config_value(new_config, "Heizungssteuerung", "VERDAMPFERTEMPERATUR", 6.0, float)
+        state.verdampfer_restart_temp = get_config_value(new_config, "Heizungssteuerung", "VERDAMPFER_RESTART_TEMP", 9.0, float)
 
         # --- Übergangsmodus-Zeiten (morgens und abends) ---
         try:
