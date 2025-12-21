@@ -2,6 +2,65 @@ from datetime import datetime, timedelta
 import pytz
 import logging
 
+import shutil
+import os
+from typing import List
+
+# Erwarteter Header für heizungsdaten.csv (angepasst an aktuelle Datei)
+EXPECTED_CSV_HEADER = [
+    "Zeitstempel", "T_Oben", "T_Hinten", "T_Boiler", "T_Verd", "Kompressor",
+    "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy"
+]
+
+def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) -> bool:
+    """
+    Prüft, ob der Header der CSV-Datei korrekt ist, und stellt ihn ggf. wieder her.
+    Gibt True zurück, wenn eine Korrektur vorgenommen wurde.
+    """
+    if expected_header is None:
+        expected_header = EXPECTED_CSV_HEADER
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            first_line = f.readline().strip()
+            # Header vergleichen (als Liste)
+            current_header = [h.strip() for h in first_line.split(",")]
+            if current_header == expected_header:
+                return False  # Header ist korrekt
+        # Header ist falsch: Backup anlegen und korrigieren
+        backup_csv(file_path)
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(",".join(expected_header) + "\n")
+            # Nur Zeilen behalten, die nicht wie ein Header aussehen
+            for line in lines:
+                if not line.strip() or line.strip() == ",".join(expected_header):
+                    continue
+                f.write(line)
+        logging.info(f"CSV-Header in {file_path} wurde korrigiert.")
+        return True
+    except Exception as e:
+        logging.error(f"Fehler beim Prüfen/Korrigieren des CSV-Headers: {e}")
+        return False
+
+def backup_csv(file_path: str, backup_dir: str = "backup") -> str:
+    """
+    Erstellt ein Backup der CSV-Datei im backup/-Verzeichnis mit Zeitstempel.
+    Gibt den Pfad zur Backup-Datei zurück.
+    """
+    try:
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+        base = os.path.basename(file_path)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"{base}_{timestamp}.bak")
+        shutil.copy2(file_path, backup_path)
+        logging.info(f"Backup von {file_path} erstellt: {backup_path}")
+        return backup_path
+    except Exception as e:
+        logging.error(f"Fehler beim Backup von {file_path}: {e}")
+        return ""
+
 def safe_timedelta(now: datetime, timestamp: datetime, local_tz: pytz.BaseTzInfo, default: timedelta = timedelta()) -> timedelta:
     """
     Berechnet die Zeitdifferenz zwischen zwei Zeitstempeln mit Zeitzonensicherheit.

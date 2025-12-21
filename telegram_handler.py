@@ -7,6 +7,7 @@ import aiofiles
 import os
 from aiohttp import FormData
 import pandas as pd
+from utils import check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
@@ -877,12 +878,21 @@ async def get_boiler_temperature_history(session, hours, state, config):
             logging.error(f"❌ CSV-Datei nicht gefunden: {file_path}")
             await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
             return
+        # Header regelmäßig prüfen und ggf. korrigieren (z.B. alle 100 Aufrufe oder nach Zeit)
+        check_and_fix_csv_header(file_path)
+        # Backup vor dem Auslesen (z.B. alle 24h oder nach Bedarf, hier immer für Demo)
+        backup_csv(file_path)
         try:
-            df = pd.read_csv(file_path, usecols=[
-                "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd",
-                "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"
-            ], engine="c")
+            # Robust: Trennzeichen automatisch erkennen, Header prüfen
+            df = pd.read_csv(file_path, sep=None, engine="python")
+            # Prüfe, ob alle erwarteten Spalten vorhanden sind
+            missing = [col for col in EXPECTED_CSV_HEADER if col not in df.columns]
+            if missing:
+                logging.warning(f"Fehlende Spalten in CSV: {missing}")
             logging.debug(f"CSV geladen, {len(df)} Zeilen, Spalten: {df.columns.tolist()}")
+            # Optional: Nur relevante Spalten weitergeben
+            usecols = [c for c in ["Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd", "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"] if c in df.columns]
+            df = df[usecols]
         except Exception as e:
             logging.error(f"❌ Fehler beim Einlesen der CSV: {e}", exc_info=True)
             await send_telegram_message(session, state.chat_id, "Fehler beim Lesen der CSV-Datei.", state.bot_token)
