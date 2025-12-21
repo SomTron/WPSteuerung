@@ -26,6 +26,9 @@ sudo systemctl restart my_script.service
 source myenv/bin/activate
 Venv: myenv starten
 
+csv zipen gzip heizungsdaten.csv
+hochladen: curl -F "reqtype=fileupload" -F "fileToUpload=@./heizungsdaten.csv.gz" https://catbox.moe/user/api.php
+
 Linux backup erstellen:
 DATUM=$(date +%Y%m%d_%H%M%S)
 cp WW_skript.py WW_skript.py_$(date +%Y%m%d_%H%M%S).bak
