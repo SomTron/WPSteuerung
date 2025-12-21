@@ -1,0 +1,140 @@
+﻿python : ERROR:root:Sicherheitsabschaltung: 
+T_Oben=56.0 Grad, T_Unten=54.0 Grad
+In Zeile:1 Zeichen:1
++ python tests/test_day_simulation.py 2>&1 | 
+Out-File -FilePath test_ou ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ERROR: 
+   root:Sich...Unten=54.0 Grad:String) [], RemoteE  
+  xception
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ERROR:root:Sicherheitsabschaltung: T_Oben=50.0 
+Grad, T_Unten=48.0 Grad
+ERROR:root:Sicherheitsabschaltung: T_Oben=50.0 
+Grad, T_Unten=48.0 Grad
+ERROR:root:Sicherheitsabschaltung: T_Oben=50.0 
+Grad, T_Unten=48.0 Grad
+ERROR:root:Sicherheitsabschaltung: T_Oben=65.0 
+Grad, T_Unten=42.0 Grad
+ERROR:root:Sicherheitsabschaltung: T_Oben=55.0 
+Grad, T_Unten=42.0 Grad
+WARNING:root:Verdampfertemperatur zu niedrig (-15.0 
+Grad < 6.0 Grad)
+Traceback (most recent call last):
+  File "C:\Users\Patrik\PycharmProjects\WPSteuerung\
+WPSteuerung\tests\test_day_simulation.py", line 
+388, in <module>
+    asyncio.run(test_scenarios())
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Patrik\AppData\Local\Programs\Pytho
+n\Python313\Lib\asyncio\runners.py", line 195, in 
+run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Users\Patrik\AppData\Local\Programs\Pytho
+n\Python313\Lib\asyncio\runners.py", line 118, in 
+run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\Patrik\AppData\Local\Programs\Pytho
+n\Python313\Lib\asyncio\base_events.py", line 725, 
+in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "C:\Users\Patrik\PycharmProjects\WPSteuerung\
+WPSteuerung\tests\test_day_simulation.py", line 
+364, in test_scenarios
+    raise AssertionError(error_msg)
+AssertionError: 
+
+*** BUG DETECTED! ***
+Zeit: 08:10:00
+▄bergangsmodus: Ja
+Temperatur: 35 < 43.0 (w³rde einschalten)
+Solar: 200W (KEIN ▄berschuss!)
+Kompressor: AN (SOLLTE AUS SEIN!)
+
+
+
+=== SZENARIO: 1. Standard Tag + Schwankungen ===
+UHRZEIT    | MODUS                | TEMP (O/M/U) | REGEL  | EIN  | AUS  | VERD   | SOLAR    | KOMPRESSOR | INFO
+--------------------------------------------------------------------------------------------------------------------------------------------
+00:00      | Nachtmodus           | 40/40/35     | 40     | 28.0 | 30.0 | 10.0   | 0W       | AUS        | Start Nacht
+02:00      | Nachtmodus           | 34/34/30     | 34     | 28.0 | 30.0 | 10.0   | 0W       | AUS        | Temp < Einschalt (35) -> AN
+03:00      | Nachtmodus           | 46/46/42     | 46     | 28.0 | 30.0 | 10.0   | 0W       | AUS        | Temp > Ausschalt (45) -> AUS
+07:00      | Nachtmodus           | 39/39/36     | 39     | 28.0 | 30.0 | 10.0   | 100W     | AUS        | Morgen (▄bergang)
+12:00      | Solar³berschuss      | 42/42/40     | 40     | 40   | 48   | 10.0   | 1000W    | AN         | Solar³berschuss -> Sollwerte hoch
+12:15      | Solar³berschuss      | 42/42/40     | 40     | 40   | 48   | 10.0   | 1000W    | AN         | Kompressor AN (Solarboost)
+13:00      | Normalmodus          | 48/48/46     | 48     | 43.0 | 45.0 | 10.0   | 200W     | AUS        | Wolke! BatPower < 600 -> Normalmodus
+13:15      | Solar³berschuss      | 48/48/46     | 46     | 40   | 48   | 10.0   | 1200W    | AUS        | Sonne da -> Solar³berschuss
+16:00      | Solar³berschuss      | 56/56/54     | 54     | 40   | 48   | 10.0   | 800W     | AUS        | Speicher voll -> AUS [SAFETY: ▄bertemperatur (>= 50.0 Grad)]
+23:00      | Nachtmodus           | 45/45/42     | 45     | 28.0 | 30.0 | 10.0   | -200W    | AUS        | Nacht
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+
+=== SZENARIO: 2. ▄bergõnge & Moduswechsel ===
+UHRZEIT    | MODUS                | TEMP (O/M/U) | REGEL  | EIN  | AUS  | VERD   | SOLAR    | KOMPRESSOR | INFO
+--------------------------------------------------------------------------------------------------------------------------------------------
+09:55      | ▄bergangsmodus       | 45/45/42     | 45     | 43.0 | 45.0 | 10.0   | 100W     | AUS        | Morgen ▄bergang (Ende 10:00)
+10:05      | Normalmodus          | 45/45/42     | 45     | 43.0 | 45.0 | 10.0   | 100W     | AUS        | Normalmodus (nach 10:00)
+11:00      | Solar³berschuss      | 45/45/42     | 42     | 40   | 48   | 10.0   | 800W     | AUS        | Direkt zu Solar³berschuss (>600W, SOC>95)
+11:15      | Solar³berschuss      | 45/45/42     | 42     | 40   | 48   | 10.0   | 800W     | AUS        | Kompressor AN (Solar)
+14:00      | Normalmodus          | 50/50/48     | 50     | 43.0 | 45.0 | 10.0   | -100W    | AUS        | Verbrauch hoch, Bat leer -> Normalmodus [SAFETY: ▄bertemperatur (>= 50.0 Grad)]
+14:15      | Normalmodus          | 50/50/48     | 50     | 43.0 | 45.0 | 10.0   | -100W    | AUS        | Kompressor bleibt AN (Hysterese) [SAFETY: ▄bertemperatur (>= 50.0 Grad)]
+18:05      | ▄bergangsmodus       | 50/50/48     | 50     | 43.0 | 45.0 | 10.0   | -100W    | AUS        | Abend ▄bergang (Start 18:00) [SAFETY: ▄bertemperatur (>= 50.0 Grad)]
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+
+=== SZENARIO: 3. Fehlerfõlle & Edge Cases ===
+UHRZEIT    | MODUS                | TEMP (O/M/U) | REGEL  | EIN  | AUS  | VERD   | SOLAR    | KOMPRESSOR | INFO
+--------------------------------------------------------------------------------------------------------------------------------------------
+10:00      | ▄bergangsmodus       | 40/40/38     | 40     | 43.0 | 45.0 | 10     | 0W       | AUS        | Normalbetrieb
+10:15      | Normalmodus          | 40/40/38     | 40     | 43.0 | 45.0 | 10     | 0W       | AN         | Kompressor AN
+10:30      | Normalmodus          | ERR          | N/A    | 43.0 | 45.0 | 10     | 0W       | AN         | SENSORFEHLER: T_Mittig ausgefallen
+10:45      | Normalmodus          | 42/42/40     | 42     | 43.0 | 45.0 | 10     | 0W       | AN         | Sensor wieder da
+11:00      | Normalmodus          | 45/45/42     | 45     | 43.0 | 45.0 | 10     | 0W       | AUS        | Normalbetrieb
+11:15      | Normalmodus          | 65/45/42     | 45     | 43.0 | 45.0 | 10     | 0W       | AUS        | ▄BERTEMPERATUR T_Oben=65! [SAFETY: ▄bertemperatur (>= 50.0 Grad)]
+11:30      | Normalmodus          | 55/45/42     | 45     | 43.0 | 45.0 | 10     | 0W       | AUS        | Abk³hlung T_Oben=55 [SAFETY: ▄bertemperatur (>= 50.0 Grad)]
+12:00      | Normalmodus          | 45/45/42     | 45     | 43.0 | 45.0 | -15    | 0W       | AUS        | VERDAMPFER VEREIST (-15░C) [SAFETY: Verdampfertemperatur zu niedrig (-15.0 Grad < 6.0 Grad)]
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+
+=== SZENARIO: 4. Mindestlaufzeit & Pause ===
+UHRZEIT    | MODUS                | TEMP (O/M/U) | REGEL  | EIN  | AUS  | VERD   | SOLAR    | KOMPRESSOR | INFO
+--------------------------------------------------------------------------------------------------------------------------------------------
+08:00      | ▄bergangsmodus       | 40/40/35     | 40     | 28.0 | 30.0 | 10.0   | 0W       | AUS        | Start (Normalmodus)
+08:05      | ▄bergangsmodus       | 34/34/30     | 34     | 43.0 | 45.0 | 10.0   | 0W       | AUS        | Temp < Einschalt -> AN
+08:10      | ▄bergangsmodus       | 46/46/42     | 46     | 43.0 | 45.0 | 10.0   | 0W       | AUS        | Temp > Ausschalt -> Bleibt AN (Min Laufzeit 5/10 min)
+08:16      | ▄bergangsmodus       | 46/46/42     | 46     | 43.0 | 45.0 | 10.0   | 0W       | AUS        | Temp > Ausschalt -> AUS (Laufzeit > 10 min)
+08:20      | ▄bergangsmodus       | 34/34/30     | 34     | 43.0 | 45.0 | 10.0   | 0W       | AUS        | Temp < Einschalt -> Bleibt AUS (Min Pause 4/10 min)
+08:27      | ▄bergangsmodus       | 34/34/30     | 34     | 43.0 | 45.0 | 10.0   | 0W       | AUS        | Temp < Einschalt -> AN (Pause > 10 min)
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+
+=== SZENARIO: 5. ▄bergangsmodus Edge Cases (Bug-Catching) ===
+UHRZEIT    | MODUS                | TEMP (O/M/U) | REGEL  | EIN  | AUS  | VERD   | SOLAR    | KOMPRESSOR | INFO
+--------------------------------------------------------------------------------------------------------------------------------------------
+07:59      | Nachtmodus           | 35/35/30     | 35     | 28.0 | 30.0 | 10.0   | 0W       | AUS        | Vor ▄bergangsmodus (Nacht)
+08:00      | ▄bergangsmodus       | 35/35/30     | 35     | 28.0 | 30.0 | 10.0   | 0W       | AUS        | ▄bergangsmodus START - KEIN Solar -> MUSS AUS bleiben!
+08:01      | ▄bergangsmodus       | 35/35/30     | 35     | 43.0 | 45.0 | 10.0   | 0W       | AUS        | Immer noch kein Solar -> MUSS AUS bleiben! [KORREKT: AUS trotz Temp-Bed.]
+08:05      | Solar³berschuss      | 35/35/30     | 30     | 40   | 48   | 10.0   | 800W     | AN         | Solar aktiv -> DARF AN
+
+
+*** BUG DETECTED! ***
+Zeit: 08:10:00
+▄bergangsmodus: Ja
+Temperatur: 35 < 43.0 (w³rde einschalten)
+Solar: 200W (KEIN ▄berschuss!)
+Kompressor: AN (SOLLTE AUS SEIN!)
+
+
+ERROR: 
+
+*** BUG DETECTED! ***
+Zeit: 08:10:00
+▄bergangsmodus: Ja
+Temperatur: 35 < 43.0 (w³rde einschalten)
+Solar: 200W (KEIN ▄berschuss!)
+Kompressor: AN (SOLLTE AUS SEIN!)
+

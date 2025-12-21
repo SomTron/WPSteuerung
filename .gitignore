@@ -1,4 +1,5 @@
-# Ignoriere Konfigurationsdateien
+# Ignoriere Konfigurationsdateien mit sensiblen Daten
+richtige_config.ini
 config.ini
 
 # Ignoriere Infodatepí
@@ -10,3 +11,7 @@ Infos
 
 # Ignoriere virtuelle Environments
 .venv/
+
+# Python Cache
+__pycache__/
+*.pyc

@@ -10,6 +10,8 @@ letzte Logs anzeigen
 
 tail -n 200 heizungssteuerung.log
 
+tail -n 200 error.log
+
 grep -i "error" heizungssteuerung.log
 grep -i "info" heizungssteuerung.log
 
@@ -23,6 +25,11 @@ sudo systemctl restart my_script.service
 
 source myenv/bin/activate
 Venv: myenv starten
+
+Linux backup erstellen:
+DATUM=$(date +%Y%m%d_%H%M%S)
+cp WW_skript.py WW_skript.py_$(date +%Y%m%d_%H%M%S).bak
+cp telegram_handler.py telegram_handler.py_$(date +%Y%m%d_%H%M%S).bak
 
 Logik:
 

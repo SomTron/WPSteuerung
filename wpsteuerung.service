@@ -1,0 +1,14 @@
+[Unit]
+Description=WP Steuerung - Heat Pump Control
+After=network.target
+
+[Service]
+Type=simple
+User=patrik
+WorkingDirectory=/home/patrik/WPSteuerung
+ExecStart=/home/patrik/WPSteuerung/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

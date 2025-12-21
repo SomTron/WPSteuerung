@@ -4,8 +4,15 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
+<<<<<<< HEAD
     <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="funktioniert wieder">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+=======
+    <list default="true" id="8736c50e-5e7c-4386-a1e4-c6f5ce1e2b54" name="Changes" comment="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase">
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WPSteuerung/telegram_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/WPSteuerung/telegram_handler.py" afterDir="false" />
+>>>>>>> cbb0d31cbadc3f073e1e998b5f6ffea5e69d0519
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -22,11 +29,20 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
+<<<<<<< HEAD
         <entry key="$PROJECT_DIR$" value="master" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
     <option name="RESET_MODE" value="HARD" />
+=======
+        <entry key="$PROJECT_DIR$" value="aa9f834d79213fb12c21cff07fe869d794cafcad" />
+        <entry key="$PROJECT_DIR$/WPSteuerung" value="master" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RESET_MODE" value="MIXED" />
+>>>>>>> cbb0d31cbadc3f073e1e998b5f6ffea5e69d0519
   </component>
   <component name="GitHubPullRequestSearchHistory">{
   &quot;lastFilter&quot;: {
@@ -36,8 +52,13 @@
 }</component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
+<<<<<<< HEAD
     &quot;url&quot;: &quot;https://github.com/SomTron/WPSteuerung.git&quot;,
     &quot;accountId&quot;: &quot;97cfe8e8-1b9d-4df8-8eef-ce437b69de49&quot;
+=======
+    &quot;url&quot;: &quot;https://github.com/SomTron/WPSteuerung&quot;,
+    &quot;accountId&quot;: &quot;12c69841-28d0-4b84-a964-dca61f6f8b01&quot;
+>>>>>>> cbb0d31cbadc3f073e1e998b5f6ffea5e69d0519
   }
 }</component>
   <component name="ProjectColorInfo">{
@@ -52,8 +73,15 @@
   &quot;keyToString&quot;: {
     &quot;ASKED_MARK_IGNORED_FILES_AS_EXCLUDED&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+<<<<<<< HEAD
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;funktioniert&quot;,
+=======
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+>>>>>>> cbb0d31cbadc3f073e1e998b5f6ffea5e69d0519
     &quot;last_opened_file_path&quot;: &quot;C:/Users/Patrik/PycharmProjects/WPSteuerungGit&quot;
   }
 }</component>
@@ -89,7 +117,11 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
+<<<<<<< HEAD
         <option value="bundled-python-sdk-82724e2b1abb-e2d783800521-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-251.28293.52" />
+=======
+        <option value="bundled-python-sdk-f69e5c277ee4-cbfc7b97e6b2-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-252.27397.106" />
+>>>>>>> cbb0d31cbadc3f073e1e998b5f6ffea5e69d0519
       </set>
     </attachedChunks>
   </component>
@@ -134,6 +166,7 @@
       <option name="project" value="LOCAL" />
       <updated>1739358712501</updated>
     </task>
+<<<<<<< HEAD
     <task id="LOCAL-00005" summary="Too Many Requests: retry after 10 Fehler behoben mit neuen Code">
       <option name="closed" value="true" />
       <created>1757571848602</created>
@@ -151,6 +184,49 @@
       <updated>1757878982377</updated>
     </task>
     <option name="localTasksCounter" value="7" />
+=======
+    <task id="LOCAL-00005" summary="richtig api">
+      <option name="closed" value="true" />
+      <created>1759493538013</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1759493538013</updated>
+    </task>
+    <task id="LOCAL-00006" summary="aktuelle api">
+      <option name="closed" value="true" />
+      <created>1759493786879</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1759493786879</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Übergangszeit auch am Abend definiert.">
+      <option name="closed" value="true" />
+      <created>1761292979330</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1761292979330</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck">
+      <option name="closed" value="true" />
+      <created>1763559971146</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1763559971146</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase">
+      <option name="closed" value="true" />
+      <created>1763561979723</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1763561979723</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
+>>>>>>> cbb0d31cbadc3f073e1e998b5f6ffea5e69d0519
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -158,7 +234,19 @@
       <map>
         <entry key="MAIN">
           <value>
-            <State />
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="origin/master" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
           </value>
         </entry>
       </map>
@@ -167,6 +255,7 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="initiales uploaden auf Github" />
     <MESSAGE value="gitignore testen" />
+<<<<<<< HEAD
     <MESSAGE value="Too Many Requests: retry after 10 Fehler behoben mit neuen Code" />
     <MESSAGE value="funktioniert wieder" />
     <option name="LAST_COMMIT_MESSAGE" value="funktioniert wieder" />
@@ -181,5 +270,13 @@
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
+=======
+    <MESSAGE value="richtig api" />
+    <MESSAGE value="aktuelle api" />
+    <MESSAGE value="Übergangszeit auch am Abend definiert." />
+    <MESSAGE value="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck" />
+    <MESSAGE value="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase" />
+    <option name="LAST_COMMIT_MESSAGE" value="Laufzeit repariert, Übergangszeit am Abend. Kein Healthcheck rebase" />
+>>>>>>> cbb0d31cbadc3f073e1e998b5f6ffea5e69d0519
   </component>
 </project>
