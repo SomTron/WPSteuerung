@@ -228,8 +228,21 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
             await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben)
         return False
     
-    if t_verd < state.verdampfertemperatur:
-        state.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {state.verdampfertemperatur} Grad)"
+    if t_verd < state.verdampfertemperatur or getattr(state, 'verdampfer_blocked', False):
+        # Hysterese-Logik: Sperre aufheben erst bei VERDAMPFER_RESTART_TEMP (z.B. 9 Grad)
+        restart_temp = getattr(state, 'verdampfer_restart_temp', 9.0)
+        
+        if t_verd < state.verdampfertemperatur:
+            state.verdampfer_blocked = True
+            reason = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {state.verdampfertemperatur} Grad)"
+        elif t_verd < restart_temp:
+            state.verdampfer_blocked = True
+            reason = f"Verdampfer-Sperre aktiv: Warten auf Erwärmung ({t_verd:.1f} Grad < {restart_temp} Grad)"
+        else:
+            state.verdampfer_blocked = False
+            return True # Sperre aufgehoben, Temperatur ok
+
+        state.ausschluss_grund = reason
         # Throttle Logging um Spam und Watchdog-Timeouts zu vermeiden
         if check_log_throttle(state, "last_verdampfer_notification"):
             logging.warning(state.ausschluss_grund)

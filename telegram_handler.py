@@ -608,34 +608,49 @@ async def send_status_telegram(
 
     compressor_status_str = "EIN" if kompressor_status else "AUS"
     status_lines = [
-        "📊 **Systemstatus**",
-        "🌡️ **Temperaturen**",
-        f" • Oben: {'N/A' if t_oben is None else f'{t_oben:.1f}°C'}",
-        f" • Mittig: {'N/A' if t_mittig is None else f'{t_mittig:.1f}°C'}",
-        f" • Unten: {'N/A' if t_unten is None else f'{t_unten:.1f}°C'}",
-        f" • Verdampfer: {'N/A' if t_verd is None else f'{t_verd:.1f}°C'}",
-        "🛠️ **Kompressor**",
-        f" • Status: {compressor_status_str}",
-        f" • Aktuelle Laufzeit: {format_time(current_runtime)}",
-        f" • Gesamtlaufzeit heute: {format_time(total_runtime)}",
-        f" • Letzte Laufzeit: {format_time(state.last_runtime)}",
-        "🎯 **Sollwerte**",
-        f" • Einschaltpunkt: {state.aktueller_einschaltpunkt}°C",
-        f" • Ausschaltpunkt: {state.aktueller_ausschaltpunkt}°C",
-        f" • Gilt für: {'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Mittig'}",
-        "⚙️ **Betriebsmodus**",
-        f" • {mode_str}",
-        "ℹ️ **Zusatzinfo**",
-        f" • Solarüberschuss: {feedinpower:.1f} W",
-        f" • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})",
-        f" • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}",
-        f" • Bademodus aktiv: {'Ja' if state.bademodus_aktiv else 'Nein'}",
-        "🔒 **Netzwerk/VPN**",
-        f" • VPN: {'✅ Aktiv (' + state.vpn_ip + ')' if state.vpn_ip else '❌ Inaktiv'}"
+        "═══════════════════════════════════════",
+        "📊 **SYSTEMSTATUS**",
+        "═══════════════════════════════════════",
+        "",
+        "🌡️ **TEMPERATUREN**",
+        f"  Oben:       {t_oben:.1f}°C" if t_oben is not None else "  Oben:       N/A",
+        f"  Mittig:     {t_mittig:.1f}°C" if t_mittig is not None else "  Mittig:     N/A",
+        f"  Unten:      {t_unten:.1f}°C" if t_unten is not None else "  Unten:      N/A",
+        f"  Verdampfer: {t_verd:.1f}°C" if t_verd is not None else "  Verdampfer: N/A",
+        "",
+        "🛠️ **KOMPRESSOR**",
+        f"  Status:        {compressor_status_str}",
+        f"  Aktuelle LZ:   {format_time(current_runtime)}",
+        f"  Gesamt heute:  {format_time(total_runtime)}",
+        f"  Letzte LZ:     {format_time(state.last_runtime)}",
+        "",
+        "🎯 **SOLLWERTE**",
+        f"  Ein:           {state.aktueller_einschaltpunkt}°C",
+        f"  Aus:           {state.aktueller_ausschaltpunkt}°C",
+        f"  Steuert nach:  {'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Mittig'}",
+        "",
+        "⚙️ **BETRIEBSMODUS**",
+        f"  {mode_str}",
+        "",
+        "☀️ **SOLARANLAGE**",
+        f"  Einspeisepower: {feedinpower:.1f} W",
+        f"  Batteriepower:  {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})",
+        f"  Überschuss aktiv: {'✅ JA' if state.solar_ueberschuss_aktiv else '❌ NEIN'}",
+        "",
+        "🔧 **ZUSTÄNDE**",
+        f"  Bademodus:      {'✅ aktiv' if state.bademodus_aktiv else '❌ aus'}",
+        f"  Urlaubsmodus:   {'✅ aktiv' if state.urlaubsmodus_aktiv else '❌ aus'}",
+        "",
+        "🔒 **NETZWERK/VPN**",
+        f"  VPN:            {'✅ ' + state.vpn_ip if state.vpn_ip else '❌ Inaktiv'}"
     ]
     if state.ausschluss_grund:
         escaped_ausschluss_grund = escape_markdown(str(state.ausschluss_grund))
-        status_lines.append(f" • Ausschlussgrund: {escaped_ausschluss_grund}")
+        status_lines.append(f"  ⚠️  Grund:       {escaped_ausschluss_grund}")
+    status_lines.extend([
+        "",
+        "═══════════════════════════════════════"
+    ])
     message = "\n".join(status_lines)
     logging.debug(f"Vollständige Status-Nachricht (Länge={len(message)}): {message}")
     return await send_telegram_message(session, chat_id, message, bot_token, parse_mode="Markdown")

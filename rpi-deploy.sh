@@ -1,15 +1,15 @@
 #!/bin/sh
-# Raspberry Pi WPSteuerung Deployment Script
-# Verwendung: ./rpi-deploy.sh oder sh rpi-deploy.sh
+# Raspberry Pi WPSteuerung Deployment Script (POSIX-sh kompatibel)
+# Verwendung: ./rpi-deploy.sh  (oder: bash rpi-deploy.sh)
 
-set -e  # Exit bei Fehler
+set -e
 
 # Farben fuer Output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Konfiguration
 REPO_DIR="/home/patrik/WPSteuerung"
@@ -21,7 +21,7 @@ printf "${CYAN}=========================================${NC}\n"
 
 # Pruefe ob Repository existiert
 if [ ! -d "$REPO_DIR" ]; then
-    printf "${RED}Fehler: Repository nicht gefunden in $REPO_DIR${NC}\n"
+    printf "${RED}Fehler: Repository nicht gefunden in %s${NC}\n" "$REPO_DIR"
     printf "${YELLOW}Fuehre erst die Ersteinrichtung durch!${NC}\n"
     exit 1
 fi
@@ -30,13 +30,13 @@ cd "$REPO_DIR"
 
 # Zeige aktuellen Branch
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-printf "\n${YELLOW}Aktueller Branch: $CURRENT_BRANCH${NC}\n"
+printf "\n${YELLOW}Aktueller Branch: %s${NC}\n" "$CURRENT_BRANCH"
 
 # Zeige Git Status (ohne untracked files)
 printf "\n${CYAN}Git Status (ohne untracked files):${NC}\n"
 git status -uno --short
 
-# Warne nur bei tatsaechlichen Aenderungen (ignore untracked files)
+# Warne nur bei getrackten Aenderungen
 if [ -n "$(git status -uno --porcelain)" ]; then
     printf "${RED}WARNUNG: Es gibt lokale Aenderungen an getrackten Dateien!${NC}\n"
     printf "Moechtest du diese verwerfen? (j/n): "
@@ -68,11 +68,10 @@ read choice
 
 case "$choice" in
     1)
-        printf "\n${CYAN}Aktualisiere Branch '$CURRENT_BRANCH'...${NC}\n"
+        printf "\n${CYAN}Aktualisiere Branch '%s'...${NC}\n" "$CURRENT_BRANCH"
         git fetch --all
         git pull origin "$CURRENT_BRANCH"
         printf "${GREEN}Code aktualisiert!${NC}\n"
-        
         printf "Service neu starten? (j/n): "
         read reply
         case "$reply" in
@@ -86,15 +85,12 @@ case "$choice" in
     2)
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
-
         printf "Zu welchem Branch wechseln? (master/android-api/funktioniert): "
         read target_branch
-
-        printf "${CYAN}Wechsle zu Branch '$target_branch'...${NC}\n"
+        printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
         git fetch --all
         git checkout "$target_branch"
-        printf "${GREEN}Zu Branch '$target_branch' gewechselt!${NC}\n"
-        
+        printf "${GREEN}Zu Branch '%s' gewechselt!${NC}\n" "$target_branch"
         printf "Service neu starten? (j/n): "
         read reply
         case "$reply" in
@@ -108,16 +104,13 @@ case "$choice" in
     3)
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
-
         printf "Zu welchem Branch wechseln? (master/android-api/funktioniert): "
         read target_branch
-        
-        printf "${CYAN}Wechsle zu Branch '$target_branch'...${NC}\n"
+        printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
         git fetch --all
         git checkout "$target_branch"
         git pull origin "$target_branch"
         printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
-        
         printf "Service neu starten? (j/n): "
         read reply
         case "$reply" in
@@ -135,15 +128,18 @@ case "$choice" in
         ;;
 
     5)
-        printf "\n${CYAN}=== Git Status ===${NC}\n"
-        printf "Branch: %s\n" "$(git rev-parse --abbrev-ref HEAD)"
-        printf "Letzter Commit: %s\n" "$(git log -1 --oneline)"
-
-        printf "\n${CYAN}=== Service Status ===${NC}\n"
-        sudo systemctl status "$SERVICE_NAME" --no-pager -l
-
-        printf "\n${CYAN}=== Letzte 20 Log-Zeilen ===${NC}\n"
-        sudo journalctl -u "$SERVICE_NAME" -n 20 --no-pager
+        printf "\n${CYAN}=========================================${NC}\n"
+        printf "${GREEN}=== Aktueller Status ===${NC}\n"
+        printf "${CYAN}=========================================${NC}\n"
+        printf "  Branch:        ${YELLOW}%s${NC}\n" "$(git rev-parse --abbrev-ref HEAD)"
+        printf "  Letzter Commit: %s\n" "$(git log -1 --oneline)"
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            printf "  Service:       ${GREEN}✓ AKTIV${NC}\n"
+        else
+            printf "  Service:       ${RED}✗ INAKTIV${NC}\n"
+        fi
+        printf "${CYAN}=========================================${NC}\n"
+        printf "\n"
         ;;
 
     6)
@@ -156,13 +152,10 @@ case "$choice" in
         else
              printf "${GREEN}WireGuard ist bereits installiert.${NC}\n"
         fi
-
         if [ ! -f "/etc/wireguard/wg0.conf" ]; then
             printf "${YELLOW}Konfiguration /etc/wireguard/wg0.conf nicht gefunden.${NC}\n"
-            printf "Du musst die Konfiguration manuell erstellen oder Schlussel generieren.\n"
-            printf "Beispiel:\n"
-            printf "  wg genkey | tee privatekey | wg pubkey > publickey\n"
-            printf "  sudo nano /etc/wireguard/wg0.conf\n"
+            printf "Du musst die Konfiguration manuell erstellen oder Schl\344ssel generieren.\n"
+            printf "Beispiel:\n  wg genkey | tee privatekey | wg pubkey > publickey\n  sudo nano /etc/wireguard/wg0.conf\n"
         else
             printf "${GREEN}Konfiguration gefunden.${NC}\n"
             printf "WireGuard Service (re)starten? (j/n): "
@@ -175,7 +168,6 @@ case "$choice" in
                     ;;
             esac
         fi
-
         if command -v wg > /dev/null 2>&1; then
              printf "\n${CYAN}WireGuard Status:${NC}\n"
              sudo wg show
@@ -195,17 +187,14 @@ case "$choice" in
         ;;
 esac
 
-printf "\n${CYAN}=========================================${NC}\n"
-printf "${GREEN}=== Aktueller Status ===${NC}\n"
-printf "${CYAN}=========================================${NC}\n"
-printf "  Branch:        ${YELLOW}%s${NC}\n" "$(git rev-parse --abbrev-ref HEAD)"
-printf "  Letzter Commit: %s\n" "$(git log -1 --oneline)"
+printf "\n${GREEN}=== Aktueller Status ===${NC}\n"
+printf "Branch: %s\n" "$(git rev-parse --abbrev-ref HEAD)"
+printf "Letzter Commit: %s\n" "$(git log -1 --oneline)"
 
 if systemctl is-active --quiet "$SERVICE_NAME"; then
-    printf "  Service:       ${GREEN}✓ AKTIV${NC}\n"
+    printf "Service: ${GREEN}AKTIV${NC}\n"
 else
-    printf "  Service:       ${RED}✗ INAKTIV${NC}\n"
+    printf "Service: ${RED}INAKTIV${NC}\n"
 fi
 
-printf "${CYAN}=========================================${NC}\n"
-printf "\n${GREEN}✓ Fertig!${NC}\n\n"
+printf "\n${CYAN}Fertig!${NC}\n"

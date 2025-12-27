@@ -229,6 +229,7 @@ class State:
         self.last_log_time = now - timedelta(minutes=1)
         self._last_config_check = now
         self.last_kompressor_status = None
+        self.verdampfer_blocked = False
 
         # --- Steuerungslogik ---
         self.kompressor_ein = False
@@ -271,6 +272,7 @@ class State:
         self.min_laufzeit = timedelta(minutes=get_config_value(config, "Heizungssteuerung", "MIN_LAUFZEIT", 10, int))
         self.min_pause = timedelta(minutes=get_config_value(config, "Heizungssteuerung", "MIN_PAUSE", 20, int))
         self.verdampfertemperatur = get_config_value(config, "Heizungssteuerung", "VERDAMPFERTEMPERATUR", 6.0, float)
+        self.verdampfer_restart_temp = get_config_value(config, "Heizungssteuerung", "VERDAMPFER_RESTART_TEMP", 9.0, float)
 
         # --- Erhöhte Schwellwerte ---
         self.einschaltpunkt_erhoeht = get_config_value(config, "Heizungssteuerung", "EINSCHALTPUNKT_ERHOEHT", 42, int)
@@ -352,7 +354,11 @@ class State:
         self.powerdc2 = None
         self.consumeenergy = None
         self.solarueberschuss = 0
+        self.solarueberschuss = 0
         self.power_source = "unbekannt"
+        
+        # --- VPN Status ---
+        self.vpn_ip = None
 
         # --- Nachtabsenkung ---
         self.nachtabsenkung = False
@@ -963,6 +969,33 @@ def is_data_old(timestamp):
     return is_old
 
 
+async def check_vpn_status(state):
+    """Prüft den Status der WireGuard-Verbindung und speichert die IP."""
+    try:
+        # Nur unter Linux ausführen
+        if os.name != 'posix':
+            return
+
+        proc = await asyncio.create_subprocess_shell(
+            "ip -4 addr show wg0 | grep inet | awk '{print $2}' | cut -d/ -f1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode == 0 and stdout:
+            ip = stdout.decode().strip()
+            if ip:
+                state.vpn_ip = ip
+                # logging.debug(f"VPN aktiv: {state.vpn_ip}")
+            else:
+                state.vpn_ip = None
+        else:
+            state.vpn_ip = None
+    except Exception as e:
+        logging.error(f"Fehler beim Prüfen des VPN-Status: {e}")
+        state.vpn_ip = None
+
+
 # Asynchrone Task für Display-Updates
 async def display_task(state):
     """
@@ -1203,6 +1236,7 @@ def load_and_validate_config():
             "EINSCHALTPUNKT_ERHOEHT": "46",
             "NACHTABSENKUNG": "0",
             "VERDAMPFERTEMPERATUR": "5",
+            "VERDAMPFER_RESTART_TEMP": "9",
             "MIN_PAUSE": "5",
             "SICHERHEITS_TEMP": "52",
             "HYSTERESE_MIN": "2"
@@ -1272,6 +1306,7 @@ async def reload_config(session, state):
         state.min_pause = timedelta(minutes=get_config_value(new_config, "Heizungssteuerung", "MIN_PAUSE", 20, int))
         state.sicherheits_temp = get_config_value(new_config, "Heizungssteuerung", "SICHERHEITS_TEMP", 52.0, float)
         state.verdampfertemperatur = get_config_value(new_config, "Heizungssteuerung", "VERDAMPFERTEMPERATUR", 6.0, float)
+        state.verdampfer_restart_temp = get_config_value(new_config, "Heizungssteuerung", "VERDAMPFER_RESTART_TEMP", 9.0, float)
 
         # --- Übergangsmodus-Zeiten (morgens und abends) ---
         try:
@@ -1608,6 +1643,10 @@ async def main_loop(config, state, session):
 
                 # Watchdog prüfen
                 last_cycle_time = await check_watchdog(state, session, last_cycle_time)
+                
+                # VPN-Status prüfen (alle 60s reicht)
+                if state.last_log_time and (now - state.last_log_time).seconds < 10:
+                    await check_vpn_status(state)
 
                 await asyncio.sleep(loop_interval)
 
@@ -1646,11 +1685,7 @@ async def run_program():
         logging.info("Initialisiere CSV-Datei...")
         if not os.path.exists("heizungsdaten.csv"):
             async with aiofiles.open("heizungsdaten.csv", 'w', newline='') as csvfile:
-                header = (
-                    "Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor,"
-                    "ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
-                    "Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Nachtabsenkung,PowerSource\n"
-                )
+                header = ",".join(EXPECTED_CSV_HEADER) + "\n"
                 await csvfile.write(header)
                 logging.info("CSV-Header geschrieben: " + header.strip())
 
