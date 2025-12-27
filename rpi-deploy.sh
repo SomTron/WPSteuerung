@@ -45,6 +45,8 @@ if [ -n "$(git status -uno --porcelain)" ]; then
         [Jj]*)
             git reset --hard
             printf "${GREEN}Lokale Aenderungen verworfen.${NC}\n"
+            printf "${CYAN}Starte Skript neu...${NC}\n"
+            exec sh ./rpi-deploy.sh "$@"
             ;;
         *)
             printf "${YELLOW}Abgebrochen.${NC}\n"
@@ -72,14 +74,9 @@ case "$choice" in
         git fetch --all
         git pull origin "$CURRENT_BRANCH"
         printf "${GREEN}Code aktualisiert!${NC}\n"
-        printf "Service neu starten? (j/n): "
-        read reply
-        case "$reply" in
-            [Jj]*)
-                sudo systemctl restart "$SERVICE_NAME"
-                printf "${GREEN}Service neu gestartet!${NC}\n"
-                ;;
-        esac
+        printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
+        sleep 1
+        exec sh ./rpi-deploy.sh "$@"
         ;;
 
     2)
@@ -111,14 +108,9 @@ case "$choice" in
         git checkout "$target_branch"
         git pull origin "$target_branch"
         printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
-        printf "Service neu starten? (j/n): "
-        read reply
-        case "$reply" in
-            [Jj]*)
-                sudo systemctl restart "$SERVICE_NAME"
-                printf "${GREEN}Service neu gestartet!${NC}\n"
-                ;;
-        esac
+        printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
+        sleep 1
+        exec sh ./rpi-deploy.sh "$@"
         ;;
 
     4)
