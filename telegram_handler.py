@@ -78,8 +78,9 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
         logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
 
     # Maskiere Sonderzeichen, wenn parse_mode="Markdown"
-    if parse_mode == "Markdown":
-        message = escape_markdown(message)
+    # WICHTIG: Automatische Maskierung entfernt, da wir Markdown manuell formatieren!
+    # if parse_mode == "Markdown":
+    #     message = escape_markdown(message)
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
@@ -437,10 +438,12 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_bo
     return await send_telegram_message(session, chat_id, message, bot_token)
 
 def escape_markdown(text):
-    """Maskiert Markdown-Sonderzeichen, um Parse-Fehler zu vermeiden."""
+    """Maskiert Markdown-Sonderzeichen für MarkdownV1."""
     if not isinstance(text, str):
         text = str(text)
-    markdown_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    # Nur echte Markdown V1 Sonderzeichen maskieren: _ * ` [
+    # Punkte, Klammern, etc. sind in V1 KEINE Sonderzeichen.
+    markdown_chars = ['_', '*', '`', '[']
     for char in markdown_chars:
         text = text.replace(char, f'\\{char}')
     return text
