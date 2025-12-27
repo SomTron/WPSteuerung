@@ -195,14 +195,17 @@ case "$choice" in
         ;;
 esac
 
-printf "\n${GREEN}=== Aktueller Status ===${NC}\n"
-printf "Branch: %s\n" "$(git rev-parse --abbrev-ref HEAD)"
-printf "Letzter Commit: %s\n" "$(git log -1 --oneline)"
+printf "\n${CYAN}=========================================${NC}\n"
+printf "${GREEN}=== Aktueller Status ===${NC}\n"
+printf "${CYAN}=========================================${NC}\n"
+printf "  Branch:        ${YELLOW}%s${NC}\n" "$(git rev-parse --abbrev-ref HEAD)"
+printf "  Letzter Commit: %s\n" "$(git log -1 --oneline)"
 
 if systemctl is-active --quiet "$SERVICE_NAME"; then
-    printf "Service: ${GREEN}AKTIV${NC}\n"
+    printf "  Service:       ${GREEN}✓ AKTIV${NC}\n"
 else
-    printf "Service: ${RED}INAKTIV${NC}\n"
+    printf "  Service:       ${RED}✗ INAKTIV${NC}\n"
 fi
 
-printf "\n${CYAN}Fertig!${NC}\n"
+printf "${CYAN}=========================================${NC}\n"
+printf "\n${GREEN}✓ Fertig!${NC}\n\n"
