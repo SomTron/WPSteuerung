@@ -111,19 +111,25 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                     logging.debug(f"Fehlgeschlagene Nachricht: '{message}' (Länge={len(message)})")
                     return False
         except (aiohttp.ClientConnectionError, OSError) as e:
-            logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+            if attempt == retries:
+                logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+            else:
+                logging.debug(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
             if attempt < retries:
                 backoff = retry_delay * (2 ** (attempt - 1))
-                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
                 await asyncio.sleep(backoff)
             else:
                 logging.error("Alle Versuche fehlgeschlagen (Netzwerkfehler).")
                 return False
         except asyncio.TimeoutError:
-            logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+            if attempt == retries:
+                logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+            else:
+                logging.debug(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
             if attempt < retries:
                 backoff = retry_delay * (2 ** (attempt - 1))
-                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
                 await asyncio.sleep(backoff)
             else:
                 logging.error("Alle Versuche fehlgeschlagen (Timeout).")
@@ -183,22 +189,22 @@ async def get_telegram_updates(session, bot_token, offset=None, retries=3, retry
                     logging.error(f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}, Details: {error_text}")
                     return None
         except (aiohttp.ClientConnectionError, OSError) as e:
-            logging.error(f"Netzwerkfehler beim Abrufen von Telegram-Updates (Versuch {attempt}/{retries}): {e}")
+            logging.debug(f"Netzwerkfehler beim Abrufen von Telegram-Updates (Versuch {attempt}/{retries}): {e}")
             if attempt < retries:
                 backoff = retry_delay * (2 ** (attempt - 1))
-                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
                 await asyncio.sleep(backoff)
             else:
-                logging.error("Alle Versuche fehlgeschlagen (Netzwerkfehler).")
+                logging.warning("Alle Versuche fehlgeschlagen (Netzwerkfehler).", extra={'rate_limit': True})
                 return None
         except asyncio.TimeoutError:
             logging.debug(f"Timeout beim Abrufen von Telegram-Updates (Versuch {attempt}/{retries})")
             if attempt < retries:
                 backoff = retry_delay * (2 ** (attempt - 1))
-                logging.info(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
                 await asyncio.sleep(backoff)
             else:
-                logging.error("Alle Versuche fehlgeschlagen (Timeout).")
+                logging.debug("Alle Versuche fehlgeschlagen (Timeout).")
                 return []
         except Exception as e:
             logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
@@ -779,6 +785,8 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
     """Telegram-Task zur Verarbeitung von Nachrichten."""
     logging.info("Starte telegram_task")
     last_update_id = None
+    consecutive_errors = 0
+    max_consecutive_errors = 10
     while True:
         async with aiohttp.ClientSession() as session:
             try:
@@ -788,6 +796,7 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     continue
                 updates = await get_telegram_updates(session, state.bot_token, last_update_id)
                 if updates is not None:
+                    consecutive_errors = 0  # Fehler-Zähler zurücksetzen bei erfolgreicher Verbindung
                     sensor_tasks = [
                         asyncio.to_thread(read_temperature_func, sensor_ids[key])
                         for key in ["oben", "unten", "mittig", "verd"]
@@ -808,13 +817,23 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     )
                 else:
                     logging.debug("Telegram-Updates waren None")
-                await asyncio.sleep(0.1)
-            except aiohttp.ClientError as e:
-                logging.error(f"Netzwerkfehler in telegram_task: {e}")
                 await asyncio.sleep(1)
+            except aiohttp.ClientError as e:
+                consecutive_errors += 1
+                if consecutive_errors == 1:
+                    logging.warning(f"Netzwerkfehler in telegram_task: {e}")
+                elif consecutive_errors >= max_consecutive_errors:
+                    logging.error(f"Telegram-Netzwerkfehler dauerhaft ({consecutive_errors} Fehler hintereinander)")
+                # Exponential Backoff: 1s, 2s, 4s, 8s, max 60s
+                backoff = min(2 ** (consecutive_errors - 1), 60)
+                await asyncio.sleep(backoff)
                 continue
             except Exception as e:
-                logging.error(f"Fehler in telegram_task: {str(e)}", exc_info=True)
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    logging.error(f"Fehler in telegram_task: {str(e)}", exc_info=True)
+                else:
+                    logging.debug(f"Fehler in telegram_task: {str(e)}")
                 await asyncio.sleep(10)
                 continue
 
