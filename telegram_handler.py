@@ -7,6 +7,7 @@ import aiofiles
 import os
 from aiohttp import FormData
 import pandas as pd
+from utils import check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
@@ -60,9 +61,18 @@ def is_solar_window(config, state):
         return False
 
 
+# Hilfsfunktion zum Erstellen einer robusten aiohttp-Session mit DNS-Fallback
+from aiohttp.resolver import AsyncResolver
+import socket
+
+def create_robust_aiohttp_session():
+    resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
+    connector = aiohttp.TCPConnector(resolver=resolver, limit_per_host=10)
+    return aiohttp.ClientSession(connector=connector)
+
 async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5,
                                 parse_mode=None):
-    """Sendet eine Nachricht über Telegram mit Fehlerbehandlung und Wiederholungslogik."""
+    """Sendet eine Nachricht über Telegram mit Fehlerbehandlung, Wiederholungslogik und DNS-Fallback."""
     if len(message) > 4096:
         message = message[:4093] + "..."
         logging.warning("Nachricht gekürzt, da Telegram-Limit von 4096 Zeichen überschritten.")
@@ -80,6 +90,15 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
         payload["parse_mode"] = parse_mode
     if reply_markup:
         payload["reply_markup"] = reply_markup
+
+    # Logge die aufgelöste IP von api.telegram.org
+    try:
+        addrs = socket.getaddrinfo("api.telegram.org", 443)
+        resolved_ips = {a[4][0] for a in addrs}
+        logging.debug(f"Resolved api.telegram.org -> {resolved_ips}")
+    except Exception as e:
+        logging.debug(f"DNS-Auflösung für api.telegram.org fehlgeschlagen: {e}")
+
     for attempt in range(1, retries + 1):
         try:
             async with session.post(url, json=payload, timeout=20) as response:
@@ -91,19 +110,27 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                     logging.error(f"Fehler beim Senden der Telegram-Nachricht (Status {response.status}): {error_text}")
                     logging.debug(f"Fehlgeschlagene Nachricht: '{message}' (Länge={len(message)})")
                     return False
-        except aiohttp.ClientConnectionError as e:
-            logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+        except (aiohttp.ClientConnectionError, OSError) as e:
+            if attempt == retries:
+                logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+            else:
+                logging.debug(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
             if attempt < retries:
-                logging.info(f"Warte {retry_delay} Sekunden vor dem nächsten Versuch...")
-                await asyncio.sleep(retry_delay)
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
             else:
                 logging.error("Alle Versuche fehlgeschlagen (Netzwerkfehler).")
                 return False
         except asyncio.TimeoutError:
-            logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+            if attempt == retries:
+                logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+            else:
+                logging.debug(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
             if attempt < retries:
-                logging.info(f"Warte {retry_delay} Sekunden vor dem nächsten Versuch...")
-                await asyncio.sleep(retry_delay)
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
             else:
                 logging.error("Alle Versuche fehlgeschlagen (Timeout).")
                 return False
@@ -135,31 +162,54 @@ async def send_welcome_message(session, chat_id, bot_token, state):
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
-async def get_telegram_updates(session, bot_token, offset=None):
-    """Ruft Telegram-Updates ab."""
+async def get_telegram_updates(session, bot_token, offset=None, retries=3, retry_delay=5):
+    """Ruft Telegram-Updates ab, mit Fehlerbehandlung, Retry und DNS-Fallback."""
     url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
     params = {"timeout": 60}
     if offset is not None:
         params["offset"] = offset
+
+    # Logge die aufgelöste IP von api.telegram.org
     try:
-        async with session.get(url, params=params, timeout=70) as response:
-            if response.status == 200:
-                data = await response.json()
-                updates = data.get("result", [])
-                return updates
-            else:
-                error_text = await response.text()
-                logging.error(f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}, Details: {error_text}")
-                return None
-    except aiohttp.ClientConnectionError as e:
-        logging.error(f"Netzwerkfehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
-        return None
-    except asyncio.TimeoutError:
-        logging.debug("Timeout beim Abrufen von Telegram-Updates (Normal bei Long-Polling)")
-        return []
+        addrs = socket.getaddrinfo("api.telegram.org", 443)
+        resolved_ips = {a[4][0] for a in addrs}
+        logging.debug(f"Resolved api.telegram.org -> {resolved_ips}")
     except Exception as e:
-        logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
-        return None
+        logging.debug(f"DNS-Auflösung für api.telegram.org fehlgeschlagen: {e}")
+
+    for attempt in range(1, retries + 1):
+        try:
+            async with session.get(url, params=params, timeout=70) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    updates = data.get("result", [])
+                    return updates
+                else:
+                    error_text = await response.text()
+                    logging.error(f"Fehler beim Abrufen von Telegram-Updates: Status {response.status}, Details: {error_text}")
+                    return None
+        except (aiohttp.ClientConnectionError, OSError) as e:
+            logging.debug(f"Netzwerkfehler beim Abrufen von Telegram-Updates (Versuch {attempt}/{retries}): {e}")
+            if attempt < retries:
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
+            else:
+                logging.warning("Alle Versuche fehlgeschlagen (Netzwerkfehler).", extra={'rate_limit': True})
+                return None
+        except asyncio.TimeoutError:
+            logging.debug(f"Timeout beim Abrufen von Telegram-Updates (Versuch {attempt}/{retries})")
+            if attempt < retries:
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
+                await asyncio.sleep(backoff)
+            else:
+                logging.debug("Alle Versuche fehlgeschlagen (Timeout).")
+                return []
+        except Exception as e:
+            logging.error(f"Unerwarteter Fehler beim Abrufen von Telegram-Updates: {e}", exc_info=True)
+            return None
+    return None
 
 
 async def aktivere_bademodus(session, chat_id, bot_token, state):
@@ -579,7 +629,9 @@ async def send_status_telegram(
         f" • Solarüberschuss: {feedinpower:.1f} W",
         f" • Batterieleistung: {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})",
         f" • Solarüberschuss aktiv: {'Ja' if state.solar_ueberschuss_aktiv else 'Nein'}",
-        f" • Bademodus aktiv: {'Ja' if state.bademodus_aktiv else 'Nein'}"
+        f" • Bademodus aktiv: {'Ja' if state.bademodus_aktiv else 'Nein'}",
+        "🔒 **Netzwerk/VPN**",
+        f" • VPN: {'✅ Aktiv (' + state.vpn_ip + ')' if state.vpn_ip else '❌ Inaktiv'}"
     ]
     if state.ausschluss_grund:
         escaped_ausschluss_grund = escape_markdown(str(state.ausschluss_grund))
@@ -733,6 +785,8 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
     """Telegram-Task zur Verarbeitung von Nachrichten."""
     logging.info("Starte telegram_task")
     last_update_id = None
+    consecutive_errors = 0
+    max_consecutive_errors = 10
     while True:
         async with aiohttp.ClientSession() as session:
             try:
@@ -742,6 +796,7 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     continue
                 updates = await get_telegram_updates(session, state.bot_token, last_update_id)
                 if updates is not None:
+                    consecutive_errors = 0  # Fehler-Zähler zurücksetzen bei erfolgreicher Verbindung
                     sensor_tasks = [
                         asyncio.to_thread(read_temperature_func, sensor_ids[key])
                         for key in ["oben", "unten", "mittig", "verd"]
@@ -762,13 +817,23 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     )
                 else:
                     logging.debug("Telegram-Updates waren None")
-                await asyncio.sleep(0.1)
-            except aiohttp.ClientError as e:
-                logging.error(f"Netzwerkfehler in telegram_task: {e}")
                 await asyncio.sleep(1)
+            except aiohttp.ClientError as e:
+                consecutive_errors += 1
+                if consecutive_errors == 1:
+                    logging.warning(f"Netzwerkfehler in telegram_task: {e}")
+                elif consecutive_errors >= max_consecutive_errors:
+                    logging.error(f"Telegram-Netzwerkfehler dauerhaft ({consecutive_errors} Fehler hintereinander)")
+                # Exponential Backoff: 1s, 2s, 4s, 8s, max 60s
+                backoff = min(2 ** (consecutive_errors - 1), 60)
+                await asyncio.sleep(backoff)
                 continue
             except Exception as e:
-                logging.error(f"Fehler in telegram_task: {str(e)}", exc_info=True)
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    logging.error(f"Fehler in telegram_task: {str(e)}", exc_info=True)
+                else:
+                    logging.debug(f"Fehler in telegram_task: {str(e)}")
                 await asyncio.sleep(10)
                 continue
 
@@ -832,12 +897,21 @@ async def get_boiler_temperature_history(session, hours, state, config):
             logging.error(f"❌ CSV-Datei nicht gefunden: {file_path}")
             await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
             return
+        # Header regelmäßig prüfen und ggf. korrigieren (z.B. alle 100 Aufrufe oder nach Zeit)
+        check_and_fix_csv_header(file_path)
+        # Backup vor dem Auslesen (z.B. alle 24h oder nach Bedarf, hier immer für Demo)
+        backup_csv(file_path)
         try:
-            df = pd.read_csv(file_path, usecols=[
-                "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd",
-                "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"
-            ], engine="c")
+            # Robust: Trennzeichen automatisch erkennen, Header prüfen
+            df = pd.read_csv(file_path, sep=None, engine="python")
+            # Prüfe, ob alle erwarteten Spalten vorhanden sind
+            missing = [col for col in EXPECTED_CSV_HEADER if col not in df.columns]
+            if missing:
+                logging.warning(f"Fehlende Spalten in CSV: {missing}")
             logging.debug(f"CSV geladen, {len(df)} Zeilen, Spalten: {df.columns.tolist()}")
+            # Optional: Nur relevante Spalten weitergeben
+            usecols = [c for c in ["Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd", "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"] if c in df.columns]
+            df = df[usecols]
         except Exception as e:
             logging.error(f"❌ Fehler beim Einlesen der CSV: {e}", exc_info=True)
             await send_telegram_message(session, state.chat_id, "Fehler beim Lesen der CSV-Datei.", state.bot_token)
