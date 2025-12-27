@@ -1,206 +1,200 @@
-#!/bin/bash
-# Raspberry Pi WPSteuerung Deployment Script
-# Verwendung: ./rpi-deploy.sh
+#!/bin/sh
+# Raspberry Pi WPSteuerung Deployment Script (POSIX-sh kompatibel)
+# Verwendung: ./rpi-deploy.sh  (oder: bash rpi-deploy.sh)
 
-set -e  # Exit bei Fehler
+set -e
 
 # Farben fuer Output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Konfiguration
 REPO_DIR="/home/patrik/WPSteuerung"
-SERVICE_NAME="wpsteuerung"  # Anpassen an deinen Service-Namen
+SERVICE_NAME="wpsteuerung"
 
-echo -e "${CYAN}=========================================${NC}"
-echo -e "${CYAN}  WPSteuerung Deployment auf Raspberry Pi${NC}"
-echo -e "${CYAN}=========================================${NC}"
+printf "${CYAN}=========================================${NC}\n"
+printf "${CYAN}  WPSteuerung Deployment auf Raspberry Pi${NC}\n"
+printf "${CYAN}=========================================${NC}\n"
 
 # Pruefe ob Repository existiert
 if [ ! -d "$REPO_DIR" ]; then
-    echo -e "${RED}Fehler: Repository nicht gefunden in $REPO_DIR${NC}"
-    echo -e "${YELLOW}Fuehre erst die Ersteinrichtung durch!${NC}"
+    printf "${RED}Fehler: Repository nicht gefunden in %s${NC}\n" "$REPO_DIR"
+    printf "${YELLOW}Fuehre erst die Ersteinrichtung durch!${NC}\n"
     exit 1
 fi
 
 cd "$REPO_DIR"
 
 # Zeige aktuellen Branch
-CURRENT_BRANCH=$(git branch --show-current)
-echo -e "\n${YELLOW}Aktueller Branch: $CURRENT_BRANCH${NC}"
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+printf "\n${YELLOW}Aktueller Branch: %s${NC}\n" "$CURRENT_BRANCH"
 
-# Zeige Git Status
-echo -e "\n${CYAN}Git Status:${NC}"
-git status --short
+# Zeige Git Status (ohne untracked files)
+printf "\n${CYAN}Git Status (ohne untracked files):${NC}\n"
+git status -uno --short
 
-# Warne bei lokalen Aenderungen
-if [ -n "$(git status --porcelain)" ]; then
-    echo -e "${RED}WARNUNG: Es gibt lokale Aenderungen!${NC}"
-    read -p "Moechtest du diese verwerfen? (j/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Jj]$ ]]; then
-        git reset --hard
-        echo -e "${GREEN}Lokale Aenderungen verworfen.${NC}"
-    else
-        echo -e "${YELLOW}Abgebrochen.${NC}"
-        exit 1
-    fi
+# Warne nur bei getrackten Aenderungen
+if [ -n "$(git status -uno --porcelain)" ]; then
+    printf "${RED}WARNUNG: Es gibt lokale Aenderungen an getrackten Dateien!${NC}\n"
+    printf "Moechtest du diese verwerfen? (j/n): "
+    read reply
+    case "$reply" in
+        [Jj]*)
+            git reset --hard
+            printf "${GREEN}Lokale Aenderungen verworfen.${NC}\n"
+            ;;
+        *)
+            printf "${YELLOW}Abgebrochen.${NC}\n"
+            exit 1
+            ;;
+    esac
 fi
 
 # Hauptmenue
-echo -e "\n${CYAN}Was moechtest du tun?${NC}"
-echo "1. Code aktualisieren (aktuellen Branch pullen)"
-echo "2. Branch wechseln"
-echo "3. Branch wechseln UND aktualisieren"
-echo "4. Nur Service neu starten"
-echo "5. Status anzeigen"
-echo "6. WireGuard installieren/prüfen"
-echo "0. Abbrechen"
+printf "\n${CYAN}Was moechtest du tun?${NC}\n"
+printf "1. Code aktualisieren (aktuellen Branch pullen)\n"
+printf "2. Branch wechseln\n"
+printf "3. Branch wechseln UND aktualisieren\n"
+printf "4. Nur Service neu starten\n"
+printf "5. Status anzeigen\n"
+printf "6. WireGuard installieren/prüfen\n"
+printf "0. Abbrechen\n"
 
-read -p "Waehle (0-5): " choice
+printf "Waehle (0-6): "
+read choice
 
-case $choice in
+case "$choice" in
     1)
-        # Pull current branch
-        echo -e "\n${CYAN}Aktualisiere Branch '$CURRENT_BRANCH'...${NC}"
+        printf "\n${CYAN}Aktualisiere Branch '%s'...${NC}\n" "$CURRENT_BRANCH"
         git fetch --all
-        git pull origin $CURRENT_BRANCH
-        
-        echo -e "${GREEN}Code aktualisiert!${NC}"
-        
-        read -p "Service neu starten? (j/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Jj]$ ]]; then
-            sudo systemctl restart $SERVICE_NAME
-            echo -e "${GREEN}Service neu gestartet!${NC}"
-        fi
+        git pull origin "$CURRENT_BRANCH"
+        printf "${GREEN}Code aktualisiert!${NC}\n"
+        printf "Service neu starten? (j/n): "
+        read reply
+        case "$reply" in
+            [Jj]*)
+                sudo systemctl restart "$SERVICE_NAME"
+                printf "${GREEN}Service neu gestartet!${NC}\n"
+                ;;
+        esac
         ;;
-        
+
     2)
-        # Switch branch
-        echo -e "\n${CYAN}Verfuegbare Branches:${NC}"
+        printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
-        
-        read -p "Zu welchem Branch wechseln? (master/android-api/funktioniert): " target_branch
-        
-        echo -e "${CYAN}Wechsle zu Branch '$target_branch'...${NC}"
+        printf "Zu welchem Branch wechseln? (master/android-api/funktioniert): "
+        read target_branch
+        printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
         git fetch --all
-        git checkout $target_branch
-        
-        echo -e "${GREEN}Zu Branch '$target_branch' gewechselt!${NC}"
-        
-        read -p "Service neu starten? (j/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Jj]$ ]]; then
-            sudo systemctl restart $SERVICE_NAME
-            echo -e "${GREEN}Service neu gestartet!${NC}"
-        fi
+        git checkout "$target_branch"
+        printf "${GREEN}Zu Branch '%s' gewechselt!${NC}\n" "$target_branch"
+        printf "Service neu starten? (j/n): "
+        read reply
+        case "$reply" in
+            [Jj]*)
+                sudo systemctl restart "$SERVICE_NAME"
+                printf "${GREEN}Service neu gestartet!${NC}\n"
+                ;;
+        esac
         ;;
-        
+
     3)
-        # Switch and pull
-        echo -e "\n${CYAN}Verfuegbare Branches:${NC}"
+        printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
-        
-        read -p "Zu welchem Branch wechseln? (master/android-api/funktioniert): " target_branch
-        
-        echo -e "${CYAN}Wechsle zu Branch '$target_branch'...${NC}"
+        printf "Zu welchem Branch wechseln? (master/android-api/funktioniert): "
+        read target_branch
+        printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
         git fetch --all
-        git checkout $target_branch
-        git pull origin $target_branch
-        
-        echo -e "${GREEN}Branch gewechselt und aktualisiert!${NC}"
-        
-        read -p "Service neu starten? (j/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Jj]$ ]]; then
-            sudo systemctl restart $SERVICE_NAME
-            echo -e "${GREEN}Service neu gestartet!${NC}"
-        fi
+        git checkout "$target_branch"
+        git pull origin "$target_branch"
+        printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
+        printf "Service neu starten? (j/n): "
+        read reply
+        case "$reply" in
+            [Jj]*)
+                sudo systemctl restart "$SERVICE_NAME"
+                printf "${GREEN}Service neu gestartet!${NC}\n"
+                ;;
+        esac
         ;;
-        
+
     4)
-        # Restart service only
-        echo -e "${CYAN}Starte Service neu...${NC}"
-        sudo systemctl restart $SERVICE_NAME
-        echo -e "${GREEN}Service neu gestartet!${NC}"
+        printf "${CYAN}Starte Service neu...${NC}\n"
+        sudo systemctl restart "$SERVICE_NAME"
+        printf "${GREEN}Service neu gestartet!${NC}\n"
         ;;
-        
+
     5)
-        # Show status
-        echo -e "\n${CYAN}=== Git Status ===${NC}"
-        echo "Branch: $(git branch --show-current)"
-        echo "Letzter Commit: $(git log -1 --oneline)"
-        
-        echo -e "\n${CYAN}=== Service Status ===${NC}"
-        sudo systemctl status $SERVICE_NAME --no-pager -l
-        
-        echo -e "\n${CYAN}=== Letzte 20 Log-Zeilen ===${NC}"
-        sudo journalctl -u $SERVICE_NAME -n 20 --no-pager
+        printf "\n${CYAN}=========================================${NC}\n"
+        printf "${GREEN}=== Aktueller Status ===${NC}\n"
+        printf "${CYAN}=========================================${NC}\n"
+        printf "  Branch:        ${YELLOW}%s${NC}\n" "$(git rev-parse --abbrev-ref HEAD)"
+        printf "  Letzter Commit: %s\n" "$(git log -1 --oneline)"
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            printf "  Service:       ${GREEN}✓ AKTIV${NC}\n"
+        else
+            printf "  Service:       ${RED}✗ INAKTIV${NC}\n"
+        fi
+        printf "${CYAN}=========================================${NC}\n"
+        printf "\n"
         ;;
 
     6)
-        # WireGuard Setup
-        echo -e "\n${CYAN}=== WireGuard Setup ===${NC}"
-        
-        if ! command -v wg &> /dev/null; then
-             echo -e "${YELLOW}WireGuard ist nicht installiert. Installiere...${NC}"
+        printf "\n${CYAN}=== WireGuard Setup ===${NC}\n"
+        if ! command -v wg > /dev/null 2>&1; then
+             printf "${YELLOW}WireGuard ist nicht installiert. Installiere...${NC}\n"
              sudo apt-get update
              sudo apt-get install -y wireguard
-             echo -e "${GREEN}WireGuard installiert.${NC}"
+             printf "${GREEN}WireGuard installiert.${NC}\n"
         else
-             echo -e "${GREEN}WireGuard ist bereits installiert.${NC}"
+             printf "${GREEN}WireGuard ist bereits installiert.${NC}\n"
         fi
-        
         if [ ! -f "/etc/wireguard/wg0.conf" ]; then
-            echo -e "${YELLOW}Konfiguration /etc/wireguard/wg0.conf nicht gefunden.${NC}"
-            echo "Du musst die Konfiguration manuell erstellen oder Schlüssel generieren."
-            echo "Beispiel:"
-            echo "  wg genkey | tee privatekey | wg pubkey > publickey"
-            echo "  sudo nano /etc/wireguard/wg0.conf"
+            printf "${YELLOW}Konfiguration /etc/wireguard/wg0.conf nicht gefunden.${NC}\n"
+            printf "Du musst die Konfiguration manuell erstellen oder Schl\344ssel generieren.\n"
+            printf "Beispiel:\n  wg genkey | tee privatekey | wg pubkey > publickey\n  sudo nano /etc/wireguard/wg0.conf\n"
         else
-            echo -e "${GREEN}Konfiguration gefunden.${NC}"
-            read -p "WireGuard Service (re)starten? (j/n): " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Jj]$ ]]; then
-                sudo systemctl enable wg-quick@wg0
-                sudo systemctl restart wg-quick@wg0
-                echo -e "${GREEN}WireGuard Service neu gestartet.${NC}"
-            fi
+            printf "${GREEN}Konfiguration gefunden.${NC}\n"
+            printf "WireGuard Service (re)starten? (j/n): "
+            read reply
+            case "$reply" in
+                [Jj]*)
+                    sudo systemctl enable wg-quick@wg0
+                    sudo systemctl restart wg-quick@wg0
+                    printf "${GREEN}WireGuard Service neu gestartet.${NC}\n"
+                    ;;
+            esac
         fi
-        
-        # Zeige Status
-        if command -v wg &> /dev/null; then
-             echo -e "\n${CYAN}WireGuard Status:${NC}"
+        if command -v wg > /dev/null 2>&1; then
+             printf "\n${CYAN}WireGuard Status:${NC}\n"
              sudo wg show
-             echo -e "\n${CYAN}IP-Adressen:${NC}"
-             ip -4 a show wg0 | grep inet
+             printf "\n${CYAN}IP-Adressen:${NC}\n"
+             ip -4 a show wg0 | grep inet || true
         fi
         ;;
-        
+
     0)
-        echo -e "${YELLOW}Abgebrochen.${NC}"
+        printf "${YELLOW}Abgebrochen.${NC}\n"
         exit 0
         ;;
-        
+
     *)
-        echo -e "${RED}Ungueltige Auswahl!${NC}"
+        printf "${RED}Ungueltige Auswahl!${NC}\n"
         exit 1
         ;;
 esac
 
-echo -e "\n${GREEN}=== Aktueller Status ===${NC}"
-echo "Branch: $(git branch --show-current)"
-echo "Letzter Commit: $(git log -1 --oneline)"
+printf "\n${GREEN}=== Aktueller Status ===${NC}\n"
+printf "Branch: %s\n" "$(git rev-parse --abbrev-ref HEAD)"
+printf "Letzter Commit: %s\n" "$(git log -1 --oneline)"
 
-# Zeige Service-Status
-if systemctl is-active --quiet $SERVICE_NAME; then
-    echo -e "Service: ${GREEN}AKTIV${NC}"
+if systemctl is-active --quiet "$SERVICE_NAME"; then
+    printf "Service: ${GREEN}AKTIV${NC}\n"
 else
-    echo -e "Service: ${RED}INAKTIV${NC}"
+    printf "Service: ${RED}INAKTIV${NC}\n"
 fi
 
-echo -e "\n${CYAN}Fertig!${NC}"
+printf "\n${CYAN}Fertig!${NC}\n"
