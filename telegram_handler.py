@@ -523,7 +523,7 @@ async def send_status_telegram(
         is_nighttime_func=None,
         is_solar_window_func=None
 ):
-    """Sendet den aktuellen Systemstatus über Telegram."""
+    """Sendet den aktuellen Systemstatus über Telegram (kompaktes Design)."""
     logging.debug(
         f"Generiere Status-Nachricht: t_oben={t_oben}, t_unten={t_unten}, t_mittig={t_mittig}, t_verd={t_verd}")
     try:
@@ -563,15 +563,14 @@ async def send_status_telegram(
                 seconds = int(seconds_str)
             hours = seconds // 3600
             minutes = (seconds % 3600) // 60
-            return f"{hours}h {minutes}min"
+            return f"{hours}h {minutes}m"
         except (ValueError, TypeError):
-            return "0h 0min"
+            return "0h 0m"
 
     nacht_reduction = int(
         config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func and is_nighttime_func(
         config) and not state.bademodus_aktiv else 0
-    is_solar_window_active = is_solar_window_func(config, state) if is_solar_window_func else False
-
+    
     # Prüfe Übergangsmodus (morgens oder abends)
     try:
         from control_logic import ist_uebergangsmodus_aktiv  # Import from control_logic
@@ -580,12 +579,10 @@ async def send_status_telegram(
         within_uebergangsmodus = False
         morgen_aktiv = False
         abend_aktiv = False
-        mode_str = "Normal (Übergangsmodus-Prüfung fehlgeschlagen)"
     else:
         within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
         now_time = datetime.now(state.local_tz).time()
-
-        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus (angepasst an neue Variablen)
+        # Unterscheide zwischen Morgen- und Abend-Übergangsmodus
         morgen_aktiv = state.nachtabsenkung_ende <= now_time <= state.uebergangsmodus_morgens_ende
         abend_aktiv = state.uebergangsmodus_abends_start <= now_time <= state.nachtabsenkung_start
 
@@ -594,11 +591,13 @@ async def send_status_telegram(
     elif state.urlaubsmodus_aktiv:
         mode_str = f"🌴 Urlaub (-{int(config['Urlaubsmodus'].get('URLAUBSABSENKUNG', 6))}°C)"
     elif within_uebergangsmodus:
-        mode_str = "Übergangsmodus (Morgen)" if morgen_aktiv else "Übergangsmodus (Abend)"
+        mode_str = "Übergangsmodus"
+        if morgen_aktiv: mode_str += " (Morgen)"
+        if abend_aktiv: mode_str += " (Abend)"
         if state.solar_ueberschuss_aktiv:
-            mode_str += " + Solarüberschuss"
+            mode_str += " + Solar"
     elif state.solar_ueberschuss_aktiv and is_nighttime_func and is_nighttime_func(config):
-        mode_str = f"Solarüberschuss + Nachtabsenkung (-{nacht_reduction}°C)"
+        mode_str = f"Solar + Nacht (-{nacht_reduction}°C)"
     elif state.solar_ueberschuss_aktiv:
         mode_str = "Solarüberschuss"
     elif is_nighttime_func and is_nighttime_func(config):
@@ -607,50 +606,36 @@ async def send_status_telegram(
         mode_str = "Normal"
 
     compressor_status_str = "EIN" if kompressor_status else "AUS"
+    
+    # Hilfsfunktionen für Formatierung
+    def fmt_temp(v): return f"{v:.1f}°C" if v is not None else "N/A"
+    
     status_lines = [
-        "═══════════════════════════════════════",
-        "📊 **SYSTEMSTATUS**",
-        "═══════════════════════════════════════",
+        "📊 *SYSTEMSTATUS*",
         "",
-        "🌡️ **TEMPERATUREN**",
-        f"  Oben:       {t_oben:.1f}°C" if t_oben is not None else "  Oben:       N/A",
-        f"  Mittig:     {t_mittig:.1f}°C" if t_mittig is not None else "  Mittig:     N/A",
-        f"  Unten:      {t_unten:.1f}°C" if t_unten is not None else "  Unten:      N/A",
-        f"  Verdampfer: {t_verd:.1f}°C" if t_verd is not None else "  Verdampfer: N/A",
+        "🌡️ *Temperaturen*",
+        f"Oben: {fmt_temp(t_oben)}  |  Mittig: {fmt_temp(t_mittig)}",
+        f"Unten: {fmt_temp(t_unten)} |  Verd: {fmt_temp(t_verd)}",
         "",
-        "🛠️ **KOMPRESSOR**",
-        f"  Status:        {compressor_status_str}",
-        f"  Aktuelle LZ:   {format_time(current_runtime)}",
-        f"  Gesamt heute:  {format_time(total_runtime)}",
-        f"  Letzte LZ:     {format_time(state.last_runtime)}",
+        f"🛠️ *Kompressor: {compressor_status_str}*",
+        f"Laufzeit: {format_time(current_runtime)} (Gesamt: {format_time(total_runtime)})",
         "",
-        "🎯 **SOLLWERTE**",
-        f"  Ein:           {state.aktueller_einschaltpunkt}°C",
-        f"  Aus:           {state.aktueller_ausschaltpunkt}°C",
-        f"  Steuert nach:  {'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Mittig'}",
+        f"🎯 *Regelung ({'Unten' if state.bademodus_aktiv or state.solar_ueberschuss_aktiv else 'Mittig'})*",
+        f"Ein: {state.aktueller_einschaltpunkt}°C | Aus: {state.aktueller_ausschaltpunkt}°C",
         "",
-        "⚙️ **BETRIEBSMODUS**",
-        f"  {mode_str}",
+        "☀️ *Energie*",
+        f"Netz: {feedinpower:.0f}W | Akku: {bat_power:.0f}W ({'Laden' if bat_power > 0 else 'Entl.' if bat_power < 0 else '-'})",
         "",
-        "☀️ **SOLARANLAGE**",
-        f"  Einspeisepower: {feedinpower:.1f} W",
-        f"  Batteriepower:  {bat_power:.1f} W ({'Laden' if bat_power > 0 else 'Entladung' if bat_power < 0 else 'Neutral'})",
-        f"  Überschuss aktiv: {'✅ JA' if state.solar_ueberschuss_aktiv else '❌ NEIN'}",
-        "",
-        "🔧 **ZUSTÄNDE**",
-        f"  Bademodus:      {'✅ aktiv' if state.bademodus_aktiv else '❌ aus'}",
-        f"  Urlaubsmodus:   {'✅ aktiv' if state.urlaubsmodus_aktiv else '❌ aus'}",
-        "",
-        "🔒 **NETZWERK/VPN**",
-        f"  VPN:            {'✅ ' + state.vpn_ip if state.vpn_ip else '❌ Inaktiv'}"
+        "⚙️ *Info*",
+        f"Modus: {mode_str}",
+        f"Zustand: Bade: {'✅' if state.bademodus_aktiv else '❌'} | Urlaub: {'✅' if state.urlaubsmodus_aktiv else '❌'} | Solar: {'✅' if state.solar_ueberschuss_aktiv else '❌'}",
+        f"VPN: {state.vpn_ip if state.vpn_ip else '❌ Inaktiv'}"
     ]
+
     if state.ausschluss_grund:
         escaped_ausschluss_grund = escape_markdown(str(state.ausschluss_grund))
-        status_lines.append(f"  ⚠️  Grund:       {escaped_ausschluss_grund}")
-    status_lines.extend([
-        "",
-        "═══════════════════════════════════════"
-    ])
+        status_lines.append(f"⚠️ Grund: {escaped_ausschluss_grund}")
+
     message = "\n".join(status_lines)
     logging.debug(f"Vollständige Status-Nachricht (Länge={len(message)}): {message}")
     return await send_telegram_message(session, chat_id, message, bot_token, parse_mode="Markdown")
