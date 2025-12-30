@@ -26,7 +26,7 @@ from typing import Optional
 from utils import safe_timedelta, safe_float
 from dateutil.relativedelta import relativedelta
 from telegram_handler import (send_telegram_message, send_welcome_message, telegram_task, get_runtime_bar_chart,
-                              get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window)
+                              get_boiler_temperature_history, deaktivere_urlaubsmodus, is_solar_window, start_healthcheck_task)
 import control_logic
 from api import init_api, app
 import uvicorn
@@ -1542,6 +1542,13 @@ async def main_loop(config, state, session):
 
         # Starte Safety-Watchdog
         asyncio.create_task(safety_watchdog(state, session))
+        
+        # Starte Healthcheck-Task
+        if state.healthcheck_url:
+            asyncio.create_task(start_healthcheck_task(session, state))
+            logging.info(f"Healthcheck-Task gestartet (URL={state.healthcheck_url})")
+        else:
+            logging.warning("Keine Healthcheck-URL konfiguriert - Task nicht gestartet.")
 
         # Watchdog-Variablen
         last_cycle_time = now
