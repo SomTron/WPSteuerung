@@ -9,3 +9,7 @@ python-telegram-bot
 smbus2
 RPLCD
 RPi.GPIO
+pydantic
+fastapi
+uvicorn
+aiodns

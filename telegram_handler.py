@@ -18,47 +18,7 @@ from utils import safe_timedelta
 # Logging-Konfiguration wird in main.py definiert
 # Empfehlung: Stelle sicher, dass logger.setLevel(logging.DEBUG) in main.py gesetzt ist
 
-def is_solar_window(config, state):
-    """Prüft, ob die aktuelle Uhrzeit im Solarfenster nach der Nachtabsenkung liegt."""
-    now = datetime.now(state.local_tz)
-    try:
-        end_time_str = config["Heizungssteuerung"].get("NACHTABSENKUNG_END", "06:00")
-        if not isinstance(end_time_str, str):
-            raise ValueError("NACHTABSENKUNG_END muss ein String sein")
-        try:
-            end_hour, end_minute = map(int, end_time_str.split(':'))
-        except ValueError:
-            raise ValueError(f"Ungültiges Zeitformat: NACHTABSENKUNG_END={end_time_str}")
-        if not (0 <= end_hour < 24 and 0 <= end_minute < 60):
-            raise ValueError(f"Ungültige Zeitwerte: Ende={end_time_str}")
-        potential_night_setback_end_today = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
-        if now < potential_night_setback_end_today + timedelta(hours=2):
-            night_setback_end_time_today = potential_night_setback_end_today
-        else:
-            night_setback_end_time_today = potential_night_setback_end_today + timedelta(days=1)
-        solar_only_window_start_time_today = night_setback_end_time_today
-        solar_only_window_end_time_today = night_setback_end_time_today + timedelta(hours=2)
-        within_solar_only_window = solar_only_window_start_time_today <= now < solar_only_window_end_time_today
-
-        # Logge nur bei Statusänderung oder alle 5 Minuten
-        if (not hasattr(is_solar_window, 'last_status') or
-                is_solar_window.last_status != within_solar_only_window or
-                state.last_solar_window_log is None or
-                safe_timedelta(now, state.last_solar_window_log, state.local_tz) >= timedelta(minutes=5)):
-            logging.debug(f"is_solar_window: now={now}, tzinfo={state.local_tz}")
-            logging.debug(
-                f"Solarfensterprüfung: Jetzt={now.strftime('%H:%M')}, "
-                f"Start={solar_only_window_start_time_today.strftime('%H:%M')}, "
-                f"Ende={solar_only_window_end_time_today.strftime('%H:%M')}, "
-                f"Ist Solarfenster={within_solar_only_window}"
-            )
-            state.last_solar_window_log = now
-
-        is_solar_window.last_status = within_solar_only_window
-        return within_solar_only_window
-    except Exception as e:
-        logging.error(f"Fehler in is_solar_window: {e}")
-        return False
+# is_solar_window has been moved to control_logic.py
 
 
 # Hilfsfunktion zum Erstellen einer robusten aiohttp-Session mit DNS-Fallback
@@ -66,8 +26,15 @@ from aiohttp.resolver import AsyncResolver
 import socket
 
 def create_robust_aiohttp_session():
-    resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
-    connector = aiohttp.TCPConnector(resolver=resolver, limit_per_host=10)
+    try:
+        resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
+        connector = aiohttp.TCPConnector(resolver=resolver, limit_per_host=10)
+    except RuntimeError: # aiodns not installed
+        logging.warning("aiodns nicht installiert, verwende Standard-DNS-Resolver.")
+        connector = aiohttp.TCPConnector(limit_per_host=10)
+    except Exception as e:
+        logging.warning(f"Fehler beim Initialisieren des DNS-Resolvers: {e}, verwende Standard.")
+        connector = aiohttp.TCPConnector(limit_per_host=10)
     return aiohttp.ClientSession(connector=connector)
 
 async def send_telegram_message(session, chat_id, message, bot_token, reply_markup=None, retries=3, retry_delay=5,
@@ -307,7 +274,7 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
         state.urlaubsmodus_start = now
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
 
-        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
+        urlaubsabsenkung = int(config.Urlaubsmodus.URLAUBSABSENKUNG)
         keyboard = get_keyboard(state)
 
         await send_telegram_message(
@@ -359,7 +326,7 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
         state.urlaubsmodus_start = now
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
 
-        urlaubsabsenkung = int(config["Urlaubsmodus"].get("URLAUBSABSENKUNG", 6))
+        urlaubsabsenkung = int(config.Urlaubsmodus.URLAUBSABSENKUNG)
         keyboard = get_keyboard(state)
 
         await send_telegram_message(
@@ -571,7 +538,7 @@ async def send_status_telegram(
             return "0h 0m"
 
     nacht_reduction = int(
-        config["Heizungssteuerung"].get("NACHTABSENKUNG", 0)) if is_nighttime_func and is_nighttime_func(
+        config.Heizungssteuerung.NACHTABSENKUNG) if is_nighttime_func and is_nighttime_func(
         config) and not state.bademodus_aktiv else 0
     
     # Prüfe Übergangsmodus (morgens oder abends)
@@ -592,7 +559,7 @@ async def send_status_telegram(
     if state.bademodus_aktiv:
         mode_str = "🛁 Bademodus"
     elif state.urlaubsmodus_aktiv:
-        mode_str = f"🌴 Urlaub (-{int(config['Urlaubsmodus'].get('URLAUBSABSENKUNG', 6))}°C)"
+        mode_str = f"🌴 Urlaub (-{int(config.Urlaubsmodus.URLAUBSABSENKUNG)}°C)"
     elif within_uebergangsmodus:
         mode_str = "Übergangsmodus"
         if morgen_aktiv: mode_str += " (Morgen)"

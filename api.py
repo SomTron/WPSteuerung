@@ -81,12 +81,34 @@ def update_config(config: ConfigUpdate):
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
     
-    if config.section not in shared_state.config:
+    # Access Pydantic model sections
+    section_obj = getattr(shared_state.config, config.section, None)
+    if not section_obj:
         raise HTTPException(status_code=404, detail=f"Section {config.section} not found")
     
-    shared_state.config[config.section][config.key] = config.value
-    # Trigger config save/reload if necessary (implementation depends on config handling)
-    return {"status": "success", "message": f"Updated {config.section}.{config.key} to {config.value}"}
+    if not hasattr(section_obj, config.key):
+        raise HTTPException(status_code=404, detail=f"Key {config.key} not found in section {config.section}")
+
+    try:
+        # Simple type casting based on current value type if possible, otherwise string
+        current_value = getattr(section_obj, config.key)
+        new_value = config.value
+        
+        if isinstance(current_value, bool):
+             new_value = config.value.lower() == 'true'
+        elif isinstance(current_value, int):
+             new_value = int(config.value)
+        elif isinstance(current_value, float):
+             new_value = float(config.value)
+             
+        setattr(section_obj, config.key, new_value)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid value for {config.key}: {str(e)}")
+
+    # Trigger config save/reload not fully implemented yet for INI write-back
+    # shared_state.update_config() # This would reload from file, overwriting changes!
+    # Ideally we should write to file here. For now, in-memory update.
+    return {"status": "success", "message": f"Updated {config.section}.{config.key} to {new_value}"}
 
 @app.post("/control")
 async def control_system(cmd: ControlCommand):

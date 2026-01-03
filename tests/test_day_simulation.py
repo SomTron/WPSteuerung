@@ -53,6 +53,7 @@ def create_mock_state(config):
     state.einschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 45))
     state.sicherheits_temp = float(config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 60.0))
     state.verdampfertemperatur = float(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", -10.0))
+    state.verdampfer_restart_temp = float(config["Heizungssteuerung"].get("VERDAMPFER_RESTART_TEMP", 9.0))
     
     # Initial State
     state.urlaubsmodus_aktiv = False
