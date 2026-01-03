@@ -19,6 +19,8 @@ class HeizungssteuerungConfig(BaseModel):
     AUSSCHALTPUNKT: int = Field(default=45)
     UEBERGANGSMODUS_MORGENS_ENDE: str = Field(default="10:00")
     UEBERGANGSMODUS_ABENDS_START: str = Field(default="17:00")
+    API_HOST: str = Field(default="0.0.0.0")
+    API_PORT: int = Field(default=8000)
 
 class HealthcheckConfig(BaseModel):
     HEALTHCHECK_URL: str = Field(default="")

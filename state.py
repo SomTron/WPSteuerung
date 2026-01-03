@@ -154,6 +154,22 @@ class State:
     def basis_ausschaltpunkt(self):
         return self.config.Heizungssteuerung.AUSSCHALTPUNKT
     
+    @property
+    def bot_token(self):
+        return self.config.Telegram.BOT_TOKEN
+    
+    @property
+    def chat_id(self):
+        return self.config.Telegram.CHAT_ID
+    
+    @property
+    def healthcheck_url(self):
+        return self.config.Healthcheck.HEALTHCHECK_URL
+
+    @property
+    def healthcheck_interval(self):
+        return self.config.Healthcheck.HEALTHCHECK_INTERVAL_MINUTES
+    
     def update_config(self):
         """Lädt die Konfiguration neu und aktualisiert lokale Referenzen bei Bedarf."""
         self.config_manager.load_config()

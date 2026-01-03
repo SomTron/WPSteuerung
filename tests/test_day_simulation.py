@@ -30,30 +30,76 @@ def create_mock_state(config):
     """Creates a mock state object based on the configuration."""
     state = MagicMock()
     state.local_tz = pytz.timezone("Europe/Berlin")
-    state.config = config
+    # Mocking Config as object with attributes
+    mock_config = MagicMock()
     
-    # Parse times from config
+    # Helper to create nested mocks
+    def create_section_mock(data):
+        section = MagicMock()
+        for k, v in data.items():
+            setattr(section, k, v)
+        return section
+
+    mock_config.Heizungssteuerung = create_section_mock({
+        "NACHT_START": "22:00",
+        "NACHT_ENDE": "06:00",
+        "NACHTABSENKUNG": 5.0,
+        "NACHTABSENKUNG_START": "22:00",
+        "NACHTABSENKUNG_END": "06:00",
+        "EINSCHALTPUNKT": 40,
+        "AUSSCHALTPUNKT": 50,
+        "AUSSCHALTPUNKT_ERHOEHT": 55,
+        "EINSCHALTPUNKT_ERHOEHT": 45,
+        "MIN_LAUFZEIT": 15,
+        "MIN_PAUSE": 20,
+        "UEBERGANGSMODUS_MORGENS_ENDE": "10:00",
+        "UEBERGANGSMODUS_ABENDS_START": "18:00", # Note: simulation uses 18:00 vs default 17:00
+        "SICHERHEITS_TEMP": 60.0,
+        "VERDAMPFERTEMPERATUR": -10.0,
+        "VERDAMPFER_RESTART_TEMP": 9.0
+    })
+
+    mock_config.Urlaubsmodus = create_section_mock({
+        "URLAUBSABSENKUNG": 6.0 # Default value from original main.py
+    })
+
+    mock_config.Solarueberschuss = create_section_mock({
+        "BATPOWER_THRESHOLD": 600.0,
+        "SOC_THRESHOLD": 95.0,
+        "FEEDINPOWER_THRESHOLD": 600.0
+    })
+    
+    state.config = mock_config
+    
+    # We need to wrap the real configparser values into the mock object structure
+    section = "Heizungssteuerung"
+    mock_config.Heizungssteuerung.AUSSCHALTPUNKT = int(config[section].get("AUSSCHALTPUNKT", 50))
+    mock_config.Heizungssteuerung.EINSCHALTPUNKT = int(config[section].get("EINSCHALTPUNKT", 40))
+    mock_config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT = int(config[section].get("AUSSCHALTPUNKT_ERHOEHT", 55))
+    mock_config.Heizungssteuerung.EINSCHALTPUNKT_ERHOEHT = int(config[section].get("EINSCHALTPUNKT_ERHOEHT", 45))
+    
+    # Parse times from config for State properties
     def parse_time(section, key, default):
         try:
             return datetime.strptime(config[section].get(key, default), "%H:%M").time()
         except:
             return datetime.strptime(default, "%H:%M").time()
-
+            
+    # Access via dict (config) for setup, assign to properties
     state.nachtabsenkung_ende = parse_time("Heizungssteuerung", "NACHTABSENKUNG_END", "06:00")
     state.uebergangsmodus_morgens_ende = parse_time("Heizungssteuerung", "UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
     state.uebergangsmodus_abends_start = parse_time("Heizungssteuerung", "UEBERGANGSMODUS_ABENDS_START", "18:00")
     state.nachtabsenkung_start = parse_time("Heizungssteuerung", "NACHTABSENKUNG_START", "22:00")
     
-    # Parse values from config
-    state.aktueller_ausschaltpunkt = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT", 50))
-    state.aktueller_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 40))
+    state.aktueller_ausschaltpunkt = mock_config.Heizungssteuerung.AUSSCHALTPUNKT
+    state.aktueller_einschaltpunkt = mock_config.Heizungssteuerung.EINSCHALTPUNKT
     state.basis_ausschaltpunkt = state.aktueller_ausschaltpunkt
     state.basis_einschaltpunkt = state.aktueller_einschaltpunkt
-    state.ausschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("AUSSCHALTPUNKT_ERHOEHT", 55))
-    state.einschaltpunkt_erhoeht = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT_ERHOEHT", 45))
-    state.sicherheits_temp = float(config["Heizungssteuerung"].get("SICHERHEITS_TEMP", 60.0))
-    state.verdampfertemperatur = float(config["Heizungssteuerung"].get("VERDAMPFERTEMPERATUR", -10.0))
-    state.verdampfer_restart_temp = float(config["Heizungssteuerung"].get("VERDAMPFER_RESTART_TEMP", 9.0))
+    state.ausschaltpunkt_erhoeht = mock_config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT
+    state.einschaltpunkt_erhoeht = mock_config.Heizungssteuerung.EINSCHALTPUNKT_ERHOEHT
+    state.sicherheits_temp = mock_config.Heizungssteuerung.SICHERHEITS_TEMP
+    state.verdampfertemperatur = mock_config.Heizungssteuerung.VERDAMPFERTEMPERATUR
+    state.verdampfer_restart_temp = mock_config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP
     
     # Initial State
     state.urlaubsmodus_aktiv = False
@@ -199,7 +245,7 @@ async def run_simulation_scenario(scenario_name, steps, config):
             
             if is_transition and t_mittig < setpoints['einschaltpunkt'] and not has_solar:
                 if mock_state.kompressor_ein and time_since_on > min_runtime_minutes:
-                    # Check for critical cold exception (Scenario 6)
+                    # Check for critical exception (Scenario 6)
                     basis_einschaltpunkt = int(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 43))
                     nacht_reduction = float(config["Heizungssteuerung"].get("NACHTABSENKUNG", 0.0))
                     night_setpoint = basis_einschaltpunkt - nacht_reduction

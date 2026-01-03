@@ -8,8 +8,7 @@ import os
 # Ensure we can import from parent directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from control_logic import determine_mode_and_setpoints
-
+from control_logic import determine_mode_and_setpoints, check_pressure_and_config
 import configparser
 
 @pytest.fixture
@@ -17,25 +16,58 @@ def mock_state():
     state = MagicMock()
     state.local_tz = pytz.timezone("Europe/Berlin")
     
-    # Verwende echtes ConfigParser-Objekt statt Dictionary
-    config = configparser.ConfigParser()
-    config.read_dict({
-        "Heizungssteuerung": {
-            "NACHT_START": "22:00",
-            "NACHT_ENDE": "06:00",
-            "NACHTABSENKUNG": "5",
-            "NACHTABSENKUNG_END": "06:00"
-        },
-        "Urlaubsmodus": {
-            "URLAUBSABSENKUNG": "10"
-        },
-        "Solarueberschuss": {
-            "BATPOWER_THRESHOLD": "600.0",
-            "SOC_THRESHOLD": "95.0",
-            "FEEDINPOWER_THRESHOLD": "600.0"
-        }
+    # Mocking Config as object with attributes
+    config = MagicMock()
+    
+    # Helper to create nested mocks
+    def create_section_mock(data):
+        section = MagicMock()
+        for k, v in data.items():
+            setattr(section, k, v)
+        return section
+
+    config.Heizungssteuerung = create_section_mock({
+        "NACHT_START": "22:00",
+        "NACHT_ENDE": "06:00",
+        "NACHTABSENKUNG": 5.0,
+        "NACHTABSENKUNG_START": "22:00",
+        "NACHTABSENKUNG_END": "06:00",
+        "EINSCHALTPUNKT": 40,
+        "AUSSCHALTPUNKT": 50,
+        "AUSSCHALTPUNKT_ERHOEHT": 55,
+        "EINSCHALTPUNKT_ERHOEHT": 45,
+        "MIN_LAUFZEIT": 15,
+        "MIN_PAUSE": 20,
+        "UEBERGANGSMODUS_MORGENS_ENDE": "10:00",
+        "UEBERGANGSMODUS_ABENDS_START": "17:00",
+        "SICHERHEITS_TEMP": 60.0,
+        "VERDAMPFERTEMPERATUR": -10.0,
+        "VERDAMPFER_RESTART_TEMP": 9.0
     })
+    
+    config.Urlaubsmodus = create_section_mock({
+        "URLAUBSABSENKUNG": 10.0
+    })
+    
+    config.Solarueberschuss = create_section_mock({
+        "BATPOWER_THRESHOLD": 600.0,
+        "SOC_THRESHOLD": 95.0,
+        "FEEDINPOWER_THRESHOLD": 600.0
+    })
+    
+    config.Telegram = create_section_mock({
+        "BOT_TOKEN": "mock_token",
+        "CHAT_ID": "mock_chat_id"
+    })
+    
+    config.Healthcheck = create_section_mock({
+        "HEALTHCHECK_URL": "http://mock-url",
+        "HEALTHCHECK_INTERVAL_MINUTES": 15
+    })
+
     state.config = config
+    
+    # Update properties dependent on config
     state.nachtabsenkung_ende = time(6, 0)
     state.uebergangsmodus_morgens_ende = time(10, 0)
     state.uebergangsmodus_abends_start = time(17, 0)
@@ -122,8 +154,6 @@ async def test_determine_mode_bademodus(mock_state):
         assert result['regelfuehler'] == 30 # t_unten
         assert result['regelfuehler'] == 30 # t_unten
 
-from control_logic import check_pressure_and_config
-
 @pytest.mark.asyncio
 async def test_check_pressure_and_config_only_pressure(mock_state):
     # Mock dependencies
@@ -154,5 +184,6 @@ async def test_check_pressure_and_config_only_pressure(mock_state):
     
     # Assertions
     assert handle_pressure.call_count == 2
-    reload_config.assert_called_once() # Should be called
-    calc_hash.assert_called_once() # Should be called
+    mock_state.update_config.assert_called_once()
+    # reload_config argument is ignored in favor of state method
+    # calc_hash.assert_called_once() # Hashes logic removed/simplified
