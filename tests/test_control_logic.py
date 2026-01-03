@@ -187,3 +187,27 @@ async def test_check_pressure_and_config_only_pressure(mock_state):
     mock_state.update_config.assert_called_once()
     # reload_config argument is ignored in favor of state method
     # calc_hash.assert_called_once() # Hashes logic removed/simplified
+
+@pytest.mark.asyncio
+async def test_determine_mode_none_solar_values(mock_state):
+    """Test handling of None values for solar data (API failure)."""
+    # Setup state with None values
+    mock_state.batpower = None
+    mock_state.soc = None
+    mock_state.feedinpower = None
+    mock_state.config.Solarueberschuss.BATPOWER_THRESHOLD = 600.0
+    mock_state.config.Solarueberschuss.SOC_THRESHOLD = 95.0
+    mock_state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD = 600.0
+    
+    # Mock time to 12:00 (Normalmodus, outside night/transition)
+    fixed_time = datetime(2023, 1, 1, 12, 0, 0, tzinfo=mock_state.local_tz)
+    
+    with patch('control_logic.datetime') as mock_dt:
+        mock_dt.now.return_value = fixed_time
+        # Re-apply side effects if needed, or just relying on now() is enough for determine_mode
+        
+        # These should proceed without error
+        result = await determine_mode_and_setpoints(mock_state, 40.0, 45.0)
+        
+        assert mock_state.solar_ueberschuss_aktiv is False
+        assert result['modus'] == "Normalmodus"

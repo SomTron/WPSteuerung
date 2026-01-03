@@ -77,6 +77,16 @@ def create_mock_state(config):
     mock_config.Heizungssteuerung.EINSCHALTPUNKT = int(config[section].get("EINSCHALTPUNKT", 40))
     mock_config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT = int(config[section].get("AUSSCHALTPUNKT_ERHOEHT", 55))
     mock_config.Heizungssteuerung.EINSCHALTPUNKT_ERHOEHT = int(config[section].get("EINSCHALTPUNKT_ERHOEHT", 45))
+    mock_config.Heizungssteuerung.NACHTABSENKUNG = float(config[section].get("NACHTABSENKUNG", 5.0))
+    mock_config.Heizungssteuerung.NACHTABSENKUNG_START = config[section].get("NACHTABSENKUNG_START", "22:00")
+    mock_config.Heizungssteuerung.NACHTABSENKUNG_END = config[section].get("NACHTABSENKUNG_END", "06:00")
+    mock_config.Heizungssteuerung.NACHT_START = config[section].get("NACHT_START", "22:00")
+    mock_config.Heizungssteuerung.NACHT_ENDE = config[section].get("NACHT_ENDE", "06:00")
+    mock_config.Heizungssteuerung.UEBERGANGSMODUS_MORGENS_ENDE = config[section].get("UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
+    mock_config.Heizungssteuerung.UEBERGANGSMODUS_ABENDS_START = config[section].get("UEBERGANGSMODUS_ABENDS_START", "17:00")
+    
+    print(f"DEBUG: Mock NACHTABSENKUNG set to: {mock_config.Heizungssteuerung.NACHTABSENKUNG}")
+    print(f"DEBUG: Real Config NACHTABSENKUNG: {config[section].get('NACHTABSENKUNG')}")
     
     # Parse times from config for State properties
     def parse_time(section, key, default):

@@ -8,15 +8,33 @@ from control_logic import check_sensors_and_safety
 class MockState:
     def __init__(self):
         self.local_tz = pytz.timezone("Europe/Berlin")
-        self.verdampfertemperatur = 6.0
-        self.verdampfer_restart_temp = 9.0
         self.verdampfer_blocked = False
         self.kompressor_ein = False
-        self.sicherheits_temp = 60.0
         self.bot_token = "mock"
         self.chat_id = "mock"
         self.last_verdampfer_notification = None
         self.ausschluss_grund = None
+        
+        # Mock config object with nested attributes (pydantic style)
+        self.config = MagicMock()
+        self.config.Heizungssteuerung.VERDAMPFERTEMPERATUR = 6.0
+        self.config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP = 9.0
+        self.config.Heizungssteuerung.SICHERHEITS_TEMP = 60.0
+        self.config.Telegram.BOT_TOKEN = "mock"
+        self.config.Telegram.CHAT_ID = "mock"
+    
+    # Properties for backward compatibility
+    @property
+    def verdampfertemperatur(self):
+        return self.config.Heizungssteuerung.VERDAMPFERTEMPERATUR
+    
+    @property
+    def verdampfer_restart_temp(self):
+        return self.config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP
+    
+    @property
+    def sicherheits_temp(self):
+        return self.config.Heizungssteuerung.SICHERHEITS_TEMP
 
 @pytest.mark.asyncio
 async def test_evaporator_hysteresis():

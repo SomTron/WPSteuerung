@@ -310,10 +310,15 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     total_reduction = nacht_reduction + urlaubs_reduction
 
     # Solarüberschuss-Schwellwerte aus Konfiguration lesen (nur bei Config-Änderung)
+    # Ensure values are not None (default to 0.0 if API failed)
+    bat_power = state.batpower if state.batpower is not None else 0.0
+    soc = state.soc if state.soc is not None else 0.0
+    feed_in = state.feedinpower if state.feedinpower is not None else 0.0
+
     state.solar_ueberschuss_aktiv = (
-            state.batpower > state.config.Solarueberschuss.BATPOWER_THRESHOLD or
-            (state.soc >= state.config.Solarueberschuss.SOC_THRESHOLD and 
-             state.feedinpower > state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD)
+            bat_power > state.config.Solarueberschuss.BATPOWER_THRESHOLD or
+            (soc >= state.config.Solarueberschuss.SOC_THRESHOLD and 
+             feed_in > state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD)
     )
 
     # Prüfe Übergangsmodus (morgens oder abends)
@@ -515,20 +520,4 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             logging.info(f"Kompressor nicht eingeschaltet: {state.ausschluss_grund}")
     return False
 
-async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_status_func: Callable):
-    """Prüft und behandelt Moduswechsel bei Solarüberschuss-Änderung."""
-    if state.kompressor_ein and state.solar_ueberschuss_aktiv != state.previous_solar_ueberschuss_aktiv and not state.bademodus_aktiv:
-        effective_ausschaltpunkt = state.previous_ausschaltpunkt or state.aktueller_ausschaltpunkt
-        if not state.solar_ueberschuss_aktiv and t_oben is not None and t_mittig is not None:
-            if t_oben >= effective_ausschaltpunkt or t_mittig >= effective_ausschaltpunkt:
-                result = await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben)
-                if result:
-                    state.kompressor_ein = False
-                    set_last_compressor_off_time(state, datetime.now(state.local_tz))
-                    state.last_runtime = safe_timedelta(datetime.now(state.local_tz), state.last_compressor_on_time)
-                    state.total_runtime_today += state.last_runtime
-                    logging.info(f"Kompressor ausgeschaltet bei Moduswechsel. Laufzeit: {state.last_runtime}")
-                    state.ausschluss_grund = None
-                    return True
-                await handle_critical_compressor_error(session, state, "bei Moduswechsel")
     return False
