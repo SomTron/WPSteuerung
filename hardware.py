@@ -68,7 +68,8 @@ class HardwareManager:
         if self.gpio_initialized and GPIO:
             try:
                 # Returnwert muss zur Logik passen.
-                return GPIO.input(self.PRESSURE_SENSOR_PIN)
+                # Legacy logic: raw_value == GPIO.LOW -> OK (True)
+                return GPIO.input(self.PRESSURE_SENSOR_PIN) == GPIO.LOW
             except Exception as e:
                 logging.error(f"Fehler beim Lesen des Drucksensors: {e}")
                 return False # Fehler-Status als Fallback
