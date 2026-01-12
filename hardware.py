@@ -24,7 +24,7 @@ class HardwareManager:
             try:
                 GPIO.setmode(GPIO.BCM)
                 GPIO.setup(self.GIO21_PIN, GPIO.OUT)
-                GPIO.setup(self.PRESSURE_SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                GPIO.setup(self.PRESSURE_SENSOR_PIN, GPIO.IN)  # Legacy: Externer Pull-up vorhanden
                 # Sicherstellen, dass Kompressor initial aus ist, falls Logik das verlangt? 
                 # Besser: Status quo behalten oder explizit ausschalten.
                 # GPIO.output(self.GIO21_PIN, GPIO.LOW) 
