@@ -63,6 +63,7 @@ class ConfigManager:
     def load_config(self):
         """Liest die Config-Datei, validiert sie und lädt sie in das Pydantic Model."""
         parser = configparser.ConfigParser()
+        parser.optionxform = str  # Behalte Groß-/Kleinschreibung bei (wichtig für Pydantic Models)
         try:
             read_files = parser.read(self.config_path)
             if not read_files:
