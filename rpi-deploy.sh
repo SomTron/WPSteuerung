@@ -15,46 +15,57 @@ NC='\033[0m'
 REPO_DIR="/home/patrik/WPSteuerung"
 SERVICE_NAME="wpsteuerung"
 
-printf "${CYAN}=========================================${NC}\n"
-printf "${CYAN}  WPSteuerung Deployment auf Raspberry Pi${NC}\n"
-printf "${CYAN}=========================================${NC}\n"
+# Hilfsfunktion fuer farbigen Output (POSIX-konform)
+# Verwendung: color_print $COLOR "Nachricht"
+color_print() {
+    printf "%b%s%b\n" "$1" "$2" "$NC"
+}
+
+color_print "$CYAN" "========================================="
+color_print "$CYAN" "  WPSteuerung Deployment auf Raspberry Pi"
+color_print "$CYAN" "========================================="
 
 # Pruefe ob Repository existiert
 if [ ! -d "$REPO_DIR" ]; then
-    printf "${RED}Fehler: Repository nicht gefunden in %s${NC}\n" "$REPO_DIR"
-    printf "${YELLOW}Fuehre erst die Ersteinrichtung durch!${NC}\n"
+    color_print "$RED" "Fehler: Repository nicht gefunden in $REPO_DIR"
+    color_print "$YELLOW" "Fuehre erst die Ersteinrichtung durch!"
     exit 1
 fi
 
 cd "$REPO_DIR"
+# Verhindere "fatal: Need to specify how to reconcile divergent branches"
+git config pull.rebase false
 
 # Zeige aktuellen Branch
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$CURRENT_BRANCH" = "HEAD" ]; then
-    printf "\n${RED}WARNUNG: Du befindest dich im 'detached HEAD' Zustand!${NC}\n"
-    printf "${YELLOW}Deine Commits koennten verloren gehen. Empfohlen: Zu einem Branch wechseln.${NC}\n"
+    printf "\n"
+    color_print "$RED" "WARNUNG: Du befindest dich im 'detached HEAD' Zustand!"
+    color_print "$YELLOW" "Deine Commits koennten verloren gehen. Empfohlen: Zu einem Branch wechseln."
 else
-    printf "\n${YELLOW}Aktueller Branch: %s${NC}\n" "$CURRENT_BRANCH"
+    printf "\n"
+    color_print "$YELLOW" "Aktueller Branch: $CURRENT_BRANCH"
 fi
 
 # Zeige Git Status (ohne untracked files)
-printf "\n${CYAN}Git Status (ohne untracked files):${NC}\n"
+printf "\n"
+color_print "$CYAN" "Git Status (ohne untracked files):"
 git status -uno --short
 
 # Warne nur bei getrackten Aenderungen
 if [ -n "$(git status -uno --porcelain)" ]; then
-    printf "${RED}WARNUNG: Es gibt lokale Aenderungen an getrackten Dateien!${NC}\n"
+    color_print "$RED" "WARNUNG: Es gibt lokale Aenderungen an getrackten Dateien!"
     printf "Moechtest du diese verwerfen? (j/n): "
     read reply
     case "$reply" in
         [Jj]*)
             git reset --hard
-            printf "${GREEN}Lokale Aenderungen verworfen.${NC}\n"
-            printf "${CYAN}Starte Skript neu...${NC}\n"
+            color_print "$GREEN" "Lokale Aenderungen verworfen."
+            color_print "$CYAN" "Starte Skript neu..."
             exec sh ./rpi-deploy.sh "$@"
             ;;
         *)
-            printf "${YELLOW}Abgebrochen.${NC}\n"
+            color_print "$YELLOW" "Abgebrochen."
             exit 1
             ;;
     esac
