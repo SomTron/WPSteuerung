@@ -768,7 +768,7 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                 if updates is not None:
                     consecutive_errors = 0  # Fehler-Zähler zurücksetzen bei erfolgreicher Verbindung
                     sensor_tasks = [
-                        asyncio.to_thread(read_temperature_func, sensor_ids[key])
+                        read_temperature_func(key)
                         for key in ["oben", "unten", "mittig", "verd"]
                     ]
                     t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd = await asyncio.gather(*sensor_tasks, return_exceptions=True)
