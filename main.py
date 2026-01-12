@@ -5,6 +5,8 @@ import signal
 import sys
 import uvicorn
 import aiohttp
+import aiofiles
+import os
 from datetime import datetime, timedelta
 import pytz
 
@@ -210,6 +212,68 @@ async def main_loop():
                 f"Ziel:{state.aktueller_einschaltpunkt:.0f}/{state.aktueller_ausschaltpunkt:.0f} {'ON' if state.kompressor_ein else 'OFF'}",
                 f"{state.previous_modus[:10]} {state.soc}%"
             )
+
+            # --- CSV Logging (Restored) ---
+            try:
+                csv_file = "heizungsdaten.csv"
+                # Header Check (synchron)
+                from utils import check_and_fix_csv_header
+                if not os.path.exists(csv_file):
+                    # Erstellen mit Header
+                    async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
+                        from utils import EXPECTED_CSV_HEADER
+                        await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
+                else:
+                    # Header prüfen (blocking IO, aber selten)
+                    check_and_fix_csv_header(csv_file)
+
+                # Daten vorbereiten
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Power Source Logic
+                power_source = "Netz"
+                if state.feedinpower > 0:
+                    power_source = "Solar"
+                elif state.batpower > 0:
+                    power_source = "Batterie"
+
+                # Werte aufbereiten (None -> N/A oder 0)
+                def fmt_csv(val): return str(val) if val is not None else "N/A"
+                
+                # Spalten Mapping gemäß EMPFEHLUNG in utils.py
+                # "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",
+                # "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy",
+                # "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Nachtabsenkung", "PowerSource"
+                
+                solax = state.last_api_data or {}
+                
+                csv_line = [
+                    timestamp,
+                    fmt_csv(t_oben),
+                    fmt_csv(t_unten),
+                    fmt_csv(t_mittig),
+                    fmt_csv(state.t_boiler),
+                    fmt_csv(t_verd),
+                    "1" if state.kompressor_ein else "0",
+                    fmt_csv(solax.get("acpower", 0)),
+                    fmt_csv(state.feedinpower),
+                    fmt_csv(state.batpower),
+                    fmt_csv(state.soc),
+                    fmt_csv(solax.get("powerdc1", 0)),
+                    fmt_csv(solax.get("powerdc2", 0)),
+                    fmt_csv(solax.get("consumeenergy", 0)),
+                    fmt_csv(state.aktueller_einschaltpunkt),
+                    fmt_csv(state.aktueller_ausschaltpunkt),
+                    "1" if state.solar_ueberschuss_aktiv else "0",
+                    "1" if control_logic.is_nighttime(state.config) else "0", # Simple bool for Nachtabsenkung col
+                    power_source
+                ]
+                
+                async with aiofiles.open(csv_file, mode="a", encoding="utf-8") as f:
+                    await f.write(",".join(csv_line) + "\n")
+
+            except Exception as e:
+                logging.error(f"Fehler beim Schreiben der CSV: {e}")
 
             # --- Sleep ---
             # Berechne Restzeit für 10s Loop (aus Config?)
