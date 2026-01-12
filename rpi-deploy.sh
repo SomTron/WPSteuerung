@@ -30,7 +30,12 @@ cd "$REPO_DIR"
 
 # Zeige aktuellen Branch
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-printf "\n${YELLOW}Aktueller Branch: %s${NC}\n" "$CURRENT_BRANCH"
+if [ "$CURRENT_BRANCH" = "HEAD" ]; then
+    printf "\n${RED}WARNUNG: Du befindest dich im 'detached HEAD' Zustand!${NC}\n"
+    printf "${YELLOW}Deine Commits koennten verloren gehen. Empfohlen: Zu einem Branch wechseln.${NC}\n"
+else
+    printf "\n${YELLOW}Aktueller Branch: %s${NC}\n" "$CURRENT_BRANCH"
+fi
 
 # Zeige Git Status (ohne untracked files)
 printf "\n${CYAN}Git Status (ohne untracked files):${NC}\n"
@@ -82,11 +87,23 @@ case "$choice" in
     2)
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
-        printf "Zu welchem Branch wechseln? (master/android-api/funktioniert): "
-        read target_branch
+        printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
+        read raw_branch
+
+        # Bereinige Branch-Namen (entferne remotes/origin/ oder origin/)
+        target_branch=$(echo "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
+
         printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
         git fetch --all
-        git checkout "$target_branch"
+
+        # Pruefe ob Branch lokal existiert, sonst tracke remote
+        if git show-ref --verify --quiet "refs/heads/$target_branch"; then
+            git checkout "$target_branch"
+        else
+            printf "${YELLOW}Branch '%s' lokal nicht gefunden. Versuche Tracking von origin/%s...${NC}\n" "$target_branch" "$target_branch"
+            git checkout -b "$target_branch" "origin/$target_branch" || git checkout "$target_branch"
+        fi
+
         printf "${GREEN}Zu Branch '%s' gewechselt!${NC}\n" "$target_branch"
         printf "Service neu starten? (j/n): "
         read reply
@@ -101,11 +118,23 @@ case "$choice" in
     3)
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
-        printf "Zu welchem Branch wechseln? (master/android-api/funktioniert): "
-        read target_branch
+        printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
+        read raw_branch
+
+        # Bereinige Branch-Namen
+        target_branch=$(echo "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
+
         printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
         git fetch --all
-        git checkout "$target_branch"
+
+        # Pruefe ob Branch lokal existiert, sonst tracke remote
+        if git show-ref --verify --quiet "refs/heads/$target_branch"; then
+            git checkout "$target_branch"
+        else
+            printf "${YELLOW}Branch '%s' lokal nicht gefunden. Versuche Tracking von origin/%s...${NC}\n" "$target_branch" "$target_branch"
+            git checkout -b "$target_branch" "origin/$target_branch" || git checkout "$target_branch"
+        fi
+
         git pull origin "$target_branch"
         printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
         printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
