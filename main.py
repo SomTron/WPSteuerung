@@ -53,6 +53,14 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         # Hardware schalten
         hardware_manager.set_compressor_state(True)
         state.kompressor_ein = True
+        
+        # Startwerte für Verifizierung speichern
+        state.kompressor_verification_start_time = datetime.now(state.local_tz)
+        state.kompressor_verification_start_t_verd = state.t_verd
+        state.kompressor_verification_start_t_unten = state.t_unten
+        state.kompressor_verification_last_check = None  # Reset
+        logging.info(f"Kompressor EIN - Verifizierung gestartet (t_verd={state.t_verd}, t_unten={state.t_unten})")
+        
         return True
     else:
         # Ausschalten
@@ -176,6 +184,19 @@ async def main_loop():
                  # Original logic continues but kompressor might be off.
                  # check_pressure_and_config handles turning off.
                  pass
+
+            # 1a. Kompressor-Laufzeit-Verifizierung
+            if state.kompressor_ein:
+                is_running, error_msg = await control_logic.verify_compressor_running(
+                    state, session, t_verd, t_unten
+                )
+                if not is_running and state.kompressor_verification_error_count >= 2:
+                    # Nach 2 Fehlern: Kompressor zwangsweise ausschalten
+                    logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
+                    await set_kompressor_status(state, False, force=True)
+                    state.ausschluss_grund = "Kompressor läuft nicht (Verifizierung fehlgeschlagen)"
+                    # Sperre für 10 Minuten
+                    state.last_compressor_off_time = datetime.now(state.local_tz) + timedelta(minutes=10)
 
             # 2. Sensoren & Safety
             sensors_safe = await control_logic.check_sensors_and_safety(

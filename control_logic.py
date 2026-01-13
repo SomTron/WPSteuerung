@@ -537,3 +537,107 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
                     return True
                 await handle_critical_compressor_error(session, state, "bei Moduswechsel")
     return False
+
+async def verify_compressor_running(
+    state, 
+    session,
+    current_t_verd: Optional[float], 
+    current_t_unten: Optional[float],
+    verification_delay_minutes: int = 3,
+    verd_drop_threshold: float = 1.5,
+    unten_change_threshold: float = 0.5
+) -> tuple[bool, Optional[str]]:
+    """
+    Überprüft, ob der Kompressor tatsächlich läuft, basierend auf Temperaturänderungen.
+    
+    Args:
+        state: State-Objekt mit Verifikationsdaten
+        session: aiohttp session für Telegram-Benachrichtigungen
+        current_t_verd: Aktuelle Verdampfertemperatur
+        current_t_unten: Aktuelle untere Boilertemperatur
+        verification_delay_minutes: Wartezeit nach Einschalten (Default: 3 Minuten)
+        verd_drop_threshold: Minimaler Temperaturabfall für t_verd (Default: 1.5°C)
+        unten_change_threshold: Minimale Temperaturänderung für t_unten (Default: 0.5°C)
+    
+    Returns:
+        (is_running, error_message): True wenn OK, False + Fehlermeldung wenn Problem erkannt
+    """
+    now = datetime.now(state.local_tz)
+    
+    # Keine Verifizierung nötig wenn Kompressor aus ist
+    if not state.kompressor_ein:
+        state.kompressor_verification_start_time = None
+        return True, None
+    
+    # Startzeit noch nicht gesetzt -> beim nächsten Durchlauf
+    if state.kompressor_verification_start_time is None:
+        return True, None
+    
+    # Wartezeit noch nicht abgelaufen
+    elapsed = safe_timedelta(now, state.kompressor_verification_start_time, state.local_tz)
+    if elapsed < timedelta(minutes=verification_delay_minutes):
+        return True, None
+    
+    # Bereits geprüft in diesem Zyklus? (verhindert mehrfache Prüfungen)
+    if state.kompressor_verification_last_check:
+        since_last_check = safe_timedelta(now, state.kompressor_verification_last_check, state.local_tz)
+        if since_last_check < timedelta(minutes=1):  # Max. alle 1 Minute prüfen
+            return True, None
+    
+    state.kompressor_verification_last_check = now
+    
+    # Validierung der Sensorwerte
+    if not is_valid_temperature(current_t_verd) or not is_valid_temperature(current_t_unten):
+        logging.warning("Kompressor-Verifizierung übersprungen: Ungültige Sensorwerte")
+        return True, None  # Bei ungültigen Werten keine Fehlermeldung
+    
+    if (state.kompressor_verification_start_t_verd is None or 
+        state.kompressor_verification_start_t_unten is None):
+        logging.warning("Kompressor-Verifizierung: Startwerte fehlen")
+        return True, None
+    
+    # Temperaturänderungen berechnen
+    verd_delta = state.kompressor_verification_start_t_verd - current_t_verd  # Sollte positiv sein (Abfall)
+    unten_delta = abs(current_t_unten - state.kompressor_verification_start_t_unten)  # Betrag der Änderung
+    
+    logging.info(
+        f"Kompressor-Verifizierung: t_verd Δ={verd_delta:.2f}°C (Soll: >{verd_drop_threshold}°C), "
+        f"t_unten Δ={unten_delta:.2f}°C (Soll: >{unten_change_threshold}°C)"
+    )
+    
+    # Prüfung 1: Verdampfer sollte kälter werden
+    verd_ok = verd_delta >= verd_drop_threshold
+    
+    # Prüfung 2: Unterer Fühler sollte sich ändern (egal in welche Richtung)
+    unten_ok = unten_delta >= unten_change_threshold
+    
+    if verd_ok and unten_ok:
+        logging.info("✓ Kompressor-Verifizierung: WP läuft korrekt")
+        state.kompressor_verification_error_count = 0
+        state.kompressor_verification_failed = False
+        return True, None
+    
+    # Fehler erkannt
+    error_parts = []
+    if not verd_ok:
+        error_parts.append(f"Verdampfer: nur {verd_delta:.1f}°C Abfall (Soll: >{verd_drop_threshold}°C)")
+    if not unten_ok:
+        error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >{unten_change_threshold}°C)")
+    
+    error_message = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)
+    
+    state.kompressor_verification_error_count += 1
+    state.kompressor_verification_failed = True
+    
+    logging.warning(f"{error_message} (Fehler #{state.kompressor_verification_error_count})")
+    
+    # Telegram-Benachrichtigung senden
+    if state.bot_token and state.chat_id:
+        full_message = (
+            f"{error_message}\n\n"
+            f"Fehleranzahl: {state.kompressor_verification_error_count}\n"
+            f"Kompressor läuft seit: {elapsed.total_seconds() / 60:.1f} Min."
+        )
+        await send_telegram_message(session, state.chat_id, full_message, state.bot_token)
+    
+    return False, error_message
