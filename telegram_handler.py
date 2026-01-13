@@ -959,8 +959,11 @@ async def get_boiler_temperature_history(session, hours, state, config):
         y_max = max_temp + 5 if pd.notna(max_temp) else 60
         color_map = {
             "Direkter PV-Strom": "green",
+            "Solar": "green",
             "Strom aus der Batterie": "yellow",
+            "Batterie": "yellow",
             "Strom vom Netz": "red",
+            "Netz": "red",
             "Keine aktive Energiequelle": "blue",
             "Unbekannt": "gray"
         }
@@ -1103,8 +1106,11 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         # Kategorie mapping
         map_src = {
             "Direkter PV-Strom": "PV",
+            "Solar": "PV",
             "Strom aus der Batterie": "Battery",
-            "Strom vom Netz": "Grid"
+            "Batterie": "Battery",
+            "Strom vom Netz": "Grid",
+            "Netz": "Grid"
         }
         active["Kategorie"] = active["PowerSource"].map(map_src).fillna("Unbekannt")
 
