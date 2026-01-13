@@ -970,7 +970,12 @@ async def get_boiler_temperature_history(session, hours, state, config):
         plt.figure(figsize=(12, 6))
         shown_labels = set()
         if "Kompressor" in df.columns and "PowerSource" in df.columns:
-            df["Kompressor"] = df["Kompressor"].map({"EIN": True, "AUS": False}).fillna(False)
+            # Support both old format (EIN/AUS) and new format (1/0)
+            df["Kompressor"] = df["Kompressor"].astype(str).map({
+                "EIN": True, "AUS": False, 
+                "1": True, "0": False,
+                "1.0": True, "0.0": False
+            }).fillna(False)
             for source, color in color_map.items():
                 mask = (df["PowerSource"] == source) & df["Kompressor"]
                 if mask.any():
