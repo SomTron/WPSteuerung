@@ -543,9 +543,9 @@ async def verify_compressor_running(
     session,
     current_t_verd: Optional[float], 
     current_t_unten: Optional[float],
-    verification_delay_minutes: int = 3,
+    verification_delay_minutes: int = 5,
     verd_drop_threshold: float = 1.5,
-    unten_change_threshold: float = 0.5
+    unten_change_threshold: float = 0.2
 ) -> tuple[bool, Optional[str]]:
     """
     Überprüft, ob der Kompressor tatsächlich läuft, basierend auf Temperaturänderungen.
