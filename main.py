@@ -253,9 +253,9 @@ async def main_loop():
                 
                 # Power Source Logic
                 power_source = "Netz"
-                if state.feedinpower > 0:
+                if state.feedinpower is not None and state.feedinpower > 0:
                     power_source = "Solar"
-                elif state.batpower > 0:
+                elif state.batpower is not None and state.batpower > 0:
                     power_source = "Batterie"
 
                 # Werte aufbereiten (None -> N/A oder 0)
