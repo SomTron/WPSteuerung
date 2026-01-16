@@ -543,7 +543,7 @@ async def verify_compressor_running(
     session,
     current_t_verd: Optional[float], 
     current_t_unten: Optional[float],
-    verification_delay_minutes: int = 5,
+    verification_delay_minutes: int = 10,  # Erhöht auf 10 Minuten
     verd_drop_threshold: float = 1.5,
     unten_change_threshold: float = 0.2
 ) -> tuple[bool, Optional[str]]:
@@ -555,9 +555,9 @@ async def verify_compressor_running(
         session: aiohttp session für Telegram-Benachrichtigungen
         current_t_verd: Aktuelle Verdampfertemperatur
         current_t_unten: Aktuelle untere Boilertemperatur
-        verification_delay_minutes: Wartezeit nach Einschalten (Default: 3 Minuten)
+        verification_delay_minutes: Wartezeit nach Einschalten (Default: 10 Minuten)
         verd_drop_threshold: Minimaler Temperaturabfall für t_verd (Default: 1.5°C)
-        unten_change_threshold: Minimale Temperaturänderung für t_unten (Default: 0.5°C)
+        unten_change_threshold: Minimale Temperaturänderung für t_unten (Default: 0.2°C)
     
     Returns:
         (is_running, error_message): True wenn OK, False + Fehlermeldung wenn Problem erkannt
@@ -607,6 +607,17 @@ async def verify_compressor_running(
     
     # Prüfung 1: Verdampfer sollte kälter werden
     verd_ok = verd_delta >= verd_drop_threshold
+    
+    # SONDERFALL: Restart bei kaltem Verdampfer
+    # Wenn der Verdampfer schon beim Start sehr kalt war (< 15°C) und nicht wärmer geworden ist,
+    # ist das auch ein Zeichen, dass er läuft (oder zumindest nicht abtaut/wärmt).
+    if not verd_ok:
+        if state.kompressor_verification_start_t_verd < 15.0:
+            # Erlauben, wenn er nicht signifikant wärmer geworden ist und immer noch kalt ist
+            # verd_delta >= -0.5 bedeutet: Er ist maximal 0.5°C wärmer geworden (Rauschen)
+            if verd_delta >= -0.5 and current_t_verd < 12.0:
+                logging.info(f"Kompressor-Verifizierung: Restart-Szenario erkannt (Start={state.kompressor_verification_start_t_verd}°C, Aktuell={current_t_verd}°C). OK.")
+                verd_ok = True
     
     # Prüfung 2: Unterer Fühler sollte sich ändern (egal in welche Richtung)
     unten_ok = unten_delta >= unten_change_threshold
