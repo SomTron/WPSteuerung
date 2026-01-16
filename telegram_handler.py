@@ -611,9 +611,10 @@ async def send_status_telegram(
     return await send_telegram_message(session, chat_id, message, bot_token, parse_mode="Markdown")
 
 
-async def send_unknown_command_message(session, chat_id, bot_token):
+async def send_unknown_command_message(session, chat_id, bot_token, state):
     """Sendet eine Nachricht bei unbekanntem Befehl."""
-    return await send_telegram_message(session, chat_id, "❓ Unbekannter Befehl. Verwende 'Hilfe' für eine Liste der Befehle.", bot_token)
+    keyboard = get_keyboard(state)
+    return await send_telegram_message(session, chat_id, "❓ Unbekannter Befehl. Verwende 'Hilfe' für eine Liste der Befehle.", bot_token, reply_markup=keyboard)
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates,
                                          last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id,
@@ -739,11 +740,11 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
 
                     # Hilfe
                     elif message_text_lower in ("🆘 hilfe", "hilfe"):
-                        await send_help_message(session, chat_id, bot_token)
+                        await send_help_message(session, chat_id, bot_token, state)
 
                     # Unbekannter Befehl
                     else:
-                        await send_unknown_command_message(session, chat_id, bot_token)
+                        await send_unknown_command_message(session, chat_id, bot_token, state)
 
                 return update['update_id'] + 1
             return last_update_id
@@ -766,6 +767,16 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     continue
                 updates = await get_telegram_updates(session, state.bot_token, last_update_id)
                 if updates is not None:
+                    # Startup Nachricht senden falls noch nicht geschehen (um Keyboard zu fixen)
+                    if not getattr(state, "telegram_startup_sent", False):
+                        try:
+                            keyboard = get_keyboard(state)
+                            await send_telegram_message(session, state.chat_id, "🚀 System gestartet. Tastenfeld aktualisiert.", state.bot_token, reply_markup=keyboard)
+                            state.telegram_startup_sent = True
+                            logging.info("Telegram Startup-Nachricht mit Keyboard gesendet.")
+                        except Exception as e:
+                            logging.error(f"Fehler beim Senden der Startup-Nachricht: {e}")
+
                     consecutive_errors = 0  # Fehler-Zähler zurücksetzen bei erfolgreicher Verbindung
                     sensor_tasks = [
                         read_temperature_func(key)
@@ -807,7 +818,7 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                 await asyncio.sleep(10)
                 continue
 
-async def send_help_message(session, chat_id, bot_token):
+async def send_help_message(session, chat_id, bot_token, state):
     """Sendet eine Hilfenachricht mit verfügbaren Befehlen über Telegram."""
     message = (
         "ℹ️ **Hilfe - Verfügbare Befehle**\n\n"
@@ -822,7 +833,8 @@ async def send_help_message(session, chat_id, bot_token):
         "📉 **Verlauf 24h**: Zeigt den Temperaturverlauf der letzten 24 Stunden.\n"
         "⏱️ **Laufzeiten [Tage]**: Zeigt die Laufzeiten der letzten X Tage (Standard: 7).\n"
     )
-    return await send_telegram_message(session, chat_id, message, bot_token)
+    keyboard = get_keyboard(state)
+    return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
 def prefilter_csv_lines(file_path, days, tz):
     now = datetime.now(tz)
