@@ -26,6 +26,7 @@ from telegram_handler import (
     get_boiler_temperature_history, # Needed for Telegram task
     get_runtime_bar_chart # Needed for Telegram task
 )
+from vpn_manager import check_vpn_status
 from api import app, init_api
 
 # Global objects
@@ -150,6 +151,8 @@ async def main_loop():
     hc_task = asyncio.create_task(start_healthcheck_task(session, state))
     
     # 7. Main Loop
+    last_vpn_check = datetime.now() - timedelta(minutes=1)
+    
     try:
         while not stop_event.is_set():
             loop_start = datetime.now()
@@ -169,6 +172,11 @@ async def main_loop():
                 state.feedinpower = state.last_api_data.get("feedinpower", 0)
                 state.batpower = state.last_api_data.get("batPower", 0)
                 state.soc = state.last_api_data.get("soc", 0)
+            
+            # --- VPN Status periodically ---
+            if (datetime.now() - last_vpn_check).total_seconds() >= 60:
+                await check_vpn_status(state)
+                last_vpn_check = datetime.now()
             
             # --- Steuerungslogik ---
             
