@@ -45,6 +45,11 @@ class SolarueberschussConfig(BaseModel):
 class LoggingConfig(BaseModel):
     ENABLE_FULL_LOG: bool = Field(default=True)
 
+class WetterprognoseConfig(BaseModel):
+    LATITUDE: float = Field(default=46.7142)
+    LONGITUDE: float = Field(default=13.6361)
+    TILT: int = Field(default=30)
+
 class AppConfig(BaseModel):
     Heizungssteuerung: HeizungssteuerungConfig = Field(default_factory=HeizungssteuerungConfig)
     Healthcheck: HealthcheckConfig = Field(default_factory=HealthcheckConfig)
@@ -53,6 +58,7 @@ class AppConfig(BaseModel):
     Urlaubsmodus: UrlaubsmodusConfig = Field(default_factory=UrlaubsmodusConfig)
     Solarueberschuss: SolarueberschussConfig = Field(default_factory=SolarueberschussConfig)
     Logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    Wetterprognose: WetterprognoseConfig = Field(default_factory=WetterprognoseConfig)
 
 class ConfigManager:
     def __init__(self, config_path: str = "config.ini"):

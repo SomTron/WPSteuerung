@@ -5,12 +5,17 @@ import aiofiles
 from datetime import datetime, timedelta
 import pytz
 
-async def get_solar_forecast(session: aiohttp.ClientSession, lat: float = 46.7142, lon: float = 13.6361):
+async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
     """
     Fetches solar radiation forecast from Open-Meteo.
     Returns: (rad_today, rad_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
     Radiation in kWh/m², times as strings "HH:MM".
     """
+    # Use config values or defaults
+    lat = config.Wetterprognose.LATITUDE if config else 46.7142
+    lon = config.Wetterprognose.LONGITUDE if config else 13.6361
+    tilt = config.Wetterprognose.TILT if config else 30
+    
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -19,7 +24,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, lat: float = 46.714
         "hourly": "direct_radiation,diffuse_radiation",
         "timezone": "Europe/Berlin",
         "forecast_days": 3,
-        "tilt": 30
+        "tilt": tilt
     }
     
     try:

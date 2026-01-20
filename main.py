@@ -197,7 +197,7 @@ async def main_loop():
             
             # --- Solar Forecast periodically (every 6 hours) ---
             if state.last_forecast_update is None or (datetime.now(state.local_tz) - state.last_forecast_update).total_seconds() >= 6 * 3600:
-                rad_today, rad_tomorrow, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session)
+                rad_today, rad_tomorrow, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session, state.config)
                 if rad_today is not None:
                     state.solar_forecast_today = rad_today
                     state.solar_forecast_tomorrow = rad_tomorrow
