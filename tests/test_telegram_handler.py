@@ -119,7 +119,6 @@ async def test_send_telegram_message_parallel():
     finally:
         await session.close()
 
-@pytest.mark.asyncio
 def test_get_telegram_updates():
     """
     Dieser Test kann nicht automatisiert laufen, solange der Bot-Skript aktiv ist (Telegram API erlaubt nur eine getUpdates-Session).
