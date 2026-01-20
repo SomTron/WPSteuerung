@@ -28,6 +28,7 @@ from telegram_handler import (
 )
 from vpn_manager import check_vpn_status
 from api import app, init_api
+from utils import safe_timedelta
 from weather_forecast import get_solar_forecast
 
 # Global objects
