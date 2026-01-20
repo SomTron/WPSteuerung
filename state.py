@@ -118,6 +118,7 @@ class State:
         self.sunrise_tomorrow: Optional[str] = None
         self.sunset_tomorrow: Optional[str] = None
         self.last_forecast_update: Optional[datetime] = None
+        self.last_day: Optional[int] = None
 
     @property
     def sicherheits_temp(self):

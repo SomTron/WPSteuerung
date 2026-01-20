@@ -1,4 +1,5 @@
 @echo off
+cd /d %~dp0
 echo Running Tests...
 REM Um den Telegram-Test auszuführen, müssen TELEGRAM_BOT_TOKEN und TELEGRAM_CHAT_ID als Umgebungsvariablen gesetzt sein.
 REM Beispiel (vorher im Terminal ausführen):

@@ -138,7 +138,7 @@ async def main_loop():
         sensor_ids=sensor_manager.sensor_ids,
         kompressor_status_func=lambda: state.kompressor_ein,
         current_runtime_func=lambda: state.current_runtime,
-        total_runtime_func=lambda: state.total_runtime_today,
+        total_runtime_func=lambda: state.total_runtime_today + state.current_runtime,
         config=state.config, # Passes AppConfig object, updated telegram_handler expects this now mostly
         get_solax_data_func=get_solax_data,
         state=state,
@@ -157,6 +157,22 @@ async def main_loop():
     try:
         while not stop_event.is_set():
             loop_start = datetime.now()
+            now = datetime.now(state.local_tz)
+            
+            # --- Tageswechsel-Reset ---
+            if state.last_day is None:
+                state.last_day = now.day
+            elif state.last_day != now.day:
+                logging.info(f"Tageswechsel erkannt ({state.last_day} -> {now.day}). Setze Statistiken zurück.")
+                state.total_runtime_today = timedelta()
+                state.last_completed_cycle = None
+                state.last_day = now.day
+            
+            # --- Live-Laufzeit aktualisieren ---
+            if state.kompressor_ein and state.last_compressor_on_time:
+                state.current_runtime = safe_timedelta(now, state.last_compressor_on_time, state.local_tz)
+            else:
+                state.current_runtime = timedelta()
             
             # --- Sensoren lesen ---
             temps = await sensor_manager.get_all_temperatures()
