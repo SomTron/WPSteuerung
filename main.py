@@ -15,6 +15,8 @@ from config_manager import ConfigManager
 from state import State
 from sensors import SensorManager
 from hardware import HardwareManager
+from hardware import HardwareManager
+from hardware_mock import MockHardwareManager
 from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
@@ -111,7 +113,15 @@ async def main_loop():
     logging.info("Starten der Wärmepumpensteuerung (Refactored)...")
 
     # 4. Hardware & Sensors init
-    hardware_manager = HardwareManager()
+    # Use mock hardware on non-Raspberry Pi platforms
+    try:
+        import RPi.GPIO
+        hardware_manager = HardwareManager()
+        logging.info("Using real hardware (Raspberry Pi detected)")
+    except ImportError:
+        hardware_manager = MockHardwareManager()
+        logging.info("Using mock hardware (non-Raspberry Pi platform)")
+    
     hardware_manager.init_gpio()
     await hardware_manager.init_lcd()
     

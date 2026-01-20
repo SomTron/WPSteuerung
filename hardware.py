@@ -1,5 +1,7 @@
 import logging
 import asyncio
+from hardware_interface import HardwareInterface
+
 try:
     import RPi.GPIO as GPIO
     from RPLCD.i2c import CharLCD
@@ -9,7 +11,7 @@ except ImportError:
     GPIO = None
     CharLCD = None
 
-class HardwareManager:
+class HardwareManager(HardwareInterface):
     def __init__(self, i2c_addr=0x27, i2c_bus=1):
         self.GIO21_PIN = 21  # Kompressor
         self.PRESSURE_SENSOR_PIN = 17 # Druckschalter
