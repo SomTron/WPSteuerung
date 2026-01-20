@@ -602,6 +602,16 @@ async def send_status_telegram(
         f"VPN: {state.vpn_ip if state.vpn_ip else '❌ Inaktiv'}"
     ]
 
+    # Solar Forecast hinzufügen
+    if state.solar_forecast_tomorrow is not None:
+        forecast_line = f"☀️ *Prognose Morgen*: {state.solar_forecast_tomorrow:.1f} kWh/m²"
+        if state.sunrise_tomorrow and state.sunset_tomorrow:
+            forecast_line += f" ({state.sunrise_tomorrow}-{state.sunset_tomorrow})"
+        status_lines.append(forecast_line)
+    
+    if state.sunrise_today and state.sunset_today:
+        status_lines.append(f"🌅 *Sonne Heute*: {state.sunrise_today} - {state.sunset_today}")
+
     if state.ausschluss_grund:
         escaped_ausschluss_grund = escape_markdown(str(state.ausschluss_grund))
         status_lines.append(f"⚠️ Grund: {escaped_ausschluss_grund}")

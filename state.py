@@ -110,6 +110,15 @@ class State:
         # --- Healthcheck ---
         self.last_healthcheck_ping: Optional[datetime] = None
 
+        # --- Solar Forecast ---
+        self.solar_forecast_today: Optional[float] = None
+        self.solar_forecast_tomorrow: Optional[float] = None
+        self.sunrise_today: Optional[str] = None
+        self.sunset_today: Optional[str] = None
+        self.sunrise_tomorrow: Optional[str] = None
+        self.sunset_tomorrow: Optional[str] = None
+        self.last_forecast_update: Optional[datetime] = None
+
     @property
     def sicherheits_temp(self):
         return self.config.Heizungssteuerung.SICHERHEITS_TEMP

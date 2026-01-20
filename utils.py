@@ -10,7 +10,8 @@ from typing import List
 EXPECTED_CSV_HEADER = [
     "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",
     "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy",
-    "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Nachtabsenkung", "PowerSource"
+    "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Nachtabsenkung", "PowerSource",
+    "Prognose_Morgen"
 ]
 
 def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) -> bool:

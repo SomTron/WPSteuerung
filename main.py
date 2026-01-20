@@ -28,6 +28,7 @@ from telegram_handler import (
 )
 from vpn_manager import check_vpn_status
 from api import app, init_api
+from weather_forecast import get_solar_forecast
 
 # Global objects
 config_manager = ConfigManager()
@@ -173,10 +174,21 @@ async def main_loop():
                 state.batpower = state.last_api_data.get("batPower", 0)
                 state.soc = state.last_api_data.get("soc", 0)
             
-            # --- VPN Status periodically ---
             if (datetime.now() - last_vpn_check).total_seconds() >= 60:
                 await check_vpn_status(state)
                 last_vpn_check = datetime.now()
+            
+            # --- Solar Forecast periodically (every 6 hours) ---
+            if state.last_forecast_update is None or (datetime.now(state.local_tz) - state.last_forecast_update).total_seconds() >= 6 * 3600:
+                rad_today, rad_tomorrow, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session)
+                if rad_today is not None:
+                    state.solar_forecast_today = rad_today
+                    state.solar_forecast_tomorrow = rad_tomorrow
+                    state.sunrise_today = sr_today
+                    state.sunset_today = ss_today
+                    state.sunrise_tomorrow = sr_tomorrow
+                    state.sunset_tomorrow = ss_tomorrow
+                    state.last_forecast_update = datetime.now(state.local_tz)
             
             # --- Steuerungslogik ---
             
@@ -295,7 +307,8 @@ async def main_loop():
                     fmt_csv(state.aktueller_ausschaltpunkt),
                     "1" if state.solar_ueberschuss_aktiv else "0",
                     "1" if control_logic.is_nighttime(state.config) else "0", # Simple bool for Nachtabsenkung col
-                    power_source
+                    power_source,
+                    fmt_csv(state.solar_forecast_tomorrow)
                 ]
                 
                 async with aiofiles.open(csv_file, mode="a", encoding="utf-8") as f:
