@@ -49,35 +49,35 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
     """
     if status:
         # Einschalten
-        if state.kompressor_ein and not force:
+        if state.control.kompressor_ein and not force:
             return True
         
         # Hardware schalten
         hardware_manager.set_compressor_state(True)
-        state.kompressor_ein = True
+        state.control.kompressor_ein = True
         
         # Startwerte für Verifizierung speichern
         state.kompressor_verification_start_time = datetime.now(state.local_tz)
-        state.kompressor_verification_start_t_verd = state.t_verd
-        state.kompressor_verification_start_t_unten = state.t_unten
+        state.kompressor_verification_start_t_verd = state.sensors.t_verd
+        state.kompressor_verification_start_t_unten = state.sensors.t_unten
         state.kompressor_verification_last_check = None  # Reset
-        logging.info(f"Kompressor EIN - Verifizierung gestartet (t_verd={state.t_verd}, t_unten={state.t_unten})")
+        logging.info(f"Kompressor EIN - Verifizierung gestartet (t_verd={state.sensors.t_verd}, t_unten={state.sensors.t_unten})")
         
         return True
     else:
         # Ausschalten
-        if not state.kompressor_ein and not force:
+        if not state.control.kompressor_ein and not force:
             return True
 
         hardware_manager.set_compressor_state(False)
-        state.kompressor_ein = False
+        state.control.kompressor_ein = False
         return True
 
 async def handle_pressure_check(session, state):
     """Liest den Druckschalter über HardwareManager."""
     pressure_ok = hardware_manager.read_pressure_sensor()
     
-    if not pressure_ok and state.last_pressure_state:
+    if not pressure_ok and state.control.last_pressure_state:
          # Notify if changed to Error
          pass # Logic handled in control_logic mostly
          
