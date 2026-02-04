@@ -67,30 +67,36 @@ def mock_state():
 
     state.config = config
     
-    # Update properties dependent on config
-    state.nachtabsenkung_ende = time(6, 0)
-    state.uebergangsmodus_morgens_ende = time(10, 0)
-    state.uebergangsmodus_abends_start = time(17, 0)
-    state.nachtabsenkung_start = time(22, 0)
+    # Sub-states
+    state.sensors = MagicMock()
+    state.solar = MagicMock()
+    state.control = MagicMock()
+    state.stats = MagicMock()
+
+    # Default values for sub-states
+    state.control.aktueller_ausschaltpunkt = 50
+    state.control.aktueller_einschaltpunkt = 40
+    state.control.kompressor_ein = False
+    state.control.solar_ueberschuss_aktiv = False
+    state.control.previous_modus = "Normalmodus"
     
-    state.aktueller_ausschaltpunkt = 50
-    state.aktueller_einschaltpunkt = 40
+    state.solar.batpower = 0
+    state.solar.soc = 50
+    state.solar.feedinpower = 0
+    
+    state.stats.last_compressor_off_time = datetime.now(state.local_tz) - timedelta(hours=1)
+    state.stats.total_runtime_today = timedelta()
+    
+    # Other legacy/simple fields
+    state.urlaubsmodus_aktiv = False
+    state.bademodus_aktiv = False
+    state.last_solar_window_status = False
+    
+    # Properties/Helper methods
     state.basis_ausschaltpunkt = 50
     state.basis_einschaltpunkt = 40
     state.ausschaltpunkt_erhoeht = 55
     state.einschaltpunkt_erhoeht = 45
-    
-    state.urlaubsmodus_aktiv = False
-    state.bademodus_aktiv = False
-    state.solar_ueberschuss_aktiv = False
-    state.previous_modus = "Normalmodus"
-    
-    state.batpower = 0
-    state.soc = 50
-    state.feedinpower = 0
-    
-    state.last_solar_window_check = None
-    state.last_solar_window_status = False
     
     return state
 
@@ -110,7 +116,7 @@ async def test_determine_mode_normal(mock_state):
 
 @pytest.mark.asyncio
 async def test_determine_mode_solar(mock_state):
-    mock_state.batpower = 1000 # > 600 triggers solar excess
+    mock_state.solar.batpower = 1000 # > 600 triggers solar excess
     
     with patch('control_logic.is_nighttime', return_value=False), \
          patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
@@ -192,9 +198,9 @@ async def test_check_pressure_and_config_only_pressure(mock_state):
 async def test_determine_mode_none_solar_values(mock_state):
     """Test handling of None values for solar data (API failure)."""
     # Setup state with None values
-    mock_state.batpower = None
-    mock_state.soc = None
-    mock_state.feedinpower = None
+    mock_state.solar.batpower = None
+    mock_state.solar.soc = None
+    mock_state.solar.feedinpower = None
     mock_state.config.Solarueberschuss.BATPOWER_THRESHOLD = 600.0
     mock_state.config.Solarueberschuss.SOC_THRESHOLD = 95.0
     mock_state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD = 600.0
@@ -209,5 +215,5 @@ async def test_determine_mode_none_solar_values(mock_state):
         # These should proceed without error
         result = await determine_mode_and_setpoints(mock_state, 40.0, 45.0)
         
-        assert mock_state.solar_ueberschuss_aktiv is False
+        assert mock_state.control.solar_ueberschuss_aktiv is False
         assert result['modus'] == "Normalmodus"
