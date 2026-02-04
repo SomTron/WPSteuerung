@@ -21,6 +21,7 @@ from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
 from telegram_handler import telegram_task
+from telegram_ui import send_welcome_message
 from telegram_api import start_healthcheck_task, send_telegram_message, create_robust_aiohttp_session
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
@@ -285,6 +286,15 @@ async def log_system_state(state):
 
 async def main_loop():
     session = await setup_application()
+    
+    # Send Startup Message
+    if state.bot_token and state.chat_id:
+        try:
+            await send_welcome_message(session, state.chat_id, state.bot_token, state)
+            logging.info("Startup message sent.")
+        except Exception as e:
+            logging.error(f"Failed to send startup message: {e}")
+
     last_vpn_check = datetime.now() - timedelta(minutes=1)
     
     try:
