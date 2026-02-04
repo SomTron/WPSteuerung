@@ -1,93 +1,19 @@
 import asyncio
-import logging
-from datetime import datetime, timedelta
 import pytz
+from datetime import datetime, timedelta
 from typing import Optional, Dict
 
-class State:
-    def __init__(self, config_manager):
-        self.config_manager = config_manager
-        # Initialer Config-Laden
-        self.config = config_manager.get()
-        
-        self.local_tz = pytz.timezone("Europe/Berlin")
-        now = datetime.now(self.local_tz)
-
-        # Locks
-        self.gpio_lock = asyncio.Lock()
-        
-        # Session (wird später gesetzt)
-        self.session = None
-
-        # --- Status-Variablen ---
-        self.last_update_id = None
-        self.lcd = None
-        self.last_sensor_readings: Dict = {}
-        
-        # --- Urlaubsmodus ---
-        self.urlaubsmodus_aktiv: bool = False
-        self.urlaubsmodus_start: Optional[datetime] = None
-        self.urlaubsmodus_ende: Optional[datetime] = None
-        self.awaiting_urlaub_duration: bool = False
-        self.awaiting_custom_duration: bool = False
-
-        # --- Bademodus ---
-        self.bademodus_aktiv: bool = False
-        self.previous_bademodus_aktiv: bool = False
-
-        # --- Laufzeitstatistik ---
-        self.current_runtime = timedelta()
-        self.last_runtime = timedelta()
-        self.total_runtime_today = timedelta()
-        self.last_day = now.date()
-        self.start_time: Optional[datetime] = None
-        self.last_compressor_on_time = now
-        self.last_compressor_off_time = now
-        self.last_log_time = now - timedelta(minutes=1)
-        self.last_completed_cycle: Optional[datetime] = None
-
-        # --- Steuerungslogik ---
-        self.kompressor_ein: bool = False
-        self.solar_ueberschuss_aktiv: bool = False
-        self.ausschluss_grund: Optional[str] = None
-        self.previous_modus: Optional[str] = None
-        self.previous_abschalten: bool = False
-        self.previous_temp_conditions: bool = False
-        
-        # --- Kompressor-Laufzeit-Verifizierung ---
-        self.kompressor_verification_start_time: Optional[datetime] = None
-        self.kompressor_verification_start_t_verd: Optional[float] = None
-        self.kompressor_verification_start_t_unten: Optional[float] = None
-        self.kompressor_verification_failed: bool = False
-        self.kompressor_verification_error_count: int = 0
-        self.kompressor_verification_last_check: Optional[datetime] = None
-        
-        # --- Schwellwerte (werden aus Config aktualisiert) ---
-        # Initialwerte, werden im Loop updated
-        self.aktueller_ausschaltpunkt = self.config.Heizungssteuerung.AUSSCHALTPUNKT
-        self.aktueller_einschaltpunkt = self.config.Heizungssteuerung.EINSCHALTPUNKT
-        self.previous_ausschaltpunkt = self.aktueller_ausschaltpunkt
-        self.previous_einschaltpunkt = self.aktueller_einschaltpunkt
-        self.previous_solar_ueberschuss_aktiv: bool = False
-
-        # --- Fehler- und Statuszustände ---
-        self.last_config_hash: Optional[str] = None
-        self._last_config_check = now
-        self.pressure_error_sent: bool = False
-        self.last_pressure_error_time = now
-        self.last_pressure_state: Optional[bool] = None
-        self.last_pause_log: Optional[datetime] = None
-        self.current_pause_reason: Optional[str] = None
-        self.last_no_start_log: Optional[datetime] = None
-        
-        # --- Sensorwerte ---
+class SensorsState:
+    def __init__(self):
         self.t_oben: Optional[float] = None
         self.t_unten: Optional[float] = None
         self.t_mittig: Optional[float] = None
         self.t_verd: Optional[float] = None
         self.t_boiler: Optional[float] = None
+        self.last_readings: Dict = {}
 
-        # --- Solax-Daten ---
+class SolarState:
+    def __init__(self):
         self.acpower: Optional[float] = None
         self.feedinpower: Optional[float] = None
         self.batpower: Optional[float] = None
@@ -95,31 +21,72 @@ class State:
         self.consumeenergy: Optional[float] = None
         self.last_api_call: Optional[datetime] = None
         self.last_api_data: Optional[dict] = None
+
+class ControlState:
+    def __init__(self, config):
+        self.kompressor_ein: bool = False
+        self.solar_ueberschuss_aktiv: bool = False
+        self.ausschluss_grund: Optional[str] = None
+        self.previous_modus: Optional[str] = None
+        self.aktueller_ausschaltpunkt = config.Heizungssteuerung.AUSSCHALTPUNKT
+        self.aktueller_einschaltpunkt = config.Heizungssteuerung.EINSCHALTPUNKT
+        self.pressure_error_sent: bool = False
+        self.last_pressure_state: Optional[bool] = None
+        self.current_pause_reason: Optional[str] = None
+
+class StatsState:
+    def __init__(self, now):
+        self.current_runtime = timedelta()
+        self.last_runtime = timedelta()
+        self.total_runtime_today = timedelta()
+        self.last_day = now.date()
+        self.start_time: Optional[datetime] = None
+        self.last_compressor_on_time = now
+        self.last_compressor_off_time = now
+        self.last_completed_cycle: Optional[datetime] = None
+
+class State:
+    def __init__(self, config_manager):
+        self.config_manager = config_manager
+        self.config = config_manager.get()
+        self.local_tz = pytz.timezone("Europe/Berlin")
+        now = datetime.now(self.local_tz)
+
+        # Sub-States
+        self.sensors = SensorsState()
+        self.solar = SolarState()
+        self.control = ControlState(self.config)
+        self.stats = StatsState(now)
         
-        # --- VPN ---
+        # Urlaubs/Bademodus (Legacy/Simple Group)
+        self.urlaubsmodus_aktiv: bool = False
+        self.urlaubsmodus_start: Optional[datetime] = None
+        self.urlaubsmodus_ende: Optional[datetime] = None
+        self.bademodus_aktiv: bool = False
+        
+        # System/Internal
+        self.gpio_lock = asyncio.Lock()
+        self.session = None
+        self.last_forecast_update: Optional[datetime] = None
         self.vpn_ip: Optional[str] = None
-
-        # --- Logging-Throttle ---
-        self.last_solar_window_check = now
-        self.last_solar_window_status: bool = False
-        self.last_solar_window_log: Optional[datetime] = None
-        self.last_abschalt_log = now
-        self.last_verdampfer_notification: Optional[datetime] = None
-        self.verdampfer_blocked: bool = False
-
-        # --- Healthcheck ---
         self.last_healthcheck_ping: Optional[datetime] = None
 
-        # --- Solar Forecast ---
-        self.solar_forecast_today: Optional[float] = None
-        self.solar_forecast_tomorrow: Optional[float] = None
-        self.sunrise_today: Optional[str] = None
-        self.sunset_today: Optional[str] = None
-        self.sunrise_tomorrow: Optional[str] = None
-        self.sunset_tomorrow: Optional[str] = None
-        self.last_forecast_update: Optional[datetime] = None
-        self.last_day: Optional[int] = None
+        # --- Compressor Verification ---
+        self.kompressor_verification_start_time: Optional[datetime] = None
+        self.kompressor_verification_start_t_verd: Optional[float] = None
+        self.kompressor_verification_start_t_unten: Optional[float] = None
+        self.kompressor_verification_failed: bool = False
+        self.kompressor_verification_error_count: int = 0
+        self.kompressor_verification_last_check: Optional[datetime] = None
 
+        # --- Safety & Error Handling ---
+        self.verdampfer_blocked: bool = False
+        self.last_sensor_error_time: Optional[datetime] = None
+        self.last_pressure_error_time: Optional[datetime] = None
+        self._last_config_check: Optional[datetime] = now # Initialize with current time
+        self.last_config_hash: Optional[str] = None
+
+    # --- Properties representing Config Values ---
     @property
     def sicherheits_temp(self):
         return self.config.Heizungssteuerung.SICHERHEITS_TEMP
@@ -149,29 +116,13 @@ class State:
         return self.config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT
     
     @property
-    def uebergangsmodus_morgens_ende(self):
-        return datetime.strptime(self.config.Heizungssteuerung.UEBERGANGSMODUS_MORGENS_ENDE, "%H:%M").time()
-
-    @property
-    def uebergangsmodus_abends_start(self):
-        return datetime.strptime(self.config.Heizungssteuerung.UEBERGANGSMODUS_ABENDS_START, "%H:%M").time()
-        
-    @property
-    def nachtabsenkung_start(self):
-        return datetime.strptime(self.config.Heizungssteuerung.NACHTABSENKUNG_START, "%H:%M").time()
-
-    @property
-    def nachtabsenkung_ende(self):
-        return datetime.strptime(self.config.Heizungssteuerung.NACHTABSENKUNG_END, "%H:%M").time()
-    
-    @property
     def basis_einschaltpunkt(self):
         return self.config.Heizungssteuerung.EINSCHALTPUNKT
 
     @property
     def basis_ausschaltpunkt(self):
         return self.config.Heizungssteuerung.AUSSCHALTPUNKT
-    
+
     @property
     def bot_token(self):
         return self.config.Telegram.BOT_TOKEN
@@ -180,15 +131,6 @@ class State:
     def chat_id(self):
         return self.config.Telegram.CHAT_ID
     
-    @property
-    def healthcheck_url(self):
-        return self.config.Healthcheck.HEALTHCHECK_URL
-
-    @property
-    def healthcheck_interval(self):
-        return self.config.Healthcheck.HEALTHCHECK_INTERVAL_MINUTES
-    
     def update_config(self):
-        """Lädt die Konfiguration neu und aktualisiert lokale Referenzen bei Bedarf."""
         self.config_manager.load_config()
         self.config = self.config_manager.get()

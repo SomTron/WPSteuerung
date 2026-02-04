@@ -30,9 +30,10 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": str(chat_id),
-        "text": str(message),
-        "parse_mode": parse_mode
+        "text": str(message)
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     if reply_markup:
         # Prevent serialization errors with mocks in tests
         if hasattr(reply_markup, "__dict__") or "MagicMock" in str(type(reply_markup)):

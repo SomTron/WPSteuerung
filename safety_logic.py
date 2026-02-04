@@ -25,29 +25,30 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
             logging.error(f"Sensorfehler: {error_msg}")
             asyncio.create_task(send_telegram_message(session, state.config.Telegram.CHAT_ID, f"⚠️ Sensorfehler: {error_msg}", state.config.Telegram.BOT_TOKEN))
         return False
+    # print("DEBUG: No sensor errors")
     state.last_sensor_error_time = None
     return True
 
 async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_verd, set_kompressor_status_func: Callable):
     """Sicherheitsabschaltung und Sensorprüfung."""
-    state.t_oben, state.t_unten, state.t_mittig, state.t_verd = t_oben, t_unten, t_mittig, t_verd
-    state.t_boiler = (t_oben + t_unten) / 2 if t_oben is not None and t_unten is not None else None
+    state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd = t_oben, t_unten, t_mittig, t_verd
+    state.sensors.t_boiler = (t_oben + t_unten) / 2 if t_oben is not None and t_unten is not None else None
     
     if not await check_for_sensor_errors(session, state, t_oben, t_unten):
-        state.ausschluss_grund = "Sensorfehler"
-        if state.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        state.control.ausschluss_grund = "Sensorfehler"
+        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
 
     safety_temp = state.config.Heizungssteuerung.SICHERHEITS_TEMP
     if (t_oben is not None and t_oben >= safety_temp) or (t_unten is not None and t_unten >= safety_temp):
-        state.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
-        if state.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
+        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         asyncio.create_task(send_telegram_message(session, state.config.Telegram.CHAT_ID, f"⚠️ Sicherheitsabschaltung: Übertemperatur!", state.config.Telegram.BOT_TOKEN))
         return False
 
     if not is_valid_temperature(t_verd, min_temp=-20.0, max_temp=50.0):
-        state.ausschluss_grund = "Verdampfertemperatur ungültig"
-        if state.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        state.control.ausschluss_grund = "Verdampfertemperatur ungültig"
+        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
     
     verd_limit = state.config.Heizungssteuerung.VERDAMPFERTEMPERATUR
@@ -61,11 +62,11 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     if too_cold or recovering:
         state.verdampfer_blocked = True
         if already_blocked:
-            state.ausschluss_grund = f"Verdampfer: Warten auf Erwärmung ({t_verd:.1f} Grad < {restart_temp} Grad)"
+            state.control.ausschluss_grund = f"Verdampfer: Warten auf Erwärmung ({t_verd:.1f} Grad < {restart_temp} Grad)"
         else:
-            state.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {verd_limit} Grad)"
+            state.control.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {verd_limit} Grad)"
         
-        if state.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
     
     state.verdampfer_blocked = False
@@ -74,7 +75,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
 async def verify_compressor_running(state, session, current_t_verd, current_t_unten, verification_delay_minutes=10):
     """Verifiziert den Lauf des Kompressors über Temperaturänderungen."""
     now = datetime.now(state.local_tz)
-    if not state.kompressor_ein or state.kompressor_verification_start_time is None:
+    if not state.control.kompressor_ein or state.kompressor_verification_start_time is None:
         state.kompressor_verification_start_time = None
         return True, None
     

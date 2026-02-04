@@ -8,7 +8,7 @@ import asyncio
 import configparser
 
 # Ensure we can import from parent directory
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from control_logic import (
     determine_mode_and_setpoints,
@@ -71,51 +71,37 @@ def create_mock_state(config):
     
     state.config = mock_config
     
-    section = "Heizungssteuerung"
-    mock_config.Heizungssteuerung.AUSSCHALTPUNKT = int(config[section].get("AUSSCHALTPUNKT", 50))
-    mock_config.Heizungssteuerung.EINSCHALTPUNKT = int(config[section].get("EINSCHALTPUNKT", 40))
-    mock_config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT = int(config[section].get("AUSSCHALTPUNKT_ERHOEHT", 55))
-    mock_config.Heizungssteuerung.EINSCHALTPUNKT_ERHOEHT = int(config[section].get("EINSCHALTPUNKT_ERHOEHT", 45))
-    mock_config.Heizungssteuerung.NACHTABSENKUNG = float(config[section].get("NACHTABSENKUNG", 5.0))
-    mock_config.Heizungssteuerung.NACHTABSENKUNG_START = config[section].get("NACHTABSENKUNG_START", "22:00")
-    mock_config.Heizungssteuerung.NACHTABSENKUNG_END = config[section].get("NACHTABSENKUNG_END", "06:00")
-    mock_config.Heizungssteuerung.UEBERGANGSMODUS_MORGENS_ENDE = config[section].get("UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
-    mock_config.Heizungssteuerung.UEBERGANGSMODUS_ABENDS_START = config[section].get("UEBERGANGSMODUS_ABENDS_START", "18:00")
+    # Sub-states
+    state.sensors = MagicMock()
+    state.solar = MagicMock()
+    state.control = MagicMock()
+    state.stats = MagicMock()
+
+    # Initial values
+    state.control.aktueller_ausschaltpunkt = 50
+    state.control.aktueller_einschaltpunkt = 40
+    state.control.kompressor_ein = False
+    state.control.solar_ueberschuss_aktiv = False
+    state.control.previous_modus = None
+    state.control.ausschluss_grund = None
     
-    # Parse times from config for State properties
-    def parse_time(section, key, default):
-        try:
-            val = config[section].get(key, default)
-            return datetime.strptime(val, "%H:%M").time()
-        except:
-            return datetime.strptime(default, "%H:%M").time()
-            
-    state.nachtabsenkung_ende = parse_time("Heizungssteuerung", "NACHTABSENKUNG_END", "06:00")
-    state.uebergangsmodus_morgens_ende = parse_time("Heizungssteuerung", "UEBERGANGSMODUS_MORGENS_ENDE", "10:00")
-    state.uebergangsmodus_abends_start = parse_time("Heizungssteuerung", "UEBERGANGSMODUS_ABENDS_START", "18:00")
-    state.nachtabsenkung_start = parse_time("Heizungssteuerung", "NACHTABSENKUNG_START", "22:00")
+    state.stats.last_compressor_on_time = datetime(2023, 1, 1, 0, 0, tzinfo=state.local_tz)
+    state.stats.last_compressor_off_time = datetime(2023, 1, 1, 0, 0, tzinfo=state.local_tz)
+    state.stats.total_runtime_today = timedelta()
     
-    state.aktueller_ausschaltpunkt = mock_config.Heizungssteuerung.AUSSCHALTPUNKT
-    state.aktueller_einschaltpunkt = mock_config.Heizungssteuerung.EINSCHALTPUNKT
-    state.basis_ausschaltpunkt = state.aktueller_ausschaltpunkt
-    state.basis_einschaltpunkt = state.aktueller_einschaltpunkt
-    state.ausschaltpunkt_erhoeht = mock_config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT
-    state.einschaltpunkt_erhoeht = mock_config.Heizungssteuerung.EINSCHALTPUNKT_ERHOEHT
+    state.solar.batpower = 0
+    state.solar.soc = 50
+    state.solar.feedinpower = 0
+    state.solar.forecast_tomorrow = 0
     
-    # Initial State
     state.urlaubsmodus_aktiv = False
     state.bademodus_aktiv = False
-    state.solar_ueberschuss_aktiv = False
-    state.previous_modus = None
-    state.kompressor_ein = False
-    state.last_compressor_on_time = datetime(2023, 1, 1, 0, 0, tzinfo=state.local_tz)
-    state.last_compressor_off_time = datetime(2023, 1, 1, 0, 0, tzinfo=state.local_tz)
-    state.batpower = 0
-    state.soc = 50
-    state.feedinpower = 0
-    state.ausschluss_grund = None
-    state.verdampfer_blocked = False
-    state.local_tz = pytz.timezone("Europe/Berlin")
+    
+    # Properties for calculations
+    state.basis_ausschaltpunkt = float(config['Heizungssteuerung']['AUSSCHALTPUNKT'])
+    state.basis_einschaltpunkt = float(config['Heizungssteuerung']['EINSCHALTPUNKT'])
+    state.ausschaltpunkt_erhoeht = float(config['Heizungssteuerung']['AUSSCHALTPUNKT_ERHOEHT'])
+    state.einschaltpunkt_erhoeht = float(config['Heizungssteuerung']['EINSCHALTPUNKT_ERHOEHT'])
     
     return state
 
@@ -129,11 +115,11 @@ async def run_simulation_scenario(scenario_name, steps, config):
     local_tz = pytz.timezone("Europe/Berlin")
     
     async def mock_set_kompressor(state, status, force=False, t_boiler_oben=None):
-        state.kompressor_ein = status
+        state.control.kompressor_ein = status
         if status:
-            state.last_compressor_on_time = current_sim_time
+            state.stats.last_compressor_on_time = current_sim_time
         else:
-            state.last_compressor_off_time = current_sim_time
+            state.stats.last_compressor_off_time = current_sim_time
         return True
         
     async def mock_send_telegram(session, chat_id, message, token, parse_mode=None):
@@ -179,8 +165,9 @@ async def run_simulation_scenario(scenario_name, steps, config):
             current_sim_time = local_tz.localize(start_date.replace(hour=hour, minute=minute))
             update_mocks(current_sim_time)
             
-            mock_state.batpower = bat_power
-            mock_state.soc = soc
+            mock_state.solar.batpower = bat_power
+            mock_state.solar.soc = soc
+            mock_state.sensors.t_verd = t_verd # Optional but good
             
             setpoints = await determine_mode_and_setpoints(mock_state, t_unten, t_mittig)
             
@@ -193,7 +180,7 @@ async def run_simulation_scenario(scenario_name, steps, config):
                 min_run = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_LAUFZEIT"]))
                 min_pause = timedelta(minutes=int(config["Heizungssteuerung"]["MIN_PAUSE"]))
                 
-                if mock_state.kompressor_ein:
+                if mock_state.control.kompressor_ein:
                     await handle_compressor_off(
                         mock_state, None, setpoints['regelfuehler'], setpoints['ausschaltpunkt'], 
                         min_run, t_oben, mock_set_kompressor
@@ -206,7 +193,7 @@ async def run_simulation_scenario(scenario_name, steps, config):
                     )
             
             time_str = current_sim_time.strftime("%H:%M")
-            comp_str = "AN" if mock_state.kompressor_ein else "AUS"
+            comp_str = "AN" if mock_state.control.kompressor_ein else "AUS"
             solar_str = f"{bat_power}W"
             temp_str = f"{t_oben}/{t_mittig}/{t_unten}"
             regel_str = f"{setpoints['regelfuehler']}"
@@ -222,12 +209,12 @@ async def run_simulation_scenario(scenario_name, steps, config):
             if is_transition and not has_solar and t_mittig < setpoints['einschaltpunkt']:
                 night_setpoint = float(config["Heizungssteuerung"].get("EINSCHALTPUNKT", 43)) - float(config["Heizungssteuerung"].get("NACHTABSENKUNG", 5.0))
                 if t_mittig <= night_setpoint:
-                    if not mock_state.kompressor_ein:
+                    if not mock_state.control.kompressor_ein:
                         error_msg = f"BUG: Kompressor AUS trotz kritischer Kälte ({t_mittig} <= {night_setpoint})"
                         print(error_msg)
                         raise AssertionError(error_msg)
                     validation_suffix = f" [KORREKT: AN wegen Kälte]"
-                elif mock_state.kompressor_ein:
+                elif mock_state.control.kompressor_ein:
                     # Should be off unless was already running and min_run not met
                     # Simplified for this specific test case
                     pass

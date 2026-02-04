@@ -62,8 +62,17 @@ def ist_uebergangsmodus_aktiv(state):
     """Prüft, ob aktuell der Übergangsmodus (morgens oder abends) aktiv ist."""
     try:
         now_time = datetime.now(state.local_tz).time()
-        morgens_aktiv = state.nachtabsenkung_ende <= now_time <= state.uebergangsmodus_morgens_ende
-        abends_aktiv = state.uebergangsmodus_abends_start <= now_time <= state.nachtabsenkung_start
+        
+        cfg = state.config.Heizungssteuerung
+        def parse_t(s): return datetime.strptime(s, "%H:%M").time()
+        
+        n_ende = parse_t(cfg.NACHTABSENKUNG_END)
+        u_m_ende = parse_t(cfg.UEBERGANGSMODUS_MORGENS_ENDE)
+        u_a_start = parse_t(cfg.UEBERGANGSMODUS_ABENDS_START)
+        n_start = parse_t(cfg.NACHTABSENKUNG_START)
+
+        morgens_aktiv = n_ende <= now_time <= u_m_ende
+        abends_aktiv = u_a_start <= now_time <= n_start
         return morgens_aktiv or abends_aktiv
     except Exception as e:
         logging.error(f"Fehler bei ist_uebergangsmodus_aktiv: {e}")

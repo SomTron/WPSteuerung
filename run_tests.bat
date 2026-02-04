@@ -1,9 +1,30 @@
 @echo off
+setlocal enabledelayedexpansion
 cd /d %~dp0
-echo Running Tests...
-REM Um den Telegram-Test auszuführen, müssen TELEGRAM_BOT_TOKEN und TELEGRAM_CHAT_ID als Umgebungsvariablen gesetzt sein.
-REM Beispiel (vorher im Terminal ausführen):
-REM set TELEGRAM_BOT_TOKEN=dein_token
-REM set TELEGRAM_CHAT_ID=deine_chat_id
+
+echo ========================================
+echo   Heat Pump Control - Test Runner
+echo ========================================
+
+REM Check if pytest is installed
+python -m pytest --version >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [ERROR] pytest is not installed or not in PATH.
+    echo Please install it using: pip install pytest pytest-asyncio
+    pause
+    exit /b 1
+)
+
+echo [INFO] Running all tests in /tests directory...
 python -m pytest -s tests/
+
+if !errorlevel! equ 0 (
+    echo.
+    echo [SUCCESS] All tests passed!
+) else (
+    echo.
+    echo [FAILURE] Some tests failed. Please check the output above.
+)
+
+echo ========================================
 pause

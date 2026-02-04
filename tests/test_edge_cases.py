@@ -43,33 +43,43 @@ def mock_state(mock_config):
     state = MagicMock()
     state.config = mock_config
     state.local_tz = pytz.timezone("Europe/Berlin")
-    state.kompressor_ein = False
-    state.solar_ueberschuss_aktiv = False
-    state.previous_solar_ueberschuss_aktiv = False
+    
+    # Sub-states
+    state.sensors = MagicMock()
+    state.solar = MagicMock()
+    state.control = MagicMock()
+    state.stats = MagicMock()
+
+    # Initial values
+    state.control.kompressor_ein = False
+    state.control.solar_ueberschuss_aktiv = False
+    state.control.previous_modus = "Normal"
+    state.control.aktueller_einschaltpunkt = 43
+    state.control.aktueller_ausschaltpunkt = 45
+    
+    state.solar.batpower = 0.0
+    state.solar.soc = 0.0
+    state.solar.feedinpower = 0.0
+    
+    state.stats.total_runtime_today = timedelta()
+    state.stats.current_runtime = timedelta()
+    state.stats.last_day = None
+    state.stats.last_compressor_on_time = None
+    state.stats.last_compressor_off_time = None
+    state.stats.last_completed_cycle = None
+
+    # Properties/Calculated fields
     state.urlaubsmodus_aktiv = False
     state.bademodus_aktiv = False
-    state.total_runtime_today = timedelta()
-    state.current_runtime = timedelta()
-    state.last_day = None
-    state.last_compressor_on_time = None
-    state.last_compressor_off_time = None
-    state.last_completed_cycle = None
-    state.batpower = 0.0
-    state.soc = 0.0
-    state.feedinpower = 0.0
-    state.previous_modus = "Normal"
     state.basis_einschaltpunkt = 43
     state.basis_ausschaltpunkt = 45
     state.einschaltpunkt_erhoeht = 40
     state.ausschaltpunkt_erhoeht = 48
-    state.aktueller_einschaltpunkt = 43
-    state.aktueller_ausschaltpunkt = 45
+    
     state.nachtabsenkung_ende = time(8, 0)
     state.nachtabsenkung_start = time(19, 30)
     state.uebergangsmodus_morgens_ende = time(10, 0)
     state.uebergangsmodus_abends_start = time(17, 0)
-    state.last_solar_window_check = None
-    state.last_solar_window_status = False
     
     return state
 
@@ -92,38 +102,40 @@ class TestMidnightTransition:
         tz = pytz.timezone("Europe/Berlin")
         yesterday = datetime.now(tz) - timedelta(days=1)
         
-        mock_state.last_day = yesterday.day
-        mock_state.total_runtime_today = timedelta(hours=5)
-        mock_state.last_completed_cycle = yesterday
+        mock_state.stats.last_day = yesterday.date()
+        mock_state.stats.total_runtime_today = timedelta(hours=5)
+        mock_state.stats.last_completed_cycle = yesterday
         
         # Simulate midnight transition
         now = datetime.now(tz)
         
-        # This logic should be in main loop
-        if mock_state.last_day != now.day:
-            mock_state.total_runtime_today = timedelta()
-            mock_state.last_completed_cycle = None
-            mock_state.last_day = now.day
+        # This logic is extracted in main.handle_day_transition
+        from main import handle_day_transition
+        handle_day_transition(mock_state, now)
         
         # Verify reset
-        assert mock_state.total_runtime_today == timedelta()
-        assert mock_state.last_completed_cycle is None
-        assert mock_state.last_day == now.day
+        assert mock_state.stats.total_runtime_today == timedelta()
+        assert mock_state.stats.last_completed_cycle is None
+        assert mock_state.stats.last_day == now.date()
     
     @pytest.mark.asyncio
     async def test_compressor_state_persists_across_midnight(self, mock_state, mock_hardware):
         """Test that compressor state is maintained across midnight."""
         # Setup: Compressor running before midnight
-        mock_state.kompressor_ein = True
-        mock_state.last_compressor_on_time = datetime.now(mock_state.local_tz) - timedelta(minutes=30)
+        mock_state.control.kompressor_ein = True
+        mock_state.stats.last_compressor_on_time = datetime.now(mock_state.local_tz) - timedelta(minutes=30)
         mock_hardware.set_compressor_state(True)
         
         # Simulate day change
-        old_day = mock_state.last_day
-        mock_state.last_day = (datetime.now(mock_state.local_tz) + timedelta(days=1)).day
+        tz = mock_state.local_tz
+        yesterday = (datetime.now(tz) - timedelta(days=1)).date()
+        mock_state.stats.last_day = yesterday
+        
+        from main import handle_day_transition
+        handle_day_transition(mock_state, datetime.now(tz))
         
         # Compressor should still be on
-        assert mock_state.kompressor_ein is True
+        assert mock_state.control.kompressor_ein is True
         assert mock_hardware.get_compressor_state() is True
 
 
@@ -134,17 +146,16 @@ class TestSolarModeSwitch:
     async def test_normal_to_solar_transition(self, mock_state, mock_config):
         """Test transition from Normal to Solar mode."""
         # Setup: Normal mode, temperature OK
-        mock_state.solar_ueberschuss_aktiv = False
-        mock_state.kompressor_ein = True
-        mock_state.previous_solar_ueberschuss_aktiv = False
+        mock_state.control.solar_ueberschuss_aktiv = False
+        mock_state.control.kompressor_ein = True
         
         t_oben = 44.0
         t_mittig = 43.5
         
         # Trigger solar surplus
-        mock_state.batpower = 700.0  # Above threshold
-        mock_state.soc = 96.0
-        mock_state.feedinpower = 700.0
+        mock_state.solar.batpower = 700.0  # Above threshold
+        mock_state.solar.soc = 96.0
+        mock_state.solar.feedinpower = 700.0
         
         result = await control_logic.determine_mode_and_setpoints(mock_state, t_mittig, t_mittig)
         
@@ -156,10 +167,9 @@ class TestSolarModeSwitch:
     async def test_solar_to_normal_transition_above_threshold(self, mock_state, mock_config, mock_hardware):
         """Test that compressor turns off when leaving solar mode if temp is high."""
         # Setup: Solar mode active, temp above normal threshold
-        mock_state.solar_ueberschuss_aktiv = True
-        mock_state.previous_solar_ueberschuss_aktiv = True
-        mock_state.kompressor_ein = True
-        mock_state.last_compressor_on_time = datetime.now(mock_state.local_tz) - timedelta(minutes=20)
+        mock_state.control.solar_ueberschuss_aktiv = True
+        mock_state.control.kompressor_ein = True
+        mock_state.stats.last_compressor_on_time = datetime.now(mock_state.local_tz) - timedelta(minutes=20)
         
         t_oben = 46.0  # Above normal threshold (45)
         t_mittig = 45.5
@@ -168,12 +178,12 @@ class TestSolarModeSwitch:
         mock_session = Mock()
         
         async def mock_set_kompressor(state, status, **kwargs):
-            state.kompressor_ein = status
+            state.control.kompressor_ein = status
             mock_hardware.set_compressor_state(status)
             return True
         
         # Simulate mode switch
-        mock_state.solar_ueberschuss_aktiv = False  # Solar surplus ended
+        mock_state.control.solar_ueberschuss_aktiv = False  # Solar surplus ended
         
         result = await control_logic.handle_mode_switch(
             mock_state, mock_session, t_oben, t_mittig, mock_set_kompressor
@@ -181,7 +191,7 @@ class TestSolarModeSwitch:
         
         # Should have turned off
         assert result is True
-        assert mock_state.kompressor_ein is False
+        assert mock_state.control.kompressor_ein is False
 
 
 class TestTimezoneEdgeCases:
@@ -237,27 +247,27 @@ class TestRuntimeCalculation:
         now = datetime.now(tz)
         start_time = now - timedelta(minutes=15)
         
-        mock_state.kompressor_ein = True
-        mock_state.last_compressor_on_time = start_time
+        mock_state.control.kompressor_ein = True
+        mock_state.stats.last_compressor_on_time = start_time
         
         # Calculate current runtime (this should happen in main loop)
-        if mock_state.kompressor_ein and mock_state.last_compressor_on_time:
-            mock_state.current_runtime = safe_timedelta(now, mock_state.last_compressor_on_time, tz)
+        if mock_state.control.kompressor_ein and mock_state.stats.last_compressor_on_time:
+            mock_state.stats.current_runtime = safe_timedelta(now, mock_state.stats.last_compressor_on_time, tz)
         else:
-            mock_state.current_runtime = timedelta()
+            mock_state.stats.current_runtime = timedelta()
         
         # Should be approximately 15 minutes
-        assert timedelta(minutes=14) < mock_state.current_runtime < timedelta(minutes=16)
+        assert timedelta(minutes=14) < mock_state.stats.current_runtime < timedelta(minutes=16)
     
     @pytest.mark.asyncio
     async def test_total_runtime_accumulation(self, mock_state):
         """Test that total_runtime_today accumulates correctly."""
         # Setup: Previous runtime
-        mock_state.total_runtime_today = timedelta(hours=2)
+        mock_state.stats.total_runtime_today = timedelta(hours=2)
         
         # Simulate compressor cycle completion
-        mock_state.last_runtime = timedelta(minutes=30)
-        mock_state.total_runtime_today += mock_state.last_runtime
+        mock_state.stats.last_runtime = timedelta(minutes=30)
+        mock_state.stats.total_runtime_today += mock_state.stats.last_runtime
         
         # Should be 2.5 hours
-        assert mock_state.total_runtime_today == timedelta(hours=2, minutes=30)
+        assert mock_state.stats.total_runtime_today == timedelta(hours=2, minutes=30)

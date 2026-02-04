@@ -137,7 +137,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     mode_str = "Normal"
     if state.bademodus_aktiv: mode_str = "🛁 Bademodus"
     elif state.urlaubsmodus_aktiv: mode_str = "🌴 Urlaub"
-    elif state.solar_ueberschuss_aktiv: mode_str = "Solarüberschuss"
+    elif state.control.solar_ueberschuss_aktiv: mode_str = "Solarüberschuss"
 
     status_lines = [
         "📊 *SYSTEMSTATUS*",

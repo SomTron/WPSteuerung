@@ -156,13 +156,14 @@ async def setup_application():
 
 def handle_day_transition(state, now):
     """Führt Aktionen beim Tageswechsel durch."""
-    if state.last_day is None:
-        state.last_day = now.day
-    elif state.last_day != now.day:
-        logging.info(f"Tageswechsel erkannt ({state.last_day} -> {now.day}). Setze Statistiken zurück.")
-        state.total_runtime_today = timedelta()
-        state.last_completed_cycle = None
-        state.last_day = now.day
+    current_date = now.date()
+    if state.stats.last_day is None:
+        state.stats.last_day = current_date
+    elif state.stats.last_day != current_date:
+        logging.info(f"Tageswechsel erkannt ({state.stats.last_day} -> {current_date}). Setze Statistiken zurück.")
+        state.stats.total_runtime_today = timedelta()
+        state.stats.last_completed_cycle = None
+        state.stats.last_day = current_date
 
 async def update_system_data(session, state):
     """Liest Sensoren und PV-Daten."""
@@ -194,10 +195,10 @@ async def check_periodic_tasks(session, state, last_vpn_check):
     if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= 6 * 3600:
         rad_today, rad_tomorrow, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session, state.config)
         if rad_today is not None:
-            state.solar_forecast_today = rad_today
-            state.solar_forecast_tomorrow = rad_tomorrow
-            state.sunrise_today = sr_today
-            state.sunset_today = ss_today
+            state.solar.forecast_today = rad_today
+            state.solar.forecast_tomorrow = rad_tomorrow
+            state.solar.sunrise_today = sr_today
+            state.solar.sunset_today = ss_today
             state.sunrise_tomorrow = sr_tomorrow
             state.sunset_tomorrow = ss_tomorrow
             state.last_forecast_update = now_local
@@ -273,7 +274,7 @@ async def log_system_state(state):
             fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
             "1" if state.control.solar_ueberschuss_aktiv else "0",
             "1" if control_logic.is_nighttime(state.config) else "0",
-            power_source, fmt_csv(state.solar_forecast_tomorrow)
+            power_source, fmt_csv(state.solar.forecast_tomorrow)
         ]
         
         async with aiofiles.open(csv_file, mode="a", encoding="utf-8") as f:
