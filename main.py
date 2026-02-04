@@ -20,18 +20,14 @@ from hardware_mock import MockHardwareManager
 from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
-from telegram_handler import (
-    telegram_task, 
-    start_healthcheck_task, 
-    send_telegram_message,
-    create_robust_aiohttp_session,
-    get_boiler_temperature_history, # Needed for Telegram task
-    get_runtime_bar_chart # Needed for Telegram task
-)
+from telegram_handler import telegram_task
+from telegram_api import start_healthcheck_task, send_telegram_message, create_robust_aiohttp_session
+from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app, init_api
 from utils import safe_timedelta
 from weather_forecast import get_solar_forecast
+from logic_utils import is_nighttime, is_solar_window
 
 # Global objects
 config_manager = ConfigManager()

@@ -2,7 +2,7 @@ import configparser
 import pytest
 import aiohttp
 import asyncio
-from telegram_handler import create_robust_aiohttp_session, send_telegram_message
+from telegram_api import create_robust_aiohttp_session, send_telegram_message
 
 import os
 

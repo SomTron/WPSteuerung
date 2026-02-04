@@ -3,7 +3,7 @@ import asyncio
 from unittest.mock import MagicMock, AsyncMock
 from datetime import datetime, timedelta
 import pytz
-from control_logic import check_sensors_and_safety
+from safety_logic import check_sensors_and_safety
 
 class MockState:
     def __init__(self):
@@ -55,7 +55,7 @@ async def test_evaporator_hysteresis():
     result = await check_sensors_and_safety(session, state, 40.0, 35.0, 38.0, t_verd, mock_set_status)
     assert result is False
     assert state.verdampfer_blocked is True
-    assert "zu niedrig" in state.ausschluss_grund
+    assert "niedrig" in state.ausschluss_grund
 
     # Case 3: Temperature recovers slightly (7°C), but still below restart threshold (9°C) -> Still blocked
     t_verd = 7.0

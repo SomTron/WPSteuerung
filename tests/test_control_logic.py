@@ -202,7 +202,7 @@ async def test_determine_mode_none_solar_values(mock_state):
     # Mock time to 12:00 (Normalmodus, outside night/transition)
     fixed_time = datetime(2023, 1, 1, 12, 0, 0, tzinfo=mock_state.local_tz)
     
-    with patch('control_logic.datetime') as mock_dt:
+    with patch('logic_utils.datetime') as mock_dt:
         mock_dt.now.return_value = fixed_time
         # Re-apply side effects if needed, or just relying on now() is enough for determine_mode
         

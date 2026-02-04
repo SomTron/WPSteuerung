@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, time
 import pytz
 from unittest.mock import Mock, patch, MagicMock
 
+import control_logic
+import logic_utils
 from hardware_mock import MockHardwareManager
 
 
@@ -75,7 +77,9 @@ def mock_state(mock_config):
 @pytest.fixture
 def mock_hardware():
     """Create mock hardware for testing."""
-    return MockHardwareManager()
+    hw = MockHardwareManager()
+    hw.init_gpio()
+    return hw
 
 
 class TestMidnightTransition:
@@ -202,18 +206,21 @@ class TestTimezoneEdgeCases:
         # Night from 19:30 to 08:00
         
         # Test at 23:00 (should be night)
-        with patch('control_logic.datetime') as mock_dt:
+        with patch('logic_utils.datetime') as mock_dt:
             mock_dt.now.return_value.time.return_value = time(23, 0)
+            mock_dt.strptime.side_effect = datetime.strptime
             assert control_logic.is_nighttime(mock_config) is True
         
         # Test at 02:00 (should be night)
-        with patch('control_logic.datetime') as mock_dt:
+        with patch('logic_utils.datetime') as mock_dt:
             mock_dt.now.return_value.time.return_value = time(2, 0)
+            mock_dt.strptime.side_effect = datetime.strptime
             assert control_logic.is_nighttime(mock_config) is True
         
         # Test at 12:00 (should not be night)
-        with patch('control_logic.datetime') as mock_dt:
+        with patch('logic_utils.datetime') as mock_dt:
             mock_dt.now.return_value.time.return_value = time(12, 0)
+            mock_dt.strptime.side_effect = datetime.strptime
             assert control_logic.is_nighttime(mock_config) is False
 
 

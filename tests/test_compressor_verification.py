@@ -1,4 +1,3 @@
-
 import pytest
 from unittest.mock import MagicMock
 from datetime import datetime, timedelta
@@ -9,7 +8,7 @@ import os
 # Ensure we can import from parent directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from control_logic import verify_compressor_running
+from safety_logic import verify_compressor_running
 
 @pytest.fixture
 def mock_state():
@@ -41,7 +40,8 @@ async def test_verification_delayed_default_10_min(mock_state):
             @classmethod
             def now(cls, tz=None):
                 return now
-        m.setattr("control_logic.datetime", MockDateTime)
+        # Must patch where it's USED: safety_logic imports datetime
+        m.setattr("safety_logic.datetime", MockDateTime)
         
         # Should return True because elapsed time (9m) < default delay (10m)
         is_running, error_msg = await verify_compressor_running(
@@ -70,19 +70,7 @@ async def test_verification_success_cold_start(mock_state):
             @classmethod
             def now(cls, tz=None):
                 return now
-         m.setattr("control_logic.datetime", MockDateTime)
-         
-         # Scenario:
-         # Start Verd: 5.0
-         # Current Verd: 5.2 (slightly warmer, delta = -0.2)
-         # Start Unten: 30.0
-         # Current Unten: 30.5 (delta = 0.5 > 0.2 threshold)
-         
-         # Normal verd_ok check (delta >= 1.5) fails because -0.2 < 1.5
-         # But Cold Start check should pass because:
-         # Start < 15 (5.0) -> True
-         # Delta >= -0.5 (-0.2) -> True
-         # Current < 12 (5.2) -> True
+         m.setattr("safety_logic.datetime", MockDateTime)
          
          is_running, error_msg = await verify_compressor_running(
             mock_state, None, current_t_verd=5.2, current_t_unten=30.5
@@ -108,7 +96,7 @@ async def test_verification_success_normal_drop(mock_state):
             @classmethod
             def now(cls, tz=None):
                 return now
-         m.setattr("control_logic.datetime", MockDateTime)
+         m.setattr("safety_logic.datetime", MockDateTime)
          
          # Drop 2.0 deg (20 -> 18) > 1.5 threshold
          is_running, error_msg = await verify_compressor_running(
@@ -135,7 +123,7 @@ async def test_verification_failure(mock_state):
              @classmethod
              def now(cls, tz=None):
                  return now
-         m.setattr("control_logic.datetime", MockDateTime)
+         m.setattr("safety_logic.datetime", MockDateTime)
 
          # No drop (20 -> 20), not cold start (< 15)
          is_running, error_msg = await verify_compressor_running(
