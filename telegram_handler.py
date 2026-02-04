@@ -121,10 +121,11 @@ async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     keyboard = get_keyboard(state)
     await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus deaktiviert.", bot_token, reply_markup=keyboard)
 
-async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token):
+async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state):
     """Sendet die aktuellen Temperaturen über Telegram."""
     message = f"🌡️ Aktuelle Temperaturen:\nBoiler oben: {fmt_temp(t_boiler_oben)}\nBoiler mittig: {fmt_temp(t_boiler_mittig)}\nBoiler unten: {fmt_temp(t_boiler_unten)}\nVerdampfer: {fmt_temp(t_verd)}"
-    return await send_telegram_message(session, chat_id, message, bot_token)
+    keyboard = get_keyboard(state)
+    return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
 async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
     """Sendet den aktuellen Systemstatus über Telegram."""
@@ -183,7 +184,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         
         if state.awaiting_custom_duration: await handle_custom_duration(session, chat_id, bot_token, config, state, text)
         elif state.awaiting_urlaub_duration: await set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, text)
-        elif "temperaturen" in text: await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token)
+        elif "temperaturen" in text: await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state)
         elif "status" in text: await send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func)
         elif "urlaub" in text: await aktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
         elif "bademodus" in text: await aktivere_bademodus(session, chat_id, bot_token, state)
