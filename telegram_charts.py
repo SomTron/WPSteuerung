@@ -56,7 +56,16 @@ async def get_boiler_temperature_history(session, hours, state, config):
         check_and_fix_csv_header(file_path)
         backup_csv(file_path)
 
-        df = pd.read_csv(file_path, sep=None, engine="python")
+        # Use prefilter for performance
+        relevant_lines = prefilter_csv_lines(file_path, int(hours/24) + 1 if hours >= 24 else 1, local_tz)
+        if len(relevant_lines) <= 1:  # Only header
+            from telegram_ui import get_keyboard
+            keyboard = get_keyboard(state)
+            await send_telegram_message(session, state.chat_id, f"Keine Daten für die letzten {hours} Stunden.", state.bot_token, reply_markup=keyboard)
+            return
+            
+        from io import StringIO
+        df = pd.read_csv(StringIO("\n".join(relevant_lines)), sep=",")
         usecols = [c for c in ["Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd", "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"] if c in df.columns]
         df = df[usecols]
 
@@ -80,24 +89,36 @@ async def get_boiler_temperature_history(session, hours, state, config):
         y_max = df[temp_columns].max().max() + 5
 
         plt.figure(figsize=(12, 6))
-        # Logic for coloring etc. (simplified for this module creation)
-        # Assuming source color map from the original
-        color_map = {"Direkter PV-Strom": "green", "Solar": "green", "Strom aus der Batterie": "yellow", "Batterie": "yellow", "Strom vom Netz": "red", "Netz": "red"}
+        ax = plt.gca()
+        
+        # Power source background coloring (MUST be done first, before line plots)
+        color_map = {"Solar": "green", "Batterie": "yellow", "Netz": "red"}
         
         if "Kompressor" in df.columns and "PowerSource" in df.columns:
-            df["Kompressor"] = df["Kompressor"].astype(str).map({"EIN": True, "AUS": False, "1": True, "0": False}).fillna(False)
+            # Convert Kompressor to boolean
+            df["Kompressor_Bool"] = df["Kompressor"].astype(str).str.strip().map({"EIN": True, "AUS": False, "1": True, "0": False}).fillna(False)
+            
+            # Fill background for each power source
             for source, color in color_map.items():
-                mask = (df["PowerSource"] == source) & df["Kompressor"]
+                mask = (df["PowerSource"].astype(str).str.strip() == source) & df["Kompressor_Bool"]
                 if mask.any():
-                    plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3)
+                    ax.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.25, label=f"{source} (Kompressor ON)")
+                    logging.debug(f"Filled {mask.sum()} points with {source} color")
+            else:
+                logging.warning("PowerSource or Kompressor column missing - no background coloring")
 
+        # Temperature line plots (drawn on top of background)
         for col, color, linestyle in [("T_Oben", "blue", "-"), ("T_Unten", "red", "-"), ("T_Mittig", "purple", "-"), ("T_Verd", "gray", "--")]:
             if col in df.columns:
-                plt.plot(df["Zeitstempel"], df[col], label=col, color=color, linestyle=linestyle)
+                ax.plot(df["Zeitstempel"], df[col], label=col, color=color, linestyle=linestyle, linewidth=1.5)
 
-        plt.xlim(time_ago, now)
-        plt.ylim(y_min, y_max)
-        plt.legend(loc="lower left")
+        ax.set_xlim(time_ago, now)
+        ax.set_ylim(y_min, y_max)
+        ax.legend(loc="upper left", fontsize=8)
+        ax.set_xlabel("Zeit")
+        ax.set_ylabel("Temperatur (°C)")
+        ax.set_title(f"Temperaturverlauf ({hours}h)")
+        ax.grid(True, alpha=0.3)
         plt.tight_layout()
 
         buf = io.BytesIO()
