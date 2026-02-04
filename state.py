@@ -37,6 +37,7 @@ class ControlState:
         self.pressure_error_sent: bool = False
         self.last_pressure_state: Optional[bool] = None
         self.current_pause_reason: Optional[str] = None
+        self.active_rule_sensor: Optional[str] = None
 
 class StatsState:
     def __init__(self, now):

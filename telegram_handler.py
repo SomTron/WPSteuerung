@@ -145,30 +145,45 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     t_soll_aus = state.control.aktueller_ausschaltpunkt
     vpn_ip = state.vpn_ip if state.vpn_ip else "N/A"
     
-    forecast = "N/A"
-    if state.solar.forecast_today:
-        forecast = f"{state.solar.forecast_today:.1f} kWh"
+    # Forecast formatting
+    forecast_text = "N/A"
+    if state.solar.forecast_today is not None:
+        today_val = f"{state.solar.forecast_today:.1f}"
+        tomorrow_val = f"{state.solar.forecast_tomorrow:.1f}" if state.solar.forecast_tomorrow is not None else "??"
+        sunrise = state.solar.sunrise_today if state.solar.sunrise_today else "??"
+        sunset = state.solar.sunset_today if state.solar.sunset_today else "??"
+        forecast_text = f"Heute: {today_val}kWh | Morgen: {tomorrow_val}kWh\n☀️ {sunrise} - 🌙 {sunset}"
+        
+    # Active Sensor
+    active_sensor = state.control.active_rule_sensor if state.control.active_rule_sensor else "Automatisch"
 
-    # Extended Status Message
+    # Status Message Definition
     status_lines = [
         "📊 *SYSTEMSTATUS*",
-        f"🌡️ *Temperaturen*",
+        "",
+        "🌡️ *Temperaturen*",
         f"Oben: {fmt_temp(t_oben)} | Mittig: {fmt_temp(t_mittig)}",
         f"Unten: {fmt_temp(t_unten)} | Verd: {fmt_temp(t_verd)}",
         "",
-        f"🛠️ *Steuerung*",
-        f"Kompressor: *{'EIN' if kompressor_status else 'AUS'}*",
-        f"Ziel: {t_soll_ein:.1f}°C (Ein) - {t_soll_aus:.1f}°C (Aus)",
+        "🛠️ *Kompressor*",
+        f"Status: *{'EIN' if kompressor_status else 'AUS'}*",
         f"Laufzeit: {format_time(current_runtime)} (Heute: {format_time(total_runtime)})",
-        f"Modus: {mode_str}",
         "",
-        f"☀️ *Energie*",
+        "⚙️ *Regelung*",
+        f"Sensor: {active_sensor}",
+        f"Ein: {t_soll_ein:.1f}°C | Aus: {t_soll_aus:.1f}°C",
+        "",
+        "⚡ *Energie*",
         f"Netz: {feedinpower:.0f}W | Akku: {bat_power:.0f}W",
-        f"Prognose heute: {forecast}",
+        f"PV: {solax_data.get('acpower', 0):.0f}W | SOC: {solax_data.get('soc', 0)}%",
         "",
-        f"📡 *System*",
+        "ℹ️ *Infos*",
+        f"Modus: {mode_str}",
         f"VPN IP: `{vpn_ip}`",
-        f"Update: {datetime.now().strftime('%H:%M:%S')}"
+        f"Update: {datetime.now().strftime('%H:%M:%S')}",
+        "",
+        "🌤️ *Prognose*",
+        forecast_text
     ]
     message = "\n".join(status_lines)
     keyboard = get_keyboard(state)

@@ -232,6 +232,15 @@ async def run_logic_step(session, state):
         state.last_solar_window_status = control_logic.is_solar_window(state.config, state)
         
         regelfuehler = result["regelfuehler"]
+        
+        # Save active sensor name for status message
+        if regelfuehler == state.sensors.t_mittig:
+            state.control.active_rule_sensor = "Mittig"
+        elif regelfuehler == state.sensors.t_unten:
+            state.control.active_rule_sensor = "Unten"
+        else:
+            state.control.active_rule_sensor = "Unknown"
+
         await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, set_kompressor_status)
         await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
         await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, set_kompressor_status)
