@@ -104,8 +104,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
                 if mask.any():
                     ax.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.25, label=f"{source} (Kompressor ON)")
                     logging.debug(f"Filled {mask.sum()} points with {source} color")
-            else:
-                logging.warning("PowerSource or Kompressor column missing - no background coloring")
 
         # Temperature line plots (drawn on top of background)
         for col, color, linestyle in [("T_Oben", "blue", "-"), ("T_Unten", "red", "-"), ("T_Mittig", "purple", "-"), ("T_Verd", "gray", "--")]:
