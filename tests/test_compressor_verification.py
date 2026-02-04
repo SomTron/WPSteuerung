@@ -14,12 +14,23 @@ from safety_logic import verify_compressor_running
 def mock_state():
     state = MagicMock()
     state.local_tz = pytz.timezone("Europe/Berlin")
-    state.kompressor_ein = True
-    state.bot_token = "mock_token"
-    state.chat_id = "mock_chat_id"
+    
+    # Sub-states
+    state.control = MagicMock()
+    state.control.kompressor_ein = True
+    
+    # Verification fields (at top level for now in State class)
     state.kompressor_verification_error_count = 0
     state.kompressor_verification_failed = False
     state.kompressor_verification_last_check = None
+    state.kompressor_verification_start_time = None
+    
+    # Config/Telegram
+    state.config = MagicMock()
+    state.config.Telegram.BOT_TOKEN = "mock_token"
+    state.config.Telegram.CHAT_ID = "mock_chat_id"
+    state.bot_token = state.config.Telegram.BOT_TOKEN
+    
     return state
 
 @pytest.mark.asyncio
