@@ -130,6 +130,14 @@ class State:
     @property
     def chat_id(self):
         return self.config.Telegram.CHAT_ID
+
+    @property
+    def healthcheck_url(self):
+        return self.config.Healthcheck.HEALTHCHECK_URL
+
+    @property
+    def healthcheck_interval(self):
+        return float(self.config.Healthcheck.HEALTHCHECK_INTERVAL_MINUTES)
     
     def update_config(self):
         self.config_manager.load_config()

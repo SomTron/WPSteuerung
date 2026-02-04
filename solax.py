@@ -11,12 +11,12 @@ async def get_solax_data(session, state):
     local_tz = pytz.timezone("Europe/Berlin")
     now = datetime.now(local_tz)
 
-    # Stelle sicher, dass state.last_api_call zeitzonenbewusst ist
-    if state.last_api_call and state.last_api_call.tzinfo is None:
-        state.last_api_call = local_tz.localize(state.last_api_call)
+    # Stelle sicher, dass state.solar.last_api_call zeitzonenbewusst ist
+    if state.solar.last_api_call and state.solar.last_api_call.tzinfo is None:
+        state.solar.last_api_call = local_tz.localize(state.solar.last_api_call)
 
-    if state.last_api_call and (now - state.last_api_call) < timedelta(minutes=5):
-        return state.last_api_data
+    if state.solar.last_api_call and (now - state.solar.last_api_call) < timedelta(minutes=5):
+        return state.solar.last_api_data
 
     max_retries = 3
     retry_delay = 5
@@ -35,9 +35,9 @@ async def get_solax_data(session, state):
                 response.raise_for_status()
                 data = await response.json()
                 if data.get("success"):
-                    state.last_api_data = data.get("result")
-                    state.last_api_call = now
-                    return state.last_api_data
+                    state.solar.last_api_data = data.get("result")
+                    state.solar.last_api_call = now
+                    return state.solar.last_api_data
                 else:
                     logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
                     return None
