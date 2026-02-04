@@ -9,6 +9,12 @@ Infos
 *.log
 heizungsdaten*.csv
 
+# Ignoriere Test-Outputs
+*_out.txt
+sim_*.txt
+test_results.txt
+raw_sim.txt
+
 # Ignoriere PyCharm-Projektdateien
 .idea/
 
