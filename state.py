@@ -63,6 +63,8 @@ class State:
         self.urlaubsmodus_start: Optional[datetime] = None
         self.urlaubsmodus_ende: Optional[datetime] = None
         self.bademodus_aktiv: bool = False
+        self.awaiting_urlaub_duration: bool = False
+        self.awaiting_custom_duration: bool = False
         
         # System/Internal
         self.gpio_lock = asyncio.Lock()
