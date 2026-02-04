@@ -42,36 +42,36 @@ def get_status():
     
     return {
         "temperatures": {
-            "oben": shared_state.t_oben,
-            "mittig": shared_state.t_mittig,
-            "unten": shared_state.t_unten,
-            "verdampfer": shared_state.t_verd,
-            "boiler": shared_state.t_boiler
+            "oben": shared_state.sensors.t_oben,
+            "mittig": shared_state.sensors.t_mittig,
+            "unten": shared_state.sensors.t_unten,
+            "verdampfer": shared_state.sensors.t_verd,
+            "boiler": shared_state.sensors.t_boiler
         },
         "compressor": {
-            "status": "EIN" if shared_state.kompressor_ein else "AUS",
-            "runtime_current": str(shared_state.last_runtime).split('.')[0] if shared_state.kompressor_ein else "0:00:00",
-            "runtime_today": str(shared_state.total_runtime_today).split('.')[0]
+            "status": "EIN" if shared_state.control.kompressor_ein else "AUS",
+            "runtime_current": str(shared_state.stats.last_runtime).split('.')[0] if shared_state.control.kompressor_ein else "0:00:00",
+            "runtime_today": str(shared_state.stats.total_runtime_today).split('.')[0]
         },
         "setpoints": {
-            "einschaltpunkt": shared_state.aktueller_einschaltpunkt,
-            "ausschaltpunkt": shared_state.aktueller_ausschaltpunkt,
+            "einschaltpunkt": shared_state.control.aktueller_einschaltpunkt,
+            "ausschaltpunkt": shared_state.control.aktueller_ausschaltpunkt,
             "sicherheits_temp": shared_state.sicherheits_temp,
             "verdampfertemperatur": shared_state.verdampfertemperatur
         },
         "mode": {
-            "current": shared_state.previous_modus,
-            "solar_active": shared_state.solar_ueberschuss_aktiv,
+            "current": shared_state.control.previous_modus,
+            "solar_active": shared_state.control.solar_ueberschuss_aktiv,
             "holiday_active": shared_state.urlaubsmodus_aktiv,
             "bath_active": shared_state.bademodus_aktiv
         },
         "energy": {
-            "battery_power": shared_state.batpower,
-            "soc": shared_state.soc,
-            "feed_in": shared_state.feedinpower
+            "battery_power": shared_state.solar.batpower,
+            "soc": shared_state.solar.soc,
+            "feed_in": shared_state.solar.feedinpower
         },
         "system": {
-            "exclusion_reason": shared_state.ausschluss_grund,
+            "exclusion_reason": shared_state.control.ausschluss_grund,
             "last_update": datetime.now().strftime("%H:%M:%S")
         }
     }

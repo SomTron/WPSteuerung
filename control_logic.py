@@ -32,9 +32,9 @@ def set_last_compressor_off_time(state, time_val):
 async def check_pressure_and_config(session, state, handle_pressure_check_func: Callable, set_kompressor_status_func: Callable, reload_config_func: Callable, calculate_file_hash_func: Callable, only_pressure: bool = False):
     """Prüft Druckschalter und aktualisiert Konfiguration bei Bedarf."""
     pressure_ok = await handle_pressure_check_func(session, state)
-    if state.last_pressure_state != pressure_ok:
+    if state.control.last_pressure_state != pressure_ok:
         logging.info(f"Druckschalter: {'OK' if pressure_ok else 'Fehler'}")
-        state.last_pressure_state = pressure_ok
+        state.control.last_pressure_state = pressure_ok
     if not pressure_ok:
         state.control.ausschluss_grund = "Druckschalterfehler"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)

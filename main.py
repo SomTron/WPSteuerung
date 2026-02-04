@@ -228,6 +228,7 @@ async def run_logic_step(session, state):
         state.control.aktueller_einschaltpunkt = result["einschaltpunkt"]
         state.control.aktueller_ausschaltpunkt = result["ausschaltpunkt"]
         state.control.solar_ueberschuss_aktiv = result["solar_ueberschuss_aktiv"]
+        state.last_solar_window_status = control_logic.is_solar_window(state.config, state)
         
         regelfuehler = result["regelfuehler"]
         await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, set_kompressor_status)

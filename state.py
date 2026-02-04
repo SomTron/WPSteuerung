@@ -70,6 +70,7 @@ class State:
         self.last_forecast_update: Optional[datetime] = None
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None
+        self.last_solar_window_status: bool = False
 
         # --- Compressor Verification ---
         self.kompressor_verification_start_time: Optional[datetime] = None
