@@ -48,7 +48,9 @@ async def get_boiler_temperature_history(session, hours, state, config):
         time_ago = now - timedelta(hours=hours)
         file_path = "heizungsdaten.csv"
         if not os.path.isfile(file_path):
-            await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token)
+            from telegram_ui import get_keyboard
+            keyboard = get_keyboard(state)
+            await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token, reply_markup=keyboard)
             return
 
         check_and_fix_csv_header(file_path)
@@ -64,7 +66,9 @@ async def get_boiler_temperature_history(session, hours, state, config):
         df = df[(df["Zeitstempel"] >= time_ago) & (df["Zeitstempel"] <= now)]
 
         if df.empty:
-            await send_telegram_message(session, state.chat_id, f"Keine Daten für die letzten {hours} Stunden.", state.bot_token)
+            from telegram_ui import get_keyboard
+            keyboard = get_keyboard(state)
+            await send_telegram_message(session, state.chat_id, f"Keine Daten für die letzten {hours} Stunden.", state.bot_token, reply_markup=keyboard)
             return
 
         temp_columns = ["T_Oben", "T_Unten", "T_Mittig", "T_Verd"]
@@ -108,8 +112,16 @@ async def get_boiler_temperature_history(session, hours, state, config):
         form.add_field("photo", buf, filename="temp_graph.png", content_type="image/png")
         await session.post(url, data=form, timeout=30)
         buf.close()
+        
+        # Re-send keyboard after photo
+        from telegram_ui import get_keyboard
+        keyboard = get_keyboard(state)
+        await send_telegram_message(session, state.chat_id, "📊", state.bot_token, reply_markup=keyboard)
     except Exception as e:
         logging.error(f"Error in charts: {e}", exc_info=True)
+        from telegram_ui import get_keyboard
+        keyboard = get_keyboard(state)
+        await send_telegram_message(session, state.chat_id, f"❌ Fehler beim Erstellen des Diagramms: {str(e)[:100]}", state.bot_token, reply_markup=keyboard)
 
 async def get_runtime_bar_chart(session, days=7, state=None):
     """Balkendiagramm der Laufzeiten."""
