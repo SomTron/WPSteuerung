@@ -21,6 +21,10 @@ class SolarState:
         self.consumeenergy: Optional[float] = None
         self.last_api_call: Optional[datetime] = None
         self.last_api_data: Optional[dict] = None
+        self.forecast_today: Optional[float] = None
+        self.forecast_tomorrow: Optional[float] = None
+        self.sunrise_today: Optional[str] = None
+        self.sunset_today: Optional[str] = None
 
 class ControlState:
     def __init__(self, config):

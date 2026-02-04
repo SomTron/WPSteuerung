@@ -139,17 +139,39 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     elif state.urlaubsmodus_aktiv: mode_str = "🌴 Urlaub"
     elif state.control.solar_ueberschuss_aktiv: mode_str = "Solarüberschuss"
 
+    # Additional Details calculation
+    t_soll_ein = state.control.aktueller_einschaltpunkt
+    t_soll_aus = state.control.aktueller_ausschaltpunkt
+    vpn_ip = state.vpn_ip if state.vpn_ip else "N/A"
+    
+    forecast = "N/A"
+    if state.solar.forecast_today:
+        forecast = f"{state.solar.forecast_today:.1f} kWh"
+
+    # Extended Status Message
     status_lines = [
         "📊 *SYSTEMSTATUS*",
+        f"🌡️ *Temperaturen*",
         f"Oben: {fmt_temp(t_oben)} | Mittig: {fmt_temp(t_mittig)}",
         f"Unten: {fmt_temp(t_unten)} | Verd: {fmt_temp(t_verd)}",
-        f"🛠️ *Kompressor: {'EIN' if kompressor_status else 'AUS'}*",
-        f"Laufzeit: {format_time(current_runtime)} (Gesamt: {format_time(total_runtime)})",
+        "",
+        f"🛠️ *Steuerung*",
+        f"Kompressor: *{'EIN' if kompressor_status else 'AUS'}*",
+        f"Ziel: {t_soll_ein:.1f}°C (Ein) - {t_soll_aus:.1f}°C (Aus)",
+        f"Laufzeit: {format_time(current_runtime)} (Heute: {format_time(total_runtime)})",
         f"Modus: {mode_str}",
-        f"Netz: {feedinpower:.0f}W | Akku: {bat_power:.0f}W"
+        "",
+        f"☀️ *Energie*",
+        f"Netz: {feedinpower:.0f}W | Akku: {bat_power:.0f}W",
+        f"Prognose heute: {forecast}",
+        "",
+        f"📡 *System*",
+        f"VPN IP: `{vpn_ip}`",
+        f"Update: {datetime.now().strftime('%H:%M:%S')}"
     ]
     message = "\n".join(status_lines)
-    return await send_telegram_message(session, chat_id, message, bot_token, parse_mode="Markdown")
+    keyboard = get_keyboard(state)
+    return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode="Markdown")
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
