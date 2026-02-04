@@ -137,9 +137,9 @@ async def setup_application():
     asyncio.create_task(telegram_task(
         read_temperature_func=sensor_manager.read_temperature,
         sensor_ids=sensor_manager.sensor_ids,
-        kompressor_status_func=lambda: state.kompressor_ein,
-        current_runtime_func=lambda: state.current_runtime,
-        total_runtime_func=lambda: state.total_runtime_today + state.current_runtime,
+        kompressor_status_func=lambda: state.control.kompressor_ein,
+        current_runtime_func=lambda: state.stats.current_runtime,
+        total_runtime_func=lambda: state.stats.total_runtime_today + state.stats.current_runtime,
         config=state.config,
         get_solax_data_func=get_solax_data,
         state=state,
@@ -168,17 +168,17 @@ async def update_system_data(session, state):
     """Liest Sensoren und PV-Daten."""
     # 1. Sensoren lesen
     temps = await sensor_manager.get_all_temperatures()
-    state.t_oben = temps.get("oben")
-    state.t_mittig = temps.get("mittig")
-    state.t_unten = temps.get("unten")
-    state.t_verd = temps.get("verd")
+    state.sensors.t_oben = temps.get("oben")
+    state.sensors.t_mittig = temps.get("mittig")
+    state.sensors.t_unten = temps.get("unten")
+    state.sensors.t_verd = temps.get("verd")
     
     # 2. PV-Daten aktualisieren
     await get_solax_data(session, state)
-    if state.last_api_data:
-        state.feedinpower = state.last_api_data.get("feedinpower", 0)
-        state.batpower = state.last_api_data.get("batPower", 0)
-        state.soc = state.last_api_data.get("soc", 0)
+    if state.solar.last_api_data:
+        state.solar.feedinpower = state.solar.last_api_data.get("feedinpower", 0)
+        state.solar.batpower = state.solar.last_api_data.get("batPower", 0)
+        state.solar.soc = state.solar.last_api_data.get("soc", 0)
 
 async def check_periodic_tasks(session, state, last_vpn_check):
     """Führt zeitgesteuerte Hintergrundaufgaben aus."""
@@ -213,34 +213,34 @@ async def run_logic_step(session, state):
         pass
 
     # 2. Kompressor-Verifizierung
-    if state.kompressor_ein:
-        is_running, error_msg = await control_logic.verify_compressor_running(state, session, state.t_verd, state.t_unten)
+    if state.control.kompressor_ein:
+        is_running, error_msg = await control_logic.verify_compressor_running(state, session, state.sensors.t_verd, state.sensors.t_unten)
         if not is_running and state.kompressor_verification_error_count >= 2:
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
             await set_kompressor_status(state, False, force=True)
-            state.ausschluss_grund = "Kompressor läuft nicht (Verifizierung fehlgeschlagen)"
-            state.last_compressor_off_time = datetime.now(state.local_tz) + timedelta(minutes=10)
+            state.control.ausschluss_grund = "Kompressor läuft nicht (Verifizierung fehlgeschlagen)"
+            state.stats.last_compressor_off_time = datetime.now(state.local_tz) + timedelta(minutes=10)
 
     # 3. Sensoren & Safety
-    if await control_logic.check_sensors_and_safety(session, state, state.t_oben, state.t_unten, state.t_mittig, state.t_verd, set_kompressor_status):
-        result = await control_logic.determine_mode_and_setpoints(state, state.t_unten, state.t_mittig)
-        state.aktueller_einschaltpunkt = result["einschaltpunkt"]
-        state.aktueller_ausschaltpunkt = result["ausschaltpunkt"]
-        state.solar_ueberschuss_aktiv = result["solar_ueberschuss_aktiv"]
+    if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
+        result = await control_logic.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig)
+        state.control.aktueller_einschaltpunkt = result["einschaltpunkt"]
+        state.control.aktueller_ausschaltpunkt = result["ausschaltpunkt"]
+        state.control.solar_ueberschuss_aktiv = result["solar_ueberschuss_aktiv"]
         
         regelfuehler = result["regelfuehler"]
-        await control_logic.handle_compressor_off(state, session, regelfuehler, state.aktueller_ausschaltpunkt, state.min_laufzeit, state.t_oben, set_kompressor_status)
-        await control_logic.handle_compressor_on(state, session, regelfuehler, state.aktueller_einschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.t_oben, set_kompressor_status)
-        await control_logic.handle_mode_switch(state, session, state.t_oben, state.t_mittig, set_kompressor_status)
+        await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, set_kompressor_status)
+        await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
+        await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, set_kompressor_status)
 
 async def log_system_state(state):
     """Schreibt CSV-Log und aktualisiert LCD."""
     # 1. LCD Update
     hardware_manager.write_lcd(
-        f"Oben:{state.t_oben if state.t_oben else 'Err':.1f} Unt:{state.t_unten if state.t_unten else 'Err':.1f}",
-        f"Mit :{state.t_mittig if state.t_mittig else 'Err':.1f} Verd:{state.t_verd if state.t_verd else 'Err':.0f}",
-        f"Ziel:{state.aktueller_einschaltpunkt:.0f}/{state.aktueller_ausschaltpunkt:.0f} {'ON' if state.kompressor_ein else 'OFF'}",
-        f"{state.previous_modus[:10] if state.previous_modus else ''} {state.soc if state.soc else 0}%"
+        f"Oben:{state.sensors.t_oben if state.sensors.t_oben else 'Err':.1f} Unt:{state.sensors.t_unten if state.sensors.t_unten else 'Err':.1f}",
+        f"Mit :{state.sensors.t_mittig if state.sensors.t_mittig else 'Err':.1f} Verd:{state.sensors.t_verd if state.sensors.t_verd else 'Err':.0f}",
+        f"Ziel:{state.control.aktueller_einschaltpunkt:.0f}/{state.control.aktueller_ausschaltpunkt:.0f} {'ON' if state.control.kompressor_ein else 'OFF'}",
+        f"{state.control.previous_modus[:10] if state.control.previous_modus else ''} {state.solar.soc if state.solar.soc else 0}%"
     )
 
     # 2. CSV Logging
@@ -255,23 +255,23 @@ async def log_system_state(state):
 
         # Power Source
         power_source = "Netz"
-        if state.feedinpower and state.feedinpower > 0: power_source = "Solar"
-        elif state.batpower and state.batpower > 0: power_source = "Batterie"
+        if state.solar.feedinpower and state.solar.feedinpower > 0: power_source = "Solar"
+        elif state.solar.batpower and state.solar.batpower > 0: power_source = "Batterie"
 
         def fmt_csv(val): return str(val) if val is not None else "N/A"
-        solax = state.last_api_data or {}
+        solax = state.solar.last_api_data or {}
         
         csv_line = [
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            fmt_csv(state.t_oben), fmt_csv(state.t_unten), fmt_csv(state.t_mittig),
-            fmt_csv(state.t_boiler), fmt_csv(state.t_verd),
-            "1" if state.kompressor_ein else "0",
-            fmt_csv(solax.get("acpower", 0)), fmt_csv(state.feedinpower),
-            fmt_csv(state.batpower), fmt_csv(state.soc),
+            fmt_csv(state.sensors.t_oben), fmt_csv(state.sensors.t_unten), fmt_csv(state.sensors.t_mittig),
+            fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd),
+            "1" if state.control.kompressor_ein else "0",
+            fmt_csv(solax.get("acpower", 0)), fmt_csv(state.solar.feedinpower),
+            fmt_csv(state.solar.batpower), fmt_csv(state.solar.soc),
             fmt_csv(solax.get("powerdc1", 0)), fmt_csv(solax.get("powerdc2", 0)),
             fmt_csv(solax.get("consumeenergy", 0)),
-            fmt_csv(state.aktueller_einschaltpunkt), fmt_csv(state.aktueller_ausschaltpunkt),
-            "1" if state.solar_ueberschuss_aktiv else "0",
+            fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
+            "1" if state.control.solar_ueberschuss_aktiv else "0",
             "1" if control_logic.is_nighttime(state.config) else "0",
             power_source, fmt_csv(state.solar_forecast_tomorrow)
         ]
@@ -291,10 +291,10 @@ async def main_loop():
             
             # Tageswechsel und Laufzeit
             handle_day_transition(state, now)
-            if state.kompressor_ein and state.last_compressor_on_time:
-                state.current_runtime = safe_timedelta(now, state.last_compressor_on_time, state.local_tz)
+            if state.control.kompressor_ein and state.stats.last_compressor_on_time:
+                state.stats.current_runtime = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
             else:
-                state.current_runtime = timedelta()
+                state.stats.current_runtime = timedelta()
             
             # Daten-Update & Periodische Tasks
             await update_system_data(session, state)
