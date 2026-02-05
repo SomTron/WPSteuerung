@@ -61,24 +61,28 @@ async def aktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
 async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, duration_text):
     """Setzt die Urlaubsmodus-Dauer basierend auf der Auswahl."""
     try:
-        if duration_text == "❌ Abbrechen":
+        # text is already lowercased in process_telegram_messages_async
+        if duration_text == "❌ abbrechen":
             keyboard = get_keyboard(state)
             await send_telegram_message(session, chat_id, "❌ Urlaubsmodus-Aktivierung abgebrochen.", bot_token, reply_markup=keyboard)
             state.awaiting_urlaub_duration = False
             return
 
-        if duration_text == "🌴 1 Tag": duration_days = 1
-        elif duration_text == "🌴 3 Tage": duration_days = 3
-        elif duration_text == "🌴 7 Tage": duration_days = 7
-        elif duration_text == "🌴 14 Tage": duration_days = 14
-        elif duration_text == "🌴 Benutzerdefiniert":
+        if duration_text == "🌴 1 tag": duration_days = 1
+        elif duration_text == "🌴 3 tage": duration_days = 3
+        elif duration_text == "🌴 7 tage": duration_days = 7
+        elif duration_text == "🌴 14 tage": duration_days = 14
+        elif duration_text == "🌴 benutzerdefiniert":
             keyboard = get_keyboard(state)
             await send_telegram_message(session, chat_id, "📅 Bitte sende die Anzahl der Tage (z.B. '5' für 5 Tage):", bot_token, reply_markup=keyboard)
             state.awaiting_custom_duration = True
             state.awaiting_urlaub_duration = False
             return
         else:
-            try: duration_days = int(duration_text.replace("🌴 ", "").replace(" Tage", "").strip())
+            try: 
+                # Cleanup string to extract number
+                clean_text = duration_text.replace("🌴", "").replace("tage", "").replace("tag", "").strip()
+                duration_days = int(clean_text)
             except ValueError:
                 keyboard = get_keyboard(state)
                 await send_telegram_message(session, chat_id, "❌ Ungültige Eingabe.", bot_token, reply_markup=keyboard)
@@ -102,7 +106,8 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
 async def handle_custom_duration(session, chat_id, bot_token, config, state, message_text):
     """Behandelt benutzerdefinierte Dauer-Eingabe."""
     try:
-        if message_text in ["🌴 Benutzerdefiniert", "❌ Abbrechen", "🌴 1 Tag", "🌴 3 Tage", "🌴 7 Tage", "🌴 14 Tage"]: return
+        # Check against lowercased button texts to prevent re-triggering logic if user clicks buttons unexpectedly
+        if message_text in ["🌴 benutzerdefiniert", "❌ abbrechen", "🌴 1 tag", "🌴 3 tage", "🌴 7 tage", "🌴 14 tage"]: return
         duration_days = int(message_text.strip())
         local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(local_tz)
