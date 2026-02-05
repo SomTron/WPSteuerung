@@ -27,8 +27,22 @@ async def get_boiler_temperature_history(session, hours, state, config):
         # Header regelmäßig prüfen und ggf. korrigieren
         check_and_fix_csv_header(file_path)
         try:
+            # Optimize: Read only last 15000 lines (~42 hours) to avoid RAM exhaustion
+            from collections import deque
+            with open(file_path, "r", encoding="utf-8") as f:
+                header_line = f.readline()
+                # Read remaining lines into a fixed-size buffer
+                last_lines = deque(f, maxlen=15000)
+            
+            # Combine header and last lines
+            if not last_lines:
+                # File only has header or is empty
+                data_io = io.StringIO(header_line)
+            else:
+                data_io = io.StringIO(header_line + "".join(last_lines))
+
             # Robust: Trennzeichen automatisch erkennen, Header prüfen, Fehlerhafte Zeilen überspringen
-            df = pd.read_csv(file_path, sep=None, engine="python", on_bad_lines='skip')
+            df = pd.read_csv(data_io, sep=None, engine="python", on_bad_lines='skip')
             # Prüfe, ob alle erwarteten Spalten vorhanden sind
             missing = [col for col in EXPECTED_CSV_HEADER if col not in df.columns]
             if missing:
