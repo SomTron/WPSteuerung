@@ -217,3 +217,31 @@ async def test_determine_mode_none_solar_values(mock_state):
         
         assert mock_state.control.solar_ueberschuss_aktiv is False
         assert result['modus'] == "Normalmodus"
+
+@pytest.mark.asyncio
+async def test_handle_compressor_on_prevents_immediate_off(mock_state):
+    """Test that handle_compressor_on does not start if stop conditions are already met."""
+    from control_logic import handle_compressor_on
+    
+    # Setup state: Bottom cold (trigger start), but top warm (trigger stop)
+    # Target: 50°C (Normal mode)
+    # t_unten: 35°C (<= 40 triggers ON)
+    # t_oben: 55°C (>= 50 triggers STOP)
+    
+    set_kompressor_status = AsyncMock(return_value=True)
+    mock_state.control.kompressor_ein = False
+    mock_state.sensors.t_verd = 15.0
+    mock_state.sensors.t_unten = 35.0
+    mock_state.stats.last_compressor_off_time = datetime.now(mock_state.local_tz) - timedelta(hours=1)
+    
+    # Try to turn on
+    # regelfuehler (t_mittig) is None here for simplicity, focusing on t_oben
+    result = await handle_compressor_on(
+        mock_state, None, regelfuehler=35.0, einschaltpunkt=40, ausschaltpunkt=50,
+        min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=20), 
+        within_solar_window=True, t_oben=55.0, set_kompressor_status_func=set_kompressor_status
+    )
+    
+    assert result is False
+    set_kompressor_status.assert_not_called()
+    assert mock_state.control.blocking_reason == "Zieltemp erreicht"

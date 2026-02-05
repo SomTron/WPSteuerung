@@ -71,6 +71,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
 
         hardware_manager.set_compressor_state(False)
         state.control.kompressor_ein = False
+        logging.info("Kompressor AUS")
         return True
 
 async def handle_pressure_check(session, state):
@@ -265,7 +266,7 @@ async def run_logic_step(session, state):
             state.control.active_rule_sensor = "Unknown"
 
         await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, set_kompressor_status)
-        await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
+        await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
         await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, set_kompressor_status)
 
 async def log_system_state(state):

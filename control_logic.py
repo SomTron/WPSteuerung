@@ -101,7 +101,7 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
             await handle_critical_compressor_error(session, state, "")
     return False
 
-async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min_laufzeit, min_pause, within_solar_window, t_oben, set_kompressor_status_func: Callable):
+async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, ausschaltpunkt, min_laufzeit, min_pause, within_solar_window, t_oben, set_kompressor_status_func: Callable):
     """Prüft Einschaltbedingungen und schaltet ein."""
     now = datetime.now(state.local_tz)
     temp_ok = regelfuehler is not None and regelfuehler <= einschaltpunkt
@@ -126,7 +126,14 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             pause_remaining = min_pause - elapsed_pause
             
 
+    stop_condition = (regelfuehler is not None and regelfuehler >= ausschaltpunkt) or (t_oben is not None and t_oben >= ausschaltpunkt)
+    
     if not state.control.kompressor_ein and temp_ok and solar_ok and pause_ok:
+        if stop_condition:
+            logging.info(f"Einschalten unterdrückt: Ausschaltpunkt ({ausschaltpunkt}) bereits erreicht (Regelfühler={regelfuehler}, Oben={t_oben})")
+            state.control.blocking_reason = "Zieltemp erreicht"
+            return False
+            
         if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
             state.control.kompressor_ein = True
             state.stats.last_compressor_on_time = now
