@@ -221,10 +221,12 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                 current_blocking = state.control.blocking_reason
                 last_blocking = state.control.last_blocking_reason
                 
+                # Skip notification for solar window (user requested status-only display)
                 if current_blocking != last_blocking and current_blocking is not None:
                     # New blocking condition detected
-                    notification = f"⚠️ *Kompressor blockiert:* {current_blocking}"
-                    await send_telegram_message(session, chat_id, notification, bot_token, parse_mode="Markdown")
+                    if not current_blocking.startswith("Solarfenster"):
+                        notification = f"⚠️ *Kompressor blockiert:* {current_blocking}"
+                        await send_telegram_message(session, chat_id, notification, bot_token, parse_mode="Markdown")
                     state.control.last_blocking_reason = current_blocking
                 elif current_blocking is None and last_blocking is not None:
                     # Blocking cleared
