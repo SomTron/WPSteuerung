@@ -74,7 +74,11 @@ class SensorManager:
                 return value
 
         # Tatsächliches Lesen (in Thread, da Datei-IO blockieren kann)
-        temp = await asyncio.to_thread(self.read_temperature_raw, sensor_id)
+        try:
+            temp = await asyncio.wait_for(asyncio.to_thread(self.read_temperature_raw, sensor_id), timeout=5.0)
+        except asyncio.TimeoutError:
+            logging.error(f"Timeout bei Sensor {sensor_key} ({sensor_id})")
+            return None
         
         if temp is not None:
              self.last_sensor_readings[sensor_id] = (now, temp)

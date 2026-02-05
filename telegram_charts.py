@@ -29,8 +29,8 @@ async def get_boiler_temperature_history(session, hours, state, config):
         # Backup vor dem Auslesen
         backup_csv(file_path)
         try:
-            # Robust: Trennzeichen automatisch erkennen, Header prüfen
-            df = pd.read_csv(file_path, sep=None, engine="python")
+            # Robust: Trennzeichen automatisch erkennen, Header prüfen, Fehlerhafte Zeilen überspringen
+            df = pd.read_csv(file_path, sep=None, engine="python", on_bad_lines='skip')
             # Prüfe, ob alle erwarteten Spalten vorhanden sind
             missing = [col for col in EXPECTED_CSV_HEADER if col not in df.columns]
             if missing:

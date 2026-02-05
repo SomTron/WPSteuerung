@@ -10,7 +10,8 @@ from typing import List
 EXPECTED_CSV_HEADER = [
     "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",
     "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy",
-    "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Urlaubsmodus", "PowerSource"
+    "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Urlaubsmodus", "PowerSource",
+    "Prognose_Morgen"
 ]
 
 HEIZUNGSDATEN_CSV = os.path.join("csv log", "heizungsdaten.csv")
