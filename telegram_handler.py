@@ -231,8 +231,8 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
 async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Telegram-Task zur Verarbeitung von Nachrichten."""
     last_update_id = None
-    while True:
-        async with create_robust_aiohttp_session() as session:
+    async with create_robust_aiohttp_session() as session:
+        while True:
             try:
                 if not state.bot_token or not state.chat_id:
                     await asyncio.sleep(60); continue

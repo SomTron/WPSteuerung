@@ -46,13 +46,7 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
         async with create_robust_aiohttp_session() as temp_session:
             return await send_telegram_message(temp_session, chat_id, message, bot_token, reply_markup, retries, retry_delay, parse_mode)
 
-    # Logge die aufgelöste IP von api.telegram.org
-    try:
-        addrs = socket.getaddrinfo("api.telegram.org", 443)
-        resolved_ips = {a[4][0] for a in addrs}
-        logging.debug(f"Resolved api.telegram.org -> {resolved_ips}")
-    except Exception as e:
-        logging.debug(f"DNS-Auflösung für api.telegram.org fehlgeschlagen: {e}")
+    # Log removed: blocking socket.getaddrinfo was here
 
     for attempt in range(retries):
         try:
@@ -102,13 +96,7 @@ async def get_telegram_updates(session, bot_token, offset=None, retries=3, retry
     if offset is not None:
         params["offset"] = offset
 
-    # Logge die aufgelöste IP von api.telegram.org
-    try:
-        addrs = socket.getaddrinfo("api.telegram.org", 443)
-        resolved_ips = {a[4][0] for a in addrs}
-        logging.debug(f"Resolved api.telegram.org -> {resolved_ips}")
-    except Exception as e:
-        logging.debug(f"DNS-Auflösung für api.telegram.org fehlgeschlagen: {e}")
+    # Log removed: blocking socket.getaddrinfo was here
 
     for attempt in range(1, retries + 1):
         try:
