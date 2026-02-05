@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import hashlib
 import pytz
 from datetime import datetime, timedelta
 from typing import Optional, Dict
@@ -151,7 +153,6 @@ class State:
     
     def update_config(self):
         """Reload config only if file has changed (detected via MD5 hash)."""
-        import hashlib
         try:
             with open(self.config_manager.config_path, 'rb') as f:
                 new_hash = hashlib.md5(f.read()).hexdigest()
