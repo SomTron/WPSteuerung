@@ -82,7 +82,7 @@ class ConfigManager:
 
             try:
                 self.config = AppConfig(**config_dict)
-                logging.info(f"Konfiguration aus '{self.config_path}' erfolgreich geladen.")
+                logging.debug(f"Konfiguration aus '{self.config_path}' erfolgreich geladen.")  # Changed to DEBUG to reduce log noise
             except ValidationError as e:
                 logging.error(f"Validierungsfehler in Config: {e}")
                 # Fallback: Versuche, Sektionen einzeln zu laden oder behalte Defaults
