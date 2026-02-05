@@ -150,5 +150,18 @@ class State:
         return float(self.config.Healthcheck.HEALTHCHECK_INTERVAL_MINUTES)
     
     def update_config(self):
-        self.config_manager.load_config()
-        self.config = self.config_manager.get()
+        """Reload config only if file has changed (detected via MD5 hash)."""
+        import hashlib
+        try:
+            with open(self.config_manager.config_path, 'rb') as f:
+                new_hash = hashlib.md5(f.read()).hexdigest()
+            
+            if new_hash != self.last_config_hash:
+                logging.info(f"Config file changed (hash mismatch), reloading...")
+                self.config_manager.load_config()
+                self.config = self.config_manager.get()
+                self.last_config_hash = new_hash
+            else:
+                logging.debug("Config file unchanged (hash match), skipping reload")
+        except Exception as e:
+            logging.error(f"Error checking config hash: {e}")
