@@ -26,8 +26,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
             return
         # Header regelmäßig prüfen und ggf. korrigieren
         check_and_fix_csv_header(file_path)
-        # Backup vor dem Auslesen
-        backup_csv(file_path)
         try:
             # Robust: Trennzeichen automatisch erkennen, Header prüfen, Fehlerhafte Zeilen überspringen
             df = pd.read_csv(file_path, sep=None, engine="python", on_bad_lines='skip')
