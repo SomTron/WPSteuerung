@@ -46,21 +46,44 @@ def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) 
 
         # Header ist falsch: Backup anlegen und korrigieren
         backup_csv(file_path)
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
         
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(",".join(expected_header) + "\n")
-            # Nur Zeilen behalten, die nicht wie ein Header aussehen (Timestamp-Check)
-            for line in lines:
-                if not line.strip():
-                    continue
-                parts = line.split(",")
-                if parts[0].strip() == expected_header[0]:
-                    continue # Überspringe alten Header
-                f.write(line)
-        logging.info(f"CSV-Header in {file_path} wurde korrigiert.")
-        return True
+        # Memory-Safe: Stream processing with temp file
+        temp_file = file_path + ".tmp"
+        try:
+            with open(file_path, "r", encoding="utf-8") as f_in, \
+                 open(temp_file, "w", encoding="utf-8") as f_out:
+                
+                # Write correct header
+                f_out.write(",".join(expected_header) + "\n")
+                
+                # Skip old header if present in first line
+                first_line_content = f_in.readline() # We already read this above, but need to consume it or check again.
+                # Actually, strictly speaking we just opened a fresh handle f_in.
+                # So the first line read here IS the header (or whatever is first).
+                
+                # Check if the first line looks like the *old* header or just garbage data
+                # If it's a data line (starts with timestamp), keep it. 
+                # If it starts with "Zeitstempel", skip it.
+                if first_line_content.strip() and not first_line_content.startswith(expected_header[0]):
+                     f_out.write(first_line_content)
+                
+                # Stream the rest
+                for line in f_in:
+                    if not line.strip(): continue
+                    # Safety: If another header line appears in middle (concatenated files?), skip it
+                    if line.startswith(expected_header[0]): continue
+                    f_out.write(line)
+            
+            # Atomic replace
+            shutil.move(temp_file, file_path)
+            logging.info(f"CSV-Header in {file_path} wurde korrigiert (Streaming-Modus).")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Fehler beim Streaming-Fix: {e}")
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            raise e
     except Exception as e:
         logging.error(f"Fehler beim Prüfen/Korrigieren des CSV-Headers: {e}")
         return False

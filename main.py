@@ -134,6 +134,29 @@ async def setup_application():
     session = create_robust_aiohttp_session()
     state.session = session
     
+    
+    # 6. CSV Header Check (Once at startup)
+    try:
+        from utils import check_and_fix_csv_header, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER
+        csv_file = HEIZUNGSDATEN_CSV
+        log_dir = os.path.dirname(csv_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        if not os.path.exists(csv_file):
+            # Create new file synchronously at startup
+            import aiofiles # We are in async context but setup_application is async
+            async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
+                await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
+            logging.info(f"Created new CSV file: {csv_file}")
+        else:
+            if check_and_fix_csv_header(csv_file):
+                logging.warning("CSV Header was redundant/fixed at startup.")
+            else:
+                logging.info("CSV Header check passed.")
+    except Exception as e:
+        logging.error(f"Startup CSV check failed: {e}")
+
     # Start Telegram Task
     asyncio.create_task(telegram_task(
         read_temperature_func=sensor_manager.read_temperature,
@@ -262,12 +285,10 @@ async def log_system_state(state):
         if log_dir and not os.path.exists(log_dir):
             os.makedirs(log_dir)
             
-        from utils import check_and_fix_csv_header, EXPECTED_CSV_HEADER
         if not os.path.exists(csv_file):
             async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
                 await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
-        else:
-            check_and_fix_csv_header(csv_file)
+        # Optimization: Header check removed from loop (done at startup)
 
         # Power Source
         power_source = "Netz"
