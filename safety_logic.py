@@ -36,18 +36,21 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     
     if not await check_for_sensor_errors(session, state, t_oben, t_unten):
         state.control.ausschluss_grund = "Sensorfehler"
+        state.control.blocking_reason = "Sensor-Fehler"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
 
     safety_temp = state.config.Heizungssteuerung.SICHERHEITS_TEMP
     if (t_oben is not None and t_oben >= safety_temp) or (t_unten is not None and t_unten >= safety_temp):
         state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
+        state.control.blocking_reason = f"Sicherheitstemp (>= {safety_temp}°C)"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         asyncio.create_task(send_telegram_message(session, state.config.Telegram.CHAT_ID, f"⚠️ Sicherheitsabschaltung: Übertemperatur!", state.config.Telegram.BOT_TOKEN))
         return False
 
     if not is_valid_temperature(t_verd, min_temp=-20.0, max_temp=50.0):
         state.control.ausschluss_grund = "Verdampfertemperatur ungültig"
+        state.control.blocking_reason = "Verdampfer ungültig"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
     
@@ -63,8 +66,10 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         state.verdampfer_blocked = True
         if already_blocked:
             state.control.ausschluss_grund = f"Verdampfer: Warten auf Erwärmung ({t_verd:.1f} Grad < {restart_temp} Grad)"
+            state.control.blocking_reason = f"Verdampfer zu kalt ({t_verd:.1f}°C, warte auf >{restart_temp}°C)"
         else:
             state.control.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {verd_limit} Grad)"
+            state.control.blocking_reason = f"Verdampfer zu kalt ({t_verd:.1f}°C < {verd_limit}°C)"
         
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False

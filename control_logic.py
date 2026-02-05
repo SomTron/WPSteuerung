@@ -37,6 +37,7 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
         state.control.last_pressure_state = pressure_ok
     if not pressure_ok:
         state.control.ausschluss_grund = "Druckschalterfehler"
+        state.control.blocking_reason = "Druckschalter-Fehler"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
     if not only_pressure:
@@ -107,17 +108,22 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
     
     within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
     solar_ok = True
+    solar_block_reason = None
     if within_uebergangsmodus and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
         # Restore critical cold exception: allow even without solar if it's very cold
         nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
         night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction
         if regelfuehler is not None and regelfuehler > night_einschaltpunkt:
             solar_ok = False
+            solar_block_reason = "Solarfenster (kein Überschuss)"
 
     pause_ok = True
+    pause_remaining = None
     if state.stats.last_compressor_off_time:
-        if safe_timedelta(now, state.stats.last_compressor_off_time, state.local_tz) < min_pause:
+        elapsed_pause = safe_timedelta(now, state.stats.last_compressor_off_time, state.local_tz)
+        if elapsed_pause < min_pause:
             pause_ok = False
+            pause_remaining = min_pause - elapsed_pause
             
 
     if not state.control.kompressor_ein and temp_ok and solar_ok and pause_ok:
@@ -128,8 +134,22 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, min
             state.kompressor_verification_start_time = now
             state.kompressor_verification_start_t_verd = state.sensors.t_verd
             state.kompressor_verification_start_t_unten = state.sensors.t_unten
+            # Clear blocking reason on successful start
+            state.control.blocking_reason = None
             logging.info(f"Eingeschaltet um {now}")
             return True
+    
+    # Set blocking reason if conditions not met
+    if not state.control.kompressor_ein and temp_ok:
+        if not pause_ok and pause_remaining:
+            minutes = int(pause_remaining.total_seconds() // 60)
+            seconds = int(pause_remaining.total_seconds() % 60)
+            state.control.blocking_reason = f"Min. Pause (noch {minutes}m {seconds}s)"
+        elif not solar_ok and solar_block_reason:
+            state.control.blocking_reason = solar_block_reason
+        else:
+            state.control.blocking_reason = None
+    
     return False
 
 async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_status_func: Callable):

@@ -38,6 +38,8 @@ class ControlState:
         self.last_pressure_state: Optional[bool] = None
         self.current_pause_reason: Optional[str] = None
         self.active_rule_sensor: Optional[str] = None
+        self.blocking_reason: Optional[str] = None  # Current blocking reason
+        self.last_blocking_reason: Optional[str] = None  # For change detection
 
 class StatsState:
     def __init__(self, now):
