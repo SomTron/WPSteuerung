@@ -10,9 +10,10 @@ from typing import List
 EXPECTED_CSV_HEADER = [
     "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",
     "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy",
-    "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Nachtabsenkung", "PowerSource",
-    "Prognose_Morgen"
+    "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Urlaubsmodus", "PowerSource"
 ]
+
+HEIZUNGSDATEN_CSV = os.path.join("csv log", "heizungsdaten.csv")
 
 def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) -> bool:
     """
@@ -21,6 +22,8 @@ def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) 
     """
     if expected_header is None:
         expected_header = EXPECTED_CSV_HEADER
+    if file_path is None:
+        file_path = HEIZUNGSDATEN_CSV
     try:
         if not os.path.exists(file_path):
             return False
@@ -61,11 +64,13 @@ def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) 
         logging.error(f"Fehler beim Prüfen/Korrigieren des CSV-Headers: {e}")
         return False
 
-def backup_csv(file_path: str, backup_dir: str = "backup") -> str:
+def backup_csv(file_path: str = None, backup_dir: str = "backup") -> str:
     """
     Erstellt ein Backup der CSV-Datei im backup/-Verzeichnis mit Zeitstempel.
     Gibt den Pfad zur Backup-Datei zurück.
     """
+    if file_path is None:
+        file_path = HEIZUNGSDATEN_CSV
     try:
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)

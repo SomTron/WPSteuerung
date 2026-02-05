@@ -3,11 +3,12 @@ import os
 import io
 import pandas as pd
 import matplotlib.pyplot as plt
+plt.switch_backend('Agg')  # Headless mode for RPi
 import pytz
 from datetime import datetime, timedelta
 from aiohttp import FormData
 from telegram_api import send_telegram_message
-from utils import check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER
+from utils import check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER, HEIZUNGSDATEN_CSV
 
 async def get_boiler_temperature_history(session, hours, state, config):
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
@@ -16,12 +17,12 @@ async def get_boiler_temperature_history(session, hours, state, config):
         now = datetime.now(local_tz)
         time_ago = now - timedelta(hours=hours)
         logging.debug(f"⏳ Starte Temperaturverlauf für {hours} Stunden, Zeitfenster: {time_ago} bis {now}")
-        file_path = "heizungsdaten.csv"
+        file_path = HEIZUNGSDATEN_CSV
         if not os.path.isfile(file_path):
             logging.error(f"❌ CSV-Datei nicht gefunden: {file_path}")
             from telegram_ui import get_keyboard
             keyboard = get_keyboard(state)
-            await send_telegram_message(session, state.chat_id, "CSV-Datei nicht gefunden.", state.bot_token, reply_markup=keyboard)
+            await send_telegram_message(session, state.chat_id, f"CSV-Datei nicht gefunden ({file_path}).", state.bot_token, reply_markup=keyboard)
             return
         # Header regelmäßig prüfen und ggf. korrigieren
         check_and_fix_csv_header(file_path)
@@ -216,7 +217,11 @@ async def get_boiler_temperature_history(session, hours, state, config):
 async def get_runtime_bar_chart(session, days=7, state=None):
     """Balkendiagramm der Laufzeiten."""
     try:
-        df = pd.read_csv("heizungsdaten.csv", parse_dates=["Zeitstempel"])
+        file_path = HEIZUNGSDATEN_CSV
+        if not os.path.exists(file_path):
+             await send_telegram_message(session, state.chat_id, "Laufzeit-Daten nicht verfügbar (CSV fehlt).", state.bot_token)
+             return
+        df = pd.read_csv(file_path, parse_dates=["Zeitstempel"])
         df = df.tail(1000)
         df["Date"] = df["Zeitstempel"].dt.date
         df["Kompressor"] = df["Kompressor"].astype(str).map({"EIN": True, "AUS": False, "1": True, "0": False}).fillna(False)

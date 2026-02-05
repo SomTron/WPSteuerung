@@ -26,7 +26,7 @@ from telegram_api import start_healthcheck_task, send_telegram_message, create_r
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app, init_api
-from utils import safe_timedelta
+from utils import safe_timedelta, HEIZUNGSDATEN_CSV
 from weather_forecast import get_solar_forecast
 from logic_utils import is_nighttime, is_solar_window
 
@@ -257,7 +257,11 @@ async def log_system_state(state):
 
     # 2. CSV Logging
     try:
-        csv_file = "heizungsdaten.csv"
+        csv_file = HEIZUNGSDATEN_CSV
+        log_dir = os.path.dirname(csv_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
         from utils import check_and_fix_csv_header, EXPECTED_CSV_HEADER
         if not os.path.exists(csv_file):
             async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
