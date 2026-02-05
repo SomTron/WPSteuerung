@@ -27,16 +27,22 @@ async def get_boiler_temperature_history(session, hours, state, config):
         # Header regelmäßig prüfen und ggf. korrigieren
         check_and_fix_csv_header(file_path)
         try:
-            # Optimize: Read only last 15000 lines (~42 hours) to avoid RAM exhaustion
-            from collections import deque
+            # Optimize: Read only last ~3MB to avoid reading huge files from SD card
+            # Average line length ~150-200 bytes. 15000 lines approx 3MB.
+            file_size = os.path.getsize(file_path)
+            read_size = 3 * 1024 * 1024  # 3MB
+            
             with open(file_path, "r", encoding="utf-8") as f:
                 header_line = f.readline()
-                # Read remaining lines into a fixed-size buffer
-                last_lines = deque(f, maxlen=15000)
+                if file_size > read_size:
+                    f.seek(file_size - read_size)
+                    f.readline() # Discard partial line
+                
+                # Read remaining lines (effectively the tail)
+                last_lines = f.readlines()
             
             # Combine header and last lines
             if not last_lines:
-                # File only has header or is empty
                 data_io = io.StringIO(header_line)
             else:
                 data_io = io.StringIO(header_line + "".join(last_lines))
@@ -213,11 +219,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
                 keyboard = get_keyboard(state)
                 await send_telegram_message(session, state.chat_id, "Fehler beim Senden des Diagramms.", state.bot_token, reply_markup=keyboard)
         buf.close()
-        
-        # Re-send keyboard after photo
-        from telegram_ui import get_keyboard
-        keyboard = get_keyboard(state)
-        await send_telegram_message(session, state.chat_id, "📊", state.bot_token, reply_markup=keyboard)
     except Exception as e:
         logging.error(f"Fehler beim Erstellen des Temperaturverlaufs: {e}", exc_info=True)
         from telegram_ui import get_keyboard
@@ -254,11 +255,6 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         form.add_field("photo", buf, filename="runtime.png", content_type="image/png")
         await session.post(url, data=form)
         buf.close()
-        
-        # Re-send keyboard after photo
-        from telegram_ui import get_keyboard
-        keyboard = get_keyboard(state)
-        await send_telegram_message(session, state.chat_id, "📊", state.bot_token, reply_markup=keyboard)
     except Exception as e:
         logging.error(f"Error in runtime chart: {e}", exc_info=True)
         from telegram_ui import get_keyboard
