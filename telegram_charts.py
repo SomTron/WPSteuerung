@@ -22,18 +22,31 @@ def prefilter_csv_lines(file_path, days, tz):
                     parts = line.strip().split(",")
                     if len(parts) < 2:
                         continue
-                    timestamp_str = parts[0]
-                    timestamp = pd.to_datetime(timestamp_str, errors='coerce')
-                    if pd.isna(timestamp):
-                        continue
-                    if timestamp.tzinfo is None:
+                    timestamp_str = parts[0].strip()
+                    
+                    # Parse timestamp more safely
+                    try:
+                        # Try standard format first
+                        timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
                         timestamp = tz.localize(timestamp)
-                    else:
-                        timestamp = timestamp.astimezone(tz)
+                    except ValueError:
+                        # Fallback to pandas if standard format fails
+                        try:
+                            timestamp = pd.to_datetime(timestamp_str)
+                            if pd.isna(timestamp):
+                                continue
+                            if timestamp.tzinfo is None:
+                                timestamp = tz.localize(timestamp)
+                            else:
+                                timestamp = timestamp.astimezone(tz)
+                        except:
+                            continue
+                    
                     if start_date <= timestamp.date() <= now.date():
                         relevant_lines.append(line.strip())
                 except Exception as e:
-                    logging.warning(f"⚠️ Konnte Zeile {line_num} nicht verarbeiten: {e}")
+                    # Silently skip bad lines
+                    continue
         logging.debug(f"✅ {len(relevant_lines)} Zeilen nach Vorfilterung.")
         return relevant_lines
     except Exception as e:
