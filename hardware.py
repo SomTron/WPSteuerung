@@ -78,19 +78,24 @@ class HardwareManager(HardwareInterface):
         return True # Mock: Immer OK
 
     def write_lcd(self, line1="", line2="", line3="", line4=""):
-        """Schreibt auf das LCD Display."""
+        """Schreibt auf das LCD Display mit Retry-Logik bei I/O Fehlern."""
         if self.lcd:
-            try:
-                self.lcd.cursor_pos = (0, 0)
-                self.lcd.write_string(line1.ljust(20)[:20])
-                self.lcd.cursor_pos = (1, 0)
-                self.lcd.write_string(line2.ljust(20)[:20])
-                self.lcd.cursor_pos = (2, 0)
-                self.lcd.write_string(line3.ljust(20)[:20])
-                self.lcd.cursor_pos = (3, 0)
-                self.lcd.write_string(line4.ljust(20)[:20])
-            except Exception as e:
-                logging.error(f"Fehler beim Schreiben auf LCD: {e}")
+            for attempt in range(3):
+                try:
+                    self.lcd.cursor_pos = (0, 0)
+                    self.lcd.write_string(line1.ljust(20)[:20])
+                    self.lcd.cursor_pos = (1, 0)
+                    self.lcd.write_string(line2.ljust(20)[:20])
+                    self.lcd.cursor_pos = (2, 0)
+                    self.lcd.write_string(line3.ljust(20)[:20])
+                    self.lcd.cursor_pos = (3, 0)
+                    self.lcd.write_string(line4.ljust(20)[:20])
+                    return # Erfolg
+                except Exception as e:
+                    if attempt < 2:
+                        logging.warning(f"LCD Schreibfehler (Versuch {attempt+1}/3): {e}")
+                    else:
+                        logging.error(f"LCD Schreibfehler final fehlgeschlagen: {e}")
 
     def cleanup(self):
         """Bereinigt GPIO und LCD Ressourcen."""

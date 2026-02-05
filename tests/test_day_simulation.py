@@ -188,7 +188,7 @@ async def run_simulation_scenario(scenario_name, steps, config):
                 else:
                     await handle_compressor_on(
                         mock_state, None, setpoints['regelfuehler'], setpoints['einschaltpunkt'], 
-                        min_run, min_pause, 
+                        setpoints['ausschaltpunkt'], min_run, min_pause, 
                         mock_is_solar.return_value, t_oben, mock_set_kompressor
                     )
             
