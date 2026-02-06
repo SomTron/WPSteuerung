@@ -15,22 +15,23 @@ mkdir -p "$TARGET_CSV" "$TARGET_STEUERUNG" "$TARGET_UPDATER"
 
 # 2. Consolidate CSV Data
 echo "Consolidating CSV files..."
-if [ -f "$HOME/heizungsdaten.csv" ]; then
-    if [ -f "$TARGET_CSV/heizungsdaten.csv" ]; then
-        mv "$HOME/heizungsdaten.csv" "$TARGET_CSV/heizungsdaten_legacy_$TIMESTAMP.csv"
-    else
-        mv "$HOME/heizungsdaten.csv" "$TARGET_CSV/"
-    fi
-fi
-
-[ -f "$HOME/heizungsdaten.csv.backup" ] && mv "$HOME/heizungsdaten.csv.backup" "$TARGET_CSV/"
-[ -f "$HOME/heizungsdaten2.csv" ] && mv "$HOME/heizungsdaten2.csv" "$TARGET_CSV/"
+# From Home
+for f in "$HOME"/heizungsdaten*.csv*; do
+    [ -f "$f" ] && mv "$f" "$TARGET_CSV/" 2>/dev/null
+done
+# From Project Root (old location)
+for f in "$PROJECT_ROOT"/heizungsdaten*.csv*; do
+    [ -f "$f" ] && mv "$f" "$TARGET_CSV/" 2>/dev/null
+done
 
 # 3. Move Logs
 echo "Moving log files..."
+# From Home
 mv "$HOME"/heizungssteuerung.log.* "$TARGET_STEUERUNG/" 2>/dev/null
-[ -f "$HOME/kompressor_log.txt" ] && mv "$HOME/kompressor_log.txt" "$TARGET_STEUERUNG/"
-[ -f "$HOME/telegram_debug.log" ] && mv "$HOME/telegram_debug.log" "$TARGET_STEUERUNG/"
+# From Project Root
+mv "$PROJECT_ROOT"/heizungssteuerung.log* "$TARGET_STEUERUNG/" 2>/dev/null
+mv "$PROJECT_ROOT"/*.log "$TARGET_STEUERUNG/" 2>/dev/null
+[ -f "$PROJECT_ROOT/kompressor_log.txt" ] && mv "$PROJECT_ROOT/kompressor_log.txt" "$TARGET_STEUERUNG/"
 
 # 4. Remove Junk / Save-Files
 echo "Removing legacy save files and backups..."
