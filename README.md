@@ -30,6 +30,15 @@ Eine umfassende Open-Source-Lösung zur Steuerung und Optimierung von Wärmepump
 
 ---
 
+## 📂 Projektstruktur
+
+Das Projekt ist in funktionale Bereiche unterteilt:
+- **`Steuerung/`**: Der Kern der Wärmepumpensteuerung (Logik, Hardware, Telegram-Bot).
+- **`Updater/`**: Tools für Deployment und Fernwartung auf dem Raspberry Pi.
+- **`Analyse/`**: (Neu) Bereich für Daten-Auswertungen und Langzeit-Statistiken.
+
+---
+
 ## ⚙️ Installation & Setup
 
 ### 1. Repository klonen
@@ -40,25 +49,26 @@ cd WPSteuerung
 
 ### 2. Virtual Environment einrichten
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# In WPSteuerung/
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r Steuerung/requirements.txt
 ```
 
 ### 3. Konfiguration
-Kopiere die Beispiel-Konfiguration und passe sie an deine Hardware und API-Tokens an:
+Kopiere die Beispiel-Konfiguration in den Steuerungs-Ordner und passe sie an:
 ```bash
-cp config.ini.example config.ini
-nano config.ini
+cp Steuerung/config.ini.example Steuerung/richtige_config.ini
+nano Steuerung/richtige_config.ini
 ```
 
 ---
 
-## 📦 System-Management (RPI_updater)
+## 📦 System-Management (Updater)
 
-Für eine einfache Wartung und Updates empfehlen wir das [RPI_updater](https://github.com/SomTron/RPI_updater) Repository. Es enthält:
+Für eine einfache Wartung und Updates nutzen Sie die Skripte im `Updater/` Verzeichnis:
 - `wp-manager.sh`: Ein interaktives Menü für Logs, Neustarts und Status.
-- `rpi-deploy.sh`: Einfaches Deployment neuer Code-Versionen per Knopfdruck.
+- `rpi-deploy.sh`: Einfaches Deployment neuer Code-Versionen per „One-Click“.
 
 ---
 
