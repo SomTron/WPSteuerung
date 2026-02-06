@@ -30,6 +30,7 @@ echo "Moving log files..."
 mv "$HOME"/heizungssteuerung.log.* "$TARGET_STEUERUNG/" 2>/dev/null
 # From Project Root
 mv "$PROJECT_ROOT"/heizungssteuerung.log* "$TARGET_STEUERUNG/" 2>/dev/null
+mv "$PROJECT_ROOT"/error.log* "$TARGET_STEUERUNG/" 2>/dev/null
 mv "$PROJECT_ROOT"/*.log "$TARGET_STEUERUNG/" 2>/dev/null
 [ -f "$PROJECT_ROOT/kompressor_log.txt" ] && mv "$PROJECT_ROOT/kompressor_log.txt" "$TARGET_STEUERUNG/"
 
