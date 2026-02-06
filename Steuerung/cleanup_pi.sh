@@ -53,9 +53,14 @@ rm -f "$HOME/2PunktRegelung.py" "$HOME/state.json"
 
 # 6. Cleanup RPI_updater (if everything is in $TARGET_UPDATER)
 if [ -d "$HOME/RPI_updater" ]; then
-    echo "Consolidating RPI_updater content..."
+    echo "Consolidating RPI_updater content from home..."
     cp -r "$HOME/RPI_updater"/* "$TARGET_UPDATER/" 2>/dev/null
     rm -rf "$HOME/RPI_updater"
+fi
+
+if [ -d "$TARGET_UPDATER/RPI_updater" ]; then
+    echo "Removing redundant nested RPI_updater folder..."
+    rm -rf "$TARGET_UPDATER/RPI_updater"
 fi
 
 # 7. Cleanup Nested Project Dir
