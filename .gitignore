@@ -5,9 +5,15 @@ config.ini
 # Ignoriere Infodatepí
 Infos
 
-# Ignoriere Runtime-Dateien (Logs und CSV)
+# Ignoriere Runtime-Dateien (Logs)
 *.log
-heizungsdaten*.csv
+
+# heizungsdaten.csv im Hauptordner ignorieren, aber nicht im Analyse-Ordner
+Steuerung/csv\ log/heizungsdaten.csv
+!Analyse/
+!Analyse/*.csv
+Analyse/*.md
+Analyse/*.html
 
 # Ignoriere Test-Outputs
 *_out.txt
