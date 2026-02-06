@@ -20,10 +20,10 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
     if not is_valid_temperature(t_boiler_unten): errors.append(f"T_Unten invalid: {t_boiler_unten}")
     
     if errors:
+        error_msg = ", ".join(errors)
+        state.control.blocking_reason = f"Sensorfehler: {error_msg}"
         if check_log_throttle(state, "last_sensor_error_time"):
-            error_msg = ", ".join(errors)
             logging.error(f"Sensorfehler: {error_msg}")
-            asyncio.create_task(send_telegram_message(session, state.config.Telegram.CHAT_ID, f"⚠️ Sensorfehler: {error_msg}", state.config.Telegram.BOT_TOKEN))
         return False
     # print("DEBUG: No sensor errors")
     state.last_sensor_error_time = None
@@ -45,7 +45,6 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
         state.control.blocking_reason = f"Sicherheitstemp (>= {safety_temp}°C)"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
-        asyncio.create_task(send_telegram_message(session, state.config.Telegram.CHAT_ID, f"⚠️ Sicherheitsabschaltung: Übertemperatur!", state.config.Telegram.BOT_TOKEN))
         return False
 
     if not is_valid_temperature(t_verd, min_temp=-20.0, max_temp=50.0):

@@ -221,21 +221,6 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
             elif "temperaturen" in text: await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state)
             elif "status" in text:
                 await send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func)
-                
-                # Send notification if blocking reason has changed
-                current_blocking = state.control.blocking_reason
-                last_blocking = state.control.last_blocking_reason
-                
-                # Skip notification for solar window (user requested status-only display)
-                if current_blocking != last_blocking and current_blocking is not None:
-                    # New blocking condition detected
-                    if not current_blocking.startswith("Solarfenster"):
-                        notification = f"⚠️ *Kompressor blockiert:* {current_blocking}"
-                        await send_telegram_message(session, chat_id, notification, bot_token, parse_mode="Markdown")
-                    state.control.last_blocking_reason = current_blocking
-                elif current_blocking is None and last_blocking is not None:
-                    # Blocking cleared
-                    state.control.last_blocking_reason = None
             elif "urlaub" in text:
                 if "ende" in text:
                     await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)

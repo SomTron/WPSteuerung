@@ -230,6 +230,34 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             
     return last_vpn_check
 
+async def check_and_send_alerts(session, state):
+    """Prüft auf Änderungen im blocking_reason und sendet sofortige Telegram-Alarme."""
+    current_blocking = state.control.blocking_reason
+    last_blocking = state.control.last_blocking_reason
+    
+    # Nachricht senden wenn sich der Grund geändert hat und ein Grund vorhanden ist
+    if current_blocking != last_blocking:
+        if current_blocking:
+            # Filtere "Solarfenster" und "Zieltemp" aus, wenn diese nicht als Sofort-Alarm gewünscht sind
+            # (Der User möchte 1-7, was Alarme, Pausen und Mindestlaufzeit einschließt)
+            is_solar = "Solarfenster" in current_blocking
+            is_zieltemp = "Zieltemp" in current_blocking
+            
+            if not is_solar and not is_zieltemp:
+                emoji = "⚠️"
+                if "Fehler" in current_blocking or "Sicherheit" in current_blocking or "🚨" in current_blocking:
+                    emoji = "🚨"
+                elif "Pause" in current_blocking or "Mindestlaufzeit" in current_blocking:
+                    emoji = "⏳"
+                
+                msg = f"{emoji} *Kompressor blockiert:* {current_blocking}"
+                logging.info(f"Sende Sofort-Alarm: {current_blocking}")
+                await control_logic.send_telegram_message(
+                    session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN, parse_mode="Markdown"
+                )
+        
+        state.control.last_blocking_reason = current_blocking
+
 async def run_logic_step(session, state):
     """Führt einen Schritt der Steuerungslogik aus."""
     # 1. Druckschalter & Config
@@ -268,6 +296,9 @@ async def run_logic_step(session, state):
         await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, set_kompressor_status)
         await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
         await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, set_kompressor_status)
+        
+        # 4. Sofort-Alarme prüfen
+        await check_and_send_alerts(session, state)
 
 async def log_system_state(state):
     """Schreibt CSV-Log und aktualisiert LCD."""

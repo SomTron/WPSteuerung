@@ -105,9 +105,12 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
                 set_last_compressor_off_time(state, datetime.now(state.local_tz))
                 state.stats.total_runtime_today += elapsed
                 state.stats.last_completed_cycle = datetime.now(state.local_tz)
+                state.control.blocking_reason = None
                 logging.info(f"Ausgeschaltet. Laufzeit: {elapsed}")
                 return True
             await handle_critical_compressor_error(session, state, "")
+        else:
+            state.control.blocking_reason = f"Warte auf Mindestlaufzeit (noch {int((min_laufzeit - elapsed).total_seconds() // 60)}m)"
     return False
 
 async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, ausschaltpunkt, min_laufzeit, min_pause, within_solar_window, t_oben, set_kompressor_status_func: Callable):
