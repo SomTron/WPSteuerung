@@ -231,32 +231,49 @@ async def check_periodic_tasks(session, state, last_vpn_check):
     return last_vpn_check
 
 async def check_and_send_alerts(session, state):
-    """Prüft auf Änderungen im blocking_reason und sendet sofortige Telegram-Alarme."""
+    """Prüft auf Änderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
     current_blocking = state.control.blocking_reason
-    last_blocking = state.control.last_blocking_reason
     
-    # Nachricht senden wenn sich der Grund geändert hat und ein Grund vorhanden ist
-    if current_blocking != last_blocking:
-        if current_blocking:
-            # Filtere "Solarfenster" und "Zieltemp" aus, wenn diese nicht als Sofort-Alarm gewünscht sind
-            # (Der User möchte 1-7, was Alarme, Pausen und Mindestlaufzeit einschließt)
-            is_solar = "Solarfenster" in current_blocking
-            is_zieltemp = "Zieltemp" in current_blocking
+    # Normalisierung: Dynamische Teile (Zeiten, Temperaturen) entfernen
+    # Beispiel: "Min. Pause (noch 1m 10s)" -> "Min. Pause"
+    # Beispiel: "Verdampfer zu kalt (5.0°C < 6°C)" -> "Verdampfer zu kalt"
+    # Beispiel: "Sensorfehler: T_Oben invalid" -> "Sensorfehler"
+    import re
+    def normalize(text):
+        if not text: return ""
+        # 1. Alles in Klammern entfernen (Zeiten, Werte)
+        res = re.sub(r'\(.*?\)', '', text)
+        # 2. Alles nach Doppelpunkt entfernen (Details)
+        res = res.split(':')[0]
+        return res.strip()
+
+    current_type = normalize(current_blocking)
+    last_type = getattr(state.control, 'last_alert_type', "")
+    
+    if current_type != last_type:
+        if current_type:
+            # Filtere bekannte Infos, die keine Alarme sein sollen
+            is_solar = "Solarfenster" in current_type
+            is_zieltemp = "Zieltemp" in current_type
             
             if not is_solar and not is_zieltemp:
                 emoji = "⚠️"
-                if "Fehler" in current_blocking or "Sicherheit" in current_blocking or "🚨" in current_blocking:
+                if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
                     emoji = "🚨"
-                elif "Pause" in current_blocking or "Mindestlaufzeit" in current_blocking:
+                elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
                     emoji = "⏳"
                 
+                # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
                 msg = f"{emoji} *Kompressor blockiert:* {current_blocking}"
-                logging.info(f"Sende Sofort-Alarm: {current_blocking}")
+                logging.info(f"Sende Einmal-Alarm: {current_type} (Voll: {current_blocking})")
                 await control_logic.send_telegram_message(
                     session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN, parse_mode="Markdown"
                 )
         
-        state.control.last_blocking_reason = current_blocking
+        state.control.last_alert_type = current_type
+    
+    # Der technische Statuswechsel wird weiterhin für andere Zwecke geloggt/gespeichert
+    state.control.last_blocking_reason = current_blocking
 
 async def run_logic_step(session, state):
     """Führt einen Schritt der Steuerungslogik aus."""
