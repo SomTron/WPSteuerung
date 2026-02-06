@@ -145,6 +145,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     if "Bademodus" in mode_name: mode_str = "🛁 " + mode_name
     elif "Urlaub" in mode_name: mode_str = "🌴 " + mode_name
     elif "Solar" in mode_name: mode_str = "☀️ " + mode_name
+    elif "Frostschutz" in mode_name: mode_str = "❄️ " + mode_name
     elif "Übergang" in mode_name: mode_str = "🌓 " + mode_name
     elif "Nacht" in mode_name: mode_str = "🌙 " + mode_name
     else: mode_str = mode_name

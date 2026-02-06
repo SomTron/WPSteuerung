@@ -66,13 +66,21 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     )
 
     within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
+    
+    # Frostschutz-Check: Wenn im Übergangsmodus/Solarfenster die Temp unter den Nacht-Sollwert fällt
+    is_critical_frost = False
+    if regelfuehler := t_mittig: # Standard sensor for these modes
+        night_einschaltpunkt = state.basis_einschaltpunkt - get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
+        if regelfuehler <= night_einschaltpunkt:
+            is_critical_frost = True
 
     if state.bademodus_aktiv:
         res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4, "regelfuehler": t_unten}
     elif state.control.solar_ueberschuss_aktiv:
         res = {"modus": "Solarüberschuss", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.einschaltpunkt_erhoeht, "regelfuehler": t_unten}
     elif within_uebergangsmodus:
-        res = {"modus": "Übergangsmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        modus_name = "Übergangsmodus (Frostschutz)" if is_critical_frost else "Übergangsmodus"
+        res = {"modus": modus_name, "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
     elif is_night:
         res = {"modus": "Nachtmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
     else:
@@ -81,6 +89,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     res["solar_ueberschuss_aktiv"] = state.control.solar_ueberschuss_aktiv
     
     if state.control.previous_modus != res["modus"]:
+        # Optional: Logik für Solarüberschuss während Übergangsmodus/Regulär etc. kann hier noch feiner getrennt werden falls gewünscht.
         logging.info(f"Wechsel zu Modus: {res['modus']}")
         state.control.previous_modus = res["modus"]
     
