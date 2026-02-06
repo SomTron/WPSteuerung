@@ -34,7 +34,13 @@ mv "$PROJECT_ROOT"/error.log* "$TARGET_STEUERUNG/" 2>/dev/null
 mv "$PROJECT_ROOT"/*.log "$TARGET_STEUERUNG/" 2>/dev/null
 [ -f "$PROJECT_ROOT/kompressor_log.txt" ] && mv "$PROJECT_ROOT/kompressor_log.txt" "$TARGET_STEUERUNG/"
 
-# 4. Remove Junk / Save-Files
+# 4. Move Config and Service files
+echo "Moving config and service files..."
+[ -f "$PROJECT_ROOT/config.ini" ] && mv "$PROJECT_ROOT/config.ini" "$TARGET_STEUERUNG/"
+[ -f "$PROJECT_ROOT/richtige_config.ini" ] && mv "$PROJECT_ROOT/richtige_config.ini" "$TARGET_STEUERUNG/"
+[ -f "$PROJECT_ROOT/wpsteuerung.service" ] && mv "$PROJECT_ROOT/wpsteuerung.service" "$TARGET_STEUERUNG/"
+
+# 5. Remove Junk / Save-Files
 echo "Removing legacy save files and backups..."
 rm -f "$HOME"/telegram_handler.py.save*
 rm -f "$HOME"/telegram_handler.py*bak
