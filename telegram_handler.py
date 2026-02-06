@@ -140,10 +140,14 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
 
     nacht_reduction = int(config.Heizungssteuerung.NACHTABSENKUNG) if is_nighttime_func and is_nighttime_func(config) and not state.bademodus_aktiv else 0
     
-    mode_str = "Normal"
-    if state.bademodus_aktiv: mode_str = "🛁 Bademodus"
-    elif state.urlaubsmodus_aktiv: mode_str = "🌴 Urlaub"
-    elif state.control.solar_ueberschuss_aktiv: mode_str = "Solarüberschuss"
+    # Mode mapping for icons
+    mode_name = state.control.previous_modus or "Normal"
+    if "Bademodus" in mode_name: mode_str = "🛁 " + mode_name
+    elif "Urlaub" in mode_name: mode_str = "🌴 " + mode_name
+    elif "Solar" in mode_name: mode_str = "☀️ " + mode_name
+    elif "Übergang" in mode_name: mode_str = "🌓 " + mode_name
+    elif "Nacht" in mode_name: mode_str = "🌙 " + mode_name
+    else: mode_str = mode_name
 
     # Additional Details calculation
     t_soll_ein = state.control.aktueller_einschaltpunkt
