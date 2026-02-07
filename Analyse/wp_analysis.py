@@ -169,47 +169,55 @@ def generate_html(cycle_data, loss_data):
 
     <div class="card" style="margin-bottom: 20px;">
         <h2>Interaktive Vorhersage (Wann starten?)</h2>
-        <div style="display: flex; gap: 30px; flex-wrap: wrap; align-items: flex-end;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
             <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #3498db;">
-                <h4 style="margin-top:0">Aktuelle Temperaturen</h4>
-                <div style="display: flex; gap: 15px;">
-                    <div>
-                        <label>Oben (°C):</label><br>
-                        <input type="number" id="input-curr-oben" value="38" step="0.1" style="width: 60px; padding: 5px;">
-                    </div>
-                    <div>
-                        <label>Mittig (°C):</label><br>
-                        <input type="number" id="input-curr-mittig" value="35" step="0.1" style="width: 60px; padding: 5px;">
-                    </div>
-                    <div>
-                        <label>Unten (°C):</label><br>
-                        <input type="number" id="input-curr-unten" value="30" step="0.1" style="width: 60px; padding: 5px;">
-                    </div>
-                </div>
-            </div>
-            
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #27ae60;">
-                <h4 style="margin-top:0">Ziel-Einstellung</h4>
-                <div style="display: flex; gap: 15px; align-items: center;">
-                    <div>
-                        <label>Ziel Temp (°C):</label><br>
-                        <input type="number" id="input-target" value="42" step="0.1" style="width: 60px; padding: 5px;">
-                    </div>
-                    <div style="font-size: 0.9em;">
-                        (Gilt für alle 3 Sensoren)
-                    </div>
+                <h4 style="margin-top:0">Einstellungen</h4>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="text-align: left; font-size: 0.85em; color: #666;">
+                            <th>Bereich</th>
+                            <th>Aktiv</th>
+                            <th>Aktuell (°C)</th>
+                            <th>Ziel (°C)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Oben</td>
+                            <td><input type="checkbox" id="check-oben" checked></td>
+                            <td><input type="number" id="input-curr-oben" value="38" step="0.1" style="width: 50px;"></td>
+                            <td><input type="number" id="input-target-oben" value="45" step="0.1" style="width: 50px;"></td>
+                        </tr>
+                        <tr>
+                            <td>Mittig</td>
+                            <td><input type="checkbox" id="check-mittig" checked></td>
+                            <td><input type="number" id="input-curr-mittig" value="35" step="0.1" style="width: 50px;"></td>
+                            <td><input type="number" id="input-target-mittig" value="42" step="0.1" style="width: 50px;"></td>
+                        </tr>
+                        <tr>
+                            <td>Unten</td>
+                            <td><input type="checkbox" id="check-unten" checked></td>
+                            <td><input type="number" id="input-curr-unten" value="30" step="0.1" style="width: 50px;"></td>
+                            <td><input type="number" id="input-target-unten" value="40" step="0.1" style="width: 50px;"></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div id="validation-error" style="color: #e74c3c; font-size: 0.85em; margin-top: 10px; display: none;">
+                    <b>Achtung:</b> Der Zielwert eines unteren Sensors darf nicht höher sein als der eines oberen Sensors.
                 </div>
             </div>
 
-            <div style="flex-grow: 1; min-width: 350px; background: #e8f4fd; padding: 15px; border-radius: 8px;">
-                <h4 style="margin-top:0">Ergebnis: Dauer bis Ziel erreicht</h4>
-                <div id="prediction-result" style="font-size: 1.2em; color: #2c3e50;"></div>
+            <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; display: flex; flex-direction: column;">
+                <h4 style="margin-top:0">Ergebnis: Dauer & Abschluss</h4>
+                <div id="finish-time-overall" style="font-size: 1.4em; font-weight: bold; color: #1e3799; margin-bottom: 10px; border-bottom: 2px solid #1e3799; padding-bottom: 5px;"></div>
+                <div id="prediction-result" style="font-size: 0.95em; color: #2c3e50; flex-grow: 1;"></div>
+            </div>
+            
+            <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); grid-column: span 2;">
+                <h4 style="margin-top:0">Temperaturverlauf-Prognose</h4>
+                <div id="chart-prediction" style="height: 250px;"></div>
             </div>
         </div>
-        <p style="font-size: 0.85em; color: #666; margin-top: 15px; line-height: 1.4;">
-            <b>Berechnungsbasis:</b> Die Dauer basiert auf den historischen Durchschnittswerten: <br>
-            <i>Oben: <span id="hint-rate-oben"></span> K/min | Mittig: <span id="hint-rate-mittig"></span> K/min | Unten: <span id="hint-rate-unten"></span> K/min</i>
-        </p>
     </div>
 
     <div class="grid">
@@ -297,33 +305,99 @@ def generate_html(cycle_data, loss_data):
         `;
         document.getElementById('stats-list').innerHTML = statsHtml;
 
+        // Global chart variable to allow updating
+        let predChart = null;
+
         // Prediction logic
         function updatePrediction() {{
-            const target = parseFloat(document.getElementById('input-target').value);
+            const targetOben = parseFloat(document.getElementById('input-target-oben').value);
+            const targetMittig = parseFloat(document.getElementById('input-target-mittig').value);
+            const targetUnten = parseFloat(document.getElementById('input-target-unten').value);
             
             const currOben = parseFloat(document.getElementById('input-curr-oben').value);
             const currMittig = parseFloat(document.getElementById('input-curr-mittig').value);
             const currUnten = parseFloat(document.getElementById('input-curr-unten').value);
 
-            const calcMin = (curr, rate) => (target > curr) ? Math.round((target - curr) / rate) : 0;
+            const activeOben = document.getElementById('check-oben').checked;
+            const activeMittig = document.getElementById('check-mittig').checked;
+            const activeUnten = document.getElementById('check-unten').checked;
 
-            const minOben = calcMin(currOben, avgRateOben);
-            const minMittig = calcMin(currMittig, avgRateMittig);
-            const minUnten = calcMin(currUnten, avgRateUnten);
+            // Validation: Top >= Mid >= Bottom
+            let isValid = true;
+            if (activeOben && activeMittig && targetMittig > targetOben) isValid = false;
+            if (activeMittig && activeUnten && targetUnten > targetMittig) isValid = false;
+            if (activeOben && activeUnten && targetUnten > targetOben) isValid = false;
 
-            document.getElementById('prediction-result').innerHTML = `
-                <div style="display:flex; justify-content:space-between; border-bottom:1px solid #cde;">
-                   <span>Oben:</span> <span>${{minOben}} Min</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; border-bottom:1px solid #cde;">
-                   <span>Mittig:</span> <span>${{minMittig}} Min</span>
-                </div>
-                <div style="display:flex; justify-content:space-between;">
-                   <span>Unten:</span> <span>${{minUnten}} Min</span>
-                </div>
-            `;
+            document.getElementById('validation-error').style.display = isValid ? 'none' : 'block';
+
+            const calcMin = (curr, target, rate) => (target > curr) ? Math.round((target - curr) / rate) : 0;
+
+            const durations = [];
+            if (activeOben) durations.push(calcMin(currOben, targetOben, avgRateOben));
+            if (activeMittig) durations.push(calcMin(currMittig, targetMittig, avgRateMittig));
+            if (activeUnten) durations.push(calcMin(currUnten, targetUnten, avgRateUnten));
+
+            const maxMin = durations.length > 0 ? Math.max(...durations) : 0;
+            
+            // Calc overall time
+            const now = new Date();
+            const finishDate = new Date(now.getTime() + maxMin * 60000);
+            const timeStr = finishDate.toLocaleTimeString([], {{hour: '2-digit', minute:'2-digit'}});
+            
+            document.getElementById('finish-time-overall').innerHTML = maxMin > 0 ? `Abgeschlossen um: ${{timeStr}} (+${{maxMin}} Min)` : "---";
+
+            let resultHtml = "";
+            let series = [];
+            
+            if (activeOben) {{
+                const d = calcMin(currOben, targetOben, avgRateOben);
+                resultHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #cde; padding: 2px 0;">
+                                <span>Oben (${{targetOben}}°C):</span> <span>${{d}} Min</span>
+                               </div>`;
+                series.push({{ name: 'Oben (Prognose)', data: [[0, currOben], [d, targetOben]] }});
+            }}
+            if (activeMittig) {{
+                const d = calcMin(currMittig, targetMittig, avgRateMittig);
+                resultHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #cde; padding: 2px 0;">
+                                <span>Mittig (${{targetMittig}}°C):</span> <span>${{d}} Min</span>
+                               </div>`;
+                series.push({{ name: 'Mittig (Prognose)', data: [[0, currMittig], [d, targetMittig]] }});
+            }}
+            if (activeUnten) {{
+                const d = calcMin(currUnten, targetUnten, avgRateUnten);
+                resultHtml += `<div style="display:flex; justify-content:space-between; padding: 2px 0;">
+                                <span>Unten (${{targetUnten}}°C):</span> <span>${{d}} Min</span>
+                               </div>`;
+                series.push({{ name: 'Unten (Prognose)', data: [[0, currUnten], [d, targetUnten]] }});
+            }}
+
+            if (!activeOben && !activeMittig && !activeUnten) {{
+                resultHtml = "Keine Sensoren ausgewählt.";
+            }}
+            document.getElementById('prediction-result').innerHTML = resultHtml;
+
+            // Chart update
+            const options = {{
+                series: series,
+                chart: {{ type: 'line', height: 250, toolbar: {{ show: false }} }},
+                stroke: {{ width: 3, dashArray: [5, 5, 5] }},
+                xaxis: {{ title: {{ text: 'Dauer (Minuten)' }}, type: 'numeric' }},
+                yaxis: {{ title: {{ text: 'Temp (°C)' }} }},
+                legend: {{ position: 'top' }}
+            }};
+
+            if (predChart) {{
+                predChart.updateOptions(options);
+            }} else {{
+                predChart = new ApexCharts(document.querySelector("#chart-prediction"), options);
+                predChart.render();
+            }}
         }}
-        ['input-curr-oben', 'input-curr-mittig', 'input-curr-unten', 'input-target'].forEach(id => {{
+
+        const ids = ['input-curr-oben', 'input-curr-mittig', 'input-curr-unten', 
+                     'input-target-oben', 'input-target-mittig', 'input-target-unten',
+                     'check-oben', 'check-mittig', 'check-unten'];
+        ids.forEach(id => {{
             document.getElementById(id).addEventListener('input', updatePrediction);
         }});
         updatePrediction();
