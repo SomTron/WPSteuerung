@@ -106,11 +106,13 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
                 state.stats.total_runtime_today += elapsed
                 state.stats.last_completed_cycle = datetime.now(state.local_tz)
                 state.control.blocking_reason = None
-                logging.info(f"Ausgeschaltet. Laufzeit: {elapsed}")
+                logging.info(f"Regulär AUS: Regelfühler ({regelfuehler:.1f}) >= Ziel ({ausschaltpunkt:.1f}). Laufzeit: {elapsed}")
                 return True
             await handle_critical_compressor_error(session, state, "")
         else:
             state.control.blocking_reason = f"Warte auf Mindestlaufzeit (noch {int((min_laufzeit - elapsed).total_seconds() // 60)}m)"
+            if check_log_throttle(state, "log_min_laufzeit_off", interval_min=5):
+                logging.info(f"Abschaltwunsch unterdrückt: Mindestlaufzeit noch nicht erreicht. Laufzeit: {elapsed}")
     return False
 
 async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, ausschaltpunkt, min_laufzeit, min_pause, within_solar_window, t_oben, set_kompressor_status_func: Callable):
@@ -155,7 +157,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
             state.kompressor_verification_start_t_unten = state.sensors.t_unten
             # Clear blocking reason on successful start
             state.control.blocking_reason = None
-            logging.info(f"Eingeschaltet um {now}")
+            logging.info(f"Eingeschaltet um {now}. Grund: Regelfühler ({regelfuehler:.1f}) <= Ein-Ziel ({einschaltpunkt:.1f})")
             return True
     
     # Set blocking reason if conditions not met
@@ -174,9 +176,20 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
 async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_status_func: Callable):
     """Schaltet aus bei Moduswechsel wenn Zieltemp erreicht."""
     if state.control.kompressor_ein and state.control.solar_ueberschuss_aktiv == False and not state.bademodus_aktiv:
-        if t_oben >= state.control.aktueller_ausschaltpunkt or t_mittig >= state.control.aktueller_ausschaltpunkt:
-            if await set_kompressor_status_func(state, False, force=True):
-                state.control.kompressor_ein = False
-                set_last_compressor_off_time(state, datetime.now(state.local_tz))
-                return True
+        elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
+        target = state.control.aktueller_ausschaltpunkt
+        
+        # Check if targets reached in the new mode
+        if t_oben >= target or t_mittig >= target:
+            # ONLY switch off if min runtime reached
+            if elapsed >= state.min_laufzeit:
+                if await set_kompressor_status_func(state, False, force=True):
+                    state.control.kompressor_ein = False
+                    set_last_compressor_off_time(state, datetime.now(state.local_tz))
+                    state.stats.total_runtime_today += elapsed
+                    logging.info(f"Modus-Wechsel AUS: T_Oben ({t_oben:.1f}) oder T_Mittig ({t_mittig:.1f}) >= Ziel ({target:.1f}). Laufzeit: {elapsed}")
+                    return True
+            else:
+                if check_log_throttle(state, "log_mode_switch_min_laufzeit", interval_min=5):
+                    logging.info(f"Modus-Wechsel AUS unterdrückt: Mindestlaufzeit ({state.min_laufzeit}) noch nicht erreicht. Laufzeit: {elapsed}")
     return False
