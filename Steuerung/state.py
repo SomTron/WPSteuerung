@@ -50,8 +50,8 @@ class StatsState:
         self.total_runtime_today = timedelta()
         self.last_day = now.date()
         self.start_time: Optional[datetime] = None
-        self.last_compressor_on_time = now
-        self.last_compressor_off_time = now
+        self.last_compressor_on_time: Optional[datetime] = None
+        self.last_compressor_off_time: Optional[datetime] = None
         self.last_completed_cycle: Optional[datetime] = None
 
 class State:

@@ -44,34 +44,48 @@ def handle_exit(signum, frame):
 
 async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
     """
-    Schaltet den Kompressor und aktualisiert den State.
-    Logik weitgehend übernommen aus original main.py, aber nutzt HardwareManager.
+    Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
     """
+    now = datetime.now(state.local_tz)
+    was_ein = state.control.kompressor_ein
+
     if status:
         # Einschalten
-        if state.control.kompressor_ein and not force:
+        if was_ein and not force:
             return True
         
-        # Hardware schalten
         hardware_manager.set_compressor_state(True)
         state.control.kompressor_ein = True
         
+        # Statistiken aktualisieren
+        state.stats.last_compressor_on_time = now
+        
         # Startwerte für Verifizierung speichern
-        state.kompressor_verification_start_time = datetime.now(state.local_tz)
+        state.kompressor_verification_start_time = now
         state.kompressor_verification_start_t_verd = state.sensors.t_verd
         state.kompressor_verification_start_t_unten = state.sensors.t_unten
-        state.kompressor_verification_last_check = None  # Reset
+        state.kompressor_verification_last_check = None
         logging.info(f"Kompressor EIN - Verifizierung gestartet (t_verd={state.sensors.t_verd}, t_unten={state.sensors.t_unten})")
         
         return True
     else:
         # Ausschalten
-        if not state.control.kompressor_ein and not force:
+        if not was_ein and not force:
             return True
 
         hardware_manager.set_compressor_state(False)
         state.control.kompressor_ein = False
-        logging.info("Kompressor AUS")
+        
+        # Statistiken aktualisieren
+        state.stats.last_compressor_off_time = now
+        if was_ein and state.stats.last_compressor_on_time:
+            elapsed = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
+            state.stats.total_runtime_today += elapsed
+            state.stats.last_completed_cycle = now
+            logging.info(f"Kompressor AUS. Laufzeit: {elapsed}")
+        else:
+            logging.info("Kompressor AUS")
+            
         return True
 
 async def handle_pressure_check(session, state):
@@ -186,6 +200,20 @@ def handle_day_transition(state, now):
         state.stats.last_day = current_date
     elif state.stats.last_day != current_date:
         logging.info(f"Tageswechsel erkannt ({state.stats.last_day} -> {current_date}). Setze Statistiken zurück.")
+        
+        # Falls der Kompressor über Mitternacht läuft: Restzeit des alten Tages dazurechnen
+        if state.control.kompressor_ein and state.stats.last_compressor_on_time:
+            # Ende des alten Tages (23:59:59.999...)
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elapsed_old_day = safe_timedelta(midnight, state.stats.last_compressor_on_time, state.local_tz)
+            if elapsed_old_day.total_seconds() > 0:
+                state.stats.total_runtime_today += elapsed_old_day
+                logging.info(f"Laufzeitanteil alter Tag: {elapsed_old_day}")
+            
+            # Startzeit für neuen Tag auf Mitternacht setzen
+            state.stats.last_compressor_on_time = midnight
+
+        # Hier könnte man die total_runtime_today in eine DB oder Datei wegschreiben
         state.stats.total_runtime_today = timedelta()
         state.stats.last_completed_cycle = None
         state.stats.last_day = current_date

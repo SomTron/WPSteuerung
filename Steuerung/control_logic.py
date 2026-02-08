@@ -97,14 +97,13 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
 
 async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, min_laufzeit, t_oben, set_kompressor_status_func: Callable):
     """Prüft Abschaltbedingungen und schaltet aus."""
+    if not state.control.kompressor_ein:
+        return False
+
     if regelfuehler is not None and regelfuehler >= ausschaltpunkt:
         elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
         if elapsed >= min_laufzeit:
             if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
-                state.control.kompressor_ein = False
-                set_last_compressor_off_time(state, datetime.now(state.local_tz))
-                state.stats.total_runtime_today += elapsed
-                state.stats.last_completed_cycle = datetime.now(state.local_tz)
                 state.control.blocking_reason = None
                 logging.info(f"Regulär AUS: Regelfühler ({regelfuehler:.1f}) >= Ziel ({ausschaltpunkt:.1f}). Laufzeit: {elapsed}")
                 return True
@@ -149,12 +148,6 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
             return False
             
         if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
-            state.control.kompressor_ein = True
-            state.stats.last_compressor_on_time = now
-            # Verification data is still simple fields for now in state.py (didn't move yet)
-            state.kompressor_verification_start_time = now
-            state.kompressor_verification_start_t_verd = state.sensors.t_verd
-            state.kompressor_verification_start_t_unten = state.sensors.t_unten
             # Clear blocking reason on successful start
             state.control.blocking_reason = None
             logging.info(f"Eingeschaltet um {now}. Grund: Regelfühler ({regelfuehler:.1f}) <= Ein-Ziel ({einschaltpunkt:.1f})")
@@ -184,9 +177,6 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
             # ONLY switch off if min runtime reached
             if elapsed >= state.min_laufzeit:
                 if await set_kompressor_status_func(state, False, force=True):
-                    state.control.kompressor_ein = False
-                    set_last_compressor_off_time(state, datetime.now(state.local_tz))
-                    state.stats.total_runtime_today += elapsed
                     logging.info(f"Modus-Wechsel AUS: T_Oben ({t_oben:.1f}) oder T_Mittig ({t_mittig:.1f}) >= Ziel ({target:.1f}). Laufzeit: {elapsed}")
                     return True
             else:
