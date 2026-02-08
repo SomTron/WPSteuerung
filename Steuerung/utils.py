@@ -1,4 +1,56 @@
 from datetime import datetime, timedelta
+import os
+import csv
+
+def rotate_csv(file_path):
+    # Check if file exists and is not empty
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        return
+
+    with open(file_path, 'r') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+
+    if len(rows) < 2:  # Header row + at least one data row
+        return
+
+    header = rows[0]
+    data_rows = rows[1:]
+
+    # Convert date strings to datetime objects (assuming format is 'YYYY-MM-DD')
+    date_format = '%Y-%m-%d'
+    try:
+        dates = [datetime.strptime(row[0], date_format) for row in data_rows]
+    except (IndexError, ValueError):
+        return  # Skip if date parsing fails
+
+    current_date = datetime.now()
+    cutoff_date = current_date - timedelta(days=14)
+
+    # Find the index where dates are older than 14 days
+    try:
+        rotate_index = next(i for i, date in enumerate(dates) if date < cutoff_date)
+    except StopIteration:
+        return  # No rows to rotate
+
+    # Create backup file with current date
+    backup_filename = f"backup_{current_date.strftime('%Y-%m-%d')}.csv"
+    with open(backup_filename, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        for row in data_rows[:rotate_index]:
+            writer.writerow(row)
+
+    # Update original file
+    with open(file_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        for row in data_rows[rotate_index:]:
+            writer.writerow(row)
+
+# Example usage (you would call this from your main.py or utils.py)
+if __name__ == "__main__":
+    rotate_csv("your_file.csv")
 import pytz
 import logging
 
