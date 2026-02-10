@@ -440,6 +440,18 @@ async def main_loop():
     except Exception as e:
         error_msg = f"🚨 CRITICAL: Unbehandelter Fehler in Main Loop: {e}"
         logging.critical(error_msg, exc_info=True)
+        
+        # Explicitly signal FAILURE to healthcheck service
+        if state and state.healthcheck_url:
+            try:
+                from telegram_api import send_healthcheck_ping
+                fail_url = state.healthcheck_url + "/fail"
+                # Use a fresh task or direct call to ensure it's sent
+                await send_healthcheck_ping(session, fail_url)
+                logging.info("Explicit /fail ping sent to healthcheck service.")
+            except:
+                pass
+
         if state.bot_token and state.chat_id:
             try:
                 # Explicitly await send_telegram_message to ensure it's sent before exit

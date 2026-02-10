@@ -132,7 +132,7 @@ async def get_telegram_updates(session, bot_token, offset=None, retries=3, retry
             return None
     return None
 
-async def _send_healthcheck_ping(session: aiohttp.ClientSession, url: str) -> bool:
+async def send_healthcheck_ping(session: aiohttp.ClientSession, url: str) -> bool:
     """Sendet einen einzelnen Ping. Gibt True bei Erfolg zurück."""
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
@@ -156,7 +156,7 @@ async def start_healthcheck_task(session: aiohttp.ClientSession, state):
 
     # Optional: Start-Ping senden (Healthchecks.io unterstützt /start)
     start_url = state.healthcheck_url if state.healthcheck_url.endswith("/start") else state.healthcheck_url + "/start"
-    await _send_healthcheck_ping(session, start_url)
+    await send_healthcheck_ping(session, start_url)
 
     while True:
         try:
@@ -165,7 +165,7 @@ async def start_healthcheck_task(session: aiohttp.ClientSession, state):
 
             # Zeit für nächsten Ping?
             if state.last_healthcheck_ping is None or (now - state.last_healthcheck_ping) >= interval:
-                success = await _send_healthcheck_ping(session, state.healthcheck_url)
+                success = await send_healthcheck_ping(session, state.healthcheck_url)
                 state.last_healthcheck_ping = now
 
                 if not success:
@@ -181,7 +181,7 @@ async def start_healthcheck_task(session: aiohttp.ClientSession, state):
         except asyncio.CancelledError:
             # Beim Programmende → Fail-Ping senden
             fail_url = state.healthcheck_url + "/fail"
-            await _send_healthcheck_ping(session, fail_url)
+            await send_healthcheck_ping(session, fail_url)
             logging.info("Healthcheck-Task beendet – Fail-Ping gesendet")
             break
 
