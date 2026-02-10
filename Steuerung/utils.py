@@ -3,50 +3,73 @@ import os
 import csv
 
 def rotate_csv(file_path):
-    # Check if file exists and is not empty
+    """
+    Rolliert die CSV-Datei: Einträge älter als 14 Tage werden in ein Backup verschoben.
+    Stream-basierter Ansatz zur Verringerung des Speicherverbrauchs.
+    """
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
         return
 
-    with open(file_path, 'r') as f:
-        reader = csv.reader(f)
-        rows = list(reader)
-
-    if len(rows) < 2:  # Header row + at least one data row
-        return
-
-    header = rows[0]
-    data_rows = rows[1:]
-
-    # Convert date strings to datetime objects (assuming format is 'YYYY-MM-DD')
     date_format = '%Y-%m-%d'
+    cutoff_date = datetime.now() - timedelta(days=14)
+    temp_file = file_path + ".tmp"
+    backup_file = f"backup_{datetime.now().strftime('%Y-%m-%d')}.csv"
+    
+    header = None
+    rows_to_keep = 0
+    rows_to_backup = 0
+    
     try:
-        dates = [datetime.strptime(row[0], date_format) for row in data_rows]
-    except (IndexError, ValueError):
-        return  # Skip if date parsing fails
+        # Erster Durchlauf: Finde heraus, wie viele Zeilen wir backupen müssen
+        with open(file_path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header: return
+            
+            for row in reader:
+                try:
+                    # Zeitstempel ist in der ersten Spalte: "YYYY-MM-DD HH:MM:SS"
+                    # Wir brauchen nur den Datumsteil
+                    row_date_str = row[0].split(" ")[0]
+                    row_date = datetime.strptime(row_date_str, date_format)
+                    if row_date < cutoff_date:
+                        rows_to_backup += 1
+                    else:
+                        rows_to_keep += 1
+                except (IndexError, ValueError):
+                    rows_to_keep += 1 # Behalte Zeilen bei Fehlern sicherheitshalber
+        
+        if rows_to_backup == 0:
+            return
 
-    current_date = datetime.now()
-    cutoff_date = current_date - timedelta(days=14)
+        # Zweiter Durchlauf: Backup und Update
+        with open(file_path, "r", encoding="utf-8") as f_in:
+            reader = csv.reader(f_in)
+            next(reader) # Skip header
+            
+            # Backup schreiben
+            if rows_to_backup > 0:
+                with open(backup_file, "w", encoding="utf-8", newline="") as f_bak:
+                    writer = csv.writer(f_bak)
+                    writer.writerow(header)
+                    for _ in range(rows_to_backup):
+                        writer.writerow(next(reader))
+            
+            # Neue Datei schreiben (Keepers)
+            with open(temp_file, "w", encoding="utf-8", newline="") as f_tmp:
+                writer = csv.writer(f_tmp)
+                writer.writerow(header)
+                for row in reader:
+                    writer.writerow(row)
+        
+        # Atomares Ersetzen
+        import shutil
+        shutil.move(temp_file, file_path)
+        logging.info(f"CSV-Rotation abgeschlossen: {rows_to_backup} Zeilen archiviert.")
 
-    # Find the index where dates are older than 14 days
-    try:
-        rotate_index = next(i for i, date in enumerate(dates) if date < cutoff_date)
-    except StopIteration:
-        return  # No rows to rotate
-
-    # Create backup file with current date
-    backup_filename = f"backup_{current_date.strftime('%Y-%m-%d')}.csv"
-    with open(backup_filename, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        for row in data_rows[:rotate_index]:
-            writer.writerow(row)
-
-    # Update original file
-    with open(file_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        for row in data_rows[rotate_index:]:
-            writer.writerow(row)
+    except Exception as e:
+        logging.error(f"Fehler bei der CSV-Rotation: {e}")
+        if os.path.exists(temp_file): os.remove(temp_file)
 
 # Example usage (you would call this from your main.py or utils.py)
 if __name__ == "__main__":
