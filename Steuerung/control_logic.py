@@ -70,9 +70,11 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     # Frostschutz-Check: Wenn im Übergangsmodus/Solarfenster die Temp unter den Nacht-Sollwert fällt
     is_critical_frost = False
     if regelfuehler := t_mittig: # Standard sensor for these modes
-        night_einschaltpunkt = state.basis_einschaltpunkt - get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
-        if regelfuehler <= night_einschaltpunkt:
-            is_critical_frost = True
+        if is_valid_temperature(regelfuehler):
+            nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
+            night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction
+            if regelfuehler <= night_einschaltpunkt:
+                is_critical_frost = True
 
     if state.bademodus_aktiv:
         res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4, "regelfuehler": t_unten}
@@ -173,7 +175,7 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
         target = state.control.aktueller_ausschaltpunkt
         
         # Check if targets reached in the new mode
-        if t_oben >= target or t_mittig >= target:
+        if (t_oben is not None and t_oben >= target) or (t_mittig is not None and t_mittig >= target):
             # ONLY switch off if min runtime reached
             if elapsed >= state.min_laufzeit:
                 if await set_kompressor_status_func(state, False, force=True):
