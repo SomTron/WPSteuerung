@@ -405,12 +405,12 @@ async def main_loop():
     session = await setup_application()
     
     # Send Startup Message
+    # Send Startup Message (Non-blocking)
     if state.bot_token and state.chat_id:
-        try:
-            await send_welcome_message(session, state.chat_id, state.bot_token, state)
-            logging.info("Startup message sent.")
-        except Exception as e:
-            logging.error(f"Failed to send startup message: {e}")
+        asyncio.create_task(
+            send_welcome_message(session, state.chat_id, state.bot_token, state)
+        )
+        logging.info("Startup message task created.")
 
     last_vpn_check = datetime.now() - timedelta(minutes=1)
     

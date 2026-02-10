@@ -179,10 +179,8 @@ async def start_healthcheck_task(session: aiohttp.ClientSession, state):
             await asyncio.sleep(sleep_sec)
 
         except asyncio.CancelledError:
-            # Beim Programmende → Fail-Ping senden
-            fail_url = state.healthcheck_url + "/fail"
-            await send_healthcheck_ping(session, fail_url)
-            logging.info("Healthcheck-Task beendet – Fail-Ping gesendet")
+            # Task wurde beendet (z.B. Shutdown)
+            logging.info("Healthcheck-Task beendet.")
             break
 
         except Exception as e:
