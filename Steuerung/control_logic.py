@@ -112,7 +112,7 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
             await handle_critical_compressor_error(session, state, "")
         else:
             state.control.blocking_reason = f"Warte auf Mindestlaufzeit (noch {int((min_laufzeit - elapsed).total_seconds() // 60)}m)"
-            if check_log_throttle(state, "log_min_laufzeit_off", interval_min=5):
+            if check_log_throttle(state, "log_min_laufzeit_off", interval_minutes=5):
                 logging.info(f"Abschaltwunsch unterdrückt: Mindestlaufzeit noch nicht erreicht. Laufzeit: {elapsed}")
     return False
 
@@ -182,6 +182,6 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
                     logging.info(f"Modus-Wechsel AUS: T_Oben ({t_oben:.1f}) oder T_Mittig ({t_mittig:.1f}) >= Ziel ({target:.1f}). Laufzeit: {elapsed}")
                     return True
             else:
-                if check_log_throttle(state, "log_mode_switch_min_laufzeit", interval_min=5):
+                if check_log_throttle(state, "log_mode_switch_min_laufzeit", interval_minutes=5):
                     logging.info(f"Modus-Wechsel AUS unterdrückt: Mindestlaufzeit ({state.min_laufzeit}) noch nicht erreicht. Laufzeit: {elapsed}")
     return False
