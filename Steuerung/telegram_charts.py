@@ -230,30 +230,93 @@ async def get_boiler_temperature_history(session, hours, state, config):
 async def get_runtime_bar_chart(session, days=7, state=None):
     """Balkendiagramm der Laufzeiten."""
     try:
+        local_tz = pytz.timezone("Europe/Berlin")
+        now = datetime.now(local_tz)
+        cutoff_date = (now - timedelta(days=days)).date()
+        
         file_path = HEIZUNGSDATEN_CSV
         if not os.path.exists(file_path):
              await send_telegram_message(session, state.chat_id, "Laufzeit-Daten nicht verfügbar (CSV fehlt).", state.bot_token)
              return
-        df = pd.read_csv(file_path, parse_dates=["Zeitstempel"])
-        df = df.tail(1000)
+             
+        # Read the last ~20MB of the file (sufficient for ~10-14 days usually)
+        file_size = os.path.getsize(file_path)
+        read_size = 20 * 1024 * 1024  # 20MB
+        
+        with open(file_path, "r", encoding="utf-8") as f:
+            header_line = f.readline()
+            if file_size > read_size:
+                f.seek(file_size - read_size)
+                f.readline() # partial line
+            last_lines = f.readlines()
+            
+        data_io = io.StringIO(header_line + "".join(last_lines))
+        df = pd.read_csv(data_io, sep=None, engine="python", on_bad_lines='skip')
+        
+        if "Zeitstempel" not in df.columns:
+            logging.error("Laufzeit-Diagramm: Spalte 'Zeitstempel' fehlt.")
+            return
+
+        df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors='coerce')
+        df = df[df["Zeitstempel"].notna()].copy()
+        
+        # Filter for the requested period
+        df = df[df["Zeitstempel"].dt.date >= cutoff_date]
+        
+        if df.empty:
+            logging.warning(f"Keine Daten für Laufzeit-Diagramm ({days} Tage).")
+            return
+
         df["Date"] = df["Zeitstempel"].dt.date
-        df["Kompressor"] = df["Kompressor"].astype(str).map({"EIN": True, "AUS": False, "1": True, "0": False}).fillna(False)
+        
+        # Support both format EIN/AUS and 1/0
+        df["Kompressor"] = df["Kompressor"].astype(str).map({
+            "EIN": True, "AUS": False, 
+            "1": True, "0": False,
+            "1.0": True, "0.0": False
+        }).fillna(False)
+        
+        # Calculate runtime: records * 10s interval / 60 = minutes
+        # TODO: This assumes exactly 10s interval. Better is to sum time differences if data is patchy.
         runtime_by_date = df[df["Kompressor"]].groupby("Date").size() * (10 / 60)
+        
+        # Ensure all dates in the range are present, even with 0 runtime
+        all_dates = pd.date_range(start=cutoff_date, end=now.date()).date
+        runtime_series = pd.Series(0.0, index=all_dates)
+        runtime_series.update(runtime_by_date)
+        
         plt.figure(figsize=(10, 5))
-        runtime_by_date.plot(kind="bar")
+        ax = runtime_series.plot(kind="bar", color="skyblue", edgecolor="navy")
+        
+        # Format labels
         plt.xlabel("Datum")
         plt.ylabel("Laufzeit (Minuten)")
-        plt.title(f"Kompressor Laufzeit ({days} Tage)")
+        plt.title(f"Kompressor Laufzeit (letzte {days} Tage)")
+        
+        # Improve x-axis labels readability
+        plt.xticks(rotation=45)
+        
+        # Add values on top of bars
+        for idx, val in enumerate(runtime_series):
+            if val > 0:
+                ax.text(idx, val + 0.5, f"{val:.0f}", ha='center', va='bottom', fontsize=9)
+
         plt.tight_layout()
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
         plt.close()
+        
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)
         form.add_field("photo", buf, filename="runtime.png", content_type="image/png")
-        await session.post(url, data=form)
+        form.add_field("caption", f"📊 Kompressor-Laufzeiten der letzten {days} Tage (in Min.)")
+        
+        async with session.post(url, data=form) as resp:
+            if resp.status != 200:
+                logging.error(f"Error sending runtime chart: {resp.status} - {await resp.text()}")
+        
         buf.close()
     except Exception as e:
         logging.error(f"Error in runtime chart: {e}", exc_info=True)
