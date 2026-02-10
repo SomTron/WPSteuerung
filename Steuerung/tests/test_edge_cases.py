@@ -76,6 +76,9 @@ def mock_state(mock_config):
     state.einschaltpunkt_erhoeht = 40
     state.ausschaltpunkt_erhoeht = 48
     
+    state.min_laufzeit = timedelta(minutes=10)
+    state.min_pause = timedelta(minutes=10)
+    
     state.nachtabsenkung_ende = time(8, 0)
     state.nachtabsenkung_start = time(19, 30)
     state.uebergangsmodus_morgens_ende = time(10, 0)

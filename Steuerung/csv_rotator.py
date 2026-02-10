@@ -46,8 +46,6 @@ class CSVRotator:
                 logging.debug(f"CSV for rotation not found: {self.csv_path}")
                 return
 
-            self.ensure_dirs()
-
             # Load the CSV
             # Using pandas for easier date manipulation, but for huge files we might need chunked reading.
             # 50MB is small enough for pandas in memory on most systems.
@@ -77,6 +75,7 @@ class CSVRotator:
                 return
 
             # Perform the archival
+            self.ensure_dirs()
             self._write_to_archive(archive_df)
 
             # Update the main CSV (Atomic replace)
