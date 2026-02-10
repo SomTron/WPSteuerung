@@ -348,8 +348,8 @@ async def run_logic_step(session, state):
         await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
         await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, set_kompressor_status)
         
-        # 4. Sofort-Alarme prüfen
-        await check_and_send_alerts(session, state)
+    # 4. Sofort-Alarme prüfen (Moved outside safety check to ensure it runs even if sensors fail)
+    await check_and_send_alerts(session, state)
 
 async def log_system_state(state):
     """Schreibt CSV-Log und aktualisiert LCD."""
@@ -438,7 +438,14 @@ async def main_loop():
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        logging.critical(f"Unbehandelter Fehler in Main Loop: {e}", exc_info=True)
+        error_msg = f"🚨 CRITICAL: Unbehandelter Fehler in Main Loop: {e}"
+        logging.critical(error_msg, exc_info=True)
+        if state.bot_token and state.chat_id:
+            try:
+                # Explicitly await send_telegram_message to ensure it's sent before exit
+                await control_logic.send_telegram_message(session, state.chat_id, error_msg, state.bot_token)
+            except:
+                pass
     finally:
         logging.info("Shutting down...")
         if hardware_manager: hardware_manager.cleanup()

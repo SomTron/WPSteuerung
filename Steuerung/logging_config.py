@@ -14,6 +14,27 @@ class TelegramHandler(logging.Handler):
         self.task = None
         self.loop = None
         self._loop_owner = False
+        self.last_messages = {} # {msg_content: last_sent_time}
+
+    def _should_send(self, message):
+        """Simple deduplication: Only send if message is new or last sent > 1 hour ago."""
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        
+        # Normalize message for better matching (e.g. remove timestamps/dynamic values if possible)
+        # For now, literal match is safest for logging.
+        if message in self.last_messages:
+            last_sent = self.last_messages[message]
+            if now - last_sent < timedelta(hours=1):
+                return False
+        
+        self.last_messages[message] = now
+        # Cleanup old entries to prevent memory leak
+        if len(self.last_messages) > 100:
+            cutoff = now - timedelta(hours=1)
+            self.last_messages = {m: t for m, t in self.last_messages.items() if t > cutoff}
+            
+        return True
 
     async def send_message(self, message):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
@@ -56,6 +77,9 @@ class TelegramHandler(logging.Handler):
                     return
 
             if self.loop.is_closed():
+                return
+
+            if not self._should_send(msg):
                 return
 
             self.queue.put_nowait(msg)
