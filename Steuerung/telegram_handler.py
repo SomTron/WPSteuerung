@@ -193,7 +193,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         "⚡ *Energie*",
         f"Netz: {feedinpower:.0f}W | Akku: {bat_power:.0f}W",
         f"PV: {solax_data.get('acpower', 0):.0f}W | SOC: {solax_data.get('soc', 0)}%",
-    ]
+    ])
 
     # Optional battery energy display
     if state.battery_capacity > 0:
