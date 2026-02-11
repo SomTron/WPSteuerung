@@ -30,6 +30,8 @@ def mock_config():
     config.Solarueberschuss.BATPOWER_THRESHOLD = 600.0
     config.Solarueberschuss.SOC_THRESHOLD = 95.0
     config.Solarueberschuss.FEEDINPOWER_THRESHOLD = 600.0
+    config.Solarueberschuss.MIN_SOC = 0.0
+    config.Solarueberschuss.BATTERY_CAPACITY_KWH = 10.0
     
     # Urlaubsmodus section
     config.Urlaubsmodus.URLAUBSABSENKUNG = 6.0
