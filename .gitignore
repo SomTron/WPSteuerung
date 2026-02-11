@@ -30,3 +30,16 @@ raw_sim.txt
 # Python Cache
 __pycache__/
 *.pyc
+
+# Backup-Dateien
+*.bak
+backup/
+Steuerung/backup/
+
+# Logs und CSVs
+csv log/
+Steuerung/csv log/
+
+# Temporäre Configs und Scripts
+Steuerung/test_config.ini
+test_header_fix.py
