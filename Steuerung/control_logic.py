@@ -10,6 +10,8 @@ from logic_utils import (
     is_nighttime, 
     is_solar_window, 
     ist_uebergangsmodus_aktiv, 
+    ist_morgens_uebergang,
+    is_battery_sufficient_for_transition,
     get_validated_reduction,
     check_log_throttle
 )
@@ -60,13 +62,19 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     feed_p = state.solar.feedinpower if state.solar.feedinpower is not None else 0.0
 
     state.control.solar_ueberschuss_aktiv = (
-            bat_p > state.config.Solarueberschuss.BATPOWER_THRESHOLD or
-            (soc_v >= state.config.Solarueberschuss.SOC_THRESHOLD and 
-             feed_p > state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD)
+            (bat_p > state.config.Solarueberschuss.BATPOWER_THRESHOLD or
+             (soc_v >= state.config.Solarueberschuss.SOC_THRESHOLD and 
+              feed_p > state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD))
+            and soc_v >= state.config.Solarueberschuss.MIN_SOC
     )
 
     within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
     
+    # Neu: Batterie-Check für Frühstart im morgendlichen Übergangsmodus
+    batterie_fruehstart = False
+    if ist_morgens_uebergang(state) and is_battery_sufficient_for_transition(state):
+        batterie_fruehstart = True
+
     # Frostschutz-Check: Wenn im Übergangsmodus/Solarfenster die Temp unter den Nacht-Sollwert fällt
     is_critical_frost = False
     if regelfuehler := t_mittig: # Standard sensor for these modes
@@ -80,6 +88,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4, "regelfuehler": t_unten}
     elif state.control.solar_ueberschuss_aktiv:
         res = {"modus": "Solarüberschuss", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.einschaltpunkt_erhoeht, "regelfuehler": t_unten}
+    elif batterie_fruehstart:
+        res = {"modus": "Übergangsmodus (Batterie Frühstart)", "ausschaltpunkt": state.basis_ausschaltpunkt - urlaubs_reduction, "einschaltpunkt": state.basis_einschaltpunkt - urlaubs_reduction, "regelfuehler": t_mittig}
     elif within_uebergangsmodus:
         modus_name = "Übergangsmodus (Frostschutz)" if is_critical_frost else "Übergangsmodus"
         res = {"modus": modus_name, "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}

@@ -92,3 +92,67 @@ def get_validated_reduction(config, section: str, key: str, default: float = 0.0
         return reduction
     except:
         return default
+
+def get_house_power(state) -> float:
+    """Berechnet den aktuellen Hausverbrauch in Watt basierend auf Solax-Daten."""
+    ac_p = state.solar.acpower if state.solar.acpower is not None else 0.0
+    feed_p = state.solar.feedinpower if state.solar.feedinpower is not None else 0.0
+    bat_p = state.solar.batpower if state.solar.batpower is not None else 0.0
+    # Last = PV-Erzeugung - Einspeisung + Batterie-Entladung
+    # (Einspeisung ist positiv, Netzbezug negativ; Entladung positiv, Ladung negativ)
+    return max(0.0, ac_p - feed_p + bat_p)
+
+def ist_morgens_uebergang(state) -> bool:
+    """Prüft, ob wir uns im morgendlichen Übergangsfenster befinden."""
+    try:
+        now_time = datetime.now(state.local_tz).time()
+        cfg = state.config.Heizungssteuerung
+        def parse_t(s): return datetime.strptime(s, "%H:%M").time()
+        
+        n_ende = parse_t(cfg.NACHTABSENKUNG_END)
+        u_m_ende = parse_t(cfg.UEBERGANGSMODUS_MORGENS_ENDE)
+        
+        return n_ende <= now_time <= u_m_ende
+    except:
+        return False
+
+def is_battery_sufficient_for_transition(state) -> bool:
+    """Prüft, ob die Batteriekapazität ausreicht, um Haus + WP bis zum Ende der Übergangszeit zu versorgen."""
+    if not ist_morgens_uebergang(state):
+        return False
+        
+    try:
+        now = datetime.now(state.local_tz)
+        cfg = state.config.Heizungssteuerung
+        u_m_ende_str = cfg.UEBERGANGSMODUS_MORGENS_ENDE
+        h, m = map(int, u_m_ende_str.split(':'))
+        u_m_ende_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        
+        # Zeit bis zum Ende in Stunden
+        remaining_time_h = (u_m_ende_dt - now).total_seconds() / 3600.0
+        if remaining_time_h <= 0:
+            return False
+            
+        house_p = get_house_power(state)
+        wp_p = cfg.WP_POWER_EXPECTED
+        total_p = house_p + wp_p
+        
+        needed_wh = total_p * remaining_time_h
+        
+        # Verfügbare Energie in der Batterie über MIN_SOC
+        soc = state.solar.soc if state.solar.soc is not None else 0.0
+        min_soc = state.config.Solarueberschuss.MIN_SOC
+        capacity_kwh = state.config.Solarueberschuss.BATTERY_CAPACITY_KWH
+        
+        if capacity_kwh <= 0 or soc <= min_soc:
+            return False
+            
+        available_wh = (soc - min_soc) / 100.0 * capacity_kwh * 1000.0
+        
+        sufficient = available_wh >= needed_wh
+        if sufficient:
+            logging.debug(f"Batterie ausreichend: {available_wh:.0f}Wh >= {needed_wh:.0f}Wh (Restzeit: {remaining_time_h:.1f}h)")
+        return sufficient
+    except Exception as e:
+        logging.error(f"Fehler in is_battery_sufficient_for_transition: {e}")
+        return False

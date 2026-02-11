@@ -52,7 +52,9 @@ def mock_state():
     config.Solarueberschuss = create_section_mock({
         "BATPOWER_THRESHOLD": 600.0,
         "SOC_THRESHOLD": 95.0,
-        "FEEDINPOWER_THRESHOLD": 600.0
+        "FEEDINPOWER_THRESHOLD": 600.0,
+        "BATTERY_CAPACITY_KWH": 10.0,
+        "MIN_SOC": 0.0
     })
     
     config.Telegram = create_section_mock({
@@ -127,6 +129,64 @@ async def test_determine_mode_solar(mock_state):
         assert result['modus'] == "Solarüberschuss"
         assert result['ausschaltpunkt'] == 55 # erhoeht
         assert result['regelfuehler'] == 30 # t_unten
+
+@pytest.mark.asyncio
+async def test_determine_mode_solar_min_soc(mock_state):
+    mock_state.solar.batpower = 1000 # > 600 triggers solar excess
+    mock_state.solar.soc = 15
+    mock_state.config.Solarueberschuss.MIN_SOC = 20.0
+    
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=True):
+        
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+        
+        # Should be Normalmodus because soc (15) < MIN_SOC (20)
+        assert result['modus'] == "Normalmodus"
+        assert mock_state.control.solar_ueberschuss_aktiv is False
+
+@pytest.mark.asyncio
+async def test_determine_mode_battery_early_start(mock_state):
+    """Test battery-aware early start during morning transition."""
+    # Setup morning transition time (e.g., 08:30 if end is 10:00)
+    mock_state.config.Heizungssteuerung.NACHTABSENKUNG_END = "08:00"
+    mock_state.config.Heizungssteuerung.UEBERGANGSMODUS_MORGENS_ENDE = "10:00"
+    mock_state.config.Heizungssteuerung.WP_POWER_EXPECTED = 600.0
+    
+    # Battery: 10kWh, SOC: 50%, Min SOC: 20% -> 3kWh available
+    mock_state.config.Solarueberschuss.BATTERY_CAPACITY_KWH = 10.0
+    mock_state.config.Solarueberschuss.MIN_SOC = 20.0
+    mock_state.solar.soc = 50.0
+    
+    # House: 200W + WP 600W = 800W. 
+    # At 08:30, 1.5h remaining -> 1200Wh needed. 3000Wh > 1200Wh.
+    mock_state.solar.acpower = 0.0
+    mock_state.solar.feedinpower = -200.0 # Drawing 200W from grid
+    mock_state.solar.batpower = 0.0
+    
+    fixed_time = datetime.now(mock_state.local_tz).replace(hour=8, minute=30, second=0, microsecond=0)
+    
+    with patch('logic_utils.datetime') as mock_lu_dt, \
+         patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=False):
+        
+        # Ensure strptime and time still work by using real datetime if possible, 
+        # or just mock the returns of now()
+        mock_lu_dt.now.return_value = fixed_time
+        mock_lu_dt.strptime.side_effect = datetime.strptime
+        
+        # We also need to patch it in control_logic if it was imported as 'datetime' 
+        # but it's used via logic_utils symbols there mostly.
+        # Wait, control_logic.py imports determine_mode_and_setpoints from logic_utils? 
+        # No, determine_mode_and_setpoints is in control_logic.py and it calls functions from logic_utils.
+        
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+        
+        assert result['modus'] == "Übergangsmodus (Batterie Frühstart)"
+        # Setpoints should be basis (50) without 5 reduction
+        assert result['ausschaltpunkt'] == 50
+        assert result['einschaltpunkt'] == 40
 
 @pytest.mark.asyncio
 async def test_determine_mode_night(mock_state):

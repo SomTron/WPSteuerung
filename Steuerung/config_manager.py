@@ -21,6 +21,7 @@ class HeizungssteuerungConfig(BaseModel):
     UEBERGANGSMODUS_ABENDS_START: str = Field(default="17:00")
     API_HOST: str = Field(default="0.0.0.0")
     API_PORT: int = Field(default=8000)
+    WP_POWER_EXPECTED: float = Field(default=600.0, description="Erwarteter Verbrauch der Wärmepumpe in Watt")
 
 class HealthcheckConfig(BaseModel):
     HEALTHCHECK_URL: str = Field(default="")
@@ -41,6 +42,8 @@ class SolarueberschussConfig(BaseModel):
     BATPOWER_THRESHOLD: float = Field(default=600.0)
     SOC_THRESHOLD: float = Field(default=95.0)
     FEEDINPOWER_THRESHOLD: float = Field(default=600.0)
+    BATTERY_CAPACITY_KWH: float = Field(default=0.0, description="Batteriekapazität in kWh")
+    MIN_SOC: float = Field(default=0.0, description="Minimaler SoC in Prozent")
 
 class LoggingConfig(BaseModel):
     ENABLE_FULL_LOG: bool = Field(default=True)

@@ -151,6 +151,14 @@ class State:
     def healthcheck_interval(self):
         return float(self.config.Healthcheck.HEALTHCHECK_INTERVAL_MINUTES)
     
+    @property
+    def battery_capacity(self):
+        return self.config.Solarueberschuss.BATTERY_CAPACITY_KWH
+
+    @property
+    def min_soc(self):
+        return self.config.Solarueberschuss.MIN_SOC
+    
     def update_config(self):
         """Reload config only if file has changed (detected via MD5 hash)."""
         try:

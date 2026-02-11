@@ -193,6 +193,15 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         "⚡ *Energie*",
         f"Netz: {feedinpower:.0f}W | Akku: {bat_power:.0f}W",
         f"PV: {solax_data.get('acpower', 0):.0f}W | SOC: {solax_data.get('soc', 0)}%",
+    ]
+
+    # Optional battery energy display
+    if state.battery_capacity > 0:
+        soc_val = solax_data.get("soc", 0)
+        remaining_kwh = (state.battery_capacity * soc_val) / 100.0
+        status_lines.append(f"🔋 Akku: {remaining_kwh:.1f} kWh")
+
+    status_lines.extend([
         "",
         "ℹ️ *Infos*",
         f"Modus: {mode_str}",
