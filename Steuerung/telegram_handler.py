@@ -132,40 +132,15 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_bo
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
-async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
-    """Sendet den aktuellen Systemstatus über Telegram."""
-    solax_data = await get_solax_data_func(session, state) or {"feedinpower": 0, "batPower": 0, "soc": 0}
-    feedinpower = solax_data.get("feedinpower", 0)
-    bat_power = solax_data.get("batPower", 0)
-
-    nacht_reduction = int(config.Heizungssteuerung.NACHTABSENKUNG) if is_nighttime_func and is_nighttime_func(config) and not state.bademodus_aktiv else 0
-    
-    # Mode mapping for icons
-    mode_name = state.control.previous_modus or "Normal"
-    if "Bademodus" in mode_name: mode_str = "🛁 " + mode_name
-    elif "Urlaub" in mode_name: mode_str = "🌴 " + mode_name
-    elif "Solar" in mode_name: mode_str = "☀️ " + mode_name
-    elif "Frostschutz" in mode_name: mode_str = "❄️ " + mode_name
-    elif "Übergang" in mode_name: mode_str = "🌓 " + mode_name
-    elif "Nacht" in mode_name: mode_str = "🌙 " + mode_name
-    else: mode_str = mode_name
-
-    # Additional Details calculation
-    t_soll_ein = state.control.aktueller_einschaltpunkt
-    t_soll_aus = state.control.aktueller_ausschaltpunkt
-    vpn_ip = state.vpn_ip if state.vpn_ip else "N/A"
-    
-    # Forecast formatting
-    forecast_text = "N/A"
-    if state.solar.forecast_today is not None:
-        today_val = f"{state.solar.forecast_today:.1f}"
-        tomorrow_val = f"{state.solar.forecast_tomorrow:.1f}" if state.solar.forecast_tomorrow is not None else "??"
-        sunrise = state.solar.sunrise_today if state.solar.sunrise_today else "??"
-        sunset = state.solar.sunset_today if state.solar.sunset_today else "??"
-        forecast_text = f"Heute: {today_val}kWh | Morgen: {tomorrow_val}kWh\n☀️ {sunrise} - 🌙 {sunset}"
-        
+def compose_status_message(t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, mode_str, vpn_ip, forecast_text, solax_data, state):
+    """Baut die Statusnachricht zusammen (ohne Senden)."""
     # Active Sensor
     active_sensor = state.control.active_rule_sensor if state.control.active_rule_sensor else "Automatisch"
+    
+    t_soll_ein = state.control.aktueller_einschaltpunkt
+    t_soll_aus = state.control.aktueller_ausschaltpunkt
+    feedinpower = solax_data.get("feedinpower", 0)
+    bat_power = solax_data.get("batPower", 0)
 
     # Status Message Definition
     status_lines = [
@@ -212,7 +187,40 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         forecast_text
     ])
     
-    message = "\n".join(status_lines)
+    return "\n".join(status_lines)
+
+async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
+    """Sendet den aktuellen Systemstatus über Telegram."""
+    solax_data = await get_solax_data_func(session, state) or {"feedinpower": 0, "batPower": 0, "soc": 0}
+    
+    # Mode mapping for icons
+    mode_name = state.control.previous_modus or "Normal"
+    if "Bademodus" in mode_name: mode_str = "🛁 " + mode_name
+    elif "Urlaub" in mode_name: mode_str = "🌴 " + mode_name
+    elif "Solar" in mode_name: mode_str = "☀️ " + mode_name
+    elif "Frostschutz" in mode_name: mode_str = "❄️ " + mode_name
+    elif "Übergang" in mode_name: mode_str = "🌓 " + mode_name
+    elif "Nacht" in mode_name: mode_str = "🌙 " + mode_name
+    else: mode_str = mode_name
+
+    vpn_ip = state.vpn_ip if state.vpn_ip else "N/A"
+    
+    # Forecast formatting
+    forecast_text = "N/A"
+    if state.solar.forecast_today is not None:
+        today_val = f"{state.solar.forecast_today:.1f}"
+        tomorrow_val = f"{state.solar.forecast_tomorrow:.1f}" if state.solar.forecast_tomorrow is not None else "??"
+        sunrise = state.solar.sunrise_today if state.solar.sunrise_today else "??"
+        sunset = state.solar.sunset_today if state.solar.sunset_today else "??"
+        forecast_text = f"Heute: {today_val}kWh | Morgen: {tomorrow_val}kWh\n☀️ {sunrise} - 🌙 {sunset}"
+        
+    message = compose_status_message(
+        t_oben, t_unten, t_mittig, t_verd,
+        kompressor_status, current_runtime, total_runtime,
+        mode_str, vpn_ip, forecast_text,
+        solax_data, state
+    )
+    
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode="Markdown")
 

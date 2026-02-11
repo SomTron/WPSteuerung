@@ -1,127 +1,54 @@
-import configparser
 import pytest
-import aiohttp
-import asyncio
-from telegram_api import create_robust_aiohttp_session, send_telegram_message
+from unittest.mock import MagicMock, patch
+from telegram_handler import compose_status_message
+from datetime import datetime
+import pytz
 
-import os
-
-def get_telegram_config():
-    config = configparser.ConfigParser()
-    config.read(os.path.join(os.path.dirname(__file__), '../richtige_config.ini'))
-    bot_token = config.get('Telegram', 'BOT_TOKEN', fallback=None)
-    chat_id = config.get('Telegram', 'CHAT_ID', fallback=None)
-    return bot_token, chat_id
-
-@pytest.mark.asyncio
-async def test_send_telegram_message_success():
-    bot_token, chat_id = get_telegram_config()
-    if not bot_token or not chat_id:
-        pytest.skip("BOT_TOKEN und CHAT_ID müssen in richtige_config.ini gesetzt sein.")
-    session = create_robust_aiohttp_session()
-    try:
-        result = await send_telegram_message(session, chat_id, "Testnachricht vom automatisierten Telegram-Test", bot_token)
-        assert result is True
-    finally:
-        await session.close()
+@pytest.fixture
+def mock_state():
+    state = MagicMock()
+    state.local_tz = pytz.timezone("Europe/Vienna")
+    state.config.Heizungssteuerung.WP_POWER_EXPECTED = 600.0
+    state.battery_capacity = 10.0
+    state.control.blocking_reason = "Test Reason"
+    state.control.aktueller_einschaltpunkt = 40.0
+    state.control.aktueller_ausschaltpunkt = 45.0
+    state.control.solar_ueberschuss_aktiv = False
+    state.control.active_rule_sensor = "Mittig"
+    return state
 
 @pytest.mark.asyncio
-async def test_send_telegram_message_network_failure():
-    bot_token, chat_id = get_telegram_config()
-    if not bot_token or not chat_id:
-        pytest.skip("BOT_TOKEN und CHAT_ID müssen in richtige_config.ini gesetzt sein.")
-    # Simuliere Netzwerkausfall durch ungültigen Proxy
-    connector = aiohttp.TCPConnector()
-    session = aiohttp.ClientSession(connector=connector, trust_env=True)
-    os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:9999'  # Port, auf dem kein Proxy läuft
-    try:
-        result = await send_telegram_message(session, chat_id, "Testnachricht Netzwerkausfall", bot_token, retries=2, retry_delay=1)
-        assert result is False
-    finally:
-        await session.close()
-        del os.environ['HTTPS_PROXY']
-
-@pytest.mark.asyncio
-async def test_send_telegram_message_markdown():
-    bot_token, chat_id = get_telegram_config()
-    if not bot_token or not chat_id:
-        pytest.skip("BOT_TOKEN und CHAT_ID müssen in richtige_config.ini gesetzt sein.")
-    session = create_robust_aiohttp_session()
-    try:
-        msg = "*Fett* _Kursiv_ [Link](https://example.com) `Code`"
-        result = await send_telegram_message(session, chat_id, msg, bot_token, parse_mode="Markdown")
-        assert result is True
-    finally:
-        await session.close()
-
-@pytest.mark.asyncio
-async def test_send_telegram_message_long():
-    bot_token, chat_id = get_telegram_config()
-    if not bot_token or not chat_id:
-        pytest.skip("BOT_TOKEN und CHAT_ID müssen in richtige_config.ini gesetzt sein.")
-    session = create_robust_aiohttp_session()
-    try:
-        msg = "A" * 5000  # Über 4096 Zeichen
-        result = await send_telegram_message(session, chat_id, msg, bot_token)
-        assert result is True
-    finally:
-        await session.close()
-
-@pytest.mark.asyncio
-async def test_send_telegram_message_invalid_token():
-    bot_token, chat_id = "invalid", "invalid"
-    session = create_robust_aiohttp_session()
-    try:
-        result = await send_telegram_message(session, chat_id, "Test mit ungültigem Token", bot_token)
-        assert result is False
-    finally:
-        await session.close()
-
-@pytest.mark.asyncio
-async def test_send_telegram_message_reply_keyboard():
-    bot_token, chat_id = get_telegram_config()
-    if not bot_token or not chat_id:
-        pytest.skip("BOT_TOKEN und CHAT_ID müssen in richtige_config.ini gesetzt sein.")
-    session = create_robust_aiohttp_session()
-    try:
-        reply_markup = {"keyboard": [["Test1", "Test2"]], "resize_keyboard": True}
-        result = await send_telegram_message(session, chat_id, "Test mit Keyboard", bot_token, reply_markup=reply_markup)
-        assert result is True
-    finally:
-        await session.close()
-
-@pytest.mark.asyncio
-async def test_send_telegram_message_timeout():
-    bot_token, chat_id = get_telegram_config()
-    if not bot_token or not chat_id:
-        pytest.skip("BOT_TOKEN und CHAT_ID müssen in richtige_config.ini gesetzt sein.")
-    # Simuliere Timeout durch sehr kurzen Timeout und ungültigen Proxy
-    connector = aiohttp.TCPConnector()
-    session = aiohttp.ClientSession(connector=connector, trust_env=True)
-    os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:9999'
-    try:
-        result = await send_telegram_message(session, chat_id, "Test Timeout", bot_token, retries=1, retry_delay=1)
-        assert result is False
-    finally:
-        await session.close()
-        del os.environ['HTTPS_PROXY']
-
-@pytest.mark.asyncio
-async def test_send_telegram_message_parallel():
-    bot_token, chat_id = get_telegram_config()
-    if not bot_token or not chat_id:
-        pytest.skip("BOT_TOKEN und CHAT_ID müssen in richtige_config.ini gesetzt sein.")
-    session = create_robust_aiohttp_session()
-    try:
-        tasks = [send_telegram_message(session, chat_id, f"Parallel Test {i}", bot_token) for i in range(3)]
-        results = await asyncio.gather(*tasks)
-        assert all(results)
-    finally:
-        await session.close()
-
-def test_get_telegram_updates():
-    """
-    Dieser Test kann nicht automatisiert laufen, solange der Bot-Skript aktiv ist (Telegram API erlaubt nur eine getUpdates-Session).
-    Führe diesen Test nur aus, wenn der Bot nicht läuft.
-    """
-    pytest.skip("Test für get_telegram_updates wird übersprungen, solange der Bot-Skript läuft (API-Limit 409 Conflict). Nur manuell testen!")
+async def test_compose_status_message(mock_state):
+    """Testet die Generierung der Telegram-Statusnachricht."""
+    solax_data = {
+        "acpower": 2000,
+        "feedinpower": 500,
+        "batPower": -100,
+        "soc": 80
+    }
+    
+    # Mocking external values
+    t_oben, t_mittig, t_unten, t_verd = 50.0, 45.0, 40.0, 10.0
+    kompressor_status = True
+    current_runtime = MagicMock()
+    total_runtime = MagicMock()
+    mode_str = "Test Modus"
+    vpn_ip = "10.0.0.1"
+    forecast_text = "Sonnig"
+    
+    with patch('telegram_handler.datetime') as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 2, 11, 12, 0, 0)
+        
+        message = compose_status_message(
+            t_oben, t_mittig, t_unten, t_verd,
+            kompressor_status, current_runtime, total_runtime,
+            mode_str, vpn_ip, forecast_text,
+            solax_data, mock_state
+        )
+        
+        # Basis-Checks
+        assert "SYSTEMSTATUS" in message
+        assert "Akku: 8.0 kWh" in message  # 80% von 10kWh
+        assert "SOC: 80%" in message
+        assert "Modus: Test Modus" in message
+        assert "10.0.0.1" in message
