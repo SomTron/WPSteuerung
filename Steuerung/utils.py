@@ -86,7 +86,7 @@ EXPECTED_CSV_HEADER = [
     "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",
     "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy",
     "Einschaltpunkt", "Ausschaltpunkt", "Solarüberschuss", "Urlaubsmodus", "PowerSource",
-    "Prognose_Morgen"
+    "Prognose_Morgen", "Einschaltgrund"
 ]
 
 HEIZUNGSDATEN_CSV = os.path.join("csv log", "heizungsdaten.csv")

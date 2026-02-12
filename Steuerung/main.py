@@ -58,6 +58,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         
         # Statistiken aktualisieren
         state.stats.last_compressor_on_time = now
+        state.control.activation_reason = state.control.previous_modus
         
         # Startwerte für Verifizierung speichern
         state.kompressor_verification_start_time = now
@@ -77,6 +78,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         
         # Statistiken aktualisieren
         state.stats.last_compressor_off_time = now
+        state.control.activation_reason = None
         if was_ein and state.stats.last_compressor_on_time:
             elapsed = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
             state.stats.total_runtime_today += elapsed
@@ -401,7 +403,8 @@ async def log_system_state(state):
             fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
             "1" if state.control.solar_ueberschuss_aktiv else "0",
             "1" if control_logic.is_nighttime(state.config) else "0",
-            power_source, fmt_csv(state.solar.forecast_tomorrow)
+            power_source, fmt_csv(state.solar.forecast_tomorrow),
+            fmt_csv(state.control.activation_reason)
         ]
         
         async with aiofiles.open(csv_file, mode="a", encoding="utf-8") as f:

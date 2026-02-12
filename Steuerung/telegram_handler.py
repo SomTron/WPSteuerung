@@ -154,6 +154,10 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, kompressor_status,
         f"Status: *{'EIN' if kompressor_status else 'AUS'}*",
     ]
     
+    # Add activation reason if running
+    if kompressor_status and state.control.activation_reason:
+        status_lines.append(f"💡 Grund: {state.control.activation_reason}")
+    
     # Add blocking reason if compressor is off and reason exists
     if not kompressor_status and state.control.blocking_reason:
         status_lines.append(f"🚫 Blockiert: {state.control.blocking_reason}")

@@ -42,6 +42,7 @@ class ControlState:
         self.active_rule_sensor: Optional[str] = None
         self.blocking_reason: Optional[str] = None  # Current blocking reason
         self.last_blocking_reason: Optional[str] = None  # For change detection
+        self.activation_reason: Optional[str] = None  # Reason why compressor switched on
 
 class StatsState:
     def __init__(self, now):
