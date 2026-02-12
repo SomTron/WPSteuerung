@@ -112,8 +112,11 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
     if not state.control.kompressor_ein:
         return False
 
+    now = datetime.now(state.local_tz)
+    elapsed = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
+
+    # 1. Reguläres Ausschalten bei Erreichen der Zieltemperatur
     if regelfuehler is not None and regelfuehler >= ausschaltpunkt:
-        elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
         if elapsed >= min_laufzeit:
             if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
                 state.control.blocking_reason = None
@@ -124,6 +127,30 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
             state.control.blocking_reason = f"Warte auf Mindestlaufzeit (noch {int((min_laufzeit - elapsed).total_seconds() // 60)}m)"
             if check_log_throttle(state, "log_min_laufzeit_off", interval_minutes=5):
                 logging.info(f"Abschaltwunsch unterdrückt: Mindestlaufzeit noch nicht erreicht. Laufzeit: {elapsed}")
+        return False
+
+    # 2. NEU: Ausschalten in der Übergangszeit bei Verlust des PV-Überschusses
+    # Wenn im Übergangsmodus, kein Solarueberschuss aktiv und Batterie reicht nicht aus -> AUS
+    if ist_uebergangsmodus_aktiv(state) and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
+        # Check for critical frost (don't turn off if it's too cold)
+        nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
+        night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction
+        
+        is_critical_frost = regelfuehler is not None and regelfuehler <= night_einschaltpunkt
+        
+        if not is_critical_frost:
+            # Check if battery is sufficient to bridge the remaining window
+            if not is_battery_sufficient_for_transition(state):
+                if elapsed >= min_laufzeit:
+                    if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+                        state.control.blocking_reason = None
+                        logging.info(f"Übergangszeit AUS: Kein PV-Überschuss & Batterie reicht nicht. Laufzeit: {elapsed}")
+                        return True
+                else:
+                    state.control.blocking_reason = f"Übergang AUS (Warte auf Mindestlaufzeit, noch {int((min_laufzeit - elapsed).total_seconds() // 60)}m)"
+                    if check_log_throttle(state, "log_min_laufzeit_off_uebergang", interval_minutes=5):
+                        logging.info(f"Übergangszeit Abschaltwunsch unterdrückt: Mindestlaufzeit. Laufzeit: {elapsed}")
+    
     return False
 
 async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, ausschaltpunkt, min_laufzeit, min_pause, within_solar_window, t_oben, set_kompressor_status_func: Callable):

@@ -118,18 +118,37 @@ def ist_morgens_uebergang(state) -> bool:
 
 def is_battery_sufficient_for_transition(state) -> bool:
     """Prüft, ob die Batteriekapazität ausreicht, um Haus + WP bis zum Ende der Übergangszeit zu versorgen."""
-    if not ist_morgens_uebergang(state):
+    now = datetime.now(state.local_tz)
+    now_time = now.time()
+    cfg = state.config.Heizungssteuerung
+    
+    def parse_t(s): return datetime.strptime(s, "%H:%M").time()
+    
+    n_ende = parse_t(cfg.NACHTABSENKUNG_END)
+    u_m_ende_str = cfg.UEBERGANGSMODUS_MORGENS_ENDE
+    u_m_ende = parse_t(u_m_ende_str)
+    
+    u_a_start = parse_t(cfg.UEBERGANGSMODUS_ABENDS_START)
+    n_start_str = cfg.NACHTABSENKUNG_START
+    n_start = parse_t(n_start_str)
+
+    # Bestimme Endzeitpunkt des aktuellen Übergangsfensters
+    target_dt = None
+    if n_ende <= now_time <= u_m_ende:
+        # Morgens-Fenster
+        h, m = map(int, u_m_ende_str.split(':'))
+        target_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    elif u_a_start <= now_time <= n_start:
+        # Abends-Fenster
+        h, m = map(int, n_start_str.split(':'))
+        target_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    
+    if target_dt is None:
         return False
         
     try:
-        now = datetime.now(state.local_tz)
-        cfg = state.config.Heizungssteuerung
-        u_m_ende_str = cfg.UEBERGANGSMODUS_MORGENS_ENDE
-        h, m = map(int, u_m_ende_str.split(':'))
-        u_m_ende_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        
         # Zeit bis zum Ende in Stunden
-        remaining_time_h = (u_m_ende_dt - now).total_seconds() / 3600.0
+        remaining_time_h = (target_dt - now).total_seconds() / 3600.0
         if remaining_time_h <= 0:
             return False
             
@@ -151,7 +170,7 @@ def is_battery_sufficient_for_transition(state) -> bool:
         
         sufficient = available_wh >= needed_wh
         if sufficient:
-            logging.debug(f"Batterie ausreichend: {available_wh:.0f}Wh >= {needed_wh:.0f}Wh (Restzeit: {remaining_time_h:.1f}h)")
+            logging.debug(f"Batterie ausreichend für Übergangszeit: {available_wh:.0f}Wh >= {needed_wh:.0f}Wh (Restzeit: {remaining_time_h:.1f}h)")
         return sufficient
     except Exception as e:
         logging.error(f"Fehler in is_battery_sufficient_for_transition: {e}")
