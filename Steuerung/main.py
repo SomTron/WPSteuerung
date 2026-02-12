@@ -354,9 +354,17 @@ async def run_logic_step(session, state):
 async def log_system_state(state):
     """Schreibt CSV-Log und aktualisiert LCD."""
     # 1. LCD Update
+    def f_temp(prefix, val, fmt=".1f"):
+        if val is None:
+            return f"{prefix}:Err"
+        try:
+            return f"{prefix}:{val:{fmt}}"
+        except:
+            return f"{prefix}:Err"
+
     hardware_manager.write_lcd(
-        f"Oben:{state.sensors.t_oben if state.sensors.t_oben else 'Err':.1f} Unt:{state.sensors.t_unten if state.sensors.t_unten else 'Err':.1f}",
-        f"Mit :{state.sensors.t_mittig if state.sensors.t_mittig else 'Err':.1f} Verd:{state.sensors.t_verd if state.sensors.t_verd else 'Err':.0f}",
+        f"{f_temp('Oben', state.sensors.t_oben)} {f_temp('Unt', state.sensors.t_unten)}",
+        f"{f_temp('Mit ', state.sensors.t_mittig)} {f_temp('Verd', state.sensors.t_verd, '.0f')}",
         f"Ziel:{state.control.aktueller_einschaltpunkt:.0f}/{state.control.aktueller_ausschaltpunkt:.0f} {'ON' if state.control.kompressor_ein else 'OFF'}",
         f"{state.control.previous_modus[:10] if state.control.previous_modus else ''} {state.solar.soc if state.solar.soc else 0}%"
     )
