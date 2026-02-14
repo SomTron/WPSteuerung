@@ -315,13 +315,14 @@ async def test_handle_compressor_on_prevents_immediate_off(mock_state):
     mock_state.stats.last_compressor_off_time = datetime.now(mock_state.local_tz) - timedelta(hours=1)
     
     # Try to turn on
-    # regelfuehler (t_mittig) is None here for simplicity, focusing on t_oben
+    # regelfuehler (t_mittig) is cold (35 <= 40), t_oben is warm (55 >= 50)
+    # The new logic should allow starting because only regelfuehler counts for regulation stop.
     result = await handle_compressor_on(
         mock_state, None, regelfuehler=35.0, einschaltpunkt=40, ausschaltpunkt=50,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=20), 
         within_solar_window=True, t_oben=55.0, set_kompressor_status_func=set_kompressor_status
     )
     
-    assert result is False
-    set_kompressor_status.assert_not_called()
-    assert mock_state.control.blocking_reason == "Zieltemp erreicht"
+    assert result is True
+    set_kompressor_status.assert_called_once()
+    assert mock_state.control.blocking_reason is None

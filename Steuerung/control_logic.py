@@ -178,7 +178,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
             pause_remaining = min_pause - elapsed_pause
             
 
-    stop_condition = (regelfuehler is not None and regelfuehler >= ausschaltpunkt) or (t_oben is not None and t_oben >= ausschaltpunkt)
+    stop_condition = (regelfuehler is not None and regelfuehler >= ausschaltpunkt)
     
     if not state.control.kompressor_ein and temp_ok and solar_ok and pause_ok:
         if stop_condition:
@@ -212,7 +212,7 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
         target = state.control.aktueller_ausschaltpunkt
         
         # Check if targets reached in the new mode
-        if (t_oben is not None and t_oben >= target) or (t_mittig is not None and t_mittig >= target):
+        if (t_mittig is not None and t_mittig >= target):
             # ONLY switch off if min runtime reached
             if elapsed >= state.min_laufzeit:
                 if await set_kompressor_status_func(state, False, force=True):
