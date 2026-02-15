@@ -153,12 +153,13 @@ def generate_html(cycle_data, loss_data):
     <style>
         body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; color: #333; margin: 0; padding: 20px; }}
         .header {{ background: #2c3e50; color: white; padding: 15px 30px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }}
-        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 20px; }}
-        .card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-        h2 {{ margin-top: 0; color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
-        .metric-list {{ list-style: none; padding: 0; }}
-        .metric-list li {{ padding: 8px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }}
-        .metric-val {{ font-weight: bold; color: #2980b9; }}
+        .grid {{ display: grid; grid-template-columns: 1fr; gap: 25px; }}
+        .card {{ background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+        h2 {{ margin-top: 0; color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }}
+        .metric-list {{ list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }}
+        .metric-list li {{ padding: 12px; background: #f8f9fa; border-radius: 6px; display: flex; flex-direction: column; align-items: center; border: 1px solid #eee; }}
+        .metric-val {{ font-size: 1.2em; font-weight: bold; color: #2980b9; margin-top: 5px; }}
+        .metric-label {{ font-size: 0.9em; color: #666; }}
     </style>
 </head>
 <body>
@@ -167,7 +168,7 @@ def generate_html(cycle_data, loss_data):
         <span>Generiert am: {datetime.now().strftime('%d.%m.%Y %H:%M')}</span>
     </div>
 
-    <div class="card" style="margin-bottom: 20px;">
+    <div class="card" style="margin-bottom: 25px;">
         <h2>Interaktive Vorhersage (Wann starten?)</h2>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
             <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #3498db;">
@@ -204,6 +205,9 @@ def generate_html(cycle_data, loss_data):
                 </table>
                 <div id="validation-error" style="color: #e74c3c; font-size: 0.85em; margin-top: 10px; display: none;">
                     <b>Achtung:</b> Der Zielwert eines unteren Sensors darf nicht höher sein als der eines oberen Sensors.
+                </div>
+                <div style="margin-top: 10px; font-size: 0.8em; color: #888;">
+                    Genutzte Raten (K/Min): O:<span id="hint-rate-oben"></span>, M:<span id="hint-rate-mittig"></span>, U:<span id="hint-rate-unten"></span>
                 </div>
             </div>
 
@@ -247,36 +251,71 @@ def generate_html(cycle_data, loss_data):
         const cycleData = {json_cycles};
         const lossData = {json_losses};
 
+        function calculateSMA(data, period) {{
+            let result = [];
+            for (let i = 0; i < data.length; i++) {{
+                if (i < period - 1) {{
+                    result.push({{ x: data[i].x, y: null }});
+                    continue;
+                }}
+                let sum = 0;
+                for (let j = 0; j < period; j++) {{
+                    sum += data[i - j].y;
+                }}
+                result.push({{ x: data[i].x, y: parseFloat((sum / period).toFixed(2)) }});
+            }}
+            return result;
+        }}
+
         // 1. COP Trend
+        const copPoints = cycleData.filter(d => d.cop).map(d => ({{ x: d.timestamp, y: d.cop }}));
+        const copSMA = calculateSMA(copPoints, 7);
+
         new ApexCharts(document.querySelector("#chart-cop"), {{
-            series: [{{ name: 'COP', data: cycleData.filter(d => d.cop).map(d => ({{ x: d.timestamp, y: d.cop }})) }}],
-            chart: {{ type: 'line', height: 350, zoom: {{ enabled: true }} }},
-            stroke: {{ curve: 'smooth', width: 2 }},
+            series: [
+                {{ name: 'COP (Rohdaten)', data: copPoints, type: 'scatter' }},
+                {{ name: 'COP (Gleitender Durchschnitt)', data: copSMA, type: 'line' }}
+            ],
+            chart: {{ height: 450, zoom: {{ enabled: true }} }},
+            stroke: {{ curve: 'smooth', width: [0, 4] }},
+            markers: {{ size: [4, 0] }},
             xaxis: {{ type: 'datetime' }},
-            yaxis: {{ title: {{ text: 'Wirkungsgrad (COP)' }} }}
+            yaxis: {{ title: {{ text: 'Wirkungsgrad (COP)' }}, min: 0 }},
+            colors: ['#3498db', '#e74c3c']
         }}).render();
 
         // 2. Ambient correlation
         new ApexCharts(document.querySelector("#chart-ambient"), {{
             series: [{{ name: 'COP vs Ambient', data: cycleData.filter(d => d.cop).map(d => [d.ambient, d.cop]) }}],
-            chart: {{ type: 'scatter', height: 350 }},
+            chart: {{ type: 'scatter', height: 450 }},
             xaxis: {{ title: {{ text: 'Raumtemp / T_Verd Start (°C)' }}, tickAmount: 10 }},
-            yaxis: {{ title: {{ text: 'COP' }} }}
+            yaxis: {{ title: {{ text: 'COP' }} }},
+            colors: ['#2ecc71']
         }}).render();
 
         // 3. Verdampfer Health
+        const verdPoints = cycleData.map(d => ({{ x: d.timestamp, y: d.verd_delta }}));
+        const verdSMA = calculateSMA(verdPoints, 7);
+
         new ApexCharts(document.querySelector("#chart-verd"), {{
-            series: [{{ name: 'T_Verd Delta', data: cycleData.map(d => ({{ x: d.timestamp, y: d.verd_delta }})) }}],
-            chart: {{ type: 'area', height: 350 }},
+            series: [
+                {{ name: 'T_Verd Delta (Rohdaten)', data: verdPoints, type: 'area' }},
+                {{ name: 'T_Verd Delta (Gleitender Durchschnitt)', data: verdSMA, type: 'line' }}
+            ],
+            chart: {{ height: 450 }},
+            stroke: {{ curve: 'smooth', width: [1, 4] }},
+            fill: {{ type: 'gradient', gradient: {{ opacityFrom: 0.6, opacityTo: 0.1 }} }},
             xaxis: {{ type: 'datetime' }},
-            yaxis: {{ title: {{ text: 'Abweichung von Ambient (K)' }} }}
+            yaxis: {{ title: {{ text: 'Abweichung von Ambient (K)' }} }},
+            colors: ['#9b59b6', '#f1c40f']
         }}).render();
 
         // 4. Losses
         new ApexCharts(document.querySelector("#chart-loss"), {{
             series: [{{ name: 'Verlustrate', data: lossData.map(d => ({{ x: d.start, y: d.loss_k_per_h }})) }}],
-            chart: {{ type: 'bar', height: 350 }},
-            xaxis: {{ type: 'datetime' }}
+            chart: {{ type: 'bar', height: 450 }},
+            xaxis: {{ type: 'datetime' }},
+            colors: ['#e67e22']
         }}).render();
 
         // Calc Stats
@@ -284,24 +323,24 @@ def generate_html(cycle_data, loss_data):
         const validRatesMittig = cycleData.filter(d => d.rate_mittig > 0);
         const validRatesUnten = cycleData.filter(d => d.rate_unten > 0);
 
-        const avgRateOben = validRatesOben.reduce((a,b) => a + b.rate_oben, 0) / validRatesOben.length;
-        const avgRateMittig = validRatesMittig.reduce((a,b) => a + b.rate_mittig, 0) / validRatesMittig.length;
-        const avgRateUnten = validRatesUnten.reduce((a,b) => a + b.rate_unten, 0) / validRatesUnten.length;
+        const avgRateOben = validRatesOben.reduce((a,b) => a + b.rate_oben, 0) / validRatesOben.length || 0;
+        const avgRateMittig = validRatesMittig.reduce((a,b) => a + b.rate_mittig, 0) / validRatesMittig.length || 0;
+        const avgRateUnten = validRatesUnten.reduce((a,b) => a + b.rate_unten, 0) / validRatesUnten.length || 0;
 
         document.getElementById('hint-rate-oben').innerText = avgRateOben.toFixed(3);
         document.getElementById('hint-rate-mittig').innerText = avgRateMittig.toFixed(3);
         document.getElementById('hint-rate-unten').innerText = avgRateUnten.toFixed(3);
 
-        const avgCop = cycleData.reduce((a,b) => a + (b.cop || 0), 0) / cycleData.filter(d => d.cop).length;
-        const avgLoss = lossData.reduce((a,b) => a + b.loss_k_per_h, 0) / lossData.length;
+        const avgCop = cycleData.reduce((a,b) => a + (b.cop || 0), 0) / cycleData.filter(d => d.cop).length || 0;
+        const avgLoss = lossData.reduce((a,b) => a + b.loss_k_per_h, 0) / lossData.length || 0;
         
         const statsHtml = `
-            <li><span>Ø Wirkungsgrad (COP):</span> <span class="metric-val">${{avgCop.toFixed(2)}}</span></li>
-            <li><span>Ø Standby-Verlust:</span> <span class="metric-val">${{avgLoss.toFixed(3)}} K/h</span></li>
-            <li><span>Ø Aufheizrate Oben:</span> <span class="metric-val">${{avgRateOben.toFixed(3)}} K/min</span></li>
-            <li><span>Ø Aufheizrate Mittig:</span> <span class="metric-val">${{avgRateMittig.toFixed(3)}} K/min</span></li>
-            <li><span>Ø Aufheizrate Unten:</span> <span class="metric-val">${{avgRateUnten.toFixed(3)}} K/min</span></li>
-            <li><span>Anzahl Heizzyklen:</span> <span class="metric-val">${{cycleData.length}}</span></li>
+            <li><span class="metric-label">Ø Wirkungsgrad (COP)</span> <span class="metric-val">${{avgCop.toFixed(2)}}</span></li>
+            <li><span class="metric-label">Ø Standby-Verlust</span> <span class="metric-val">${{avgLoss.toFixed(3)}} K/h</span></li>
+            <li><span class="metric-label">Ø Rate Oben</span> <span class="metric-val">${{avgRateOben.toFixed(3)}} K/min</span></li>
+            <li><span class="metric-label">Ø Rate Mittig</span> <span class="metric-val">${{avgRateMittig.toFixed(3)}} K/min</span></li>
+            <li><span class="metric-label">Ø Rate Unten</span> <span class="metric-val">${{avgRateUnten.toFixed(3)}} K/min</span></li>
+            <li><span class="metric-label">Anzahl Heizzyklen</span> <span class="metric-val">${{cycleData.length}}</span></li>
         `;
         document.getElementById('stats-list').innerHTML = statsHtml;
 
@@ -330,7 +369,7 @@ def generate_html(cycle_data, loss_data):
 
             document.getElementById('validation-error').style.display = isValid ? 'none' : 'block';
 
-            const calcMin = (curr, target, rate) => (target > curr) ? Math.round((target - curr) / rate) : 0;
+            const calcMin = (curr, target, rate) => (target > curr && rate > 0) ? Math.round((target - curr) / rate) : 0;
 
             const durations = [];
             if (activeOben) durations.push(calcMin(currOben, targetOben, avgRateOben));
