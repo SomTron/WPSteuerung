@@ -74,8 +74,10 @@ def analyze_cycles(df):
             cycle = df.iloc[start_pos:end_pos].copy()
             if len(cycle) > 5:
                 # Ambient Temp: T_Verd just before start
+                # Base Power: ACPower just before start (to subtract household consumption)
                 ambient_val = df.iloc[max(0, start_pos - 1)]["T_Verd"]
-                heating_cycles.append((cycle, ambient_val))
+                base_power = df.iloc[max(0, start_pos - 1)]["ACPower"]
+                heating_cycles.append((cycle, ambient_val, base_power))
 
     # Standby Periods (Loss analysis)
     for end_pos in ends:
@@ -91,24 +93,31 @@ def analyze_cycles(df):
 def calculate_metrics(heating_cycles, standby_periods):
     """Calculates granular metrics for reporting."""
     cycle_results = []
-    for cycle, ambient in heating_cycles:
+    for cycle, ambient, base_power in heating_cycles:
         start_t = cycle["Zeitstempel"].iloc[0]
         duration_min = (cycle["Zeitstempel"].iloc[-1] - start_t).total_seconds() / 60.0
         
+        # Filter obvious data gaps (e.g. cycle lasting > 6 hours due to missing 'AUS' entry)
+        if duration_min > 360 or duration_min < 2:
+            continue
+
         dt_mittig = cycle["T_Mittig"].iloc[-1] - cycle["T_Mittig"].iloc[0]
         dt_oben = cycle["T_Oben"].iloc[-1] - cycle["T_Oben"].iloc[0]
         dt_unten = cycle["T_Unten"].iloc[-1] - cycle["T_Unten"].iloc[0]
         
         # COP: 3-Zone Model (100L per sensor)
-        # Q = m * c * dt
         thermal_joule = (100 * SPECIFIC_HEAT_WATER * dt_oben) + \
                         (100 * SPECIFIC_HEAT_WATER * dt_mittig) + \
                         (100 * SPECIFIC_HEAT_WATER * dt_unten)
         
         thermal_kwh = thermal_joule / 3600000.0
-        avg_power = cycle["ACPower"].mean()
-        elec_kwh = (avg_power * (duration_min / 60.0)) / 1000.0
-        cop = thermal_kwh / elec_kwh if elec_kwh > 0.05 else 0
+        
+        # Electrical: Subtract base power to isolate WP
+        avg_raw_power = cycle["ACPower"].mean()
+        wp_power = max(200, avg_raw_power - base_power) # WP usually draws at least 200W+ when on
+        
+        elec_kwh = (wp_power * (duration_min / 60.0)) / 1000.0
+        cop = thermal_kwh / elec_kwh if elec_kwh > 0.02 else 0
         
         # Evaporator Health: T_Verd delta from ambient
         avg_t_verd = cycle["T_Verd"].mean()
@@ -301,17 +310,17 @@ def generate_html(cycle_data, loss_data):
         // 3. Verdampfer Health
         const verdPoints = cycleData.map(d => ({{ x: d.timestamp, y: d.verd_delta }}));
         const verdSMA = calculateSMA(verdPoints, 7);
-
+        
         new ApexCharts(document.querySelector("#chart-verd"), {{
             series: [
-                {{ name: 'T_Verd Delta (Rohdaten)', data: verdPoints, type: 'area' }},
-                {{ name: 'T_Verd Delta (Gleitender Durchschnitt)', data: verdSMA, type: 'line' }}
+                {{ name: 'Abweichung (Rohdaten)', data: verdPoints, type: 'scatter' }},
+                {{ name: 'Abweichung (Trend)', data: verdSMA, type: 'line' }}
             ],
-            chart: {{ height: 450 }},
-            stroke: {{ curve: 'smooth', width: [1, 4] }},
-            fill: {{ type: 'gradient', gradient: {{ opacityFrom: 0.6, opacityTo: 0.1 }} }},
+            chart: {{ height: 450, zoom: {{ enabled: true }} }},
+            stroke: {{ curve: 'smooth', width: [0, 4] }},
+            markers: {{ size: [4, 0] }},
             xaxis: {{ type: 'datetime' }},
-            yaxis: {{ title: {{ text: 'Abweichung von Ambient (K)' }} }},
+            yaxis: {{ title: {{ text: 'K (Diff zu Ambient)' }} }},
             colors: ['#9b59b6', '#f1c40f']
         }}).render();
 
@@ -335,8 +344,9 @@ def generate_html(cycle_data, loss_data):
         document.getElementById('hint-rate-oben').innerText = avgRateOben.toFixed(3);
         document.getElementById('hint-rate-mittig').innerText = avgRateMittig.toFixed(3);
         document.getElementById('hint-rate-unten').innerText = avgRateUnten.toFixed(3);
-
-        const avgCop = cycleData.reduce((a,b) => a + (b.cop || 0), 0) / cycleData.filter(d => d.cop).length || 0;
+ 
+        const validCops = cycleData.filter(d => d.cop !== null && d.cop > 0);
+        const avgCop = validCops.reduce((a,b) => a + b.cop, 0) / validCops.length || 0;
         const avgLoss = lossData.reduce((a,b) => a + b.loss_k_per_h, 0) / lossData.length || 0;
         
         const statsHtml = `
