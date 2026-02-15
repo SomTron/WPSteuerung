@@ -99,8 +99,13 @@ def calculate_metrics(heating_cycles, standby_periods):
         dt_oben = cycle["T_Oben"].iloc[-1] - cycle["T_Oben"].iloc[0]
         dt_unten = cycle["T_Unten"].iloc[-1] - cycle["T_Unten"].iloc[0]
         
-        # COP
-        thermal_kwh = (BOILER_VOLUME_L * SPECIFIC_HEAT_WATER * dt_mittig) / 3600000.0
+        # COP: 3-Zone Model (100L per sensor)
+        # Q = m * c * dt
+        thermal_joule = (100 * SPECIFIC_HEAT_WATER * dt_oben) + \
+                        (100 * SPECIFIC_HEAT_WATER * dt_mittig) + \
+                        (100 * SPECIFIC_HEAT_WATER * dt_unten)
+        
+        thermal_kwh = thermal_joule / 3600000.0
         avg_power = cycle["ACPower"].mean()
         elec_kwh = (avg_power * (duration_min / 60.0)) / 1000.0
         cop = thermal_kwh / elec_kwh if elec_kwh > 0.05 else 0
