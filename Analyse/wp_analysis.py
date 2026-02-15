@@ -299,12 +299,35 @@ def generate_html(cycle_data, loss_data):
         }}).render();
 
         // 2. Ambient correlation
+        const ambientRaw = cycleData
+            .filter(d => d.cop !== null && d.ambient !== null)
+            .map(d => [d.ambient, d.cop]);
+        
+        // Calculate average COP per degree Celsius
+        const ambientMap = {{}};
+        ambientRaw.forEach(([temp, cop]) => {{
+            const rounded = Math.round(temp);
+            if (!ambientMap[rounded]) ambientMap[rounded] = {{ sum: 0, count: 0 }};
+            ambientMap[rounded].sum += cop;
+            ambientMap[rounded].count++;
+        }});
+        
+        const ambientAvg = Object.keys(ambientMap).map(temp => ({{
+            x: parseInt(temp), 
+            y: parseFloat((ambientMap[temp].sum / ambientMap[temp].count).toFixed(2))
+        }})).sort((a, b) => a.x - b.x);
+
         new ApexCharts(document.querySelector("#chart-ambient"), {{
-            series: [{{ name: 'COP vs Ambient', data: cycleData.filter(d => d.cop).map(d => [d.ambient, d.cop]) }}],
-            chart: {{ type: 'scatter', height: 450 }},
-            xaxis: {{ title: {{ text: 'Raumtemp / T_Verd Start (°C)' }}, tickAmount: 10 }},
-            yaxis: {{ title: {{ text: 'COP' }} }},
-            colors: ['#2ecc71']
+            series: [
+                {{ name: 'Ø COP pro Grad', data: ambientAvg, type: 'line' }},
+                {{ name: 'COP (Rohdaten)', data: ambientRaw.map(p => ({{x: p[0], y: p[1]}})), type: 'scatter' }}
+            ],
+            chart: {{ height: 450, type: 'line', zoom: {{ enabled: true }} }},
+            stroke: {{ curve: 'smooth', width: [4, 0] }},
+            markers: {{ size: [0, 4] }},
+            xaxis: {{ title: {{ text: 'Raumtemp / T_Verd Start (°C)' }}, tickAmount: 10, type: 'numeric' }},
+            yaxis: {{ title: {{ text: 'COP' }}, min: 0 }},
+            colors: ['#e67e22', '#2ecc71']
         }}).render();
 
         // 3. Verdampfer Health
