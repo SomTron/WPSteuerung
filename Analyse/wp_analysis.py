@@ -112,9 +112,9 @@ def calculate_metrics(heating_cycles, standby_periods):
         
         thermal_kwh = thermal_joule / 3600000.0
         
-        # Electrical: Subtract base power to isolate WP
-        avg_raw_power = cycle["ACPower"].mean()
-        wp_power = max(200, avg_raw_power - base_power) # WP usually draws at least 200W+ when on
+        # Electrical: Use user's measured fixed value (623W) for WP
+        # This is more stable than subtracting fluctuating household base load
+        wp_power = 623.0 
         
         elec_kwh = (wp_power * (duration_min / 60.0)) / 1000.0
         cop = thermal_kwh / elec_kwh if elec_kwh > 0.02 else 0
