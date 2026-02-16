@@ -37,7 +37,7 @@ def _plot_temperature_history(hours, bot_token, chat_id, local_tz):
         data_io = io.StringIO(header + content)
         
         # Fast C engine, skip bad lines, only relevant columns
-        usecols = [c for c in ["Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd", "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"] if c in EXPECTED_CSV_HEADER]
+        usecols = [c for c in ["Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Verd", "T_Vorlauf", "Kompressor", "PowerSource", "Einschaltpunkt", "Ausschaltpunkt"] if c in EXPECTED_CSV_HEADER]
         df = pd.read_csv(data_io, engine="c", sep=",", on_bad_lines='skip', usecols=usecols)
         
         if df.empty or "Zeitstempel" not in df.columns:
@@ -54,7 +54,7 @@ def _plot_temperature_history(hours, bot_token, chat_id, local_tz):
             return None, "Keine Daten im gewählten Zeitraum."
 
         # Plotting
-        temp_columns = ["T_Oben", "T_Unten", "T_Mittig", "T_Verd"]
+        temp_columns = ["T_Oben", "T_Unten", "T_Mittig", "T_Verd", "T_Vorlauf"]
         for col in temp_columns:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -89,7 +89,8 @@ def _plot_temperature_history(hours, bot_token, chat_id, local_tz):
 
         plot_configs = [
             ("T_Oben", "blue", "-"), ("T_Unten", "red", "-"),
-            ("T_Mittig", "purple", "-"), ("T_Verd", "gray", "--")
+            ("T_Mittig", "purple", "-"), ("T_Verd", "gray", "--"),
+            ("T_Vorlauf", "orange", "-")
         ]
         for col, color, linestyle in plot_configs:
             if col in df.columns and df[col].notna().any():
@@ -135,7 +136,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", str(state.chat_id))
-        caption = f"📈 Verlauf {hours}h | T_Oben=blau, T_Unten=rot, T_Mittig=lila, T_Verd=grau--"
+        caption = f"📈 Verlauf {hours}h | T_Oben=blau, T_Unten=rot, T_Mittig=lila, T_Verd=grau--, T_Vorlauf=orange"
         form.add_field("caption", caption)
         form.add_field("photo", buf, filename="temp_history.png", content_type="image/png")
         

@@ -28,7 +28,7 @@ async def test_compose_status_message(mock_state):
     }
     
     # Mocking external values
-    t_oben, t_mittig, t_unten, t_verd = 50.0, 45.0, 40.0, 10.0
+    t_oben, t_mittig, t_unten, t_verd, t_vorlauf = 50.0, 45.0, 40.0, 10.0, 35.0
     kompressor_status = True
     current_runtime = MagicMock()
     total_runtime = MagicMock()
@@ -40,7 +40,7 @@ async def test_compose_status_message(mock_state):
         mock_dt.now.return_value = datetime(2026, 2, 11, 12, 0, 0)
         
         message = compose_status_message(
-            t_oben, t_mittig, t_unten, t_verd,
+            t_oben, t_unten, t_mittig, t_verd, t_vorlauf,
             kompressor_status, current_runtime, total_runtime,
             mode_str, vpn_ip, forecast_text,
             solax_data, mock_state
@@ -52,3 +52,4 @@ async def test_compose_status_message(mock_state):
         assert "SOC: 80%" in message
         assert "Modus: Test Modus" in message
         assert "10.0.0.1" in message
+        assert "Vorlauf: 35.0" in message

@@ -126,13 +126,13 @@ async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     keyboard = get_keyboard(state)
     await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus deaktiviert.", bot_token, reply_markup=keyboard)
 
-async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state):
+async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, t_vorlauf, chat_id, bot_token, state):
     """Sendet die aktuellen Temperaturen über Telegram."""
-    message = f"🌡️ Aktuelle Temperaturen:\nBoiler oben: {fmt_temp(t_boiler_oben)}\nBoiler mittig: {fmt_temp(t_boiler_mittig)}\nBoiler unten: {fmt_temp(t_boiler_unten)}\nVerdampfer: {fmt_temp(t_verd)}"
+    message = f"🌡️ Aktuelle Temperaturen:\nBoiler oben: {fmt_temp(t_boiler_oben)}\nBoiler mittig: {fmt_temp(t_boiler_mittig)}\nBoiler unten: {fmt_temp(t_boiler_unten)}\nVerdampfer: {fmt_temp(t_verd)}\nVorlauf: {fmt_temp(t_vorlauf)}"
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
-def compose_status_message(t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, mode_str, vpn_ip, forecast_text, solax_data, state):
+def compose_status_message(t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompressor_status, current_runtime, total_runtime, mode_str, vpn_ip, forecast_text, solax_data, state):
     """Baut die Statusnachricht zusammen (ohne Senden)."""
     # Active Sensor
     active_sensor = state.control.active_rule_sensor if state.control.active_rule_sensor else "Automatisch"
@@ -148,7 +148,9 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, kompressor_status,
         "",
         "🌡️ *Temperaturen*",
         f"Oben: {fmt_temp(t_oben)} | Mittig: {fmt_temp(t_mittig)}",
+        f"Oben: {fmt_temp(t_oben)} | Mittig: {fmt_temp(t_mittig)}",
         f"Unten: {fmt_temp(t_unten)} | Verd: {fmt_temp(t_verd)}",
+        f"Vorlauf: {fmt_temp(t_vorlauf)}",
         "",
         "🛠️ *Kompressor*",
         f"Status: *{'EIN' if kompressor_status else 'AUS'}*",
@@ -193,7 +195,7 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, kompressor_status,
     
     return "\n".join(status_lines)
 
-async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
+async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
     """Sendet den aktuellen Systemstatus über Telegram."""
     solax_data = await get_solax_data_func(session, state) or {"feedinpower": 0, "batPower": 0, "soc": 0}
     
@@ -219,7 +221,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
         forecast_text = f"Heute: {today_val}kWh | Morgen: {tomorrow_val}kWh\n☀️ {sunrise} - 🌙 {sunset}"
         
     message = compose_status_message(
-        t_oben, t_unten, t_mittig, t_verd,
+        t_oben, t_unten, t_mittig, t_verd, t_vorlauf,
         kompressor_status, current_runtime, total_runtime,
         mode_str, vpn_ip, forecast_text,
         solax_data, state
@@ -228,7 +230,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode="Markdown")
 
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
+async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, t_vorlauf, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     if not updates: return last_update_id
     for update in updates:
@@ -239,9 +241,9 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         try:
             if state.awaiting_custom_duration: await handle_custom_duration(session, chat_id, bot_token, config, state, text)
             elif state.awaiting_urlaub_duration: await set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, text)
-            elif "temperaturen" in text: await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state)
+            elif "temperaturen" in text: await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, t_vorlauf, chat_id, bot_token, state)
             elif "status" in text:
-                await send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func)
+                await send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, t_vorlauf, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func)
             elif "urlaub" in text:
                 if "ende" in text:
                     await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
@@ -277,8 +279,9 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     t_boiler_unten = await read_temperature_func("unten")
                     t_boiler_mittig = await read_temperature_func("mittig")
                     t_verd = await read_temperature_func("verd")
+                    t_vorlauf = await read_temperature_func("vorlauf")
                     
-                    last_update_id = await process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status_func(), current_runtime_func(), total_runtime_func(), state.chat_id, state.bot_token, config, get_solax_data_func, state, get_boiler_temperature_history, get_runtime_bar_chart, is_nighttime_func, is_solar_window_func)
+                    last_update_id = await process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, t_vorlauf, updates, last_update_id, kompressor_status_func(), current_runtime_func(), total_runtime_func(), state.chat_id, state.bot_token, config, get_solax_data_func, state, get_boiler_temperature_history, get_runtime_bar_chart, is_nighttime_func, is_solar_window_func)
             except Exception as e:
                 logging.error(f"Error in telegram_task: {e}")
             await asyncio.sleep(5)

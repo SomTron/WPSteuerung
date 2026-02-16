@@ -46,6 +46,7 @@ def get_status():
             "mittig": shared_state.sensors.t_mittig,
             "unten": shared_state.sensors.t_unten,
             "verdampfer": shared_state.sensors.t_verd,
+            "vorlauf": shared_state.sensors.t_vorlauf,
             "boiler": shared_state.sensors.t_boiler
         },
         "compressor": {

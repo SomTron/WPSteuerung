@@ -51,6 +51,7 @@ class MockState:
         self.t_mittig = 41.0
         self.t_unten = 39.5
         self.t_verd = 10.2
+        self.t_vorlauf = 35.0
         self.t_boiler = (self.t_oben + self.t_mittig + self.t_unten) / 3
         self.last_runtime = timedelta(minutes=15)
         self.total_runtime_today = timedelta(hours=2, minutes=30)
@@ -83,6 +84,7 @@ def get_status():
     mock_state.t_mittig = 39 + random.uniform(-2, 2)
     mock_state.t_unten = 38 + random.uniform(-2, 2)
     mock_state.t_verd = 10 + random.uniform(-1, 1)
+    mock_state.t_vorlauf = 35 + random.uniform(-2, 2)
     mock_state.t_boiler = (mock_state.t_oben + mock_state.t_mittig + mock_state.t_unten) / 3
     
     return {
@@ -91,6 +93,7 @@ def get_status():
             "mittig": round(mock_state.t_mittig, 1),
             "unten": round(mock_state.t_unten, 1),
             "verdampfer": round(mock_state.t_verd, 1),
+            "vorlauf": round(mock_state.t_vorlauf, 1),
             "boiler": round(mock_state.t_boiler, 1)
         },
         "compressor": {

@@ -234,6 +234,7 @@ async def update_system_data(session, state):
     state.sensors.t_mittig = temps.get("mittig")
     state.sensors.t_unten = temps.get("unten")
     state.sensors.t_verd = temps.get("verd")
+    state.sensors.t_vorlauf = temps.get("vorlauf")
     
     # 2. PV-Daten aktualisieren
     await get_solax_data(session, state)
@@ -366,7 +367,7 @@ async def log_system_state(state):
 
     hardware_manager.write_lcd(
         f"{f_temp('Oben', state.sensors.t_oben)} {f_temp('Unt', state.sensors.t_unten)}",
-        f"{f_temp('Mit ', state.sensors.t_mittig)} {f_temp('Verd', state.sensors.t_verd, '.0f')}",
+        f"Mit {f_temp('Verd', state.sensors.t_verd, '.0f')}/{f_temp('V', state.sensors.t_vorlauf, '.0f')}",
         f"Ziel:{state.control.aktueller_einschaltpunkt:.0f}/{state.control.aktueller_ausschaltpunkt:.0f} {'ON' if state.control.kompressor_ein else 'OFF'}",
         f"{state.control.previous_modus[:10] if state.control.previous_modus else ''} {state.solar.soc if state.solar.soc else 0}%"
     )
@@ -394,7 +395,7 @@ async def log_system_state(state):
         csv_line = [
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             fmt_csv(state.sensors.t_oben), fmt_csv(state.sensors.t_unten), fmt_csv(state.sensors.t_mittig),
-            fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd),
+            fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd), fmt_csv(state.sensors.t_vorlauf),
             "1" if state.control.kompressor_ein else "0",
             fmt_csv(solax.get("acpower", 0)), fmt_csv(state.solar.feedinpower),
             fmt_csv(state.solar.batpower), fmt_csv(state.solar.soc),

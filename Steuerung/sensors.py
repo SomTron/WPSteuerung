@@ -15,7 +15,8 @@ class SensorManager:
             "oben": "28-0bd6d4461d84",
             "mittig": "28-6977d446424a",
             "unten": "28-445bd44686f4",
-            "verd": "28-213bd4460d65"
+            "verd": "28-213bd4460d65",
+            "vorlauf": "28-2ce8d446a504"
         }
 
     def reset_cache(self):
@@ -88,7 +89,7 @@ class SensorManager:
     async def get_all_temperatures(self) -> Dict[str, Optional[float]]:
         """Liest alle Sensoren parallel."""
         tasks = []
-        keys = ["oben", "mittig", "unten", "verd"]
+        keys = ["oben", "mittig", "unten", "verd", "vorlauf"]
         for key in keys:
             tasks.append(self.read_temperature(key))
         

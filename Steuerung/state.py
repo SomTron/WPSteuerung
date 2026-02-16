@@ -11,6 +11,7 @@ class SensorsState:
         self.t_unten: Optional[float] = None
         self.t_mittig: Optional[float] = None
         self.t_verd: Optional[float] = None
+        self.t_vorlauf: Optional[float] = None
         self.t_boiler: Optional[float] = None
         self.last_readings: Dict = {}
 
