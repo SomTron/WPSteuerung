@@ -148,7 +148,6 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompres
         "",
         "🌡️ *Temperaturen*",
         f"Oben: {fmt_temp(t_oben)} | Mittig: {fmt_temp(t_mittig)}",
-        f"Oben: {fmt_temp(t_oben)} | Mittig: {fmt_temp(t_mittig)}",
         f"Unten: {fmt_temp(t_unten)} | Verd: {fmt_temp(t_verd)}",
         f"Vorlauf: {fmt_temp(t_vorlauf)}",
         "",
