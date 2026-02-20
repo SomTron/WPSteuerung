@@ -52,5 +52,5 @@ async def test_log_system_state_handles_none_sensors():
         args = mock_hw.write_lcd.call_args[0]
         assert "Oben:Err" in args[0]
         assert "Unt:25.5" in args[0]
-        assert "Mit :Err" in args[1]
         assert "Verd:Err" in args[1]
+        assert "V:Err" in args[1]

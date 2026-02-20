@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 from datetime import datetime
+import asyncio
+from utils_history import read_history_data
 
 # Data Models
 class ConfigUpdate(BaseModel):
@@ -26,17 +28,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global state reference (will be injected from main.py)
-shared_state = None
-control_funcs = None
-
-def init_api(state, funcs):
-    global shared_state, control_funcs
-    shared_state = state
-    control_funcs = funcs
 
 @app.get("/status")
-def get_status():
+def get_status(request: Request):
+    shared_state = getattr(request.app.state, "shared_state", None)
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
     
@@ -78,7 +73,8 @@ def get_status():
     }
 
 @app.post("/config")
-def update_config(config: ConfigUpdate):
+def update_config(request: Request, config: ConfigUpdate):
+    shared_state = getattr(request.app.state, "shared_state", None)
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
     
@@ -106,13 +102,12 @@ def update_config(config: ConfigUpdate):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid value for {config.key}: {str(e)}")
 
-    # Trigger config save/reload not fully implemented yet for INI write-back
-    # shared_state.update_config() # This would reload from file, overwriting changes!
-    # Ideally we should write to file here. For now, in-memory update.
     return {"status": "success", "message": f"Updated {config.section}.{config.key} to {new_value}"}
 
 @app.post("/control")
-async def control_system(cmd: ControlCommand):
+async def control_system(request: Request, cmd: ControlCommand):
+    shared_state = getattr(request.app.state, "shared_state", None)
+    control_funcs = getattr(request.app.state, "control_funcs", None)
     if not shared_state or not control_funcs:
         raise HTTPException(status_code=503, detail="System not initialized")
     
@@ -140,34 +135,19 @@ async def control_system(cmd: ControlCommand):
     raise HTTPException(status_code=400, detail="Unknown command")
 
 @app.get("/history")
-def get_history(hours: int = 24):
-    """Get historical data from CSV"""
-    import os
-    import pandas as pd
-    
+async def get_history(hours: int = 24):
+    """Get historical data from CSV asynchronously to prevent blocking the event loop"""
     csv_path = "heizungsdaten.csv"
-    if not os.path.exists(csv_path):
-        raise HTTPException(status_code=404, detail="No historical data available")
-    
     try:
-        df = pd.read_csv(csv_path)
-        # Filter last N hours
-        df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'])
-        cutoff = datetime.now() - pd.Timedelta(hours=hours)
-        df = df[df['Zeitstempel'] >= cutoff]
+        # Führe Dateioperation in Thread-Pool aus
+        result = await asyncio.to_thread(read_history_data, csv_path, hours)
         
-        # Convert to JSON-friendly format
-        data = []
-        for _, row in df.iterrows():
-            data.append({
-                "timestamp": row['Zeitstempel'].strftime("%Y-%m-%d %H:%M:%S"),
-                "t_oben": row['T_Oben'],
-                "t_mittig": row['T_Mittig'],
-                "t_unten": row['T_Unten'],
-                "t_verd": row['T_Verd'],
-                "kompressor": row['Kompressor']
-            })
-        
-        return {"data": data, "count": len(data)}
+        if not result["data"] and not os.path.exists(csv_path):
+            raise HTTPException(status_code=404, detail="No historical data available")
+            
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
+        logging.error(f"Error reading history in API: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")

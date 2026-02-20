@@ -24,7 +24,7 @@ from telegram_ui import send_welcome_message
 from telegram_api import start_healthcheck_task, send_telegram_message, create_robust_aiohttp_session
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
-from api import app, init_api
+from api import app
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV
 from weather_forecast import get_solar_forecast
 from logic_utils import is_nighttime, is_solar_window
@@ -140,8 +140,8 @@ async def setup_application():
     sensor_manager = SensorManager()
     
     # 5. API init
-    control_funcs = {"set_kompressor": set_kompressor_status}
-    init_api(state, control_funcs)
+    app.state.shared_state = state
+    app.state.control_funcs = {"set_kompressor": set_kompressor_status}
     
     # Start API Thread
     api_thread = threading.Thread(target=run_api, daemon=True)

@@ -41,16 +41,20 @@ async def test_update_system_data_mapping():
     from main import update_system_data
     
     state = MagicMock()
-    session = MagicMock()
+    state.local_tz = pytz.timezone("Europe/Berlin")
+    session = AsyncMock()
     
     # Mocking sensor_manager
     mock_sensor_manager = MagicMock()
+    mock_sensor_manager.critical_failure = False
+    mock_sensor_manager.critical_failure_sensor = None
     mock_sensor_manager.get_all_temperatures = AsyncMock(return_value={
         "oben": 50.5, "mittig": 45.0, "unten": 40.0, "verd": -5.0
     })
     
     with patch('main.sensor_manager', mock_sensor_manager), \
-         patch('main.get_solax_data', return_value=None):
+         patch('main.hardware_manager', MagicMock()), \
+         patch('main.get_solax_data', new_callable=AsyncMock, return_value=None):
         
         await update_system_data(session, state)
         

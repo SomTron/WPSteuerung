@@ -1,0 +1,60 @@
+........................................................................ [ 53%]
+......................F..F.....................................          [100%]
+================================== FAILURES ===================================
+_________________ test_log_system_state_handles_none_sensors __________________
+tests\test_main_logging_fix.py:55: in test_log_system_state_handles_none_sensors
+    assert "Mit:Err" in args[1]
+E   AssertionError: assert 'Mit:Err' in 'Mit Verd:Err/V:Err'
+---------------------------- Captured stdout call -----------------------------
+2026-02-20 21:55:28 +0100 ERROR - Fehler bei is_nighttime: strptime() argument 1 must be str, not MagicMock
+------------------------------ Captured log call ------------------------------
+ERROR    root:logic_utils.py:39 Fehler bei is_nighttime: strptime() argument 1 must be str, not MagicMock
+_______________________ test_update_system_data_mapping _______________________
+tests\test_main_modular.py:55: in test_update_system_data_mapping
+    await update_system_data(session, state)
+main.py:252: in update_system_data
+    await set_kompressor_status(state, False, force=True)
+main.py:48: in set_kompressor_status
+    now = datetime.now(state.local_tz)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: tzinfo argument must be None or of a tzinfo subclass, not type 'MagicMock'
+---------------------------- Captured stdout call -----------------------------
+2026-02-20 21:55:29 +0100 CRITICAL - \U0001f6a8 KRITISCHER SENSORFEHLER: Sensor '<MagicMock name='mock.critical_failure_sensor' id='2133738026528'>' hat <MagicMock name='mock.consecutive_failures.get()' id='2133738013760'>x hintereinander versagt! Kompressor wird abgeschaltet, System startet neu.
+------------------------------ Captured log call ------------------------------
+CRITICAL root:main.py:248 \U0001f6a8 KRITISCHER SENSORFEHLER: Sensor '<MagicMock name='mock.critical_failure_sensor' id='2133738026528'>' hat <MagicMock name='mock.consecutive_failures.get()' id='2133738013760'>x hintereinander versagt! Kompressor wird abgeschaltet, System startet neu.
+============================== warnings summary ===============================
+tests/test_compressor_verification.py::test_verification_failure_no_unten_change
+tests/test_config_management.py::test_config_case_sensitivity
+  C:\Users\Patrik\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\unraisableexception.py:67: PytestUnraisableExceptionWarning: Exception ignored from cffi callback <function _addrinfo_cb at 0x000001F0B1856AC0>: None
+  
+  Traceback (most recent call last):
+    File "C:\Users\Patrik\AppData\Local\Programs\Python\Python313\Lib\site-packages\pycares\__init__.py", line 174, in _addrinfo_cb
+      callback(result, status)
+      ~~~~~~~~^^^^^^^^^^^^^^^^
+    File "C:\Users\Patrik\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 878, in call_soon_threadsafe
+      self._check_closed()
+      ~~~~~~~~~~~~~~~~~~^^
+    File "C:\Users\Patrik\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 556, in _check_closed
+      raise RuntimeError('Event loop is closed')
+  RuntimeError: Event loop is closed
+  
+  
+    warnings.warn(pytest.PytestUnraisableExceptionWarning(msg))
+
+tests/test_error_conditions.py::test_send_telegram_message_error_handling
+  C:\Users\Patrik\PycharmProjects\WPSteuerung\Steuerung\telegram_api.py:53: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+    async with session.post(url, json=payload, timeout=20) as response:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_state_hierarchy.py::test_sensors_state
+  C:\Users\Patrik\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:2245: RuntimeWarning: coroutine 'to_thread' was never awaited
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_main_logging_fix.py::test_log_system_state_handles_none_sensors
+FAILED tests/test_main_modular.py::test_update_system_data_mapping - TypeErro...
+2 failed, 133 passed, 4 warnings in 20.98s

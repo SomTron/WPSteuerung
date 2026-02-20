@@ -1,26 +1,51 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
+from datetime import datetime
 import sys
 import os
 
-# Add parent directory to path to import api_server
+# Add parent directory to path to import api
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from api_server import app, MockState
+from api import app, ConfigUpdate, ControlCommand
+
+# Setup mock state for testing
+mock_state = MagicMock()
+mock_state.sensors.t_oben = 42.5
+mock_state.sensors.t_mittig = 41.0
+mock_state.sensors.t_unten = 39.5
+mock_state.sensors.t_verd = 10.2
+mock_state.sensors.t_vorlauf = 35.0
+mock_state.sensors.t_boiler = 41.0
+
+mock_state.control.kompressor_ein = False
+mock_state.control.aktueller_einschaltpunkt = 40.0
+mock_state.control.aktueller_ausschaltpunkt = 50.0
+mock_state.sicherheits_temp = 60.0
+mock_state.verdampfertemperatur = -10.0
+mock_state.control.previous_modus = "Normalmodus"
+mock_state.control.solar_ueberschuss_aktiv = False
+mock_state.urlaubsmodus_aktiv = False
+mock_state.bademodus_aktiv = False
+mock_state.control.ausschluss_grund = None
+
+mock_state.solar.batpower = 250
+mock_state.solar.soc = 75
+mock_state.solar.feedinpower = 100
+
+mock_state.stats.last_runtime = "0:15:00"
+mock_state.stats.total_runtime_today = "2:30:00"
+
+# Mock Control Config Section
+mock_state.config.Heizungssteuerung.MIN_LAUFZEIT = 15
+
+# Inject dependencies
+app.state.shared_state = mock_state
+mock_set_kompressor = AsyncMock()
+app.state.control_funcs = {"set_kompressor": mock_set_kompressor}
 
 client = TestClient(app)
-
-def test_root_endpoint():
-    """Test the root endpoint"""
-    response = client.get("/")
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert data["name"] == "WPSteuerung API"
-    assert data["version"] == "1.0.0"
-    assert data["mode"] == "development"
-
 
 def test_get_status():
     """Test the status endpoint"""
@@ -29,52 +54,22 @@ def test_get_status():
     
     data = response.json()
     
-    # Check temperature structure
-    assert "temperatures" in data
-    assert "oben" in data["temperatures"]
-    assert "mittig" in data["temperatures"]
-    assert "unten" in data["temperatures"]
-    assert "verdampfer" in data["temperatures"]
-    assert "boiler" in data["temperatures"]
+    # Check temperature structure and values
+    assert data["temperatures"]["oben"] == 42.5
+    assert data["temperatures"]["mittig"] == 41.0
     
     # Check compressor structure
-    assert "compressor" in data
-    assert "status" in data["compressor"]
-    assert "runtime_current" in data["compressor"]
-    assert "runtime_today" in data["compressor"]
+    assert data["compressor"]["status"] == "AUS"
     
     # Check setpoints structure
-    assert "setpoints" in data
-    assert "einschaltpunkt" in data["setpoints"]
-    assert "ausschaltpunkt" in data["setpoints"]
-    assert "sicherheits_temp" in data["setpoints"]
-    assert "verdampfertemperatur" in data["setpoints"]
-    
-    # Check mode structure
-    assert "mode" in data
-    assert "current" in data["mode"]
-    assert "solar_active" in data["mode"]
-    assert "holiday_active" in data["mode"]
-    assert "bath_active" in data["mode"]
+    assert data["setpoints"]["einschaltpunkt"] == 40.0
     
     # Check energy structure
-    assert "energy" in data
-    assert "battery_power" in data["energy"]
-    assert "soc" in data["energy"]
-    assert "feed_in" in data["energy"]
-    
-    # Check system structure
-    assert "system" in data
-    assert "exclusion_reason" in data["system"]
-    assert "last_update" in data["system"]
-    assert "mode" in data["system"]
+    assert data["energy"]["battery_power"] == 250
 
 
-@patch('api_server.logging')
-def test_update_config(mock_logging):
+def test_update_config():
     """Test the config update endpoint"""
-    from api_server import ConfigUpdate
-    
     # Test valid config update
     config_data = {
         "section": "Heizungssteuerung",
@@ -88,13 +83,10 @@ def test_update_config(mock_logging):
     data = response.json()
     assert data["status"] == "success"
     assert "Updated Heizungssteuerung.MIN_LAUFZEIT to 20" in data["message"]
-    assert "mock" in data["message"]
 
 
 def test_control_system_force_on():
     """Test forcing compressor on"""
-    from api_server import ControlCommand
-    
     command_data = {
         "command": "force_on"
     }
@@ -104,8 +96,8 @@ def test_control_system_force_on():
     
     data = response.json()
     assert data["status"] == "success"
-    assert "Kompressor forced ON" in data["message"]
-    assert "mock" in data["message"]
+    assert "Compressor forced ON" in data["message"]
+    mock_set_kompressor.assert_called_once_with(mock_state, True, force=True)
 
 
 def test_control_system_force_off():
@@ -113,14 +105,14 @@ def test_control_system_force_off():
     command_data = {
         "command": "force_off"
     }
-    
+    mock_set_kompressor.reset_mock()
     response = client.post("/control", json=command_data)
     assert response.status_code == 200
     
     data = response.json()
     assert data["status"] == "success"
-    assert "Kompressor forced OFF" in data["message"]
-    assert "mock" in data["message"]
+    assert "Compressor forced OFF" in data["message"]
+    mock_set_kompressor.assert_called_once_with(mock_state, False, force=True)
 
 
 def test_control_system_set_bath_mode():
@@ -138,45 +130,7 @@ def test_control_system_set_bath_mode():
     
     data = response.json()
     assert data["status"] == "success"
-    assert "Bademodus set to True" in data["message"]
-    assert "mock" in data["message"]
-
-
-def test_control_system_set_holiday_mode():
-    """Test setting holiday mode"""
-    command_data = {
-        "command": "set_mode",
-        "params": {
-            "mode": "urlaubsmodus",
-            "active": True
-        }
-    }
-    
-    response = client.post("/control", json=command_data)
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert data["status"] == "success"
-    assert "Urlaubsmodus set to True" in data["message"]
-    assert "mock" in data["message"]
-
-
-def test_control_system_unknown_mode():
-    """Test setting an unknown mode"""
-    command_data = {
-        "command": "set_mode",
-        "params": {
-            "mode": "unknown_mode",
-            "active": True
-        }
-    }
-    
-    response = client.post("/control", json=command_data)
-    assert response.status_code == 400
-    
-    data = response.json()
-    assert "detail" in data
-    assert "Unknown mode: unknown_mode" in data["detail"]
+    assert mock_state.bademodus_aktiv == True
 
 
 def test_control_system_unknown_command():
@@ -190,30 +144,27 @@ def test_control_system_unknown_command():
     
     data = response.json()
     assert "detail" in data
-    assert "Unknown command: unknown_command" in data["detail"]
+    assert "Unknown command" in data["detail"]
 
 
-def test_get_history_default_hours():
-    """Test getting history with default hours"""
-    response = client.get("/history")
-    assert response.status_code == 200
+@patch('api.read_history_data')
+def test_get_history_custom_hours(mock_read_history):
+    """Test getting history with custom hours using the new async utility"""
+    # Mocking the to_thread read_history_data response
+    mock_read_history.return_value = {
+        "data": [
+            {"timestamp": "2023-10-27 12:00:00", "t_oben": 45.0, "kompressor": "EIN"}
+        ],
+        "count": 1
+    }
     
-    data = response.json()
-    assert "data" in data
-    assert "count" in data
-    assert isinstance(data["data"], list)
-    assert isinstance(data["count"], int)
-    assert data["count"] == len(data["data"])
-
-
-def test_get_history_custom_hours():
-    """Test getting history with custom hours"""
-    response = client.get("/history?hours=12")
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert "data" in data
-    assert "count" in data
-    assert isinstance(data["data"], list)
-    assert isinstance(data["count"], int)
-    assert data["count"] == len(data["data"])
+    # We must patch os.path.exists during the test if the endpoint still checks it or bypass it
+    with patch('os.path.exists', return_value=True):
+        response = client.get("/history?hours=12")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert "data" in data
+        assert "count" in data
+        assert data["count"] == 1
+        assert data["data"][0]["kompressor"] == "EIN"

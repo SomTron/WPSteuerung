@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import sys
 import os
 from datetime import datetime
+import pytz
 
 # Ensure we can import from parent directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -13,7 +14,7 @@ async def test_activation_reason_tracking():
     from main import set_kompressor_status
     
     state = MagicMock()
-    state.local_tz = None # Not needed for mock
+    state.local_tz = pytz.timezone("Europe/Berlin")
     state.control.kompressor_ein = False
     state.control.previous_modus = "Solarüberschuss"
     state.control.activation_reason = None
@@ -44,7 +45,7 @@ async def test_status_message_includes_reason():
     state.battery_capacity = 0
     
     msg = compose_status_message(
-        45.0, 40.0, 42.0, 5.0, 
+        45.0, 40.0, 42.0, 5.0, 35.0, # Added t_vorlauf = 35.0
         True, # kompressor_status
         None, None, # runtimes
         "Solarüberschuss", "127.0.0.1", "Forecast", 
