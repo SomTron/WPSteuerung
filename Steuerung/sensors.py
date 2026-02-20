@@ -56,10 +56,10 @@ class SensorManager:
             logging.error(f"Fehler beim Lesen von Sensor {sensor_id}: {e}")
             return None
 
-    async def read_temperature(self, sensor_key: str) -> Optional[float]:
+    async def read_temperature(self, sensor_key: str, retries: int = 3) -> Optional[float]:
         """
-        Liest die Temperatur asynchron mit Caching.
-        sensor_key: 'oben', 'mittig', 'unten', 'verd'
+        Liest die Temperatur asynchron mit Caching und Retry-Logik.
+        sensor_key: 'oben', 'mittig', 'unten', 'verd', 'vorlauf'
         """
         sensor_id = self.sensor_ids.get(sensor_key)
         if not sensor_id:
@@ -74,17 +74,29 @@ class SensorManager:
             if now - last_time < self.sensor_read_interval:
                 return value
 
-        # Tatsächliches Lesen (in Thread, da Datei-IO blockieren kann)
-        try:
-            temp = await asyncio.wait_for(asyncio.to_thread(self.read_temperature_raw, sensor_id), timeout=5.0)
-        except asyncio.TimeoutError:
-            logging.error(f"Timeout bei Sensor {sensor_key} ({sensor_id})")
-            return None
+        # Tatsächliches Lesen mit Retry-Logik
+        for attempt in range(retries):
+            try:
+                temp = await asyncio.wait_for(asyncio.to_thread(self.read_temperature_raw, sensor_id), timeout=5.0)
+                if temp is not None:
+                    self.last_sensor_readings[sensor_id] = (now, temp)
+                    return temp
+                
+                # Wenn temp None ist (z.B. CRC-Fehler), auch retryen
+                if attempt < retries - 1:
+                    logging.warning(f"Sensor {sensor_key} ({sensor_id}) lieferte None. Retry {attempt + 1}/{retries}...")
+                    await asyncio.sleep(0.2)
+            except asyncio.TimeoutError:
+                if attempt < retries - 1:
+                    logging.warning(f"Timeout bei Sensor {sensor_key} ({sensor_id}). Retry {attempt + 1}/{retries}...")
+                    await asyncio.sleep(0.2)
+                else:
+                    logging.error(f"Finaler Timeout bei Sensor {sensor_key} ({sensor_id}) nach {retries} Versuchen.")
+            except Exception as e:
+                logging.error(f"Unerwarteter Fehler beim Lesen von Sensor {sensor_key}: {e}")
+                break
         
-        if temp is not None:
-             self.last_sensor_readings[sensor_id] = (now, temp)
-        
-        return temp
+        return None
 
     async def get_all_temperatures(self) -> Dict[str, Optional[float]]:
         """Liest alle Sensoren parallel."""
