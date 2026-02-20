@@ -236,6 +236,35 @@ async def update_system_data(session, state):
     state.sensors.t_verd = temps.get("verd")
     state.sensors.t_vorlauf = temps.get("vorlauf")
     
+    # 1b. Kritischen Sensorfehler prüfen (z.B. 5x hintereinander fehlgeschlagen)
+    if sensor_manager.critical_failure:
+        sensor_name = sensor_manager.critical_failure_sensor or "unbekannt"
+        fail_count = sensor_manager.consecutive_failures.get(sensor_name, 0)
+        error_msg = (
+            f"🚨 KRITISCHER SENSORFEHLER: Sensor '{sensor_name}' hat {fail_count}x "
+            f"hintereinander versagt! Kompressor wird abgeschaltet, System startet neu."
+        )
+        logging.critical(error_msg)
+        
+        # Kompressor sicherheitshalber ausschalten
+        if state.control.kompressor_ein:
+            await set_kompressor_status(state, False, force=True)
+            logging.critical("Kompressor wurde wegen Sensorfehler ausgeschaltet.")
+        
+        # Telegram-Alarm senden (best effort)
+        if state.bot_token and state.chat_id:
+            try:
+                await send_telegram_message(session, state.chat_id, error_msg, state.bot_token)
+            except Exception as e:
+                logging.error(f"Telegram-Alarm konnte nicht gesendet werden: {e}")
+        
+        # Hardware aufräumen und Neustart durch systemd auslösen
+        if hardware_manager:
+            hardware_manager.cleanup()
+        await session.close()
+        logging.critical("System wird beendet (exit code 1) für systemd-Neustart.")
+        sys.exit(1)
+    
     # 2. PV-Daten aktualisieren
     await get_solax_data(session, state)
     if state.solar.last_api_data:
