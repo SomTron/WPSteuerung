@@ -89,6 +89,7 @@ class State:
         self.kompressor_verification_start_time: Optional[datetime] = None
         self.kompressor_verification_start_t_verd: Optional[float] = None
         self.kompressor_verification_start_t_unten: Optional[float] = None
+        self.kompressor_verification_start_t_vorlauf: Optional[float] = None
         self.kompressor_verification_failed: bool = False
         self.kompressor_verification_error_count: int = 0
         self.kompressor_verification_last_check: Optional[datetime] = None

@@ -76,8 +76,8 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     state.verdampfer_blocked = False
     return True
 
-async def verify_compressor_running(state, session, current_t_verd, current_t_unten, verification_delay_minutes=10):
-    """Verifiziert den Lauf des Kompressors über Temperaturänderungen."""
+async def verify_compressor_running(state, session, current_t_vorlauf, current_t_unten, verification_delay_minutes=20):
+    """Verifiziert den Lauf des Kompressors über Temperaturänderungen am Vorlauf."""
     now = datetime.now(state.local_tz)
     if not state.control.kompressor_ein or state.kompressor_verification_start_time is None:
         state.kompressor_verification_start_time = None
@@ -91,17 +91,15 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
             return True, None
     state.kompressor_verification_last_check = now
 
-    verd_delta = state.kompressor_verification_start_t_verd - current_t_verd
+    # Vorlauf muss STEIGEN
+    vorlauf_delta = current_t_vorlauf - (state.kompressor_verification_start_t_vorlauf or current_t_vorlauf)
     unten_delta = abs(current_t_unten - state.kompressor_verification_start_t_unten)
     
-    verd_ok = verd_delta >= 1.5
-    if not verd_ok and state.kompressor_verification_start_t_verd < 15.0:
-        if verd_delta >= -0.5 and current_t_verd < 12.0:
-            verd_ok = True
-    
+    # Kriterium: Vorlauf steigt um mindestens 2 Grad
+    vorlauf_ok = vorlauf_delta >= 2.0
     unten_ok = unten_delta >= 0.2
     
-    if verd_ok and unten_ok:
+    if vorlauf_ok and unten_ok:
         state.kompressor_verification_failed = False
         state.kompressor_verification_error_count = 0
         return True, None
@@ -110,8 +108,8 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
     state.kompressor_verification_error_count += 1
     
     error_parts = []
-    if not verd_ok: error_parts.append(f"Verdampfer: nur {verd_delta:.1f}°C Abfall (Soll: >1.5°C)")
-    if not unten_ok: error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >0.2°C)")
+    if not vorlauf_ok: error_parts.append(f"Vorlauf: nur {vorlauf_delta:.1f}°C Anstieg (Soll: >=2.0°C)")
+    if not unten_ok: error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >=0.2°C)")
     
     error_msg = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)
     if state.bot_token:

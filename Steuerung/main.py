@@ -64,8 +64,9 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         state.kompressor_verification_start_time = now
         state.kompressor_verification_start_t_verd = state.sensors.t_verd
         state.kompressor_verification_start_t_unten = state.sensors.t_unten
+        state.kompressor_verification_start_t_vorlauf = state.sensors.t_vorlauf
         state.kompressor_verification_last_check = None
-        logging.info(f"Kompressor EIN - Verifizierung gestartet (t_verd={state.sensors.t_verd}, t_unten={state.sensors.t_unten})")
+        logging.info(f"Kompressor EIN - Verifizierung gestartet (t_vorlauf={state.sensors.t_vorlauf}, t_unten={state.sensors.t_unten})")
         
         return True
     else:
@@ -351,7 +352,7 @@ async def run_logic_step(session, state):
 
     # 2. Kompressor-Verifizierung
     if state.control.kompressor_ein:
-        is_running, error_msg = await control_logic.verify_compressor_running(state, session, state.sensors.t_verd, state.sensors.t_unten)
+        is_running, error_msg = await control_logic.verify_compressor_running(state, session, state.sensors.t_vorlauf, state.sensors.t_unten, verification_delay_minutes=20)
         if not is_running and state.kompressor_verification_error_count >= 2:
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
             await set_kompressor_status(state, False, force=True)

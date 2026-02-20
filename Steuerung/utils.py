@@ -13,7 +13,12 @@ def rotate_csv(file_path):
     date_format = '%Y-%m-%d'
     cutoff_date = datetime.now() - timedelta(days=14)
     temp_file = file_path + ".tmp"
-    backup_file = f"backup_{datetime.now().strftime('%Y-%m-%d')}.csv"
+    
+    backup_dir = "backup"
+    if not os.path.exists(backup_dir):
+        os.makedirs(backup_dir)
+        
+    backup_file = os.path.join(backup_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.csv")
     
     header = None
     rows_to_keep = 0

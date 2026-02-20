@@ -19,11 +19,13 @@ def mock_state():
     state.control = MagicMock()
     state.control.kompressor_ein = True
     
-    # Verification fields (at top level for now in State class)
+    # Verification fields
     state.kompressor_verification_error_count = 0
     state.kompressor_verification_failed = False
     state.kompressor_verification_last_check = None
     state.kompressor_verification_start_time = None
+    state.kompressor_verification_start_t_vorlauf = 0.0
+    state.kompressor_verification_start_t_unten = 0.0
     
     # Config/Telegram
     state.config = MagicMock()
@@ -34,112 +36,94 @@ def mock_state():
     return state
 
 @pytest.mark.asyncio
-async def test_verification_delayed_default_10_min(mock_state):
+async def test_verification_delayed_default_20_min(mock_state):
     """
-    Test that verification is skipped (returns True) if time < 10 minutes (new default).
+    Test that verification is skipped (returns True) if time < 20 minutes.
     """
-    now = datetime(2023, 1, 1, 12, 10, 0, tzinfo=mock_state.local_tz)
-    # Start time 9 minutes ago
-    start_time = now - timedelta(minutes=9)
+    now = datetime(2023, 1, 1, 12, 19, 0, tzinfo=mock_state.local_tz)
+    # Start time 19 minutes ago
+    start_time = now - timedelta(minutes=19)
     
     mock_state.kompressor_verification_start_time = start_time
-    mock_state.kompressor_verification_start_t_verd = 10.0
+    mock_state.kompressor_verification_start_t_vorlauf = 30.0
     mock_state.kompressor_verification_start_t_unten = 30.0
     
-    with pytest.MonkeyPatch.context() as m:
-        class MockDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return now
-        # Must patch where it's USED: safety_logic imports datetime
-        m.setattr("safety_logic.datetime", MockDateTime)
-        
-        # Should return True because elapsed time (9m) < default delay (10m)
+    with patch_datetime(now):
+        # Should return True because elapsed time (19m) < default delay (20m)
         is_running, error_msg = await verify_compressor_running(
-            mock_state, None, current_t_verd=8.0, current_t_unten=30.0
+            mock_state, None, current_t_vorlauf=35.0, current_t_unten=30.0
         )
         
         assert is_running is True
         assert error_msg is None
 
 @pytest.mark.asyncio
-async def test_verification_success_cold_start(mock_state):
+async def test_verification_success_rise(mock_state):
     """
-    Test "Cold Start / Restart" scenario.
-    Start T_Verd is low (< 15), Current T_Verd is low (< 12), and did not rise significantly.
+    Test standard success case: significant flow temperature rise.
     """
-    now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
-    # Start time 15 minutes ago
-    start_time = now - timedelta(minutes=15)
+    now = datetime(2023, 1, 1, 12, 25, 0, tzinfo=mock_state.local_tz)
+    start_time = now - timedelta(minutes=25)
     
     mock_state.kompressor_verification_start_time = start_time
-    mock_state.kompressor_verification_start_t_verd = 5.0  # Cold start
-    mock_state.kompressor_verification_start_t_unten = 30.0
+    mock_state.kompressor_verification_start_t_vorlauf = 30.0
+    mock_state.kompressor_verification_start_t_unten = 40.0
     
-    with pytest.MonkeyPatch.context() as m:
-         class MockDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return now
-         m.setattr("safety_logic.datetime", MockDateTime)
-         
-         is_running, error_msg = await verify_compressor_running(
-            mock_state, None, current_t_verd=5.2, current_t_unten=30.5
+    with patch_datetime(now):
+        # Rise 2.5 deg (30 -> 32.5) >= 2.0 threshold
+        is_running, error_msg = await verify_compressor_running(
+            mock_state, None, current_t_vorlauf=32.5, current_t_unten=40.3
         )
-         
-         assert is_running is True
-         assert error_msg is None
+        
+        assert is_running is True
+        assert error_msg is None
 
 @pytest.mark.asyncio
-async def test_verification_success_normal_drop(mock_state):
+async def test_verification_failure_no_rise(mock_state):
     """
-    Test standard success case: significant temperature drop.
+    Test failure: no rise in flow temperature.
     """
-    now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
-    start_time = now - timedelta(minutes=15)
+    now = datetime(2023, 1, 1, 12, 25, 0, tzinfo=mock_state.local_tz)
+    start_time = now - timedelta(minutes=25)
     
     mock_state.kompressor_verification_start_time = start_time
-    mock_state.kompressor_verification_start_t_verd = 20.0
-    mock_state.kompressor_verification_start_t_unten = 30.0
+    mock_state.kompressor_verification_start_t_vorlauf = 30.0
+    mock_state.kompressor_verification_start_t_unten = 40.0
     
-    with pytest.MonkeyPatch.context() as m:
-         class MockDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return now
-         m.setattr("safety_logic.datetime", MockDateTime)
-         
-         # Drop 2.0 deg (20 -> 18) > 1.5 threshold
-         is_running, error_msg = await verify_compressor_running(
-            mock_state, None, current_t_verd=18.0, current_t_unten=30.3
+    with patch_datetime(now):
+        # Only 1 degree rise (30 -> 31) < 2.0 threshold
+        is_running, error_msg = await verify_compressor_running(
+            mock_state, None, current_t_vorlauf=31.0, current_t_unten=40.3
         )
-         
-         assert is_running is True
-         assert error_msg is None
+        
+        assert is_running is False
+        assert "Vorlauf: nur 1.0°C Anstieg" in error_msg
 
 @pytest.mark.asyncio
-async def test_verification_failure(mock_state):
+async def test_verification_failure_no_unten_change(mock_state):
     """
-    Test failure: not cold enough, no drop.
+    Test failure: rise in flow ok, but no change in unten sensor.
     """
-    now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
-    start_time = now - timedelta(minutes=15)
+    now = datetime(2023, 1, 1, 12, 25, 0, tzinfo=mock_state.local_tz)
+    start_time = now - timedelta(minutes=25)
     
     mock_state.kompressor_verification_start_time = start_time
-    mock_state.kompressor_verification_start_t_verd = 20.0 # Warm start
-    mock_state.kompressor_verification_start_t_unten = 30.0
+    mock_state.kompressor_verification_start_t_vorlauf = 30.0
+    mock_state.kompressor_verification_start_t_unten = 40.0
     
-    with pytest.MonkeyPatch.context() as m:
-         class MockDateTime(datetime):
-             @classmethod
-             def now(cls, tz=None):
-                 return now
-         m.setattr("safety_logic.datetime", MockDateTime)
-
-         # No drop (20 -> 20), not cold start (< 15)
-         is_running, error_msg = await verify_compressor_running(
-            mock_state, None, current_t_verd=20.0, current_t_unten=30.3
+    with patch_datetime(now):
+        # Rise 3.0 deg ok, but unten change 0.1 < 0.2
+        is_running, error_msg = await verify_compressor_running(
+            mock_state, None, current_t_vorlauf=33.0, current_t_unten=40.1
         )
-         
-         assert is_running is False
-         assert "Verdampfer: nur 0.0°C Abfall" in error_msg
+        
+        assert is_running is False
+        assert "Unterer Fühler: nur 0.1°C Änderung" in error_msg
+
+def patch_datetime(target_now):
+    from unittest.mock import patch
+    class MockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return target_now
+    return patch("safety_logic.datetime", MockDateTime)
