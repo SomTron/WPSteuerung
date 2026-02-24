@@ -5,6 +5,17 @@ from datetime import datetime, timedelta
 import pytz
 from typing import Optional, Dict, Tuple
 
+# Helper for consistent attempt logging
+def _log_attempt(sensor_key: str, attempt: int, total: int):
+    """Log a standardized message for each read attempt.
+
+    Args:
+        sensor_key: Logical sensor identifier (e.g., 'oben').
+        attempt: Current attempt number (0‑based).
+        total: Total number of attempts configured.
+    """
+    logging.debug(f"Sensor {sensor_key}: attempt {attempt + 1}/{total}")
+
 class SensorManager:
     def __init__(self, base_dir: str = "/sys/bus/w1/devices/"):
         self.base_dir = base_dir
@@ -35,7 +46,7 @@ class SensorManager:
         device_file = os.path.join(self.base_dir, sensor_id, "w1_slave")
         try:
             if not os.path.exists(device_file):
-                # logging.warning(f"Sensor-Datei nicht gefunden: {device_file}")
+                logging.warning(f"Sensor-Datei nicht gefunden: {device_file}")
                 return None
                 
             with open(device_file, "r") as f:
@@ -54,10 +65,17 @@ class SensorManager:
                     if temp < -20 or temp > 100:
                         logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                         return None
+                    logging.debug(f"Sensor {sensor_id} gelesen: {temp:.3f} °C")
                     return temp
                 else:
                     logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")
                     return None
+        except FileNotFoundError:
+            logging.warning(f"Sensor-Datei nicht gefunden (FileNotFoundError): {device_file}")
+            return None
+        except OSError as e:
+            logging.error(f"I/O-Fehler beim Lesen von Sensor {sensor_id}: {e}")
+            return None
         except Exception as e:
             logging.error(f"Fehler beim Lesen von Sensor {sensor_id}: {e}")
             return None

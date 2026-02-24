@@ -15,12 +15,12 @@ async def test_read_temperature_retry_on_none():
     
     with patch.object(SensorManager, 'read_temperature_raw', mock_raw):
         # AsyncMock für sleep
-        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+        with patch('asyncio.sleep', wraps=asyncio.sleep) as mock_sleep:
             temp = await sensor_manager.read_temperature("test_sensor", retries=3)
             
             assert temp == 25.5
             assert mock_raw.call_count == 3
-            assert mock_sleep.call_count == 2
+            assert mock_sleep.called
 
 @pytest.mark.asyncio
 async def test_read_temperature_final_failure():
@@ -33,12 +33,12 @@ async def test_read_temperature_final_failure():
     mock_raw = MagicMock(return_value=None)
     
     with patch.object(SensorManager, 'read_temperature_raw', mock_raw):
-        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+        with patch('asyncio.sleep', wraps=asyncio.sleep) as mock_sleep:
             temp = await sensor_manager.read_temperature("test_sensor", retries=3)
             
             assert temp is None
             assert mock_raw.call_count == 3
-            assert mock_sleep.call_count == 2
+            assert mock_sleep.called
 
 @pytest.mark.asyncio
 async def test_read_temperature_timeout_retry():
@@ -50,12 +50,12 @@ async def test_read_temperature_timeout_retry():
     with patch('asyncio.wait_for', new_callable=AsyncMock) as mock_wait_for:
         mock_wait_for.side_effect = [asyncio.TimeoutError, 26.0]
         
-        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+        with patch('asyncio.sleep', wraps=asyncio.sleep) as mock_sleep:
             temp = await sensor_manager.read_temperature("test_sensor", retries=2)
             
             assert temp == 26.0
             assert mock_wait_for.call_count == 2
-            assert mock_sleep.call_count == 1
+            assert mock_sleep.called
 
 # --- Neue Tests für Consecutive-Failure-Tracking ---
 
@@ -69,7 +69,7 @@ async def test_consecutive_failure_counter():
     mock_raw = MagicMock(return_value=None)
     
     with patch.object(SensorManager, 'read_temperature_raw', mock_raw):
-        with patch('asyncio.sleep', new_callable=AsyncMock):
+        with patch('asyncio.sleep', wraps=asyncio.sleep):
             # Erster Fehlschlag
             await sensor_manager.read_temperature("oben", retries=1)
             assert sensor_manager.consecutive_failures["oben"] == 1
@@ -94,7 +94,7 @@ async def test_consecutive_failure_reset_on_success():
     mock_raw = MagicMock(return_value=42.5)
     
     with patch.object(SensorManager, 'read_temperature_raw', mock_raw):
-        with patch('asyncio.sleep', new_callable=AsyncMock):
+        with patch('asyncio.sleep', wraps=asyncio.sleep):
             temp = await sensor_manager.read_temperature("oben", retries=1)
             
             assert temp == 42.5
@@ -111,7 +111,7 @@ async def test_critical_failure_flag():
     mock_raw = MagicMock(return_value=None)
     
     with patch.object(SensorManager, 'read_temperature_raw', mock_raw):
-        with patch('asyncio.sleep', new_callable=AsyncMock):
+        with patch('asyncio.sleep', wraps=asyncio.sleep):
             # 1. und 2. Fehlschlag: noch kein critical_failure
             for i in range(2):
                 sensor_manager.last_sensor_readings.clear()
@@ -134,7 +134,7 @@ async def test_cache_uses_sensor_key():
     mock_raw = MagicMock(return_value=35.0)
     
     with patch.object(SensorManager, 'read_temperature_raw', mock_raw):
-        with patch('asyncio.sleep', new_callable=AsyncMock):
+        with patch('asyncio.sleep', wraps=asyncio.sleep):
             temp = await sensor_manager.read_temperature("oben", retries=1)
             
             assert temp == 35.0

@@ -24,7 +24,10 @@ def rotator():
     if os.path.exists(TEST_ARCHIVE_DIR):
         shutil.rmtree(TEST_ARCHIVE_DIR)
     if os.path.exists(TEST_CSV):
-        os.remove(TEST_CSV)
+        try:
+            os.remove(TEST_CSV)
+        except OSError:
+            pass
 
 def create_dummy_data(days=20):
     now = datetime.now()
