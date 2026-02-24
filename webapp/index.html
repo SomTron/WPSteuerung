@@ -416,7 +416,7 @@
     </div>
 
     <script>
-        const API_BASE = `http://${window.location.hostname}:5000`;
+        const API_BASE = "/api";
         let statusData = null;
         let chart = null;
         let temperatureHistory = {
@@ -524,55 +524,124 @@
             }
         }
 
+        function createChart() {
+            const ctx = document.getElementById('tempChart').getContext('2d');
+            if (chart) chart.destroy();
+
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: temperatureHistory.timestamps,
+                    datasets: [
+                        {
+                            label: 'Oben',
+                            data: temperatureHistory.oben,
+                            borderColor: '#00d4ff',
+                            backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: 'Mittig',
+                            data: temperatureHistory.mittig,
+                            borderColor: '#51cf66',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Unten',
+                            data: temperatureHistory.unten,
+                            borderColor: '#ffd43b',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Verdampfer',
+                            data: temperatureHistory.verdampfer,
+                            borderColor: '#ff6b6b',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                color: '#a0a0c0',
+                                font: { size: 12 },
+                                usePointStyle: true,
+                                padding: 20
+                            }
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: 'rgba(22, 33, 62, 0.95)',
+                            titleColor: '#fff',
+                            bodyColor: '#a0a0c0',
+                            borderColor: 'rgba(0, 212, 255, 0.3)',
+                            borderWidth: 1,
+                            padding: 12
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: {
+                                color: '#a0a0c0',
+                                callback: function (value) {
+                                    return value + ' °C';
+                                }
+                            }
+                        },
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: {
+                                color: '#a0a0c0',
+                                maxRotation: 45,
+                                minRotation: 45,
+                                autoSkip: true,
+                                maxTicksLimit: 10
+                            }
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    },
+                    animations: {
+                        radius: {
+                            duration: 400,
+                            easing: 'linear',
+                            from: 1,
+                            to: 0,
+                            loop: true
+                        }
+                    }
+                }
+            });
+        }
+
         function updateChart() {
+            if (!chart) return;
             chart.data.labels = temperatureHistory.timestamps;
             chart.data.datasets[0].data = temperatureHistory.oben;
             chart.data.datasets[1].data = temperatureHistory.mittig;
-            legend: {
-                display: true,
-                    position: 'top',
-                        labels: {
-                    color: '#a0a0c0',
-                        font: { size: 12 }
-                }
-            },
-            tooltip: {
-                mode: 'index',
-                    intersect: false,
-                        backgroundColor: 'rgba(22, 33, 62, 0.95)',
-                            titleColor: '#fff',
-                                bodyColor: '#a0a0c0',
-                                    borderColor: 'rgba(0, 212, 255, 0.3)',
-                                        borderWidth: 1
-            }
-        },
-        scales: {
-            y: {
-                beginAtZero: false,
-                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                ticks: {
-                    color: '#a0a0c0',
-                        callback: function (value) {
-                            return value + ' °C';
-                        }
-                }
-            },
-            x: {
-                grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                ticks: {
-                    color: '#a0a0c0',
-                        maxRotation: 45,
-                            minRotation: 45
-                }
-            }
-        },
-        interaction: {
-            mode: 'nearest',
-                axis: 'x',
-                    intersect: false
-        }
-                }
-            });
+            chart.data.datasets[2].data = temperatureHistory.unten;
+            chart.data.datasets[3].data = temperatureHistory.verdampfer;
+            chart.update('none'); // Update without animation for smoother real-time refresh
         }
 
         function updateConnectionStatus(connected) {
