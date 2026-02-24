@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit
 object RetrofitClient {
     
     // Local test server (api_server.py)
-    private const val BASE_URL = "http://10.0.2.2:5000/"  // Android Emulator -> localhost
+    private const val BASE_URL = "http://10.100.0.1/api/" // Android Emulator -> localhost
     // For physical device on same network, use: "http://YOUR_PC_IP:5000/"
     
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
