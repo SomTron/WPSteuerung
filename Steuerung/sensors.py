@@ -14,7 +14,8 @@ def _log_attempt(sensor_key: str, attempt: int, total: int):
         attempt: Current attempt number (0‑based).
         total: Total number of attempts configured.
     """
-    logging.debug(f"Sensor {sensor_key}: attempt {attempt + 1}/{total}")
+    # logging.debug(f"Sensor {sensor_key}: attempt {attempt + 1}/{total}")
+    pass
 
 class SensorManager:
     def __init__(self, base_dir: str = "/sys/bus/w1/devices/"):
@@ -65,7 +66,7 @@ class SensorManager:
                     if temp < -20 or temp > 100:
                         logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                         return None
-                    logging.debug(f"Sensor {sensor_id} gelesen: {temp:.3f} °C")
+                    # logging.debug(f"Sensor {sensor_id} gelesen: {temp:.3f} °C")
                     return temp
                 else:
                     logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")
