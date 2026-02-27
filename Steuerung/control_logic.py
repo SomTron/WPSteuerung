@@ -91,8 +91,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     elif batterie_fruehstart:
         res = {"modus": "Übergangsmodus (Batterie Frühstart)", "ausschaltpunkt": state.basis_ausschaltpunkt - urlaubs_reduction, "einschaltpunkt": state.basis_einschaltpunkt - urlaubs_reduction, "regelfuehler": t_mittig}
     elif within_uebergangsmodus:
-        modus_name = "Übergangsmodus (Frostschutz)" if is_critical_frost else "Übergangsmodus"
-        res = {"modus": modus_name, "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        if is_critical_frost:
+            res = {"modus": "Übergangsmodus (Frostschutz)", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        elif is_battery_sufficient_for_transition(state):
+            res = {"modus": "Übergangsmodus (Batteriepuffer)", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        else:
+            res = {"modus": "Übergangsmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
     elif is_night:
         res = {"modus": "Nachtmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
     else:
@@ -144,7 +148,7 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
                 if elapsed >= min_laufzeit:
                     if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
                         state.control.blocking_reason = None
-                        logging.info(f"Übergangszeit AUS: Kein PV-Überschuss & Batterie reicht nicht. Laufzeit: {elapsed}")
+                        logging.info(f"Übergangszeit AUS: Kein PV-Überschuss & Batterie reicht nicht. Modus: {state.control.previous_modus}, Laufzeit: {elapsed}")
                         return True
                 else:
                     state.control.blocking_reason = f"Übergang AUS (Warte auf Mindestlaufzeit, noch {int((min_laufzeit - elapsed).total_seconds() // 60)}m)"
