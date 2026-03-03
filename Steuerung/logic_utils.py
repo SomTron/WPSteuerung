@@ -18,20 +18,22 @@ def parse_t(s: str):
 
 def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0) -> bool:
     """Prüft, ob eine Log-Nachricht gesendet werden soll (Throttling)."""
-    last_time = getattr(state, attribute_name, None)
+    if not hasattr(state, 'log_throttle_times'):
+        state.log_throttle_times = {}
+    last_time = state.log_throttle_times.get(attribute_name)
     now = datetime.now(state.local_tz)
     if last_time is None or safe_timedelta(now, last_time, state.local_tz) > timedelta(minutes=interval_minutes):
-        setattr(state, attribute_name, now)
+        state.log_throttle_times[attribute_name] = now
         return True
     return False
 
-def is_nighttime(config):
+def is_nighttime(config, tz=None):
     """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
     try:
         start_str = config.Heizungssteuerung.NACHTABSENKUNG_START
         end_str = config.Heizungssteuerung.NACHTABSENKUNG_END
         
-        now = datetime.now().time()
+        now = datetime.now(tz).time() if tz else datetime.now().time()
         start = datetime.strptime(start_str, "%H:%M").time()
         end = datetime.strptime(end_str, "%H:%M").time()
         

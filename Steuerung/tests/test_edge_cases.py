@@ -182,8 +182,8 @@ class TestSolarModeSwitch:
         # Mock session for telegram
         mock_session = Mock()
         
-        async def mock_set_kompressor(state, status, **kwargs):
-            state.control.kompressor_ein = status
+        async def mock_set_kompressor(status, **kwargs):
+            mock_state.control.kompressor_ein = status
             mock_hardware.set_compressor_state(status)
             return True
         

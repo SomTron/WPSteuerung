@@ -50,7 +50,7 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
 
 async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     """Bestimmt den Betriebsmodus und setzt Sollwerte."""
-    is_night = is_nighttime(state.config)
+    is_night = is_nighttime(state.config, tz=state.local_tz)
     within_solar = is_solar_window(state.config, state)
     
     nacht_reduction_val = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
@@ -77,7 +77,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         batterie_fruehstart = True
 
     is_critical_frost = False
-    if regelfuehler := t_mittig: # Standard sensor for these modes
+    regelfuehler = t_mittig  # Standard sensor for these modes
+    if regelfuehler is not None:
         if is_valid_temperature(regelfuehler):
             night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction_val
             if regelfuehler <= night_einschaltpunkt:

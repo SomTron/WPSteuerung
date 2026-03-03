@@ -115,12 +115,12 @@ async def control_system(request: Request, cmd: ControlCommand):
         # Example: Force compressor ON
         # This requires exposing the set_kompressor_status_func or similar in control_funcs
         if "set_kompressor" in control_funcs:
-            await control_funcs["set_kompressor"](shared_state, True, force=True)
+            await control_funcs["set_kompressor"](True, force=True)
             return {"status": "success", "message": "Compressor forced ON"}
             
     elif cmd.command == "force_off":
         if "set_kompressor" in control_funcs:
-            await control_funcs["set_kompressor"](shared_state, False, force=True)
+            await control_funcs["set_kompressor"](False, force=True)
             return {"status": "success", "message": "Compressor forced OFF"}
             
     elif cmd.command == "set_mode":

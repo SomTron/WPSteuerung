@@ -219,7 +219,7 @@ async def test_handle_mode_switch_from_normal_to_solar():
     state.stats.last_compressor_on_time = datetime.now(state.local_tz) - timedelta(minutes=15)  # More than min runtime
     
     # Mock the set_kompressor function
-    async def mock_set_kompressor(state, status, **kwargs):
+    async def mock_set_kompressor(status, **kwargs):
         state.control.kompressor_ein = status
         return True
     
@@ -255,7 +255,7 @@ async def test_handle_mode_switch_from_solar_to_normal_high_temp():
     t_mittig = 46.0
     
     # Mock the set_kompressor function
-    async def mock_set_kompressor(state, status, **kwargs):
+    async def mock_set_kompressor(status, **kwargs):
         state.control.kompressor_ein = status
         return True
     
@@ -276,7 +276,7 @@ async def test_mode_transitions_integration():
     session = AsyncMock()
     
     # Mock the set_kompressor function
-    async def mock_set_kompressor(state, status, **kwargs):
+    async def mock_set_kompressor(status, **kwargs):
         state.control.kompressor_ein = status
         return True
     

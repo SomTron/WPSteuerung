@@ -31,6 +31,8 @@ class SolarState:
         self.forecast_tomorrow: Optional[float] = None
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
+        self.sunrise_tomorrow: Optional[str] = None
+        self.sunset_tomorrow: Optional[str] = None
 
     def __repr__(self):
         return f"<SolarState(acpower={self.acpower}, feedinpower={self.feedinpower}, batpower={self.batpower}, soc={self.soc})>"
@@ -96,6 +98,7 @@ class State:
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None
         self.last_solar_window_status: bool = False
+        self.log_throttle_times: Dict[str, datetime] = {}
 
         # --- Compressor Verification ---
         self.kompressor_verification_start_time: Optional[datetime] = None

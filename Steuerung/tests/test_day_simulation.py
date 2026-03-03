@@ -114,12 +114,12 @@ async def run_simulation_scenario(scenario_name, steps, config):
     start_date = datetime(2024, 6, 15, 0, 0, 0)
     local_tz = pytz.timezone("Europe/Berlin")
     
-    async def mock_set_kompressor(state, status, force=False, t_boiler_oben=None):
-        state.control.kompressor_ein = status
+    async def mock_set_kompressor(status, force=False, t_boiler_oben=None):
+        mock_state.control.kompressor_ein = status
         if status:
-            state.stats.last_compressor_on_time = current_sim_time
+            mock_state.stats.last_compressor_on_time = current_sim_time
         else:
-            state.stats.last_compressor_off_time = current_sim_time
+            mock_state.stats.last_compressor_off_time = current_sim_time
         return True
         
     async def mock_send_telegram(session, chat_id, message, token, parse_mode=None):

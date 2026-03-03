@@ -43,13 +43,7 @@ def handle_exit(signum, frame):
 async def handle_pressure_check(session, state):
     """Liest den Druckschalter über HardwareManager."""
     if not state.hardware_manager: return True
-    pressure_ok = state.hardware_manager.read_pressure_sensor()
-    
-    if not pressure_ok and state.control.last_pressure_state:
-         # Notify if changed to Error
-         pass # Logic handled in control_logic mostly
-         
-    return pressure_ok
+    return state.hardware_manager.read_pressure_sensor()
 
 def run_api():
     """Startet den FastAPI-Server."""
@@ -105,17 +99,15 @@ async def setup_application():
     state.session = session
     
     
-    # 6. CSV Header Check (Once at startup)
+    # 7. CSV Header Check (Once at startup)
     try:
-        from utils import check_and_fix_csv_header, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER
+        from utils import check_and_fix_csv_header
         csv_file = HEIZUNGSDATEN_CSV
         log_dir = os.path.dirname(csv_file)
         if log_dir and not os.path.exists(log_dir):
             os.makedirs(log_dir)
             
         if not os.path.exists(csv_file):
-            # Create new file synchronously at startup
-            import aiofiles # We are in async context but setup_application is async
             async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
                 await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
             logging.info(f"Created new CSV file: {csv_file}")
@@ -158,7 +150,7 @@ def handle_day_transition(state, now):
 
         # Automatische Rollierung der Heizungslog-Datei (einmal pro Tag)
         try:
-            from utils import rotate_csv, HEIZUNGSDATEN_CSV
+            from utils import rotate_csv
             rotate_csv(HEIZUNGSDATEN_CSV)
             logging.info("Heizungslog-Datei wurde rolliert (alte Einträge gesichert).")
         except Exception as e:
@@ -245,8 +237,8 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.solar.forecast_tomorrow = rad_tomorrow
             state.solar.sunrise_today = sr_today
             state.solar.sunset_today = ss_today
-            state.sunrise_tomorrow = sr_tomorrow
-            state.sunset_tomorrow = ss_tomorrow
+            state.solar.sunrise_tomorrow = sr_tomorrow
+            state.solar.sunset_tomorrow = ss_tomorrow
             state.last_forecast_update = now_local
             
     return last_vpn_check
@@ -298,7 +290,7 @@ async def run_logic_step(session, state):
     if not await control_logic.check_pressure_and_config(
         session, state, handle_pressure_check, state.set_kompressor_status, state.update_config, lambda: "hash"
     ):
-        pass
+        return
 
     # 2. Kompressor-Verifizierung
     if state.control.kompressor_ein:
@@ -320,9 +312,9 @@ async def run_logic_step(session, state):
         regelfuehler = result["regelfuehler"]
         
         # Save active sensor name for status message
-        if regelfuehler == state.sensors.t_mittig:
+        if regelfuehler is state.sensors.t_mittig:
             state.control.active_rule_sensor = "Mittig"
-        elif regelfuehler == state.sensors.t_unten:
+        elif regelfuehler is state.sensors.t_unten:
             state.control.active_rule_sensor = "Unten"
         else:
             state.control.active_rule_sensor = "Unknown"
@@ -342,7 +334,7 @@ async def log_system_state(state):
             return f"{prefix}:Err"
         try:
             return f"{prefix}:{val:{fmt}}"
-        except:
+        except Exception:
             return f"{prefix}:Err"
 
     if not state.hardware_manager: return
@@ -384,7 +376,7 @@ async def log_system_state(state):
             fmt_csv(solax.get("consumeenergy", 0)),
             fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
             "1" if state.control.solar_ueberschuss_aktiv else "0",
-            "1" if control_logic.is_nighttime(state.config) else "0",
+            "1" if control_logic.is_nighttime(state.config, tz=state.local_tz) else "0",
             power_source, fmt_csv(state.solar.forecast_tomorrow),
             fmt_csv(state.control.activation_reason)
         ]
