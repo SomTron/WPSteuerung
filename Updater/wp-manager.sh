@@ -54,6 +54,7 @@ while true; do
     printf "8) 📂   List Files\n"
     printf "9) ☁️    Upload CSV to Catbox\n"
     printf "10) 🆕  Update WP-Manager (this script)\n"
+    printf "11) 🔙  Rollback (Ältere Version einspielen)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -95,6 +96,11 @@ while true; do
             printf "${GREEN}Update fertig. Starte Skript neu...${NC}\n"
             sleep 1
             exec sh "$0" "$@"
+            ;;
+        11) 
+            printf "${CYAN}Starte Deployment-Menü für Rollback... Bitte drücke gleich '7'.${NC}\n"
+            sleep 1
+            sh ./rpi-deploy.sh; wait_for_key 
             ;;
         0) exit 0 ;;
         *) sleep 1 ;;

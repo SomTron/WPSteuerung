@@ -24,6 +24,75 @@ color_print() {
     printf "%b%s%b\n" "$1" "$2" "$NC"
 }
 
+# --- Hilfsfunktionen für robusteres Deployment ---
+
+save_fallback() {
+    local max_fallbacks=5
+    local fallback_file="$REPO_DIR/.git/fallback_commits"
+    local current_commit=$(git rev-parse HEAD)
+    local current_date=$(date '+%Y-%m-%d %H:%M:%S')
+    local commit_msg=$(git log -1 --format=%s)
+    
+    # Speichere die aktuellen Abhängigkeiten vor dem Update zum Vergleichen
+    if [ -f "$REPO_DIR/requirements.txt" ]; then
+        cp "$REPO_DIR/requirements.txt" "$REPO_DIR/.git/requirements.txt.bak" 2>/dev/null || true
+    fi
+    
+    # Commit in Historiendatei eintragen (nur wenn er nicht schon der neueste Eintrag ist)
+    if [ ! -f "$fallback_file" ] || ! head -n 1 "$fallback_file" | grep -q "$current_commit"; then
+        echo "$current_commit | $current_date | $commit_msg" | cat - "$fallback_file" 2>/dev/null | head -n $max_fallbacks > "$fallback_file.tmp"
+        mv "$fallback_file.tmp" "$fallback_file"
+    fi
+}
+
+check_dependencies() {
+    printf "\n${CYAN}Prüfe auf neue Python-Abhängigkeiten...${NC}\n"
+    if [ -f "$REPO_DIR/requirements.txt" ] && [ -f "$REPO_DIR/.git/requirements.txt.bak" ]; then
+        if ! cmp -s "$REPO_DIR/requirements.txt" "$REPO_DIR/.git/requirements.txt.bak"; then
+            printf "${YELLOW}requirements.txt hat sich geändert! Installiere neue Abhängigkeiten...${NC}\n"
+            # Versuche global oder im venv zu installieren (hier globale fallback-annahme basierend auf typischen RPi setups)
+            # Da wir nicht wissen, ob ein venv aktiv ist, versuchen wir pip3 install -r mit --break-system-packages (ab Python 3.11 auf RPi nötig für system-wide)
+            # Eine sicherere Methode ist, den systemctl service zu checken, aber wir verwenden den Standard pip
+            if command -v pip3 >/dev/null 2>&1; then
+                # Nutze sudo um Berechtigungsprobleme beim globalen Install auf RPi zu vermeiden, falls nötig.
+                sudo pip3 install -r "$REPO_DIR/requirements.txt" || sudo pip3 install --break-system-packages -r "$REPO_DIR/requirements.txt" || true
+                printf "${GREEN}Abhängigkeiten aktualisiert.${NC}\n"
+            else
+                printf "${RED}pip3 nicht gefunden! Bitte manuell prüfen.${NC}\n"
+            fi
+        else
+            printf "${GREEN}Keine Änderungen an den Abhängigkeiten.${NC}\n"
+        fi
+    fi
+}
+
+check_health_and_rollback() {
+    local target_commit=$1
+    printf "\n${CYAN}Warte 5 Sekunden auf Service-Start...${NC}\n"
+    sleep 5
+    
+    if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+        printf "\n${RED}================================================${NC}\n"
+        printf "${RED}WARNUNG: Service ist nach dem Neustart fehlgeschlagen!${NC}\n"
+        printf "${RED}================================================${NC}\n"
+        printf "Fehler-Log (letzte 10 Zeilen):\n"
+        sudo journalctl -u "$SERVICE_NAME" -n 10 --no-pager | grep -i error || true
+        
+        if [ -n "$target_commit" ]; then
+            printf "\nSoll das System automatisch auf den vorherigen Zustand (Commit %s) zurückgesetzt werden? (j/n): " "$target_commit"
+            read rb_reply
+            if [ "$rb_reply" = "j" ] || [ "$rb_reply" = "J" ]; then
+                printf "${CYAN}Setze zurück auf %s...${NC}\n" "$target_commit"
+                git reset --hard "$target_commit"
+                sudo systemctl restart "$SERVICE_NAME"
+                printf "${GREEN}Zurückgesetzt und neu gestartet!${NC}\n"
+            fi
+        fi
+    else
+        printf "${GREEN}Healthcheck bestanden: Service ist aktiv.${NC}\n"
+    fi
+}
+
 color_print "$CYAN" "========================================="
 color_print "$CYAN" "  WPSteuerung Deployment auf Raspberry Pi"
 color_print "$CYAN" "========================================="
@@ -82,9 +151,10 @@ printf "3. Branch wechseln UND aktualisieren\n"
 printf "4. Nur Service neu starten\n"
 printf "5. Status anzeigen\n"
 printf "6. WireGuard installieren/prüfen\n"
+printf "7. Auf ältere Version zurücksetzen (Rollback)\n"
 printf "0. Abbrechen\n"
 
-printf "Waehle (0-6): "
+printf "Waehle (0-7): "
 read choice
 
 case "$choice" in
@@ -116,9 +186,13 @@ case "$choice" in
         printf "\nUpdate durchfuehren? (j/n): "
         read confirm
         if [ "$confirm" = "j" ] || [ "$confirm" = "J" ]; then
+            save_fallback
             printf "\n${CYAN}Aktualisiere Branch '%s'...${NC}\n" "$CURRENT_BRANCH"
             git pull origin "$CURRENT_BRANCH"
             printf "${GREEN}Code aktualisiert!${NC}\n"
+            check_dependencies
+            sudo systemctl restart "$SERVICE_NAME"
+            check_health_and_rollback "$CUR_COMMIT"
             printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
             sleep 1
             exec sh "$SCRIPT_PATH" "$@"
@@ -207,8 +281,12 @@ case "$choice" in
                 git checkout -b "$target_branch" "origin/$target_branch" || git checkout "$target_branch"
             fi
 
+            save_fallback
             git pull origin "$target_branch"
             printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
+            check_dependencies
+            sudo systemctl restart "$SERVICE_NAME"
+            check_health_and_rollback "$CUR_COMMIT"
             printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
             sleep 1
             exec sh "$SCRIPT_PATH" "$@"
@@ -270,6 +348,41 @@ case "$choice" in
              sudo wg show
              printf "\n${CYAN}IP-Adressen:${NC}\n"
              ip -4 a show wg0 | grep inet || true
+        fi
+        ;;
+
+    7)
+        printf "\n${CYAN}=== Rollback auf ältere Version ===${NC}\n"
+        printf "Letzte Commits dieses Branches:\n"
+        git log -10 --oneline --decorate
+        printf "\nLetzte durch Updates gespeicherte funktionierende Commits:\n"
+        if [ -f "$REPO_DIR/.git/fallback_commits" ]; then
+            cat "$REPO_DIR/.git/fallback_commits"
+        else
+            printf "Keine Update-Historie gefunden.\n"
+        fi
+        
+        printf "\nWelchen Commit (Hash) möchtest du wiederherstellen? (Leer = Abbrechen): "
+        read fallback_commit
+        
+        if [ -n "$fallback_commit" ]; then
+            printf "${YELLOW}Achtung: Dies versetzt das Repository in einen 'Detached HEAD' Zustand.${NC}\n"
+            printf "Du kannst später mit Auswahl 2 (Branch wechseln) wieder auf den Branch wechseln.\n"
+            printf "Lokale nicht-committete Änderungen werden verworfen.\n"
+            printf "Fortfahren? (j/n): "
+            read rb_confirm
+            if [ "$rb_confirm" = "j" ] || [ "$rb_confirm" = "J" ]; then
+                printf "${CYAN}Führe checkout auf %s aus...${NC}\n" "$fallback_commit"
+                git reset --hard HEAD > /dev/null 2>&1 || true
+                git checkout "$fallback_commit"
+                printf "${GREEN}Code auf Version %s zurückgesetzt!${NC}\n" "$fallback_commit"
+                sudo systemctl restart "$SERVICE_NAME"
+                printf "${GREEN}Service neu gestartet!${NC}\n"
+            else
+                printf "${YELLOW}Abgebrochen.${NC}\n"
+            fi
+        else
+            printf "${YELLOW}Abgebrochen.${NC}\n"
         fi
         ;;
 
