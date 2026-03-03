@@ -1,6 +1,9 @@
-from datetime import datetime, timedelta
+import logging
 import os
 import csv
+import shutil
+from datetime import datetime, timedelta
+from typing import List
 
 def rotate_csv(file_path):
     """
@@ -80,11 +83,6 @@ def rotate_csv(file_path):
 if __name__ == "__main__":
     rotate_csv("your_file.csv")
 import pytz
-import logging
-
-import shutil
-import os
-from typing import List
 
 # Erwarteter Header für heizungsdaten.csv (20 Spalten aus main.py)
 EXPECTED_CSV_HEADER = [

@@ -6,12 +6,26 @@ from telegram_api import send_telegram_message
 from logic_utils import is_valid_temperature, check_log_throttle
 from utils import safe_timedelta
 
+def _fire_and_log(coro, context: str = "background task"):
+    """Erstellt einen Task und loggt Fehler statt sie zu verschlucken."""
+    task = asyncio.create_task(coro)
+    def _on_done(t):
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logging.error(f"Fehler in {context}: {exc}")
+    task.add_done_callback(_on_done)
+    return task
+
 async def handle_critical_compressor_error(session, state, error_context: str):
     """Behandelt kritische Fehler beim Kompressor-Ausschalten."""
     msg = f"🚨 KRITISCHER FEHLER: Kompressor bleibt {error_context} eingeschaltet!"
     logging.critical(f"Kritischer Fehler: Kompressor konnte {error_context} nicht ausgeschaltet werden!")
-    asyncio.create_task(send_telegram_message(
-        session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN))
+    _fire_and_log(
+        send_telegram_message(session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN),
+        context="handle_critical_compressor_error"
+    )
 
 async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten):
     """Prüft auf Sensorfehler."""
@@ -114,5 +128,8 @@ async def verify_compressor_running(state, session, current_t_vorlauf, current_t
     error_msg = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)
     if state.bot_token:
         # Cast to string to prevent MagicMock serialization errors in telegram_api
-        asyncio.create_task(send_telegram_message(session, state.config.Telegram.CHAT_ID, f"{error_msg}\nFehler #{state.kompressor_verification_error_count}", state.config.Telegram.BOT_TOKEN))
+        _fire_and_log(
+            send_telegram_message(session, state.config.Telegram.CHAT_ID, f"{error_msg}\nFehler #{state.kompressor_verification_error_count}", state.config.Telegram.BOT_TOKEN),
+            context="verify_compressor_running"
+        )
     return False, error_msg

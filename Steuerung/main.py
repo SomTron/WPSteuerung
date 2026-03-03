@@ -25,7 +25,7 @@ from telegram_api import start_healthcheck_task, send_telegram_message, create_r
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app
-from utils import safe_timedelta, HEIZUNGSDATEN_CSV
+from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER
 from weather_forecast import get_solar_forecast
 from logic_utils import is_nighttime, is_solar_window
 
