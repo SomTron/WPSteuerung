@@ -6,18 +6,18 @@ Erstellt am 03.03.2026. Status-Tracking für alle identifizierten Verbesserungen
 
 ## 🔴 Priorität 1 – Bugs & Risiken
 
-- [ ] **1. Fehlender `EXPECTED_CSV_HEADER` Import in `main.py`**
+- [x] **1. Fehlender `EXPECTED_CSV_HEADER` Import in `main.py`** ✅
   - Zeile 414 in `log_system_state()` referenziert `EXPECTED_CSV_HEADER`, aber nur `HEIZUNGSDATEN_CSV` wird importiert (Zeile 28).
   - **Fix:** `from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER`
 
-- [ ] **2. Fehlender `logging` Import in `utils.py`**
+- [x] **2. Fehlender `logging` Import in `utils.py`** ✅
   - `rotate_csv()` (Zeile 73) ruft `logging.info()` auf, aber `import logging` steht erst in Zeile 83 – nach der Funktion.
   - **Fix:** `import logging` an den Anfang der Datei verschieben.
 
-- [ ] **3. Doppelter `import os` in `utils.py`**
+- [x] **3. Doppelter `import os` in `utils.py`** ✅
   - `os` wird in Zeile 2 und Zeile 86 importiert. Alle Imports konsolidieren.
 
-- [ ] **4. Fire-and-forget Tasks ohne Error-Handling (`safety_logic.py`)**
+- [x] **4. Fire-and-forget Tasks ohne Error-Handling (`safety_logic.py`)** ✅
   - `asyncio.create_task()` in Zeile 13 und 117 ohne Exception-Callback. Fehler werden verschluckt.
   - **Fix:** Task-Referenz speichern und `add_done_callback()` verwenden.
 
