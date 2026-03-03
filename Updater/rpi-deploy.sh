@@ -121,11 +121,12 @@ fi
 
 # Zeige Git Status (ohne untracked files)
 printf "\n"
-color_print "$CYAN" "Git Status (ohne untracked files):"
-git status -uno --short
+color_print "$CYAN" "Git Status (ohne untracked files, ignoriere sonnen_prognose.csv):"
+git status -uno --short | grep -v "sonnen_prognose.csv" || true
 
 # Warne nur bei getrackten Aenderungen
-if [ -n "$(git status -uno --porcelain)" ]; then
+MODIFIED_FILES=$(git status -uno --porcelain | grep -v "sonnen_prognose.csv" || true)
+if [ -n "$MODIFIED_FILES" ]; then
     color_print "$RED" "WARNUNG: Es gibt lokale Aenderungen an getrackten Dateien!"
     printf "Moechtest du diese verwerfen? (j/n): "
     read reply
