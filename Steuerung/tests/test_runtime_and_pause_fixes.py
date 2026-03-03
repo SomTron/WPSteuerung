@@ -11,7 +11,8 @@ sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 # Add parent of tests (which is Steuerung) to path if running from Steuerung
 sys.path.append(os.getcwd())
 
-from main import set_kompressor_status, handle_day_transition
+from state import State
+from main import handle_day_transition
 from control_logic import handle_compressor_off
 
 @pytest.fixture
@@ -39,12 +40,14 @@ async def test_pause_time_logic_no_reset_if_already_off(mock_state):
     mock_state.control.kompressor_ein = False
     
     # Simuliere Abschaltwunsch (obwohl bereits aus)
-    with patch('main.hardware_manager') as mock_hw:
-        await set_kompressor_status(mock_state, False)
-        
-        # Zeit sollte sich NICHT geändert haben
-        assert mock_state.stats.last_compressor_off_time == off_time
-        mock_hw.set_compressor_state.assert_not_called()
+    mock_hw = MagicMock()
+    mock_state.hardware_manager = mock_hw
+    
+    await State.set_kompressor_status(mock_state, False)
+    
+    # Zeit sollte sich NICHT geändert haben
+    assert mock_state.stats.last_compressor_off_time == off_time
+    mock_hw.set_compressor_state.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_runtime_calculation_only_once_on_off(mock_state):
@@ -55,18 +58,20 @@ async def test_runtime_calculation_only_once_on_off(mock_state):
     mock_state.control.kompressor_ein = True
     
     # 1. Ausschalten
-    with patch('main.hardware_manager'):
-        await set_kompressor_status(mock_state, False)
-        
-        expected_runtime = timedelta(minutes=15)
-        # Erlaube kleine Abweichung durch Test-Laufzeit
-        assert abs((mock_state.stats.total_runtime_today - expected_runtime).total_seconds()) < 1.0
-        
-        current_total = mock_state.stats.total_runtime_today
-        
-        # 2. Erneuter Abschaltruf (sollte nichts ändern)
-        await set_kompressor_status(mock_state, False)
-        assert mock_state.stats.total_runtime_today == current_total
+    mock_hw = MagicMock()
+    mock_state.hardware_manager = mock_hw
+    
+    await State.set_kompressor_status(mock_state, False)
+    
+    expected_runtime = timedelta(minutes=15)
+    # Erlaube kleine Abweichung durch Test-Laufzeit
+    assert abs((mock_state.stats.total_runtime_today - expected_runtime).total_seconds()) < 1.0
+    
+    current_total = mock_state.stats.total_runtime_today
+    
+    # 2. Erneuter Abschaltruf (sollte nichts ändern)
+    await State.set_kompressor_status(mock_state, False)
+    assert mock_state.stats.total_runtime_today == current_total
 
 def test_midnight_transition_running_compressor(mock_state):
     """Verifiziert den Midnight-Split bei laufendem Kompressor."""

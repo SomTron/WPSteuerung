@@ -9,6 +9,7 @@ import aiofiles
 import os
 from datetime import datetime, timedelta
 import pytz
+import re
 
 # Modules
 from config_manager import ConfigManager
@@ -32,8 +33,6 @@ from logic_utils import is_nighttime, is_solar_window
 # Global objects
 config_manager = ConfigManager()
 state = None
-sensor_manager = None
-hardware_manager = None
 stop_event = threading.Event()
 
 def handle_exit(signum, frame):
@@ -41,58 +40,10 @@ def handle_exit(signum, frame):
     stop_event.set()
     sys.exit(0)
 
-async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
-    """
-    Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
-    """
-    now = datetime.now(state.local_tz)
-    was_ein = state.control.kompressor_ein
-
-    if status:
-        # Einschalten
-        if was_ein and not force:
-            return True
-        
-        hardware_manager.set_compressor_state(True)
-        state.control.kompressor_ein = True
-        
-        # Statistiken aktualisieren
-        state.stats.last_compressor_on_time = now
-        state.control.activation_reason = state.control.previous_modus
-        
-        # Startwerte für Verifizierung speichern
-        state.kompressor_verification_start_time = now
-        state.kompressor_verification_start_t_verd = state.sensors.t_verd
-        state.kompressor_verification_start_t_unten = state.sensors.t_unten
-        state.kompressor_verification_start_t_vorlauf = state.sensors.t_vorlauf
-        state.kompressor_verification_last_check = None
-        logging.info(f"Kompressor EIN - Verifizierung gestartet (t_vorlauf={state.sensors.t_vorlauf}, t_unten={state.sensors.t_unten})")
-        
-        return True
-    else:
-        # Ausschalten
-        if not was_ein and not force:
-            return True
-
-        hardware_manager.set_compressor_state(False)
-        state.control.kompressor_ein = False
-        
-        # Statistiken aktualisieren
-        state.stats.last_compressor_off_time = now
-        state.control.activation_reason = None
-        if was_ein and state.stats.last_compressor_on_time:
-            elapsed = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
-            state.stats.total_runtime_today += elapsed
-            state.stats.last_completed_cycle = now
-            logging.info(f"Kompressor AUS. Laufzeit: {elapsed}")
-        else:
-            logging.info("Kompressor AUS")
-            
-        return True
-
 async def handle_pressure_check(session, state):
     """Liest den Druckschalter über HardwareManager."""
-    pressure_ok = hardware_manager.read_pressure_sensor()
+    if not state.hardware_manager: return True
+    pressure_ok = state.hardware_manager.read_pressure_sensor()
     
     if not pressure_ok and state.control.last_pressure_state:
          # Notify if changed to Error
@@ -112,9 +63,10 @@ def run_api():
 
 async def setup_application():
     """Initialisiert Konfiguration, Hardware, Sensoren und API."""
-    global state, sensor_manager, hardware_manager
+    global state
     
     # 1. Config laden
+    config_manager = ConfigManager()
     config_manager.load_config()
     config = config_manager.get()
     
@@ -128,20 +80,21 @@ async def setup_application():
     # 4. Hardware & Sensors init
     try:
         import RPi.GPIO
-        hardware_manager = HardwareManager()
+        hw_mgr = HardwareManager()
         logging.info("Using real hardware (Raspberry Pi detected)")
     except ImportError:
-        hardware_manager = MockHardwareManager()
+        hw_mgr = MockHardwareManager()
         logging.info("Using mock hardware (non-Raspberry Pi platform)")
     
-    hardware_manager.init_gpio()
-    await hardware_manager.init_lcd()
+    state.hardware_manager = hw_mgr
+    hw_mgr.init_gpio()
+    await hw_mgr.init_lcd()
     
-    sensor_manager = SensorManager()
+    state.sensor_manager = SensorManager(config=config)
     
     # 5. API init
     app.state.shared_state = state
-    app.state.control_funcs = {"set_kompressor": set_kompressor_status}
+    app.state.control_funcs = {"set_kompressor": state.set_kompressor_status}
     
     # Start API Thread
     api_thread = threading.Thread(target=run_api, daemon=True)
@@ -176,8 +129,8 @@ async def setup_application():
 
     # Start Telegram Task
     asyncio.create_task(telegram_task(
-        read_temperature_func=sensor_manager.read_temperature,
-        sensor_ids=sensor_manager.sensor_ids,
+        read_temperature_func=state.sensor_manager.read_temperature,
+        sensor_ids=state.sensor_manager.sensor_ids,
         kompressor_status_func=lambda: state.control.kompressor_ein,
         current_runtime_func=lambda: state.stats.current_runtime,
         total_runtime_func=lambda: state.stats.total_runtime_today + state.stats.current_runtime,
@@ -230,7 +183,8 @@ def handle_day_transition(state, now):
 async def update_system_data(session, state):
     """Liest Sensoren und PV-Daten."""
     # 1. Sensoren lesen
-    temps = await sensor_manager.get_all_temperatures()
+    if not state.sensor_manager: return
+    temps = await state.sensor_manager.get_all_temperatures()
     state.sensors.t_oben = temps.get("oben")
     state.sensors.t_mittig = temps.get("mittig")
     state.sensors.t_unten = temps.get("unten")
@@ -238,9 +192,9 @@ async def update_system_data(session, state):
     state.sensors.t_vorlauf = temps.get("vorlauf")
     
     # 1b. Kritischen Sensorfehler prüfen (z.B. 5x hintereinander fehlgeschlagen)
-    if sensor_manager.critical_failure:
-        sensor_name = sensor_manager.critical_failure_sensor or "unbekannt"
-        fail_count = sensor_manager.consecutive_failures.get(sensor_name, 0)
+    if state.sensor_manager.critical_failure:
+        sensor_name = state.sensor_manager.critical_failure_sensor or "unbekannt"
+        fail_count = state.sensor_manager.consecutive_failures.get(sensor_name, 0)
         error_msg = (
             f"🚨 KRITISCHER SENSORFEHLER: Sensor '{sensor_name}' hat {fail_count}x "
             f"hintereinander versagt! Kompressor wird abgeschaltet, System startet neu."
@@ -249,7 +203,7 @@ async def update_system_data(session, state):
         
         # Kompressor sicherheitshalber ausschalten
         if state.control.kompressor_ein:
-            await set_kompressor_status(state, False, force=True)
+            await state.set_kompressor_status(False, force=True)
             logging.critical("Kompressor wurde wegen Sensorfehler ausgeschaltet.")
         
         # Telegram-Alarm senden (best effort)
@@ -260,8 +214,8 @@ async def update_system_data(session, state):
                 logging.error(f"Telegram-Alarm konnte nicht gesendet werden: {e}")
         
         # Hardware aufräumen und Neustart durch systemd auslösen
-        if hardware_manager:
-            hardware_manager.cleanup()
+        if state.hardware_manager:
+            state.hardware_manager.cleanup()
         await session.close()
         logging.critical("System wird beendet (exit code 1) für systemd-Neustart.")
         sys.exit(1)
@@ -302,10 +256,6 @@ async def check_and_send_alerts(session, state):
     current_blocking = state.control.blocking_reason
     
     # Normalisierung: Dynamische Teile (Zeiten, Temperaturen) entfernen
-    # Beispiel: "Min. Pause (noch 1m 10s)" -> "Min. Pause"
-    # Beispiel: "Verdampfer zu kalt (5.0°C < 6°C)" -> "Verdampfer zu kalt"
-    # Beispiel: "Sensorfehler: T_Oben invalid" -> "Sensorfehler"
-    import re
     def normalize(text):
         if not text: return ""
         # 1. Alles in Klammern entfernen (Zeiten, Werte)
@@ -346,7 +296,7 @@ async def run_logic_step(session, state):
     """Führt einen Schritt der Steuerungslogik aus."""
     # 1. Druckschalter & Config
     if not await control_logic.check_pressure_and_config(
-        session, state, handle_pressure_check, set_kompressor_status, state.update_config, lambda: "hash"
+        session, state, handle_pressure_check, state.set_kompressor_status, state.update_config, lambda: "hash"
     ):
         pass
 
@@ -355,12 +305,12 @@ async def run_logic_step(session, state):
         is_running, error_msg = await control_logic.verify_compressor_running(state, session, state.sensors.t_vorlauf, state.sensors.t_unten, verification_delay_minutes=20)
         if not is_running and state.kompressor_verification_error_count >= 2:
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
-            await set_kompressor_status(state, False, force=True)
+            await state.set_kompressor_status(False, force=True)
             state.control.ausschluss_grund = "Kompressor läuft nicht (Verifizierung fehlgeschlagen)"
             state.stats.last_compressor_off_time = datetime.now(state.local_tz) + timedelta(minutes=10)
 
     # 3. Sensoren & Safety
-    if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
+    if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, state.set_kompressor_status):
         result = await control_logic.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig)
         state.control.aktueller_einschaltpunkt = result["einschaltpunkt"]
         state.control.aktueller_ausschaltpunkt = result["ausschaltpunkt"]
@@ -395,7 +345,8 @@ async def log_system_state(state):
         except:
             return f"{prefix}:Err"
 
-    hardware_manager.write_lcd(
+    if not state.hardware_manager: return
+    state.hardware_manager.write_lcd(
         f"{f_temp('Oben', state.sensors.t_oben)} {f_temp('Unt', state.sensors.t_unten)}",
         f"Mit {f_temp('Verd', state.sensors.t_verd, '.0f')}/{f_temp('V', state.sensors.t_vorlauf, '.0f')}",
         f"Ziel:{state.control.aktueller_einschaltpunkt:.0f}/{state.control.aktueller_ausschaltpunkt:.0f} {'ON' if state.control.kompressor_ein else 'OFF'}",
@@ -444,19 +395,20 @@ async def log_system_state(state):
         logging.error(f"Fehler beim Schreiben der CSV: {e}")
 
 async def main_loop():
-    session = await setup_application()
-    
-    # Send Startup Message
-    # Send Startup Message (Non-blocking)
-    if state.bot_token and state.chat_id:
-        asyncio.create_task(
-            send_welcome_message(session, state.chat_id, state.bot_token, state)
-        )
-        logging.info("Startup message task created.")
-
-    last_vpn_check = datetime.now() - timedelta(minutes=1)
-    
+    session = None
     try:
+        session = await setup_application()
+        
+        # Send Startup Message
+    # Send Startup Message (Non-blocking)
+        if state.bot_token and state.chat_id:
+            asyncio.create_task(
+                send_welcome_message(session, state.chat_id, state.bot_token, state)
+            )
+            logging.info("Startup message task created.")
+
+        last_vpn_check = datetime.now() - timedelta(minutes=1)
+        
         while not stop_event.is_set():
             now = datetime.now(state.local_tz)
             
@@ -491,19 +443,21 @@ async def main_loop():
                 # Use a fresh task or direct call to ensure it's sent
                 await send_healthcheck_ping(session, fail_url)
                 logging.info("Explicit /fail ping sent to healthcheck service.")
-            except:
-                pass
+            except Exception as ping_err:
+                logging.error(f"Fehler beim Senden des Healthcheck-Fail-Pings: {ping_err}")
 
         if state.bot_token and state.chat_id:
             try:
                 # Explicitly await send_telegram_message to ensure it's sent before exit
                 await control_logic.send_telegram_message(session, state.chat_id, error_msg, state.bot_token)
-            except:
-                pass
+            except Exception as tg_err:
+                logging.error(f"Fehler beim Senden der Telegram-Kritik-Nachricht: {tg_err}")
     finally:
         logging.info("Shutting down...")
-        if hardware_manager: hardware_manager.cleanup()
-        await session.close()
+        if state and hasattr(state, 'hardware_manager') and state.hardware_manager:
+            state.hardware_manager.cleanup()
+        if session:
+            await session.close()
 
 
 if __name__ == "__main__":

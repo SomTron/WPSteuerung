@@ -3,6 +3,13 @@ import logging
 from typing import Optional
 from pydantic import BaseModel, Field, ValidationError
 
+class SensorenConfig(BaseModel):
+    OBEN: str = Field(default="28-0bd6d4461d84")
+    MITTIG: str = Field(default="28-6977d446424a")
+    UNTEN: str = Field(default="28-445bd44686f4")
+    VERD: str = Field(default="28-213bd4460d65")
+    VORLAUF: str = Field(default="28-2ce8d446a504")
+
 class HeizungssteuerungConfig(BaseModel):
     MIN_LAUFZEIT: int = Field(default=15, description="Minimale Laufzeit in Minuten")
     MIN_PAUSE: int = Field(default=20, description="Minimale Pause in Minuten")
@@ -62,6 +69,7 @@ class AppConfig(BaseModel):
     Solarueberschuss: SolarueberschussConfig = Field(default_factory=SolarueberschussConfig)
     Logging: LoggingConfig = Field(default_factory=LoggingConfig)
     Wetterprognose: WetterprognoseConfig = Field(default_factory=WetterprognoseConfig)
+    Sensoren: SensorenConfig = Field(default_factory=SensorenConfig)
 
 class ConfigManager:
     def __init__(self, config_path: str = "config.ini"):

@@ -53,7 +53,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     is_night = is_nighttime(state.config)
     within_solar = is_solar_window(state.config, state)
     
-    nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0) if is_night else 0.0
+    nacht_reduction_val = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
+    nacht_reduction = nacht_reduction_val if is_night else 0.0
     urlaubs_reduction = get_validated_reduction(state.config, "Urlaubsmodus", "URLAUBSABSENKUNG", 0.0) if state.urlaubsmodus_aktiv else 0.0
     total_reduction = nacht_reduction + urlaubs_reduction
 
@@ -75,12 +76,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     if ist_morgens_uebergang(state) and is_battery_sufficient_for_transition(state):
         batterie_fruehstart = True
 
-    # Frostschutz-Check: Wenn im Übergangsmodus/Solarfenster die Temp unter den Nacht-Sollwert fällt
     is_critical_frost = False
     if regelfuehler := t_mittig: # Standard sensor for these modes
         if is_valid_temperature(regelfuehler):
-            nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
-            night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction
+            night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction_val
             if regelfuehler <= night_einschaltpunkt:
                 is_critical_frost = True
 

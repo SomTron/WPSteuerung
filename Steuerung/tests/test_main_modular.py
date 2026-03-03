@@ -40,6 +40,7 @@ async def test_update_system_data_mapping():
     """Verify that update_system_data correctly maps sensor values to the state."""
     from main import update_system_data
     
+    # Setup state
     state = MagicMock()
     state.local_tz = pytz.timezone("Europe/Berlin")
     session = AsyncMock()
@@ -49,16 +50,17 @@ async def test_update_system_data_mapping():
     mock_sensor_manager.critical_failure = False
     mock_sensor_manager.critical_failure_sensor = None
     mock_sensor_manager.get_all_temperatures = AsyncMock(return_value={
-        "oben": 50.5, "mittig": 45.0, "unten": 40.0, "verd": -5.0
+        "oben": 50.5, "mittig": 45.0, "unten": 40.0, "verd": -5.0, "vorlauf": 48.0
     })
     
-    with patch('main.sensor_manager', mock_sensor_manager), \
-         patch('main.hardware_manager', MagicMock()), \
-         patch('main.get_solax_data', new_callable=AsyncMock, return_value=None):
-        
+    state.sensor_manager = mock_sensor_manager
+    state.hardware_manager = MagicMock()
+    
+    with patch('main.get_solax_data', new_callable=AsyncMock, return_value=None):
         await update_system_data(session, state)
         
         assert state.sensors.t_oben == 50.5
         assert state.sensors.t_mittig == 45.0
         assert state.sensors.t_unten == 40.0
         assert state.sensors.t_verd == -5.0
+        assert state.sensors.t_vorlauf == 48.0

@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 @pytest.mark.asyncio
 async def test_activation_reason_tracking():
     """Verify that activation_reason is correctly set and cleared in main.py."""
-    from main import set_kompressor_status
+    from state import State
     
     state = MagicMock()
     state.local_tz = pytz.timezone("Europe/Berlin")
@@ -20,16 +20,18 @@ async def test_activation_reason_tracking():
     state.control.activation_reason = None
     
     # Mock hardware
-    with patch('main.hardware_manager') as mock_hw:
-        # 1. Switch ON
-        await set_kompressor_status(state, True)
-        assert state.control.kompressor_ein is True
-        assert state.control.activation_reason == "Solarüberschuss"
-        
-        # 2. Switch OFF
-        await set_kompressor_status(state, False)
-        assert state.control.kompressor_ein is False
-        assert state.control.activation_reason is None
+    mock_hw = MagicMock()
+    state.hardware_manager = mock_hw
+    
+    # 1. Switch ON
+    await State.set_kompressor_status(state, True)
+    assert state.control.kompressor_ein is True
+    assert state.control.activation_reason == "Solarüberschuss"
+    
+    # 2. Switch OFF
+    await State.set_kompressor_status(state, False)
+    assert state.control.kompressor_ein is False
+    assert state.control.activation_reason is None
 
 @pytest.mark.asyncio
 async def test_status_message_includes_reason():

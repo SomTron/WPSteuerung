@@ -35,12 +35,12 @@ async def test_log_system_state_handles_none_sensors():
     
     # Mock hardware_manager
     mock_hw = MagicMock()
+    state.hardware_manager = mock_hw
     
     # Mock aiofiles
     mock_file = AsyncMock()
     
-    with patch('main.hardware_manager', mock_hw), \
-         patch('aiofiles.open', return_value=mock_file), \
+    with patch('aiofiles.open', return_value=mock_file), \
          patch('main.HEIZUNGSDATEN_CSV', 'mock.csv'), \
          patch('os.path.exists', return_value=True):
         

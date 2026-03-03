@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
 import pytz
 import sys
@@ -9,6 +9,13 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from safety_logic import verify_compressor_running
+
+def patch_datetime(target_now):
+    class MockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return target_now
+    return patch("safety_logic.datetime", MockDateTime)
 
 @pytest.fixture
 def mock_state():
@@ -120,10 +127,29 @@ async def test_verification_failure_no_unten_change(mock_state):
         assert is_running is False
         assert "Unterer Fühler: nur 0.1°C Änderung" in error_msg
 
-def patch_datetime(target_now):
-    from unittest.mock import patch
-    class MockDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return target_now
-    return patch("safety_logic.datetime", MockDateTime)
+@pytest.mark.asyncio
+async def test_verification_skipped_if_compressor_off(mock_state):
+    """Verify verification is skipped if compressor is OFF."""
+    mock_state.control.kompressor_ein = False
+    is_running, error_msg = await verify_compressor_running(mock_state, None, 35.0, 30.0)
+    assert is_running is True
+    assert error_msg is None
+
+@pytest.mark.asyncio
+async def test_verification_skipped_if_no_start_time(mock_state):
+    """Verify verification is skipped if no start time is set."""
+    mock_state.kompressor_verification_start_time = None
+    is_running, error_msg = await verify_compressor_running(mock_state, None, 35.0, 30.0)
+    assert is_running is True
+    assert error_msg is None
+
+@pytest.mark.asyncio
+async def test_verification_error_counter(mock_state):
+    """Verify that error counter increments on failure."""
+    now = datetime(2023, 1, 1, 12, 25, 0, tzinfo=mock_state.local_tz)
+    mock_state.kompressor_verification_start_time = now - timedelta(minutes=25)
+    mock_state.kompressor_verification_error_count = 1
+    
+    with patch_datetime(now):
+        await verify_compressor_running(mock_state, None, 30.0, 40.0)
+        assert mock_state.kompressor_verification_error_count == 2

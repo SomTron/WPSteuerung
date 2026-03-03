@@ -18,19 +18,31 @@ def _log_attempt(sensor_key: str, attempt: int, total: int):
     pass
 
 class SensorManager:
-    def __init__(self, base_dir: str = "/sys/bus/w1/devices/"):
+    def __init__(self, config=None, base_dir: str = "/sys/bus/w1/devices/"):
         self.base_dir = base_dir
         self.last_sensor_readings: Dict[str, Tuple[datetime, float]] = {}
         self.sensor_read_interval = timedelta(seconds=5)
         self.tz = pytz.timezone("Europe/Berlin")
-        # Sensor IDs mapping (könnte auch aus Config kommen, hier fest wie in main.py)
-        self.sensor_ids = {
-            "oben": "28-0bd6d4461d84",
-            "mittig": "28-6977d446424a",
-            "unten": "28-445bd44686f4",
-            "verd": "28-213bd4460d65",
-            "vorlauf": "28-2ce8d446a504"
-        }
+        
+        # Sensor IDs mapping from config or defaults
+        if config and hasattr(config, 'Sensoren'):
+            c = config.Sensoren
+            self.sensor_ids = {
+                "oben": c.OBEN,
+                "mittig": c.MITTIG,
+                "unten": c.UNTEN,
+                "verd": c.VERD,
+                "vorlauf": c.VORLAUF
+            }
+        else:
+            self.sensor_ids = {
+                "oben": "28-0bd6d4461d84",
+                "mittig": "28-6977d446424a",
+                "unten": "28-445bd44686f4",
+                "verd": "28-213bd4460d65",
+                "vorlauf": "28-2ce8d446a504"
+            }
+            
         # Consecutive failure tracking per sensor key
         self.consecutive_failures: Dict[str, int] = {key: 0 for key in self.sensor_ids}
         self.max_consecutive_failures: int = 5
@@ -66,7 +78,7 @@ class SensorManager:
                     if temp < -20 or temp > 100:
                         logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                         return None
-                    # logging.debug(f"Sensor {sensor_id} gelesen: {temp:.3f} °C")
+                    logging.debug(f"Sensor {sensor_id} gelesen: {temp:.3f} °C")
                     return temp
                 else:
                     logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")

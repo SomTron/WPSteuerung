@@ -15,6 +15,9 @@ class SensorsState:
         self.t_boiler: Optional[float] = None
         self.last_readings: Dict = {}
 
+    def __repr__(self):
+        return f"<SensorsState(t_oben={self.t_oben}, t_unten={self.t_unten}, t_mittig={self.t_mittig}, t_verd={self.t_verd}, t_vorlauf={self.t_vorlauf}, t_boiler={self.t_boiler})>"
+
 class SolarState:
     def __init__(self):
         self.acpower: Optional[float] = None
@@ -28,6 +31,9 @@ class SolarState:
         self.forecast_tomorrow: Optional[float] = None
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
+
+    def __repr__(self):
+        return f"<SolarState(acpower={self.acpower}, feedinpower={self.feedinpower}, batpower={self.batpower}, soc={self.soc})>"
 
 class ControlState:
     def __init__(self, config):
@@ -45,6 +51,9 @@ class ControlState:
         self.last_blocking_reason: Optional[str] = None  # For change detection
         self.activation_reason: Optional[str] = None  # Reason why compressor switched on
 
+    def __repr__(self):
+        return f"<ControlState(kompressor_ein={self.kompressor_ein}, solar_ueberschuss_aktiv={self.solar_ueberschuss_aktiv}, blocking_reason='{self.blocking_reason}')>"
+
 class StatsState:
     def __init__(self, now):
         self.current_runtime = timedelta()
@@ -55,6 +64,9 @@ class StatsState:
         self.last_compressor_on_time: Optional[datetime] = None
         self.last_compressor_off_time: Optional[datetime] = None
         self.last_completed_cycle: Optional[datetime] = None
+
+    def __repr__(self):
+        return f"<StatsState(total_runtime_today={self.total_runtime_today}, last_day={self.last_day})>"
 
 class State:
     def __init__(self, config_manager):
@@ -100,6 +112,12 @@ class State:
         self.last_pressure_error_time: Optional[datetime] = None
         self._last_config_check: Optional[datetime] = now # Initialize with current time
         self.last_config_hash: Optional[str] = None
+        
+        self.hardware_manager = None
+        self.sensor_manager = None
+
+    def __repr__(self):
+        return f"<State(sensors={self.sensors}, solar={self.solar}, control={self.control}, stats={self.stats})>"
 
     # --- Properties representing Config Values ---
     @property
@@ -177,3 +195,54 @@ class State:
                 logging.debug("Config file unchanged (hash match), skipping reload")
         except Exception as e:
             logging.error(f"Error checking config hash: {e}")
+
+    async def set_kompressor_status(self, status, force=False, t_boiler_oben=None):
+        """
+        Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
+        """
+        now = datetime.now(self.local_tz)
+        was_ein = self.control.kompressor_ein
+        hw = self.hardware_manager
+
+        if status:
+            # Einschalten
+            if was_ein and not force:
+                return True
+            
+            if hw: hw.set_compressor_state(True)
+            self.control.kompressor_ein = True
+            
+            # Statistiken aktualisieren
+            self.stats.last_compressor_on_time = now
+            self.control.activation_reason = self.control.previous_modus
+            
+            # Startwerte für Verifizierung speichern
+            self.kompressor_verification_start_time = now
+            self.kompressor_verification_start_t_verd = self.sensors.t_verd
+            self.kompressor_verification_start_t_unten = self.sensors.t_unten
+            self.kompressor_verification_start_t_vorlauf = self.sensors.t_vorlauf
+            self.kompressor_verification_last_check = None
+            logging.info(f"Kompressor EIN - Verifizierung gestartet (t_vorlauf={self.sensors.t_vorlauf}, t_unten={self.sensors.t_unten})")
+            
+            return True
+        else:
+            # Ausschalten
+            if not was_ein and not force:
+                return True
+
+            if hw: hw.set_compressor_state(False)
+            self.control.kompressor_ein = False
+            
+            # Statistiken aktualisieren
+            self.stats.last_compressor_off_time = now
+            self.control.activation_reason = None
+            if was_ein and self.stats.last_compressor_on_time:
+                from utils import safe_timedelta
+                elapsed = safe_timedelta(now, self.stats.last_compressor_on_time, self.local_tz)
+                self.stats.total_runtime_today += elapsed
+                self.stats.last_completed_cycle = now
+                logging.info(f"Kompressor AUS. Laufzeit: {elapsed}")
+            else:
+                logging.info("Kompressor AUS")
+                
+            return True

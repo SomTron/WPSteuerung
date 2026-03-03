@@ -6,6 +6,14 @@ from telegram_api import send_telegram_message
 from logic_utils import is_valid_temperature, check_log_throttle
 from utils import safe_timedelta
 
+# Constants
+MIN_VERDAMPFER_TEMP = -20.0
+MAX_VERDAMPFER_TEMP = 50.0
+VORLAUF_RISE_THRESHOLD = 2.0
+UNTEN_CHANGE_THRESHOLD = 0.2
+VERIFICATION_DELAY_DEFAULT = 20
+VERIFICATION_CHECK_INTERVAL = 1 # Minute
+
 def _fire_and_log(coro, context: str = "background task"):
     """Erstellt einen Task und loggt Fehler statt sie zu verschlucken."""
     task = asyncio.create_task(coro)
@@ -61,7 +69,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
 
-    if not is_valid_temperature(t_verd, min_temp=-20.0, max_temp=50.0):
+    if not is_valid_temperature(t_verd, min_temp=MIN_VERDAMPFER_TEMP, max_temp=MAX_VERDAMPFER_TEMP):
         state.control.ausschluss_grund = "Verdampfertemperatur ungültig"
         state.control.blocking_reason = "Verdampfer ungültig"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
@@ -90,7 +98,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     state.verdampfer_blocked = False
     return True
 
-async def verify_compressor_running(state, session, current_t_vorlauf, current_t_unten, verification_delay_minutes=20):
+async def verify_compressor_running(state, session, current_t_vorlauf, current_t_unten, verification_delay_minutes=VERIFICATION_DELAY_DEFAULT):
     """Verifiziert den Lauf des Kompressors über Temperaturänderungen am Vorlauf."""
     now = datetime.now(state.local_tz)
     if not state.control.kompressor_ein or state.kompressor_verification_start_time is None:
@@ -101,7 +109,7 @@ async def verify_compressor_running(state, session, current_t_vorlauf, current_t
     if elapsed < timedelta(minutes=verification_delay_minutes): return True, None
     
     if state.kompressor_verification_last_check:
-        if safe_timedelta(now, state.kompressor_verification_last_check, state.local_tz) < timedelta(minutes=1):
+        if safe_timedelta(now, state.kompressor_verification_last_check, state.local_tz) < timedelta(minutes=VERIFICATION_CHECK_INTERVAL):
             return True, None
     state.kompressor_verification_last_check = now
 
@@ -109,9 +117,9 @@ async def verify_compressor_running(state, session, current_t_vorlauf, current_t
     vorlauf_delta = current_t_vorlauf - (state.kompressor_verification_start_t_vorlauf or current_t_vorlauf)
     unten_delta = abs(current_t_unten - state.kompressor_verification_start_t_unten)
     
-    # Kriterium: Vorlauf steigt um mindestens 2 Grad
-    vorlauf_ok = vorlauf_delta >= 2.0
-    unten_ok = unten_delta >= 0.2
+    # Kriterium: Vorlauf steigt um mindestens threshold
+    vorlauf_ok = vorlauf_delta >= VORLAUF_RISE_THRESHOLD
+    unten_ok = unten_delta >= UNTEN_CHANGE_THRESHOLD
     
     if vorlauf_ok and unten_ok:
         state.kompressor_verification_failed = False
@@ -122,8 +130,8 @@ async def verify_compressor_running(state, session, current_t_vorlauf, current_t
     state.kompressor_verification_error_count += 1
     
     error_parts = []
-    if not vorlauf_ok: error_parts.append(f"Vorlauf: nur {vorlauf_delta:.1f}°C Anstieg (Soll: >=2.0°C)")
-    if not unten_ok: error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >=0.2°C)")
+    if not vorlauf_ok: error_parts.append(f"Vorlauf: nur {vorlauf_delta:.1f}°C Anstieg (Soll: >={VORLAUF_RISE_THRESHOLD}°C)")
+    if not unten_ok: error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >={UNTEN_CHANGE_THRESHOLD}°C)")
     
     error_msg = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)
     if state.bot_token:

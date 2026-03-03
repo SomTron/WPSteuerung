@@ -10,7 +10,8 @@ import asyncio
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import set_kompressor_status, handle_day_transition, setup_application
+from state import State
+from main import handle_day_transition, setup_application
 from control_logic import handle_compressor_off, handle_compressor_on
 from utils import check_and_fix_csv_header, rotate_csv
 from telegram_api import send_telegram_message
@@ -41,12 +42,13 @@ async def test_set_kompressor_status_network_error():
     state = create_mock_state()
     
     # Mock hardware manager to simulate network error
-    with patch('main.hardware_manager') as mock_hw:
-        mock_hw.set_compressor_state.side_effect = Exception("Network error")
-        
-        # This should raise an exception, which is the current behavior
-        with pytest.raises(Exception, match="Network error"):
-            await set_kompressor_status(state, True)
+    mock_hw = MagicMock()
+    state.hardware_manager = mock_hw
+    mock_hw.set_compressor_state.side_effect = Exception("Network error")
+    
+    # This should raise an exception, which is the current behavior
+    with pytest.raises(Exception, match="Network error"):
+        await State.set_kompressor_status(state, True)
 
 
 @pytest.mark.asyncio
@@ -58,12 +60,13 @@ async def test_set_kompressor_status_timeout():
     state.control.kompressor_ein = True  # Muss eingeschaltet sein, damit er ausgeschaltet werden kann
     
     # Mock hardware manager to simulate timeout
-    with patch('main.hardware_manager') as mock_hw:
-        mock_hw.set_compressor_state.side_effect = asyncio.TimeoutError()
-        
-        # This should raise a TimeoutError, which is the current behavior
-        with pytest.raises(asyncio.TimeoutError):
-            await set_kompressor_status(state, False)
+    mock_hw = MagicMock()
+    state.hardware_manager = mock_hw
+    mock_hw.set_compressor_state.side_effect = asyncio.TimeoutError()
+    
+    # This should raise a TimeoutError, which is the current behavior
+    with pytest.raises(asyncio.TimeoutError):
+        await State.set_kompressor_status(state, False)
 
 
 @pytest.mark.asyncio
@@ -92,12 +95,10 @@ async def test_setup_application_config_error():
         
         # This should handle the config error gracefully
         try:
-            state = await setup_application()
-            # Should still return a state object even with config error
-            assert state is not None
+            await setup_application()
+            import main
+            assert main.state is not None
         except Exception as e:
-            # If setup_application is designed to propagate errors, 
-            # we might expect it to raise an exception
             pass
 
 
@@ -176,7 +177,7 @@ async def test_multiple_concurrent_requests():
     
     # Simulate multiple concurrent calls to set_kompressor_status
     async def call_set_kompressor():
-        return await set_kompressor_status(state, True)
+        return await State.set_kompressor_status(state, True)
     
     # Run multiple concurrent calls
     tasks = [call_set_kompressor() for _ in range(5)]

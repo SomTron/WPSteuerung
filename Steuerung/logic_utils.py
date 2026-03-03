@@ -12,6 +12,10 @@ def is_valid_temperature(temp: Optional[float], min_temp: float = -50.0, max_tem
     if temp < min_temp or temp > max_temp: return False
     return True
 
+def parse_t(s: str):
+    """Parses a time string in HH:MM format."""
+    return datetime.strptime(s, "%H:%M").time()
+
 def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0) -> bool:
     """Prüft, ob eine Log-Nachricht gesendet werden soll (Throttling)."""
     last_time = getattr(state, attribute_name, None)
@@ -64,7 +68,6 @@ def ist_uebergangsmodus_aktiv(state):
         now_time = datetime.now(state.local_tz).time()
         
         cfg = state.config.Heizungssteuerung
-        def parse_t(s): return datetime.strptime(s, "%H:%M").time()
         
         n_ende = parse_t(cfg.NACHTABSENKUNG_END)
         u_m_ende = parse_t(cfg.UEBERGANGSMODUS_MORGENS_ENDE)
@@ -90,7 +93,8 @@ def get_validated_reduction(config, section: str, key: str, default: float = 0.0
         if reduction < 0 or reduction > 35:
             return default
         return reduction
-    except:
+    except Exception as e:
+        logging.error(f"Fehler in get_validated_reduction: {e}")
         return default
 
 def get_house_power(state) -> float:
@@ -107,13 +111,13 @@ def ist_morgens_uebergang(state) -> bool:
     try:
         now_time = datetime.now(state.local_tz).time()
         cfg = state.config.Heizungssteuerung
-        def parse_t(s): return datetime.strptime(s, "%H:%M").time()
         
         n_ende = parse_t(cfg.NACHTABSENKUNG_END)
         u_m_ende = parse_t(cfg.UEBERGANGSMODUS_MORGENS_ENDE)
         
         return n_ende <= now_time <= u_m_ende
-    except:
+    except Exception as e:
+        logging.error(f"Fehler in ist_morgens_uebergang: {e}")
         return False
 
 def is_battery_sufficient_for_transition(state) -> bool:
@@ -121,8 +125,6 @@ def is_battery_sufficient_for_transition(state) -> bool:
     now = datetime.now(state.local_tz)
     now_time = now.time()
     cfg = state.config.Heizungssteuerung
-    
-    def parse_t(s): return datetime.strptime(s, "%H:%M").time()
     
     n_ende = parse_t(cfg.NACHTABSENKUNG_END)
     u_m_ende_str = cfg.UEBERGANGSMODUS_MORGENS_ENDE
