@@ -60,6 +60,8 @@ def mock_state():
     state.solar.feedinpower = 0.0
     state.solar.batpower = 0.0
     
+    state.log_throttle_times = {}
+    
     return state
 
 @pytest.mark.asyncio

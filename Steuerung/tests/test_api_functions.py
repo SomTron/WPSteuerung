@@ -97,7 +97,7 @@ def test_control_system_force_on():
     data = response.json()
     assert data["status"] == "success"
     assert "Compressor forced ON" in data["message"]
-    mock_set_kompressor.assert_called_once_with(mock_state, True, force=True)
+    mock_set_kompressor.assert_called_once_with(True, force=True)
 
 
 def test_control_system_force_off():
@@ -112,7 +112,7 @@ def test_control_system_force_off():
     data = response.json()
     assert data["status"] == "success"
     assert "Compressor forced OFF" in data["message"]
-    mock_set_kompressor.assert_called_once_with(mock_state, False, force=True)
+    mock_set_kompressor.assert_called_once_with(False, force=True)
 
 
 def test_control_system_set_bath_mode():
