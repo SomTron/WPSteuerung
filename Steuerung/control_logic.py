@@ -40,7 +40,7 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
     if not pressure_ok:
         state.control.ausschluss_grund = "Druckschalterfehler"
         state.control.blocking_reason = "Druckschalter-Fehler"
-        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        if state.control.kompressor_ein: await set_kompressor_status_func(False, force=True)
         return False
     if not only_pressure:
         if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=60):
@@ -121,7 +121,7 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
     # 1. Reguläres Ausschalten bei Erreichen der Zieltemperatur
     if regelfuehler is not None and regelfuehler >= ausschaltpunkt:
         if elapsed >= min_laufzeit:
-            if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+            if await set_kompressor_status_func(False, force=True, t_boiler_oben=t_oben):
                 state.control.blocking_reason = None
                 logging.info(f"Regulär AUS: Regelfühler ({regelfuehler:.1f}) >= Ziel ({ausschaltpunkt:.1f}). Laufzeit: {elapsed}")
                 return True
@@ -145,7 +145,7 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
             # Check if battery is sufficient to bridge the remaining window
             if not is_battery_sufficient_for_transition(state):
                 if elapsed >= min_laufzeit:
-                    if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+                    if await set_kompressor_status_func(False, force=True, t_boiler_oben=t_oben):
                         state.control.blocking_reason = None
                         logging.info(f"Übergangszeit AUS: Kein PV-Überschuss & Batterie reicht nicht. Modus: {state.control.previous_modus}, Laufzeit: {elapsed}")
                         return True
@@ -189,7 +189,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
             state.control.blocking_reason = "Zieltemp erreicht"
             return False
             
-        if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
+        if await set_kompressor_status_func(True, t_boiler_oben=t_oben):
             # Clear blocking reason on successful start
             state.control.blocking_reason = None
             logging.info(f"Eingeschaltet um {now}. Grund: Regelfühler ({regelfuehler:.1f}) <= Ein-Ziel ({einschaltpunkt:.1f})")
@@ -218,7 +218,7 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
         if (t_mittig is not None and t_mittig >= target):
             # ONLY switch off if min runtime reached
             if elapsed >= state.min_laufzeit:
-                if await set_kompressor_status_func(state, False, force=True):
+                if await set_kompressor_status_func(False, force=True):
                     logging.info(f"Modus-Wechsel AUS: T_Oben ({t_oben:.1f}) oder T_Mittig ({t_mittig:.1f}) >= Ziel ({target:.1f}). Laufzeit: {elapsed}")
                     return True
             else:

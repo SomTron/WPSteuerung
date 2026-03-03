@@ -59,20 +59,20 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     if not await check_for_sensor_errors(session, state, t_oben, t_unten):
         state.control.ausschluss_grund = "Sensorfehler"
         state.control.blocking_reason = "Sensor-Fehler"
-        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        if state.control.kompressor_ein: await set_kompressor_status_func(False, force=True)
         return False
 
     safety_temp = state.config.Heizungssteuerung.SICHERHEITS_TEMP
     if (t_oben is not None and t_oben >= safety_temp) or (t_unten is not None and t_unten >= safety_temp):
         state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
         state.control.blocking_reason = f"Sicherheitstemp (>= {safety_temp}°C)"
-        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        if state.control.kompressor_ein: await set_kompressor_status_func(False, force=True)
         return False
 
     if not is_valid_temperature(t_verd, min_temp=MIN_VERDAMPFER_TEMP, max_temp=MAX_VERDAMPFER_TEMP):
         state.control.ausschluss_grund = "Verdampfertemperatur ungültig"
         state.control.blocking_reason = "Verdampfer ungültig"
-        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        if state.control.kompressor_ein: await set_kompressor_status_func(False, force=True)
         return False
     
     verd_limit = state.config.Heizungssteuerung.VERDAMPFERTEMPERATUR
@@ -92,7 +92,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
             state.control.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {verd_limit} Grad)"
             state.control.blocking_reason = f"Verdampfer zu kalt ({t_verd:.1f}°C < {verd_limit}°C)"
         
-        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        if state.control.kompressor_ein: await set_kompressor_status_func(False, force=True)
         return False
     
     state.verdampfer_blocked = False

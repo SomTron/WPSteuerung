@@ -92,7 +92,7 @@ async def test_handle_compressor_off_transition_no_surplus_no_battery(mock_state
         )
         
         assert result is True
-        set_kompressor_status.assert_called_with(mock_state, False, force=True, t_boiler_oben=45.0)
+        set_kompressor_status.assert_called_with(False, force=True, t_boiler_oben=45.0)
 
 @pytest.mark.asyncio
 async def test_handle_compressor_off_transition_has_battery(mock_state):
@@ -204,4 +204,4 @@ async def test_handle_compressor_off_evening_transition(mock_state):
         )
         
         assert result is True
-        set_kompressor_status.assert_called_with(mock_state, False, force=True, t_boiler_oben=45.0)
+        set_kompressor_status.assert_called_with(False, force=True, t_boiler_oben=45.0)
