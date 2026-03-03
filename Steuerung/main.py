@@ -327,9 +327,9 @@ async def run_logic_step(session, state):
         else:
             state.control.active_rule_sensor = "Unknown"
 
-        await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, set_kompressor_status)
-        await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
-        await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, set_kompressor_status)
+        await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, state.set_kompressor_status)
+        await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, state.set_kompressor_status)
+        await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, state.set_kompressor_status)
         
     # 4. Sofort-Alarme prüfen (Moved outside safety check to ensure it runs even if sensors fail)
     await check_and_send_alerts(session, state)
@@ -410,23 +410,26 @@ async def main_loop():
         last_vpn_check = datetime.now() - timedelta(minutes=1)
         
         while not stop_event.is_set():
-            now = datetime.now(state.local_tz)
-            
-            # Tageswechsel und Laufzeit
-            handle_day_transition(state, now)
-            if state.control.kompressor_ein and state.stats.last_compressor_on_time:
-                state.stats.current_runtime = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
-            else:
-                state.stats.current_runtime = timedelta()
-            
-            # Daten-Update & Periodische Tasks
-            await update_system_data(session, state)
-            last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
-            
-            # Logik & Logging
-            await run_logic_step(session, state)
-            await log_system_state(state)
-            
+            try:
+                now = datetime.now(state.local_tz)
+                
+                # Tageswechsel und Laufzeit
+                handle_day_transition(state, now)
+                if state.control.kompressor_ein and state.stats.last_compressor_on_time:
+                    state.stats.current_runtime = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
+                else:
+                    state.stats.current_runtime = timedelta()
+                
+                # Daten-Update & Periodische Tasks
+                await update_system_data(session, state)
+                last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
+                
+                # Logik & Logging
+                await run_logic_step(session, state)
+                await log_system_state(state)
+            except Exception as loop_e:
+                logging.error(f"Fehler im Main-Loop-Durchlauf: {loop_e}", exc_info=True)
+                
             await asyncio.sleep(10)
 
     except asyncio.CancelledError:
