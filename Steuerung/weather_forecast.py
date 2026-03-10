@@ -76,11 +76,22 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
                 sunset_today = sun_data.get(today_str, {}).get("sunset")
                 sunrise_tomorrow = sun_data.get(tomorrow_str, {}).get("sunrise")
                 sunset_tomorrow = sun_data.get(tomorrow_str, {}).get("sunset")
-                
-                logging.info(f"Solar forecast updated: Today={rad_today:.2f} kWh/m² ({sunrise_today}-{sunset_today}), Tomorrow={rad_tomorrow:.2f} kWh/m²")
-                
+
+                # Sichere Formatierung auch bei None-Werten
+                def _fmt_rad(val):
+                    return f"{val:.2f}" if isinstance(val, (int, float)) else "n/a"
+
+                logging.info(
+                    f"Solar forecast updated: Today={_fmt_rad(rad_today)} kWh/m² ({sunrise_today}-{sunset_today}), "
+                    f"Tomorrow={_fmt_rad(rad_tomorrow)} kWh/m²"
+                )
+
                 # Log to dedicated CSV
-                await log_forecast_to_csv(rad_today, rad_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
+                await log_forecast_to_csv(
+                    rad_today, rad_tomorrow,
+                    sunrise_today, sunset_today,
+                    sunrise_tomorrow, sunset_tomorrow
+                )
                 
                 return rad_today, rad_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow
             else:
@@ -103,7 +114,17 @@ async def log_forecast_to_csv(rad_today, rad_tomorrow, sunrise_today, sunset_tod
                 await f.write(header)
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            line = f"{timestamp},{rad_today:.2f},{rad_tomorrow:.2f},{sunrise_today},{sunset_today},{sunrise_tomorrow},{sunset_tomorrow}\n"
+
+            def _fmt_csv_rad(val):
+                return f"{val:.2f}" if isinstance(val, (int, float)) else "n/a"
+
+            line = (
+                f"{timestamp},"
+                f"{_fmt_csv_rad(rad_today)},"
+                f"{_fmt_csv_rad(rad_tomorrow)},"
+                f"{sunrise_today},{sunset_today},"
+                f"{sunrise_tomorrow},{sunset_tomorrow}\n"
+            )
             await f.write(line)
             logging.debug(f"Logged solar forecast to {csv_file}")
     except Exception as e:

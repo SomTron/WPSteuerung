@@ -48,7 +48,7 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
 
     # Log removed: blocking socket.getaddrinfo was here
 
-    for attempt in range(retries):
+    for attempt in range(1, retries + 1):
         try:
             async with session.post(url, json=payload, timeout=20) as response:
                 if response.status == 200:
@@ -61,9 +61,13 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                     return False
         except (aiohttp.ClientConnectionError, OSError) as e:
             if attempt == retries:
-                logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+                logging.error(
+                    f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}"
+                )
             else:
-                logging.debug(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+                logging.debug(
+                    f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}"
+                )
             if attempt < retries:
                 backoff = retry_delay * (2 ** (attempt - 1))
                 logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
@@ -73,9 +77,13 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                 return False
         except asyncio.TimeoutError:
             if attempt == retries:
-                logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+                logging.error(
+                    f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})"
+                )
             else:
-                logging.debug(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+                logging.debug(
+                    f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})"
+                )
             if attempt < retries:
                 backoff = retry_delay * (2 ** (attempt - 1))
                 logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")

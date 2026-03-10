@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 from datetime import datetime
 import asyncio
+import os
 from utils_history import read_history_data
 
 # Data Models

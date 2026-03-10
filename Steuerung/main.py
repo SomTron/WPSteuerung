@@ -337,12 +337,24 @@ async def log_system_state(state):
         except Exception:
             return f"{prefix}:Err"
 
-    if not state.hardware_manager: return
+    if not state.hardware_manager:
+        return
+
+    def f_setpoint(val):
+        if val is None:
+            return "?"
+        try:
+            return f"{val:.0f}"
+        except Exception:
+            return "?"
+
     state.hardware_manager.write_lcd(
         f"{f_temp('Oben', state.sensors.t_oben)} {f_temp('Unt', state.sensors.t_unten)}",
         f"Mit {f_temp('Verd', state.sensors.t_verd, '.0f')}/{f_temp('V', state.sensors.t_vorlauf, '.0f')}",
-        f"Ziel:{state.control.aktueller_einschaltpunkt:.0f}/{state.control.aktueller_ausschaltpunkt:.0f} {'ON' if state.control.kompressor_ein else 'OFF'}",
-        f"{state.control.previous_modus[:10] if state.control.previous_modus else ''} {state.solar.soc if state.solar.soc else 0}%"
+        f"Ziel:{f_setpoint(state.control.aktueller_einschaltpunkt)}/{f_setpoint(state.control.aktueller_ausschaltpunkt)} "
+        f"{'ON' if state.control.kompressor_ein else 'OFF'}",
+        f"{state.control.previous_modus[:10] if state.control.previous_modus else ''} "
+        f"{state.solar.soc if state.solar.soc else 0}%"
     )
 
     # 2. CSV Logging

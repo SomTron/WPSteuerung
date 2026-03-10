@@ -22,26 +22,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.patrykandpatrick.vico.compose.cartesian.axis.HorizontalAxis
-import com.patrykandpatrick.vico.compose.cartesian.axis.VerticalAxis
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
-import com.patrykandpatrick.vico.compose.cartesian.axis.rememberBottom
-import com.patrykandpatrick.vico.compose.cartesian.axis.rememberStart
-import com.patrykandpatrick.vico.compose.cartesian.data.CartesianChartModelProducer
-import com.patrykandpatrick.vico.compose.cartesian.data.lineSeries
-import com.patrykandpatrick.vico.compose.cartesian.layer.LineCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.axis.rememberBottomAxis
+import com.patrykandpatrick.vico.compose.cartesian.axis.rememberStartAxis
+import com.patrykandpatrick.vico.compose.cartesian.data.rememberCartesianChartModelProducer
+import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLine
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
 import com.patrykandpatrick.vico.compose.common.component.rememberLineComponent
 import com.patrykandpatrick.vico.compose.common.component.rememberTextComponent
 import com.patrykandpatrick.vico.compose.common.fill
+import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
+import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
 import com.wpsteuerung.app.data.model.HistoryDataPoint
 import com.wpsteuerung.app.viewmodel.HistoryUiState
 import com.wpsteuerung.app.viewmodel.HistoryViewModel
@@ -213,9 +211,10 @@ fun HistoryScreen(
 
 @Composable
 fun TemperatureChart(
+    data: List<HistoryDataPoint>,
     modifier: Modifier = Modifier
 ) {
-    val modelProducer = remember { CartesianChartModelProducer.build() }
+    val modelProducer = rememberCartesianChartModelProducer()
 
     LaunchedEffect(data) {
         modelProducer.runTransaction {
@@ -243,20 +242,20 @@ fun TemperatureChart(
             chart = rememberCartesianChart(
                 rememberLineCartesianLayer(
                     lineProvider = LineCartesianLayer.LineProvider.series(
-                        LineCartesianLayer.Line(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFFE91E63)))), // Pink for Oben
-                        LineCartesianLayer.Line(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFF2196F3)))), // Blue for Mittig
-                        LineCartesianLayer.Line(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFF4CAF50)))), // Green for Unten
-                        LineCartesianLayer.Line(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFFFF9800))))  // Orange for Verdampfer
+                        LineCartesianLayer.rememberLine(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFFE91E63)))), // Pink for Oben
+                        LineCartesianLayer.rememberLine(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFF2196F3)))), // Blue for Mittig
+                        LineCartesianLayer.rememberLine(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFF4CAF50)))), // Green for Unten
+                        LineCartesianLayer.rememberLine(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFFFF9800))))  // Orange for Verdampfer
                     )
                 ),
-                startAxis = VerticalAxis.rememberStart(
+                startAxis = rememberStartAxis(
                     label = rememberTextComponent(),
                     guideline = rememberLineComponent(
                         fill = fill(Color.LightGray),
                         thickness = 1.dp
                     )
                 ),
-                bottomAxis = HorizontalAxis.rememberBottom(
+                bottomAxis = rememberBottomAxis(
                     label = rememberTextComponent()
                 )
             ),

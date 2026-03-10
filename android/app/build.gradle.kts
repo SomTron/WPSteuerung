@@ -78,8 +78,9 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     
     // Charts
-    implementation("com.patrykandpatrick.vico:compose:3.0.0-beta.4")
-    implementation("com.patrykandpatrick.vico:compose-m3:3.0.0-beta.4")
+    implementation("com.patrykandpatrick.vico:core:3.0.2")
+    implementation("com.patrykandpatrick.vico:compose:3.0.2")
+    implementation("com.patrykandpatrick.vico:compose-m3:3.0.2")
 
     
     // Coroutines
