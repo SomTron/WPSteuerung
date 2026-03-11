@@ -78,7 +78,7 @@ class SensorManager:
                     if temp < -20 or temp > 100:
                         logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                         return None
-                    logging.debug(f"Sensor {sensor_id} gelesen: {temp:.3f} °C")
+                    # Erfolgreiche Messung: kein Debug-Log mehr, um Log-Datei klein zu halten
                     return temp
                 else:
                     logging.warning(f"Ungültige Daten von Sensor {sensor_id}: CRC-Fehler")

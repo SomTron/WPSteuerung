@@ -67,8 +67,11 @@ async def setup_application():
     # 2. State init
     state = State(config_manager)
     
-    # 3. Logging setup
-    setup_logging(enable_full_log=True, telegram_config=state.config.Telegram)
+    # 3. Logging setup (Konfigurierbar über [Logging].ENABLE_FULL_LOG)
+    setup_logging(
+        enable_full_log=getattr(config.Logging, "ENABLE_FULL_LOG", True),
+        telegram_config=state.config.Telegram
+    )
     logging.info("Starten der Wärmepumpensteuerung (Refactored)...")
 
     # 4. Hardware & Sensors init
