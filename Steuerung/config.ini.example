@@ -49,3 +49,9 @@ ENABLE_FULL_LOG = True
 LATITUDE = 46.7142
 LONGITUDE = 13.6361
 TILT = 30
+PANEL_EFFICIENCY = 0.20
+; Optional: PV-Panel-Gruppen im Format
+; anzahl,länge_m,breite_m,tilt_deg,azimuth_deg; weitere_gruppe; ...
+; Beispiel: 12 Module mit 1.722m x 1.134m, 5° Neigung, Azimut 90° (Ost)
+;           24 Module mit 1.722m x 1.134m, 30° Neigung, Azimut 60°
+PANEL_GROUPS = 12,1.722,1.134,5,90;24,1.722,1.134,30,60

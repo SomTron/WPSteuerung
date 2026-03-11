@@ -5,16 +5,77 @@ import aiofiles
 from datetime import datetime, timedelta
 import pytz
 
+def _compute_pv_geometry(config):
+    """
+    Liefert (effektiver_tilt_deg, total_area_m2, panel_efficiency).
+
+    PANEL_GROUPS-Format:
+      'anzahl,länge_m,breite_m,tilt_deg,azimuth_deg; ...'
+    Beispiel:
+      '12,1.722,1.134,5,90;24,1.722,1.134,30,60'
+    """
+    default_tilt = config.Wetterprognose.TILT if config else 30
+    try:
+        panel_eff = getattr(config.Wetterprognose, "PANEL_EFFICIENCY", 0.20) if config else 0.20
+    except Exception:
+        panel_eff = 0.20
+
+    try:
+        panel_str = getattr(config.Wetterprognose, "PANEL_GROUPS", "") if config else ""
+    except Exception:
+        panel_str = ""
+
+    if not panel_str:
+        return default_tilt, 0.0, panel_eff
+
+    total_area = 0.0
+    weighted_tilt_sum = 0.0
+
+    for group in panel_str.split(";"):
+        group = group.strip()
+        if not group:
+            continue
+        parts = [p.strip() for p in group.split(",")]
+        if len(parts) < 4:
+            logging.warning(f"Ignoriere ungueltige PANEL_GROUPS-Gruppe: '{group}'")
+            continue
+        try:
+            count = float(parts[0])
+            length_m = float(parts[1])
+            width_m = float(parts[2])
+            tilt_deg = float(parts[3])
+            # azimuth_deg = float(parts[4])  # aktuell nicht verwendet, aber im Format vorgesehen
+
+            area = count * length_m * width_m
+            if area <= 0:
+                continue
+
+            total_area += area
+            weighted_tilt_sum += area * tilt_deg
+        except ValueError:
+            logging.warning(f"Konnte PANEL_GROUPS-Eintrag nicht parsen: '{group}'")
+            continue
+
+    effective_tilt = default_tilt
+    if total_area > 0:
+        effective_tilt = weighted_tilt_sum / total_area
+
+    return effective_tilt, total_area, panel_eff
+
 async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
     """
     Fetches solar radiation forecast from Open-Meteo.
-    Returns: (rad_today, rad_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
-    Radiation in kWh/m², times as strings "HH:MM".
+    Returns:
+      (rad_today_m2, rad_tomorrow_m2,
+       pv_today_kwh, pv_tomorrow_kwh,
+       sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
+
+    rad_* in kWh/m², PV-Werte als geschätzte Anlagenenergie in kWh.
     """
     # Use config values or defaults
     lat = config.Wetterprognose.LATITUDE if config else 46.7142
     lon = config.Wetterprognose.LONGITUDE if config else 13.6361
-    tilt = config.Wetterprognose.TILT if config else 30
+    tilt, total_area_m2, panel_eff = _compute_pv_geometry(config)
     
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -40,7 +101,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
                 
                 if not times or not direct or not diffuse:
                     logging.warning("Open-Meteo API returned empty hourly data.")
-                    return None, None, None, None, None, None
+                    return None, None, None, None, None, None, None, None
                 
                 total_radiation = [dir + diff for dir, diff in zip(direct, diffuse)]
                 daily_totals = {}
@@ -77,36 +138,60 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
                 sunrise_tomorrow = sun_data.get(tomorrow_str, {}).get("sunrise")
                 sunset_tomorrow = sun_data.get(tomorrow_str, {}).get("sunset")
 
+                # PV-Gesamtenergie abschätzen (kWh)
+                pv_today = None
+                pv_tomorrow = None
+                if isinstance(rad_today, (int, float)) and total_area_m2 > 0 and panel_eff > 0:
+                    pv_today = rad_today * total_area_m2 * panel_eff
+                if isinstance(rad_tomorrow, (int, float)) and total_area_m2 > 0 and panel_eff > 0:
+                    pv_tomorrow = rad_tomorrow * total_area_m2 * panel_eff
+
                 # Sichere Formatierung auch bei None-Werten
                 def _fmt_rad(val):
                     return f"{val:.2f}" if isinstance(val, (int, float)) else "n/a"
 
+                def _fmt_pv(val):
+                    return f"{val:.1f}" if isinstance(val, (int, float)) else "n/a"
+
                 logging.info(
-                    f"Solar forecast updated: Today={_fmt_rad(rad_today)} kWh/m² ({sunrise_today}-{sunset_today}), "
-                    f"Tomorrow={_fmt_rad(rad_tomorrow)} kWh/m²"
+                    "Solar forecast updated: "
+                    f"RadToday={_fmt_rad(rad_today)} kWh/m², RadTomorrow={_fmt_rad(rad_tomorrow)} kWh/m², "
+                    f"PVToday={_fmt_pv(pv_today)} kWh, PVMorrow={_fmt_pv(pv_tomorrow)} kWh "
+                    f"({sunrise_today}-{sunset_today})"
                 )
 
                 # Log to dedicated CSV
                 await log_forecast_to_csv(
                     rad_today, rad_tomorrow,
+                    pv_today, pv_tomorrow,
                     sunrise_today, sunset_today,
                     sunrise_tomorrow, sunset_tomorrow
                 )
                 
-                return rad_today, rad_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow
+                return (
+                    rad_today, rad_tomorrow,
+                    pv_today, pv_tomorrow,
+                    sunrise_today, sunset_today,
+                    sunrise_tomorrow, sunset_tomorrow
+                )
             else:
                 error_text = await response.text()
                 logging.error(f"Error fetching solar forecast: Status {response.status}, Details: {error_text}")
-                return None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None
     except Exception as e:
         logging.error(f"Unexpected error in get_solar_forecast: {e}")
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
-async def log_forecast_to_csv(rad_today, rad_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow):
+async def log_forecast_to_csv(rad_today, rad_tomorrow, pv_today, pv_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow):
     """Logs the forecast results to a separate CSV file."""
     csv_file = "sonnen_prognose.csv"
     try:
-        header = "Zeitstempel,Today_kWh,Tomorrow_kWh,Sunrise_Today,Sunset_Today,Sunrise_Tomorrow,Sunset_Tomorrow\n"
+        header = (
+            "Zeitstempel,"
+            "Today_Rad_kWh_m2,Tomorrow_Rad_kWh_m2,"
+            "Today_PV_kWh,Tomorrow_PV_kWh,"
+            "Sunrise_Today,Sunset_Today,Sunrise_Tomorrow,Sunset_Tomorrow\n"
+        )
         file_exists = os.path.exists(csv_file)
         
         async with aiofiles.open(csv_file, mode="a", encoding="utf-8") as f:
@@ -118,10 +203,15 @@ async def log_forecast_to_csv(rad_today, rad_tomorrow, sunrise_today, sunset_tod
             def _fmt_csv_rad(val):
                 return f"{val:.2f}" if isinstance(val, (int, float)) else "n/a"
 
+            def _fmt_csv_pv(val):
+                return f"{val:.2f}" if isinstance(val, (int, float)) else "n/a"
+
             line = (
                 f"{timestamp},"
                 f"{_fmt_csv_rad(rad_today)},"
                 f"{_fmt_csv_rad(rad_tomorrow)},"
+                f"{_fmt_csv_pv(pv_today)},"
+                f"{_fmt_csv_pv(pv_tomorrow)},"
                 f"{sunrise_today},{sunset_today},"
                 f"{sunrise_tomorrow},{sunset_tomorrow}\n"
             )

@@ -200,7 +200,10 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, t_vor
         tomorrow_val = f"{state.solar.forecast_tomorrow:.1f}" if state.solar.forecast_tomorrow is not None else "??"
         sunrise = state.solar.sunrise_today if state.solar.sunrise_today else "??"
         sunset = state.solar.sunset_today if state.solar.sunset_today else "??"
-        forecast_text = f"Heute: {today_val}kWh | Morgen: {tomorrow_val}kWh\n☀️ {sunrise} - 🌙 {sunset}"
+        forecast_text = (
+            f"PV-Ertrag Heute: {today_val}kWh | Morgen: {tomorrow_val}kWh\n"
+            f"☀️ {sunrise} - 🌙 {sunset}"
+        )
         
     message = compose_status_message(
         t_oben, t_unten, t_mittig, t_verd, t_vorlauf,

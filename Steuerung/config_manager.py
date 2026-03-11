@@ -58,7 +58,19 @@ class LoggingConfig(BaseModel):
 class WetterprognoseConfig(BaseModel):
     LATITUDE: float = Field(default=46.7142)
     LONGITUDE: float = Field(default=13.6361)
-    TILT: int = Field(default=30)
+    TILT: int = Field(default=30, description="Fallback-Neigungswinkel in Grad, falls keine Panelgruppen konfiguriert sind")
+    PANEL_EFFICIENCY: float = Field(
+        default=0.20,
+        description="PV-Wirkungsgrad (0-1), z.B. 0.20 für 20%%"
+    )
+    PANEL_GROUPS: str = Field(
+        default="",
+        description=(
+            "Optionale PV-Panel-Gruppen im Format "
+            "'anzahl,länge_m,breite_m,tilt_deg,azimuth_deg; ...'. "
+            "Beispiel: '12,1.722,1.134,5,90;24,1.722,1.134,30,60'"
+        ),
+    )
 
 class AppConfig(BaseModel):
     Heizungssteuerung: HeizungssteuerungConfig = Field(default_factory=HeizungssteuerungConfig)

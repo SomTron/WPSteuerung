@@ -231,10 +231,22 @@ async def check_periodic_tasks(session, state, last_vpn_check):
     
     # 2. Solar Forecast (alle 6h)
     if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= 6 * 3600:
-        rad_today, rad_tomorrow, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session, state.config)
-        if rad_today is not None:
-            state.solar.forecast_today = rad_today
-            state.solar.forecast_tomorrow = rad_tomorrow
+        (
+            rad_today_m2,
+            rad_tomorrow_m2,
+            pv_today_kwh,
+            pv_tomorrow_kwh,
+            sr_today,
+            ss_today,
+            sr_tomorrow,
+            ss_tomorrow,
+        ) = await get_solar_forecast(session, state.config)
+        if pv_today_kwh is not None:
+            # Speichere sowohl PV-Gesamtenergie als auch Strahlung pro m² im State
+            state.solar.forecast_today = pv_today_kwh
+            state.solar.forecast_tomorrow = pv_tomorrow_kwh
+            state.solar.forecast_rad_today_m2 = rad_today_m2
+            state.solar.forecast_rad_tomorrow_m2 = rad_tomorrow_m2
             state.solar.sunrise_today = sr_today
             state.solar.sunset_today = ss_today
             state.solar.sunrise_tomorrow = sr_tomorrow

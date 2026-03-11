@@ -27,8 +27,11 @@ class SolarState:
         self.consumeenergy: Optional[float] = None
         self.last_api_call: Optional[datetime] = None
         self.last_api_data: Optional[dict] = None
+        # PV-Prognosen (gesamte Anlagenenergie in kWh)
         self.forecast_today: Optional[float] = None
         self.forecast_tomorrow: Optional[float] = None
+        self.forecast_rad_today_m2: Optional[float] = None
+        self.forecast_rad_tomorrow_m2: Optional[float] = None
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
         self.sunrise_tomorrow: Optional[str] = None
