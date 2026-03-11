@@ -133,14 +133,15 @@ def setup_logging(enable_full_log=True, telegram_config=None, session=None):
     error_handler.setFormatter(formatter)
     root_logger.addHandler(error_handler)
 
-    # Full Log
-    if enable_full_log:
-        file_handler = RotatingFileHandler(
-            "heizungssteuerung.log", maxBytes=100*1024*1024, backupCount=5, encoding="utf-8"
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+    # Full Log / Basis-Log
+    # - Wenn enable_full_log=True: DEBUG ins File
+    # - Wenn enable_full_log=False: nur INFO+ ins File (kompakter)
+    file_handler = RotatingFileHandler(
+        "heizungssteuerung.log", maxBytes=100*1024*1024, backupCount=5, encoding="utf-8"
+    )
+    file_handler.setLevel(logging.DEBUG if enable_full_log else logging.INFO)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
 
     # Console
     stream_handler = logging.StreamHandler(sys.stdout)
