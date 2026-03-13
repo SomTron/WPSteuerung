@@ -20,16 +20,21 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 def _get_active_api_key(request: Request) -> str:
     """Liest den API-Key: erst aus config (shared_state), dann Umgebungsvariable."""
     shared_state = getattr(request.app.state, "shared_state", None)
+    key_val = ""
     if shared_state:
-        cfg_key = getattr(getattr(shared_state.config, "API", None), "API_KEY", "")
-        if cfg_key:
-            return cfg_key
-    return _ENV_API_KEY
+        key_val = getattr(getattr(shared_state.config, "API", None), "API_KEY", "")
+    
+    if not key_val:
+        key_val = _ENV_API_KEY
+    
+    # Bereinigen: Leerzeichen und Anführungszeichen (falls in .ini oder env gesetzt)
+    return key_val.strip(" '\"")
 
 async def verify_api_key(request: Request, key: str = Depends(api_key_header)):
     """Prüft den API-Key, falls einer konfiguriert ist."""
     active_key = _get_active_api_key(request)
     if active_key and key != active_key:
+        logging.warning("API-Key Authentifizierung fehlgeschlagen.")
         raise HTTPException(status_code=401, detail="Ungültiger oder fehlender API-Key")
 
 # ── Data Models ────────────────────────────────────────────────────────────
