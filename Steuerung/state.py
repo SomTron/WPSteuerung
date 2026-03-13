@@ -222,6 +222,10 @@ class State:
             if hw: hw.set_compressor_state(True)
             self.control.kompressor_ein = True
             
+            # Reset blocking reasons when successfully switched
+            self.control.blocking_reason = None
+            self.control.ausschluss_grund = None
+            
             # Statistiken aktualisieren
             self.stats.last_compressor_on_time = now
             self.control.activation_reason = self.control.previous_modus
@@ -242,6 +246,10 @@ class State:
 
             if hw: hw.set_compressor_state(False)
             self.control.kompressor_ein = False
+            
+            # Reset blocking reasons when successfully switched
+            self.control.blocking_reason = None
+            self.control.ausschluss_grund = None
             
             # Statistiken aktualisieren
             self.stats.last_compressor_off_time = now

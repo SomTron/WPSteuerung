@@ -365,7 +365,11 @@ async def run_logic_step(session, state):
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
             await state.set_kompressor_status(False, force=True)
             state.control.ausschluss_grund = "Kompressor läuft nicht (Verifizierung fehlgeschlagen)"
-            state.stats.last_compressor_off_time = datetime.now(state.local_tz) + timedelta(minutes=10)
+            # Penalty pause (+10 min) for safety, clearly logged and set as blocking reason
+            penalty_time = datetime.now(state.local_tz) + timedelta(minutes=10)
+            state.stats.last_compressor_off_time = penalty_time
+            state.control.blocking_reason = "Sicherheits-Pause (nach Verifizierungsfehler)"
+            logging.warning(f"Sicherheits-Pause bis {penalty_time.strftime('%H:%M:%S')} (Verifizierungsfehler)")
 
     # 3. Sensoren & Safety
     if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, state.set_kompressor_status):
