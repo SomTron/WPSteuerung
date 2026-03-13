@@ -163,6 +163,13 @@ h1 {
     border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
+/* ----- Chart Container ----- */
+.chart-container {
+    width: 100%;
+    height: 300px;
+    margin-top: 10px;
+}
+
 /* ----- Data Grids ----- */
 .grid-2-col {
     display: grid;

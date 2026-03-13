@@ -55,7 +55,8 @@ def get_status(request: Request):
             "einschaltpunkt": shared_state.control.aktueller_einschaltpunkt,
             "ausschaltpunkt": shared_state.control.aktueller_ausschaltpunkt,
             "sicherheits_temp": shared_state.sicherheits_temp,
-            "verdampfertemperatur": shared_state.verdampfertemperatur
+            "verdampfertemperatur": shared_state.verdampfertemperatur,
+            "active_sensor": shared_state.control.active_rule_sensor
         },
         "mode": {
             "current": shared_state.control.previous_modus,
@@ -66,11 +67,20 @@ def get_status(request: Request):
         "energy": {
             "battery_power": shared_state.solar.batpower,
             "soc": shared_state.solar.soc,
-            "feed_in": shared_state.solar.feedinpower
+            "feed_in": shared_state.solar.feedinpower,
+            "pv_power": shared_state.solar.acpower,
+            "battery_capacity_kwh": (shared_state.battery_capacity * shared_state.solar.soc / 100.0) if shared_state.battery_capacity > 0 else 0
+        },
+        "forecast": {
+            "today": shared_state.solar.forecast_today,
+            "tomorrow": shared_state.solar.forecast_tomorrow,
+            "sunrise": shared_state.solar.sunrise_today,
+            "sunset": shared_state.solar.sunset_today
         },
         "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund,
-            "last_update": datetime.now().strftime("%H:%M:%S")
+            "last_update": datetime.now().strftime("%H:%M:%S"),
+            "vpn_ip": shared_state.vpn_ip
         }
     }
 

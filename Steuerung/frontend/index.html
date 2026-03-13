@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 </head>
 <body>
     <div class="app-container">
@@ -42,6 +44,14 @@
                 <div class="info-row mt-3">
                     <span class="label">Status Info:</span>
                     <span id="system-reason" class="text-sm">--</span>
+                </div>
+            </section>
+
+            <!-- Chart -->
+            <section class="card glass">
+                <h2>Verlauf (letzte 24h)</h2>
+                <div class="chart-container" style="position: relative; height:300px; width:100%">
+                    <canvas id="historyChart"></canvas>
                 </div>
             </section>
 
@@ -81,8 +91,16 @@
                         <span id="energy-feedin" class="value">-- W</span>
                     </div>
                     <div class="data-box small">
-                        <span class="label">Batterie</span>
+                        <span class="label">PV Leistung</span>
+                        <span id="energy-pv" class="value">-- W</span>
+                    </div>
+                    <div class="data-box small">
+                        <span class="label">Batterie (W)</span>
                         <span id="energy-battery" class="value">-- W</span>
+                    </div>
+                    <div class="data-box small">
+                        <span class="label">Batterie (kWh)</span>
+                        <span id="energy-battery-kwh" class="value">-- kWh</span>
                     </div>
                     <div class="data-box small">
                         <span class="label">SOC</span>
@@ -93,6 +111,41 @@
                 <div class="progress-wrap mt-3">
                     <div class="progress-bg">
                         <div id="soc-bar" class="progress-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Erweiterte Infos -->
+            <section class="card glass">
+                <h2>Regelung & Prognose</h2>
+                <div class="grid-2-col">
+                    <div class="data-box">
+                        <span class="label">Sensor (Aktiv)</span>
+                        <span id="ctrl-sensor" class="value text-sm">--</span>
+                    </div>
+                    <div class="data-box">
+                        <span class="label">Soll (Ein/Aus)</span>
+                        <span id="ctrl-setpoints" class="value text-sm">--</span>
+                    </div>
+                    <div class="data-box">
+                        <span class="label">VPN IP</span>
+                        <span id="sys-vpn" class="value text-sm">--</span>
+                    </div>
+                </div>
+                <div class="info-row mt-3">
+                    <div style="display:flex; flex-direction:column; gap:4px; width:100%;">
+                        <div style="display:flex; justify-content:space-between">
+                            <span class="label">PV Heute: </span>
+                            <span id="forecast-today" class="value text-sm">-- kWh</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between">
+                            <span class="label">PV Morgen: </span>
+                            <span id="forecast-tomorrow" class="value text-sm">-- kWh</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between">
+                            <span class="label">Sonne: </span>
+                            <span id="forecast-sun" class="value text-sm">--</span>
+                        </div>
                     </div>
                 </div>
             </section>
