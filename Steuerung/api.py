@@ -31,12 +31,26 @@ def _get_active_api_key(request: Request) -> str:
     return key_val.strip(" '\"")
 
 async def verify_api_key(request: Request, key: str = Depends(api_key_header)):
-    """Prüft den API-Key, falls einer konfiguriert ist."""
+    """Prüft den API-Key (Header oder Query-Parameter)."""
     active_key = _get_active_api_key(request)
-    if active_key and key != active_key:
-        masked_got = (key[:2] + "..." + key[-2:]) if key and len(key) > 4 else "***"
+    if not active_key:
+        return
+
+    # Fallback: Falls Header fehlt, in Query-Params suchen
+    query_key = request.query_params.get("key")
+    used_key = key or query_key
+
+    if used_key != active_key:
+        masked_got = (used_key[:2] + "..." + used_key[-2:]) if used_key and len(used_key) > 4 else "***"
         masked_exp = (active_key[:2] + "..." + active_key[-2:]) if active_key and len(active_key) > 4 else "***"
-        logging.warning(f"API-Key Auth fehlgeschlagen. Erwartet: '{masked_exp}', Erhalten: '{masked_got}'")
+        
+        # Logge Header-Namen für Diagnose (ohne Werte!)
+        header_names = ", ".join(request.headers.keys())
+        logging.warning(
+            f"API-Key Auth fehlgeschlagen. Erwartet: '{masked_exp}', Erhalten: '{masked_got}' "
+            f"(Quelle: {'Header' if key else 'Query' if query_key else 'Keine'}). "
+            f"Vorhandene Header: {header_names}"
+        )
         raise HTTPException(status_code=401, detail="Ungültiger oder fehlender API-Key")
 
 # ── Data Models ────────────────────────────────────────────────────────────
