@@ -8,25 +8,41 @@
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="manifest" href="manifest.json">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <!-- Chart.js + date-fns adapter (für Zeitachse) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
 <body>
+    <!-- API-Key Modal -->
+    <div id="api-key-modal" class="modal-overlay hidden">
+        <div class="modal-box">
+            <h2>🔒 API-Key erforderlich</h2>
+            <p>Bitte gib deinen API-Key ein. Er wird sicher im Browser gespeichert.</p>
+            <input type="password" id="api-key-input" placeholder="API-Key eingeben..." autocomplete="current-password">
+            <button id="api-key-submit" class="btn primary-btn" style="width:100%; margin-top:12px;">Speichern &amp; Verbinden</button>
+            <p id="api-key-error" class="text-danger hidden">Ungültiger Key. Bitte erneut versuchen.</p>
+        </div>
+    </div>
+
     <div class="app-container">
         <!-- Header -->
         <header class="glass-header">
             <div class="header-content">
                 <h1>Wärmepumpe</h1>
-                <div class="connection-status">
-                    <span class="status-dot" id="conn-dot"></span>
-                    <span id="conn-text">Verbunden</span>
+                <div class="header-actions">
+                    <div class="connection-status">
+                        <span class="status-dot" id="conn-dot"></span>
+                        <span id="conn-text">Verbunden</span>
+                    </div>
+                    <button id="btn-change-key" class="btn-icon" title="API-Key ändern">🔑</button>
                 </div>
             </div>
         </header>
 
         <main>
             <!-- Kompressor Status -->
-            <section class="card glass hero-card">
+            <section class="card glass hero-card" id="card-compressor">
                 <div class="card-header">
                     <h2>Kompressor</h2>
                     <span id="compressor-badge" class="badge badge-off">AUS</span>
@@ -47,16 +63,23 @@
                 </div>
             </section>
 
-            <!-- Chart -->
-            <section class="card glass">
-                <h2>Verlauf (letzte 24h)</h2>
-                <div class="chart-container" style="position: relative; height:300px; width:100%">
+            <!-- Verlauf -->
+            <section class="card glass" id="card-chart">
+                <div class="card-header">
+                    <h2>Verlauf</h2>
+                    <div class="chart-range-btns">
+                        <button class="range-btn active" data-hours="6">6h</button>
+                        <button class="range-btn" data-hours="24">24h</button>
+                        <button class="range-btn" data-hours="168">7d</button>
+                    </div>
+                </div>
+                <div class="chart-container">
                     <canvas id="historyChart"></canvas>
                 </div>
             </section>
 
             <!-- Temperaturen -->
-            <section class="card glass">
+            <section class="card glass" id="card-temps">
                 <h2>Temperaturen</h2>
                 <div class="grid-2-col">
                     <div class="data-box">
@@ -83,23 +106,23 @@
             </section>
 
             <!-- Energie -->
-            <section class="card glass">
-                <h2>Energie & Solar</h2>
-                <div class="grid-3-col">
+            <section class="card glass" id="card-energy">
+                <h2>Energie &amp; Solar</h2>
+                <div class="energy-grid">
                     <div class="data-box small">
                         <span class="label">Netz</span>
                         <span id="energy-feedin" class="value">-- W</span>
                     </div>
                     <div class="data-box small">
-                        <span class="label">PV Leistung</span>
+                        <span class="label">PV</span>
                         <span id="energy-pv" class="value">-- W</span>
                     </div>
                     <div class="data-box small">
-                        <span class="label">Batterie (W)</span>
+                        <span class="label">Akku (W)</span>
                         <span id="energy-battery" class="value">-- W</span>
                     </div>
                     <div class="data-box small">
-                        <span class="label">Batterie (kWh)</span>
+                        <span class="label">Akku (kWh)</span>
                         <span id="energy-battery-kwh" class="value">-- kWh</span>
                     </div>
                     <div class="data-box small">
@@ -115,9 +138,9 @@
                 </div>
             </section>
 
-            <!-- Erweiterte Infos -->
-            <section class="card glass">
-                <h2>Regelung & Prognose</h2>
+            <!-- Regelung & Prognose -->
+            <section class="card glass" id="card-control">
+                <h2>Regelung &amp; Prognose</h2>
                 <div class="grid-2-col">
                     <div class="data-box">
                         <span class="label">Sensor (Aktiv)</span>
@@ -151,8 +174,8 @@
             </section>
 
             <!-- Modi & Steuerung -->
-            <section class="card glass controls">
-                <h2>Modi & Steuerung</h2>
+            <section class="card glass controls" id="card-modes">
+                <h2>Modi &amp; Steuerung</h2>
                 
                 <div class="mode-toggles">
                     <div class="toggle-row">

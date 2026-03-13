@@ -403,3 +403,132 @@ input:checked + .slider:before {
 .danger-btn:hover, .danger-btn:active {
     background: rgba(239, 68, 68, 0.1);
 }
+
+/* ----- API-Key Modal ----- */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.modal-box {
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 20px;
+    padding: 28px;
+    width: 100%;
+    max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-box h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.modal-box p {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.modal-box input[type="password"] {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: var(--text-main);
+    font-family: var(--font-main);
+    font-size: 0.95rem;
+    outline: none;
+    width: 100%;
+    transition: border-color 0.2s;
+}
+
+.modal-box input[type="password"]:focus {
+    border-color: var(--accent-blue);
+}
+
+.hidden { display: none !important; }
+
+.text-danger {
+    font-size: 0.8rem;
+    color: var(--danger);
+    text-align: center;
+}
+
+/* ----- Header Actions ----- */
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.btn-icon {
+    background: transparent;
+    border: none;
+    font-size: 1.1rem;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    padding: 4px;
+}
+
+.btn-icon:hover { opacity: 1; }
+
+/* ----- Stale / Offline Overlay ----- */
+.card.stale {
+    opacity: 0.45;
+    pointer-events: none;
+    filter: grayscale(0.5);
+    transition: opacity 0.5s, filter 0.5s;
+}
+
+/* ----- Chart Range Buttons ----- */
+.chart-range-btns {
+    display: flex;
+    gap: 6px;
+}
+
+.range-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-family: var(--font-main);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.range-btn.active,
+.range-btn:hover {
+    background: rgba(14, 165, 233, 0.2);
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+/* ----- Responsive Energy Grid ----- */
+.energy-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+}
+
+@media (max-width: 380px) {
+    .energy-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
