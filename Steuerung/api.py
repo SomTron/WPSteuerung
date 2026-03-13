@@ -34,7 +34,9 @@ async def verify_api_key(request: Request, key: str = Depends(api_key_header)):
     """Prüft den API-Key, falls einer konfiguriert ist."""
     active_key = _get_active_api_key(request)
     if active_key and key != active_key:
-        logging.warning("API-Key Authentifizierung fehlgeschlagen.")
+        masked_got = (key[:2] + "..." + key[-2:]) if key and len(key) > 4 else "***"
+        masked_exp = (active_key[:2] + "..." + active_key[-2:]) if active_key and len(active_key) > 4 else "***"
+        logging.warning(f"API-Key Auth fehlgeschlagen. Erwartet: '{masked_exp}', Erhalten: '{masked_got}'")
         raise HTTPException(status_code=401, detail="Ungültiger oder fehlender API-Key")
 
 # ── Data Models ────────────────────────────────────────────────────────────
