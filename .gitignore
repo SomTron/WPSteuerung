@@ -43,3 +43,4 @@ Steuerung/csv log/
 # Temporäre Configs und Scripts
 Steuerung/test_config.ini
 test_header_fix.py
+Steuerung/sonnen_prognose.csv
