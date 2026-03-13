@@ -11,15 +11,25 @@ import asyncio
 from utils_history import read_history_data
 
 # ── API-Key Authentifizierung ──────────────────────────────────────────────
-# Setze die Umgebungsvariable WP_API_KEY um die API abzusichern.
-# Wenn WP_API_KEY nicht gesetzt ist, ist die Authentifizierung deaktiviert.
-_API_KEY = os.environ.get("WP_API_KEY", "")
+# Priorität: [API] API_KEY in config.ini > Umgebungsvariable WP_API_KEY
+# Wenn keins gesetzt ist, ist die Authentifizierung deaktiviert.
+_ENV_API_KEY = os.environ.get("WP_API_KEY", "")
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-async def verify_api_key(key: str = Depends(api_key_header)):
+def _get_active_api_key(request: Request) -> str:
+    """Liest den API-Key: erst aus config (shared_state), dann Umgebungsvariable."""
+    shared_state = getattr(request.app.state, "shared_state", None)
+    if shared_state:
+        cfg_key = getattr(getattr(shared_state.config, "API", None), "API_KEY", "")
+        if cfg_key:
+            return cfg_key
+    return _ENV_API_KEY
+
+async def verify_api_key(request: Request, key: str = Depends(api_key_header)):
     """Prüft den API-Key, falls einer konfiguriert ist."""
-    if _API_KEY and key != _API_KEY:
+    active_key = _get_active_api_key(request)
+    if active_key and key != active_key:
         raise HTTPException(status_code=401, detail="Ungültiger oder fehlender API-Key")
 
 # ── Data Models ────────────────────────────────────────────────────────────

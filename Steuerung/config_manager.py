@@ -34,6 +34,9 @@ class HealthcheckConfig(BaseModel):
     HEALTHCHECK_URL: str = Field(default="")
     HEALTHCHECK_INTERVAL_MINUTES: int = Field(default=15)
 
+class ApiConfig(BaseModel):
+    API_KEY: str = Field(default="", description="API-Key für die Web-Oberfläche. Leer = keine Authentifizierung.")
+
 class SolaxCloudConfig(BaseModel):
     TOKEN_ID: str = Field(default="")
     SN: str = Field(default="")
@@ -87,6 +90,7 @@ class AppConfig(BaseModel):
     Logging: LoggingConfig = Field(default_factory=LoggingConfig)
     Wetterprognose: WetterprognoseConfig = Field(default_factory=WetterprognoseConfig)
     Sensoren: SensorenConfig = Field(default_factory=SensorenConfig)
+    API: ApiConfig = Field(default_factory=ApiConfig)
 
 class ConfigManager:
     def __init__(self, config_path: str = "config.ini"):

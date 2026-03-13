@@ -61,3 +61,9 @@ PANEL_EFFICIENCY = 0.20
 ; Beispiel: 12 Module mit 1.722m x 1.134m, 5° Neigung, Azimut 90° (Ost)
 ;           24 Module mit 1.722m x 1.134m, 30° Neigung, Azimut 60°
 PANEL_GROUPS = 12,1.722,1.134,5,90;24,1.722,1.134,30,60
+
+[API]
+; API-Key für die Web-Oberfläche.
+; Wenn leer oder auskommentiert: keine Authentifizierung (öffentlicher Zugriff).
+; Tipp: wähle einen langen, zufälligen String, z.B. output von: python -c "import secrets; print(secrets.token_hex(32))"
+API_KEY = 

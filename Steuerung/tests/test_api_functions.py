@@ -47,6 +47,8 @@ mock_state.stats.total_runtime_today = "2:30:00"
 
 # Mock Control Config Section
 mock_state.config.Heizungssteuerung.MIN_LAUFZEIT = 15
+# Disable API key auth in tests (empty key = no auth)
+mock_state.config.API.API_KEY = ""
 
 # Inject dependencies
 app.state.shared_state = mock_state
