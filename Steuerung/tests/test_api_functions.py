@@ -33,6 +33,14 @@ mock_state.control.ausschluss_grund = None
 mock_state.solar.batpower = 250
 mock_state.solar.soc = 75
 mock_state.solar.feedinpower = 100
+mock_state.solar.acpower = 500
+mock_state.battery_capacity = 0
+mock_state.vpn_ip = "10.8.0.1"
+mock_state.solar.forecast_today = None
+mock_state.solar.forecast_tomorrow = None
+mock_state.solar.sunrise_today = None
+mock_state.solar.sunset_today = None
+mock_state.control.active_rule_sensor = "Automatisch"
 
 mock_state.stats.last_runtime = "0:15:00"
 mock_state.stats.total_runtime_today = "2:30:00"

@@ -69,7 +69,7 @@ def get_status(request: Request):
             "soc": shared_state.solar.soc,
             "feed_in": shared_state.solar.feedinpower,
             "pv_power": shared_state.solar.acpower,
-            "battery_capacity_kwh": (shared_state.battery_capacity * shared_state.solar.soc / 100.0) if shared_state.battery_capacity > 0 else 0
+            "battery_capacity_kwh": (shared_state.battery_capacity * shared_state.solar.soc / 100.0) if isinstance(shared_state.battery_capacity, (int, float)) and shared_state.battery_capacity > 0 else 0
         },
         "forecast": {
             "today": shared_state.solar.forecast_today,
