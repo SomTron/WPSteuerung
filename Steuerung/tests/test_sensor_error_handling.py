@@ -50,7 +50,7 @@ async def test_read_temperature_timeout_handling(sensor_manager, caplog):
 @pytest.mark.asyncio
 async def test_logging_levels(sensor_manager, caplog):
     """Testet, dass erfolgreiche Reads, CRC-Fehler und kritische Fehler richtig geloggt werden."""
-    # Test erfolgreicher Read (Debug)
+    # Test erfolgreicher Read (kein Debug-Log mehr, um Log-Datei klein zu halten)
     caplog.clear()
     with patch("os.path.exists", return_value=True):
         mock_file_content_success = ["YES\n", "t=25000\n"]
@@ -58,7 +58,7 @@ async def test_logging_levels(sensor_manager, caplog):
             with caplog.at_level(logging.DEBUG):
                 result = sensor_manager.read_temperature_raw("28-123")
                 assert result == 25.0
-                assert "Sensor 28-123 gelesen: 25.000 °C" in caplog.text
+                assert "Sensor 28-123 gelesen" not in caplog.text
 
     # Test CRC-Fehler (Warning)
     caplog.clear()

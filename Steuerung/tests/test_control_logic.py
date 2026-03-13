@@ -118,6 +118,12 @@ async def test_determine_mode_normal(mock_state):
 
 @pytest.mark.asyncio
 async def test_determine_mode_solar(mock_state):
+    # PV-Schwellen und Forecast so setzen, dass heute/morgen "high" sind
+    mock_state.solar.pv_threshold_low_kwh = 5.0
+    mock_state.solar.pv_threshold_high_kwh = 10.0
+    mock_state.solar.forecast_today = 15.0
+    mock_state.solar.forecast_tomorrow = 16.0
+
     mock_state.solar.batpower = 1000 # > 600 triggers solar excess
     
     with patch('control_logic.is_nighttime', return_value=False), \
@@ -132,6 +138,12 @@ async def test_determine_mode_solar(mock_state):
 
 @pytest.mark.asyncio
 async def test_determine_mode_solar_min_soc(mock_state):
+    # Gleiche PV-Konstellation wie im "Solar"-Test
+    mock_state.solar.pv_threshold_low_kwh = 5.0
+    mock_state.solar.pv_threshold_high_kwh = 10.0
+    mock_state.solar.forecast_today = 15.0
+    mock_state.solar.forecast_tomorrow = 16.0
+
     mock_state.solar.batpower = 1000 # > 600 triggers solar excess
     mock_state.solar.soc = 15
     mock_state.config.Solarueberschuss.MIN_SOC = 20.0
@@ -261,6 +273,10 @@ async def test_determine_mode_none_solar_values(mock_state):
     mock_state.solar.batpower = None
     mock_state.solar.soc = None
     mock_state.solar.feedinpower = None
+    mock_state.solar.pv_threshold_low_kwh = None
+    mock_state.solar.pv_threshold_high_kwh = None
+    mock_state.solar.forecast_today = None
+    mock_state.solar.forecast_tomorrow = None
     mock_state.config.Solarueberschuss.BATPOWER_THRESHOLD = 600.0
     mock_state.config.Solarueberschuss.SOC_THRESHOLD = 95.0
     mock_state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD = 600.0
@@ -277,6 +293,108 @@ async def test_determine_mode_none_solar_values(mock_state):
         
         assert mock_state.control.solar_ueberschuss_aktiv is False
         assert result['modus'] == "Normalmodus"
+
+
+@pytest.mark.asyncio
+async def test_determine_mode_plan_blocks_solar_when_today_high_tomorrow_low(mock_state):
+    """Wenn heute HIGH, morgen LOW: Überschuss nur bei echter Einspeisung."""
+    mock_state.solar.pv_threshold_low_kwh = 5.0
+    mock_state.solar.pv_threshold_high_kwh = 10.0
+    mock_state.solar.forecast_today = 15.0   # HIGH
+    mock_state.solar.forecast_tomorrow = 4.0 # LOW
+
+    # Roh-Bedingung via Batterie-Laden wäre erfüllt, aber Plan blockiert das.
+    mock_state.solar.batpower = 1000
+    mock_state.solar.soc = 100.0
+    mock_state.solar.feedinpower = 0
+
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=True):
+
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+
+        assert result['modus'] == "Normalmodus"
+        assert mock_state.control.solar_ueberschuss_aktiv is False
+
+    # Wenn aber tatsächlich eingespeist wird: Überschussmodus trotz "schlechtem" Plan
+    mock_state.solar.soc = 100.0
+    mock_state.solar.feedinpower = 1000
+
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=True):
+
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+
+        assert result['modus'] == "Solarüberschuss"
+        assert mock_state.control.solar_ueberschuss_aktiv is True
+
+
+@pytest.mark.asyncio
+async def test_determine_mode_plan_blocks_solar_when_today_low_tomorrow_high(mock_state):
+    """Wenn heute LOW, morgen HIGH: Überschuss nur bei echter Einspeisung."""
+    mock_state.solar.pv_threshold_low_kwh = 5.0
+    mock_state.solar.pv_threshold_high_kwh = 10.0
+    mock_state.solar.forecast_today = 4.0    # LOW
+    mock_state.solar.forecast_tomorrow = 15.0  # HIGH
+
+    # Ohne echte Einspeisung: kein Überschuss
+    mock_state.solar.batpower = 1000
+    mock_state.solar.soc = 100.0
+    mock_state.solar.feedinpower = 0
+
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=True):
+
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+
+        assert result['modus'] == "Normalmodus"
+        assert mock_state.control.solar_ueberschuss_aktiv is False
+
+    # Mit echter Einspeisung: Überschussmodus auch bei schlechtem Forecast-Plan
+    mock_state.solar.feedinpower = 1000
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=True):
+
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+
+        assert result['modus'] == "Solarüberschuss"
+        assert mock_state.control.solar_ueberschuss_aktiv is True
+
+
+@pytest.mark.asyncio
+async def test_determine_mode_plan_blocks_solar_when_both_low(mock_state):
+    """Wenn beide LOW: Überschuss nur bei echter Einspeisung."""
+    mock_state.solar.pv_threshold_low_kwh = 5.0
+    mock_state.solar.pv_threshold_high_kwh = 10.0
+    mock_state.solar.forecast_today = 3.0    # LOW
+    mock_state.solar.forecast_tomorrow = 4.0  # LOW
+
+    mock_state.solar.batpower = 1000
+    mock_state.solar.soc = 100.0
+    mock_state.solar.feedinpower = 0
+
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=True):
+
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+
+        assert result['modus'] == "Normalmodus"
+        assert mock_state.control.solar_ueberschuss_aktiv is False
+
+    mock_state.solar.feedinpower = 1000
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=False), \
+         patch('control_logic.is_solar_window', return_value=True):
+
+        result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
+
+        assert result['modus'] == "Solarüberschuss"
+        assert mock_state.control.solar_ueberschuss_aktiv is True
 
 @pytest.mark.asyncio
 async def test_determine_mode_transition_frostschutz(mock_state):

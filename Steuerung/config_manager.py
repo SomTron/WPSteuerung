@@ -51,6 +51,11 @@ class SolarueberschussConfig(BaseModel):
     FEEDINPOWER_THRESHOLD: float = Field(default=600.0)
     BATTERY_CAPACITY_KWH: float = Field(default=0.0, description="Batteriekapazität in kWh")
     MIN_SOC: float = Field(default=0.0, description="Minimaler SoC in Prozent")
+    ADAPTIVE_PV_THRESHOLDS: bool = Field(default=True, description="LOW/HIGH PV-Schwellen automatisch aus Historie berechnen")
+    PV_THRESHOLD_LOOKBACK_DAYS: int = Field(default=45, description="Wie viele Tage Historie für die Schwellenberechnung")
+    PV_THRESHOLD_LOW_PERCENTILE: float = Field(default=0.25, description="Perzentil für LOW_PV (0..1)")
+    PV_THRESHOLD_HIGH_PERCENTILE: float = Field(default=0.75, description="Perzentil für HIGH_PV (0..1)")
+    PV_THRESHOLD_MIN_DAYS: int = Field(default=10, description="Mindestanzahl Tage, bevor Schwellen gesetzt werden")
 
 class LoggingConfig(BaseModel):
     ENABLE_FULL_LOG: bool = Field(default=True)

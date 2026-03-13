@@ -48,6 +48,46 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
             state._last_config_check = datetime.now(state.local_tz)
     return True
 
+def _plan_allows_solar_oversupply_today(state) -> Optional[bool]:
+    """
+    Entscheidet anhand der PV-Prognose (heute/morgen) und adaptiver Schwellen,
+    ob der Solarüberschuss-Modus heute grundsätzlich erlaubt ist.
+
+    Logik (Klassen aus LOW/HIGH):
+      - heute HIGH & morgen HIGH   -> Überschussmodus erlaubt
+      - sonst                      -> Normalmodus (kein Überschuss)
+
+    Gibt True/False zurück oder None, wenn nicht genug Daten vorhanden sind
+    (dann greift die alte Schwellenlogik ohne Plan-Gating).
+    """
+    try:
+        today = getattr(state.solar, "forecast_today", None)
+        tomorrow = getattr(state.solar, "forecast_tomorrow", None)
+        low = getattr(state.solar, "pv_threshold_low_kwh", None)
+        high = getattr(state.solar, "pv_threshold_high_kwh", None)
+
+        if any(v is None for v in (today, tomorrow, low, high)):
+            return None
+
+        def _classify(val: float) -> str:
+            if val < low:
+                return "low"
+            if val > high:
+                return "high"
+            return "mid"
+
+        today_cls = _classify(today)
+        tomorrow_cls = _classify(tomorrow)
+
+        if today_cls == "high" and tomorrow_cls == "high":
+            return True
+
+        return False
+    except Exception as e:
+        logging.debug(f"Plan-basierte PV-Klassifizierung nicht möglich: {e}")
+        return None
+
+
 async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     """Bestimmt den Betriebsmodus und setzt Sollwerte."""
     is_night = is_nighttime(state.config, tz=state.local_tz)
@@ -62,12 +102,26 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     soc_v = state.solar.soc if state.solar.soc is not None else 0.0
     feed_p = state.solar.feedinpower if state.solar.feedinpower is not None else 0.0
 
-    state.control.solar_ueberschuss_aktiv = (
-            (bat_p > state.config.Solarueberschuss.BATPOWER_THRESHOLD or
-             (soc_v >= state.config.Solarueberschuss.SOC_THRESHOLD and 
-              feed_p > state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD))
-            and soc_v >= state.config.Solarueberschuss.MIN_SOC
-    )
+    # 1) Klassische Überschuss-Bedingung (Batterie/FeedIn/SOC)
+    cfg_su = state.config.Solarueberschuss
+    battery_charge_excess = bat_p > cfg_su.BATPOWER_THRESHOLD
+    feedin_excess = (soc_v >= cfg_su.SOC_THRESHOLD and feed_p > cfg_su.FEEDINPOWER_THRESHOLD)
+
+    # 2) Plan-basierte Freigabe anhand der PV-Prognose heute/morgen
+    plan_allow = _plan_allows_solar_oversupply_today(state)
+    if plan_allow is None:
+        # Fallback: Nur klassische Bedingung
+        state.control.solar_ueberschuss_aktiv = (
+            (battery_charge_excess or feedin_excess) and soc_v >= cfg_su.MIN_SOC
+        )
+    else:
+        # Auch an "schlechten" Tagen: Wenn wirklich eingespeist wird (feedin_excess),
+        # soll der Überschussmodus aktiv werden. Der Forecast-Plan beschränkt nur
+        # den Batterie-Lade-Trigger.
+        state.control.solar_ueberschuss_aktiv = (
+            (feedin_excess or (bool(plan_allow) and battery_charge_excess))
+            and soc_v >= cfg_su.MIN_SOC
+        )
 
     within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
     

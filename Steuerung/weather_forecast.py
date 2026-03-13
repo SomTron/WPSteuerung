@@ -4,6 +4,8 @@ import os
 import aiofiles
 from datetime import datetime, timedelta
 import pytz
+import csv
+from collections import OrderedDict
 
 def _compute_pv_geometry(config):
     """
@@ -61,6 +63,100 @@ def _compute_pv_geometry(config):
         effective_tilt = weighted_tilt_sum / total_area
 
     return effective_tilt, total_area, panel_eff
+
+def _percentile(sorted_vals, p: float) -> float:
+    if not sorted_vals:
+        raise ValueError("empty data")
+    if p <= 0:
+        return float(sorted_vals[0])
+    if p >= 1:
+        return float(sorted_vals[-1])
+    idx = int(round(p * (len(sorted_vals) - 1)))
+    return float(sorted_vals[max(0, min(idx, len(sorted_vals) - 1))])
+
+def compute_adaptive_pv_thresholds_from_csv(
+    csv_path: str,
+    lookback_days: int = 45,
+    low_percentile: float = 0.25,
+    high_percentile: float = 0.75,
+    min_days: int = 10,
+):
+    """
+    Liest `sonnen_prognose.csv` und berechnet adaptive LOW/HIGH Schwellen (kWh/Tag).
+
+    Robustheit:
+    - Unterstützt alte Header (Today_kWh/Tomorrow_kWh) und neue (Today_PV_kWh/Tomorrow_PV_kWh).
+    - Nutzt pro Kalendertag den letzten geloggten Wert (Forecast wird i.d.R. mehrfach pro Tag aktualisiert).
+
+    Returns: (low_kwh, high_kwh) oder (None, None) wenn zu wenig Daten vorhanden sind.
+    """
+    if lookback_days <= 0:
+        return None, None
+
+    if not os.path.exists(csv_path):
+        return None, None
+
+    tz = pytz.timezone("Europe/Berlin")
+    cutoff_date = (datetime.now(tz) - timedelta(days=lookback_days)).date()
+
+    # OrderedDict: date -> value (last wins, preserve insertion order)
+    daily_vals = OrderedDict()
+
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return None, None
+
+            # Prefer PV-kWh columns if present, fallback to older radiation columns if needed
+            today_col = None
+            for cand in ("Today_PV_kWh", "Today_kWh", "Today_Rad_kWh_m2"):
+                if cand in reader.fieldnames:
+                    today_col = cand
+                    break
+
+            if today_col is None:
+                return None, None
+
+            for row in reader:
+                ts = (row.get("Zeitstempel") or "").strip()
+                if len(ts) < 10:
+                    continue
+                day_str = ts[:10]
+                try:
+                    day = datetime.strptime(day_str, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                if day < cutoff_date:
+                    continue
+
+                raw_val = (row.get(today_col) or "").strip()
+                if not raw_val or raw_val.lower() == "n/a":
+                    continue
+                try:
+                    val = float(raw_val)
+                except ValueError:
+                    continue
+                if val < 0:
+                    continue
+
+                daily_vals[day] = val  # last entry of the day wins
+    except Exception as e:
+        logging.error(f"Fehler beim Lesen von {csv_path} für adaptive PV-Schwellen: {e}")
+        return None, None
+
+    if len(daily_vals) < min_days:
+        return None, None
+
+    vals = sorted(daily_vals.values())
+    low = _percentile(vals, low_percentile)
+    high = _percentile(vals, high_percentile)
+
+    # Ensure sane ordering
+    if high < low:
+        low, high = high, low
+
+    return low, high
 
 async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
     """

@@ -32,6 +32,10 @@ class SolarState:
         self.forecast_tomorrow: Optional[float] = None
         self.forecast_rad_today_m2: Optional[float] = None
         self.forecast_rad_tomorrow_m2: Optional[float] = None
+        # Adaptive PV-Schwellen (kWh/Tag) aus Historie
+        self.pv_threshold_low_kwh: Optional[float] = None
+        self.pv_threshold_high_kwh: Optional[float] = None
+        self.pv_threshold_last_update: Optional[datetime] = None
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
         self.sunrise_tomorrow: Optional[str] = None

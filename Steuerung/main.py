@@ -27,7 +27,7 @@ from telegram_charts import get_boiler_temperature_history, get_runtime_bar_char
 from vpn_manager import check_vpn_status
 from api import app
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER
-from weather_forecast import get_solar_forecast
+from weather_forecast import get_solar_forecast, compute_adaptive_pv_thresholds_from_csv
 from logic_utils import is_nighttime, is_solar_window
 
 # Global objects
@@ -100,6 +100,31 @@ async def setup_application():
     # 6. Session & Tasks
     session = create_robust_aiohttp_session()
     state.session = session
+    
+    # 6b. Adaptive PV-Schwellen direkt beim Start berechnen (für schnelle Verifikation)
+    try:
+        su_cfg = state.config.Solarueberschuss
+        adaptive_on = getattr(su_cfg, "ADAPTIVE_PV_THRESHOLDS", True)
+        if adaptive_on:
+            now_local = datetime.now(state.local_tz)
+            low, high = compute_adaptive_pv_thresholds_from_csv(
+                csv_path="sonnen_prognose.csv",
+                lookback_days=int(getattr(su_cfg, "PV_THRESHOLD_LOOKBACK_DAYS", 45)),
+                low_percentile=float(getattr(su_cfg, "PV_THRESHOLD_LOW_PERCENTILE", 0.25)),
+                high_percentile=float(getattr(su_cfg, "PV_THRESHOLD_HIGH_PERCENTILE", 0.75)),
+                min_days=int(getattr(su_cfg, "PV_THRESHOLD_MIN_DAYS", 10)),
+            )
+            if low is not None and high is not None:
+                state.solar.pv_threshold_low_kwh = low
+                state.solar.pv_threshold_high_kwh = high
+                state.solar.pv_threshold_last_update = now_local
+                logging.info(
+                    f"Adaptive PV-Schwellen (Startup) (kWh/Tag): LOW={low:.1f}, HIGH={high:.1f}"
+                )
+            else:
+                logging.info("Adaptive PV-Schwellen (Startup): zu wenig Daten in sonnen_prognose.csv")
+    except Exception as e:
+        logging.debug(f"Adaptive PV-Schwellen (Startup) konnten nicht berechnet werden: {e}")
     
     
     # 7. CSV Header Check (Once at startup)
@@ -255,6 +280,32 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.solar.sunrise_tomorrow = sr_tomorrow
             state.solar.sunset_tomorrow = ss_tomorrow
             state.last_forecast_update = now_local
+
+    # 3. Adaptive PV-Schwellen (typ. 1x/Tag reicht, laufen aber unabhängig von Forecast)
+    try:
+        su_cfg = state.config.Solarueberschuss
+        adaptive_on = getattr(su_cfg, "ADAPTIVE_PV_THRESHOLDS", True)
+        if adaptive_on:
+            if (
+                state.solar.pv_threshold_last_update is None
+                or (now_local - state.solar.pv_threshold_last_update).total_seconds() >= 24 * 3600
+            ):
+                low, high = compute_adaptive_pv_thresholds_from_csv(
+                    csv_path="sonnen_prognose.csv",
+                    lookback_days=int(getattr(su_cfg, "PV_THRESHOLD_LOOKBACK_DAYS", 45)),
+                    low_percentile=float(getattr(su_cfg, "PV_THRESHOLD_LOW_PERCENTILE", 0.25)),
+                    high_percentile=float(getattr(su_cfg, "PV_THRESHOLD_HIGH_PERCENTILE", 0.75)),
+                    min_days=int(getattr(su_cfg, "PV_THRESHOLD_MIN_DAYS", 10)),
+                )
+                if low is not None and high is not None:
+                    state.solar.pv_threshold_low_kwh = low
+                    state.solar.pv_threshold_high_kwh = high
+                    state.solar.pv_threshold_last_update = now_local
+                    logging.info(
+                        f"Adaptive PV-Schwellen aktualisiert (kWh/Tag): LOW={low:.1f}, HIGH={high:.1f}"
+                    )
+    except Exception as e:
+        logging.debug(f"Adaptive PV-Schwellen konnten nicht berechnet werden: {e}")
             
     return last_vpn_check
 

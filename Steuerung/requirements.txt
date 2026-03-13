@@ -6,9 +6,9 @@ matplotlib
 pytz
 python-dateutil
 python-telegram-bot
-smbus2
-RPLCD
-RPi.GPIO
+smbus2; platform_system == "Linux"
+RPLCD; platform_system == "Linux"
+RPi.GPIO; platform_system == "Linux"
 pydantic
 fastapi
 uvicorn
