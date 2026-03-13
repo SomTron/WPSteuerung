@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
@@ -152,3 +153,10 @@ async def get_history(hours: int = 24):
     except Exception as e:
         logging.error(f"Error reading history in API: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")
+
+# Mount frontend
+frontend_path = os.path.join(os.path.dirname(__file__), "frontend")
+if os.path.exists(frontend_path):
+    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+else:
+    logging.warning(f"Frontend directory not found at {frontend_path}")

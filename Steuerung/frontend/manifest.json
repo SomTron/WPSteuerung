@@ -1,0 +1,16 @@
+{
+  "name": "Wärmepumpen Steuerung",
+  "short_name": "WP Control",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b1120",
+  "theme_color": "#0b1120",
+  "description": "Smart Home Wärmepumpen Dashboard",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdib3g9IjAgMCAxMDAgMTAwIj4gPHRleHQgeT0iNTAiIHZhbGlnbj0ibWlkZGxlIj7wn4yhPC90ZXh0Pjwvc3ZnPg==",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}

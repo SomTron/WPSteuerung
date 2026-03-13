@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WP Steuerung</title>
+    <meta name="theme-color" content="#0f172a">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="manifest" href="manifest.json">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="glass-header">
+            <div class="header-content">
+                <h1>Wärmepumpe</h1>
+                <div class="connection-status">
+                    <span class="status-dot" id="conn-dot"></span>
+                    <span id="conn-text">Verbunden</span>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <!-- Kompressor Status -->
+            <section class="card glass hero-card">
+                <div class="card-header">
+                    <h2>Kompressor</h2>
+                    <span id="compressor-badge" class="badge badge-off">AUS</span>
+                </div>
+                <div class="status-details">
+                    <div class="stat-item">
+                        <span class="label">Aktuelle Laufzeit</span>
+                        <span id="runtime-current" class="value highlight">--:--:--</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="label">Laufzeit Heute</span>
+                        <span id="runtime-today" class="value">--:--:--</span>
+                    </div>
+                </div>
+                <div class="info-row mt-3">
+                    <span class="label">Status Info:</span>
+                    <span id="system-reason" class="text-sm">--</span>
+                </div>
+            </section>
+
+            <!-- Temperaturen -->
+            <section class="card glass">
+                <h2>Temperaturen</h2>
+                <div class="grid-2-col">
+                    <div class="data-box">
+                        <span class="label">Boiler Oben</span>
+                        <span id="temp-oben" class="value temp">-- °C</span>
+                    </div>
+                    <div class="data-box">
+                        <span class="label">Boiler Mitte</span>
+                        <span id="temp-mittig" class="value temp">-- °C</span>
+                    </div>
+                    <div class="data-box">
+                        <span class="label">Boiler Unten</span>
+                        <span id="temp-unten" class="value temp">-- °C</span>
+                    </div>
+                    <div class="data-box">
+                        <span class="label">Vorlauf</span>
+                        <span id="temp-vorlauf" class="value temp">-- °C</span>
+                    </div>
+                    <div class="data-box full-width">
+                        <span class="label">Verdampfer</span>
+                        <span id="temp-verdampfer" class="value temp">-- °C</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Energie -->
+            <section class="card glass">
+                <h2>Energie & Solar</h2>
+                <div class="grid-3-col">
+                    <div class="data-box small">
+                        <span class="label">Netz</span>
+                        <span id="energy-feedin" class="value">-- W</span>
+                    </div>
+                    <div class="data-box small">
+                        <span class="label">Batterie</span>
+                        <span id="energy-battery" class="value">-- W</span>
+                    </div>
+                    <div class="data-box small">
+                        <span class="label">SOC</span>
+                        <span id="energy-soc" class="value">-- %</span>
+                    </div>
+                </div>
+                <!-- Progress Bar SOC -->
+                <div class="progress-wrap mt-3">
+                    <div class="progress-bg">
+                        <div id="soc-bar" class="progress-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Modi & Steuerung -->
+            <section class="card glass controls">
+                <h2>Modi & Steuerung</h2>
+                
+                <div class="mode-toggles">
+                    <div class="toggle-row">
+                        <div class="toggle-info">
+                            <span class="toggle-title">🛁 Bademodus</span>
+                            <span class="toggle-desc">Sollwert anheben für mehr Warmwasser</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-bademodus">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                    <div class="toggle-row">
+                        <div class="toggle-info">
+                            <span class="toggle-title">🌴 Urlaubsmodus</span>
+                            <span class="toggle-desc">System absenken für Energieeinsparung</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-urlaubsmodus">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="action-buttons mt-4">
+                    <button id="btn-force-on" class="btn primary-btn g-shadow">Starten</button>
+                    <button id="btn-force-off" class="btn danger-btn">Stoppen</button>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
