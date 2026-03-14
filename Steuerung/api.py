@@ -216,7 +216,8 @@ async def control_system(request: Request, cmd: ControlCommand):
 @app.get("/history")
 async def get_history(hours: int = 24):
     """Liefert historische Daten asynchron aus der CSV-Datei."""
-    csv_path = "heizungsdaten.csv"
+    from utils import HEIZUNGSDATEN_CSV
+    csv_path = HEIZUNGSDATEN_CSV
     try:
         result = await asyncio.to_thread(read_history_data, csv_path, hours)
 

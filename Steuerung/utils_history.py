@@ -20,6 +20,8 @@ def read_history_data(file_path: str, hours: int):
             if file_size > read_size:
                 f.seek(-read_size, os.SEEK_END)
                 f.readline() # Diskartiere unvollständige erste Zeile
+            else:
+                f.readline() # Header überspringen, da er unten explizit hinzugefügt wird
             content = f.read().decode("utf-8", errors="ignore")
             
         # Wir brauchen den Header für Pandas
