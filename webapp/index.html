@@ -424,7 +424,8 @@
             oben: [],
             mittig: [],
             unten: [],
-            verdampfer: []
+            verdampfer: [],
+            kompressor: []
         };
         const MAX_DATA_POINTS = 60;
 
@@ -467,7 +468,8 @@
                     oben: [],
                     mittig: [],
                     unten: [],
-                    verdampfer: []
+                    verdampfer: [],
+                    kompressor: []
                 };
 
                 // Load historical data
@@ -483,6 +485,14 @@
                     temperatureHistory.mittig.push(point.t_mittig);
                     temperatureHistory.unten.push(point.t_unten);
                     temperatureHistory.verdampfer.push(point.t_verd);
+                    
+                    // Kompressor State (1 für EIN, 0 für AUS). Wir nutzen einen großen Wert 
+                    // (Höhe des Diagramms) um den Hintergrund zu füllen
+                    let k_state = 0;
+                    if (point.kompressor === '1' || point.kompressor === 'EIN') {
+                        k_state = 65; // Maximale erwartete Temperatur zur Füllung
+                    }
+                    temperatureHistory.kompressor.push(k_state);
                 });
 
                 if (chart) {
@@ -509,6 +519,9 @@
             temperatureHistory.mittig.push(temps.mittig);
             temperatureHistory.unten.push(temps.unten);
             temperatureHistory.verdampfer.push(temps.verdampfer);
+            
+            let isRunning = statusData && statusData.compressor && statusData.compressor.status === 'EIN';
+            temperatureHistory.kompressor.push(isRunning ? 65 : 0);
 
             // Nur die letzten MAX_DATA_POINTS behalten
             if (temperatureHistory.timestamps.length > MAX_DATA_POINTS) {
@@ -517,6 +530,7 @@
                 temperatureHistory.mittig.shift();
                 temperatureHistory.unten.shift();
                 temperatureHistory.verdampfer.shift();
+                temperatureHistory.kompressor.shift();
             }
 
             if (chart) {
@@ -566,12 +580,24 @@
                             borderWidth: 2,
                             pointRadius: 0,
                             tension: 0.4
+                        },
+                        {
+                            label: 'Kompressor',
+                            data: temperatureHistory.kompressor,
+                            borderColor: 'transparent',
+                            backgroundColor: 'rgba(255, 60, 60, 0.1)',
+                            borderWidth: 0,
+                            pointRadius: 0,
+                            fill: true,
+                            stepped: true,
+                            tension: 0
                         }
                     ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    animation: false, // Animationen global deaktivieren für mehr Performance
                     plugins: {
                         legend: {
                             display: true,
@@ -620,16 +646,7 @@
                         mode: 'nearest',
                         axis: 'x',
                         intersect: false
-                    },
-                    animations: {
-                        radius: {
-                            duration: 400,
-                            easing: 'linear',
-                            from: 1,
-                            to: 0,
-                            loop: true
-                        }
-                    }
+                    } // Entfernte alte Animation config
                 }
             });
         }
@@ -641,6 +658,7 @@
             chart.data.datasets[1].data = temperatureHistory.mittig;
             chart.data.datasets[2].data = temperatureHistory.unten;
             chart.data.datasets[3].data = temperatureHistory.verdampfer;
+            chart.data.datasets[4].data = temperatureHistory.kompressor;
             chart.update('none'); // Update without animation for smoother real-time refresh
         }
 
