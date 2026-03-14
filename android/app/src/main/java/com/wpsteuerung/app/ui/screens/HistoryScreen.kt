@@ -217,15 +217,23 @@ fun TemperatureChart(
     val modelProducer = rememberCartesianChartModelProducer()
 
     LaunchedEffect(data) {
-        modelProducer.runTransaction {
-            // Extract temperatures, filtering out nulls
-            val obenData = data.mapNotNull { it.tOben }
-            val mittigData = data.mapNotNull { it.tMittig }
-            val untenData = data.mapNotNull { it.tUnten }
-            val verdData = data.mapNotNull { it.tVerd }
+        // Decimate data for better performance on mobile (max ~300 points)
+        val step = if (data.size > 300) data.size / 300 else 1
+        val decimatedData = data.filterIndexed { index, _ -> index % step == 0 || index == data.lastIndex }
+        
+        // Extract temperatures, filtering out nulls
+        val obenData = decimatedData.mapNotNull { it.tOben }
+        val mittigData = decimatedData.mapNotNull { it.tMittig }
+        val untenData = decimatedData.mapNotNull { it.tUnten }
+        val verdData = decimatedData.mapNotNull { it.tVerd }
+        
+        // Compressor background
+        val compData = decimatedData.map { if (it.kompressor == "1" || it.kompressor == "running" || it.kompressor == "EIN") 65.0 else 0.0 }
 
+        modelProducer.runTransaction {
             // Create line series
             lineSeries {
+                if (compData.any { it > 0 }) series(compData)
                 if (obenData.isNotEmpty()) series(obenData)
                 if (mittigData.isNotEmpty()) series(mittigData)
                 if (untenData.isNotEmpty()) series(untenData)
@@ -242,6 +250,10 @@ fun TemperatureChart(
             chart = rememberCartesianChart(
                 rememberLineCartesianLayer(
                     lineProvider = LineCartesianLayer.LineProvider.series(
+                        LineCartesianLayer.rememberLine(
+                            fill = LineCartesianLayer.LineFill.single(fill(Color.Transparent)),
+                            areaFill = LineCartesianLayer.AreaFill.single(fill(Color(0x19FF3C3C)))
+                        ), // Red background for Compressor
                         LineCartesianLayer.rememberLine(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFFE91E63)))), // Pink for Oben
                         LineCartesianLayer.rememberLine(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFF2196F3)))), // Blue for Mittig
                         LineCartesianLayer.rememberLine(fill = LineCartesianLayer.LineFill.single(fill(Color(0xFF4CAF50)))), // Green for Unten
