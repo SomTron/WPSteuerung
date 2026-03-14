@@ -16,7 +16,7 @@ interface WPApiService {
     
     @GET("history")
     suspend fun getHistory(
-        @Query("hours") hours: Int = 6,
+        @Query("hours") hours: Int = 24,
         @Query("limit") limit: Int = 100
     ): HistoryResponse
     

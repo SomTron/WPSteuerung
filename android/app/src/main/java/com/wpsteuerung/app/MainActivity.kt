@@ -3,58 +3,69 @@ package com.wpsteuerung.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.wpsteuerung.app.ui.screens.DashboardScreen
 import com.wpsteuerung.app.ui.screens.HistoryScreen
 import com.wpsteuerung.app.ui.theme.WPSteuerungTheme
-import com.wpsteuerung.app.viewmodel.DashboardViewModel
-import com.wpsteuerung.app.viewmodel.HistoryViewModel
+
+// HINWEIS: Für Material Icons Icons.Filled.ShowChart benötigst du:
+// implementation("androidx.compose.material:material-icons-extended:<version>")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge() // FIX: Edge-to-Edge für modernes Android-Look
         setContent {
             WPSteuerungTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    MainApp()
-                }
+                MainApp()
             }
         }
     }
 }
 
+// FIX: sealed class + companion object hatte Initialisierungsproblem →
+// einfaches enum ist zuverlässiger für Navigation
+enum class NavDestination(val label: String, val icon: ImageVector) {
+    Dashboard("Dashboard", Icons.Filled.Home),
+    History("Verlauf",     Icons.Filled.ShowChart)
+}
+
 @Composable
 fun MainApp() {
-    var selectedTab by remember { mutableStateOf(0) }
-    
+    var selectedDestination by remember { mutableStateOf(NavDestination.Dashboard) }
+
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Text("🏠") },
-                    label = { Text("Dashboard") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Text("📊") },
-                    label = { Text("Verlauf") }
-                )
+                NavDestination.entries.forEach { destination ->
+                    NavigationBarItem(
+                        selected = selectedDestination == destination,
+                        onClick  = { selectedDestination = destination },
+                        icon = {
+                            Icon(
+                                imageVector = destination.icon,
+                                contentDescription = destination.label
+                            )
+                        },
+                        label = { Text(destination.label) }
+                    )
+                }
             }
         }
     ) { padding ->
-        when (selectedTab) {
-            0 -> DashboardScreen(modifier = Modifier.padding(padding))
-            1 -> HistoryScreen(modifier = Modifier.padding(padding))
+        when (selectedDestination) {
+            NavDestination.Dashboard -> DashboardScreen(modifier = Modifier.padding(padding))
+            NavDestination.History   -> HistoryScreen(modifier = Modifier.padding(padding))
         }
     }
 }

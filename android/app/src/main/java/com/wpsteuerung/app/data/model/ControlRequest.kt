@@ -1,26 +1,39 @@
 package com.wpsteuerung.app.data.model
 
-import com.google.gson.annotations.SerializedName
+import com.google.gson.JsonObject
 
-// Control request matching backend API expectations
+// FIX: Map<String, Any> durch JsonObject ersetzt — Gson serialisiert Any
+// (besonders Boolean) manchmal falsch. JsonObject ist typsicher und zuverlässig.
 data class ControlRequest(
-    val command: String,  // "set_mode", "force_on", "force_off"
-    val params: Map<String, Any>? = null
+    val command: String,
+    val params: JsonObject? = null
 )
 
-// Helper function to create mode control requests
-fun createModeRequest(mode: String, active: Boolean): ControlRequest {
-    return ControlRequest(
-        command = "set_mode",
-        params = mapOf(
-            "mode" to mode,
-            "active" to active
-        )
-    )
-}
-
-// Control response from backend
+// FIX: Default-Werte gegen Gson-Crashes bei fehlendem Feld
 data class ControlResponse(
-    val status: String,
-    val message: String
+    val status: String = "",
+    val message: String = ""
 )
+
+// ─────────────────────────────────────────────
+// Hilfsfunktionen
+// ─────────────────────────────────────────────
+
+fun createModeRequest(mode: String, active: Boolean): ControlRequest =
+    ControlRequest(
+        command = "set_mode",
+        params = JsonObject().apply {
+            addProperty("mode", mode)
+            addProperty("active", active)
+        }
+    )
+
+fun createUrlaubsmodusRequest(enabled: Boolean, durationHours: Int?): ControlRequest =
+    ControlRequest(
+        command = "set_mode",
+        params = JsonObject().apply {
+            addProperty("mode", "urlaubsmodus")
+            addProperty("active", enabled)
+            durationHours?.let { addProperty("duration_hours", it) }
+        }
+    )
