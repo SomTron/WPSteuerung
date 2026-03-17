@@ -138,10 +138,24 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
             if regelfuehler <= night_einschaltpunkt:
                 is_critical_frost = True
 
+    # PV-Plan-Status für aussagekräftige Modus-Namen
+    plan_allow = _plan_allows_solar_oversupply_today(state)
+    pv_plan_erlaubt = plan_allow is True  # None = unbekannt, False = blockiert, True = erlaubt
+    pv_plan_blockiert = plan_allow is False
+
+    # Batterie-Vorrang-Modus: PV-Plan erlaubt, aber Batterie wird noch nicht stark genug geladen
+    batterie_vorrang = pv_plan_erlaubt and not state.control.solar_ueberschuss_aktiv
+
     if state.bademodus_aktiv:
         res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4, "regelfuehler": t_unten}
     elif state.control.solar_ueberschuss_aktiv:
         res = {"modus": "Solarüberschuss", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.einschaltpunkt_erhoeht, "regelfuehler": t_unten}
+    elif batterie_vorrang:
+        # PV-Plan erlaubt Solarüberschuss, aber Batterie hat Vorrang (wird erst geladen)
+        res = {"modus": "Solarüberschuss (Batterie-Vorrang)", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+    elif pv_plan_blockiert:
+        # PV-Plan verhindert Solarüberschuss (heute/morgen nicht beide HIGH)
+        res = {"modus": "Normalmodus (PV-Plan: heute/morgen nicht HIGH)", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
     elif batterie_fruehstart:
         res = {"modus": "Übergangsmodus (Batterie Frühstart)", "ausschaltpunkt": state.basis_ausschaltpunkt - urlaubs_reduction, "einschaltpunkt": state.basis_einschaltpunkt - urlaubs_reduction, "regelfuehler": t_mittig}
     elif within_uebergangsmodus:
