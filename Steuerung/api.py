@@ -144,6 +144,8 @@ def get_status(request: Request):
             "tomorrow": _safe(solar, "forecast_tomorrow"),
             "sunrise":  _safe(solar, "sunrise_today"),
             "sunset":   _safe(solar, "sunset_today"),
+            "threshold_low":  _safe(solar, "pv_threshold_low_kwh"),
+            "threshold_high": _safe(solar, "pv_threshold_high_kwh"),
         },
         "system": {
             "exclusion_reason": _safe(control, "ausschluss_grund"),

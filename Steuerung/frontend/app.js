@@ -70,6 +70,7 @@ const el = {
     fcToday:    document.getElementById('forecast-today'),
     fcTomorrow: document.getElementById('forecast-tomorrow'),
     fcSun:      document.getElementById('forecast-sun'),
+    fcThresholds: document.getElementById('forecast-thresholds'),
 
     toggleBade:  document.getElementById('toggle-bademodus'),
     toggleUrlaub:document.getElementById('toggle-urlaubsmodus'),
@@ -162,6 +163,14 @@ async function fetchStatus() {
             el.fcToday.textContent    = `${data.forecast.today?.toFixed(1)    || '--'} kWh`;
             el.fcTomorrow.textContent = `${data.forecast.tomorrow?.toFixed(1) || '--'} kWh`;
             el.fcSun.textContent      = `${data.forecast.sunrise || '--:--'} – ${data.forecast.sunset || '--:--'}`;
+            // PV-Schwellenwerte anzeigen
+            const low = data.forecast.threshold_low;
+            const high = data.forecast.threshold_high;
+            if (typeof low === 'number' && typeof high === 'number') {
+                el.fcThresholds.textContent = `LOW=${low.toFixed(1)} | HIGH=${high.toFixed(1)} kWh`;
+            } else {
+                el.fcThresholds.textContent = '--';
+            }
         }
 
         // ── Toggles ──
