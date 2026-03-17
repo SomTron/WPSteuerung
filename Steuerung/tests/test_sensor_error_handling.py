@@ -33,19 +33,29 @@ def test_read_temperature_raw_invalid_data(sensor_manager, caplog):
 
 @pytest.mark.asyncio
 async def test_read_temperature_timeout_handling(sensor_manager, caplog):
-    """Testet, dass Timeouts ein Warning erzeugen und retried werden."""
+    """Testet, dass Timeouts erst bei spaeteren Versuchen als Warning erzeugt werden."""
     with patch("asyncio.wait_for", new_callable=AsyncMock) as mock_wait_for:
-        # Erster Aufruf wirft TimeoutError, zweiter liefert Wert
-        mock_wait_for.side_effect = [asyncio.TimeoutError(), 25.0]
+        # 3 Versuche: 2x Timeout, 1x Erfolg
+        mock_wait_for.side_effect = [asyncio.TimeoutError(), asyncio.TimeoutError(), 25.0]
         
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            with caplog.at_level(logging.WARNING):
-                temp = await sensor_manager.read_temperature("test_sensor", retries=2)
+            # Check DEBUG level for Retry 1
+            with caplog.at_level(logging.DEBUG):
+                temp = await sensor_manager.read_temperature("test_sensor", retries=3)
                 
                 assert temp == 25.0
-                assert mock_wait_for.call_count == 2
-                assert mock_sleep.call_count == 1
-                assert "Timeout bei Sensor test_sensor (28-123). Retry 1/2..." in caplog.text
+                assert mock_wait_for.call_count == 3
+                assert mock_sleep.call_count == 2
+                
+                # Retry 1/3 sollte DEBUG sein
+                assert any(record.levelname == 'DEBUG' and "Retry 1/3" in record.message for record in caplog.records)
+                # Retry 2/3 sollte WARNING sein (da es der vorletzte Versuch ist, bevor es fehlschlägt, 
+                # oder allgemeiner: wir haben es so implementiert, dass nur der LETZTE moegliche Retry vor dem finalen Fail ein Warning ist)
+                # In der Implementierung: logs_level = DEBUG if attempt < retries - 2 else WARNING
+                # Fuer retries=3:
+                # attempt 0 (Retry 1): 0 < 1 -> DEBUG
+                # attempt 1 (Retry 2): 1 < 1 -> False -> WARNING
+                assert any(record.levelname == 'WARNING' and "Retry 2/3" in record.message for record in caplog.records)
 
 @pytest.mark.asyncio
 async def test_logging_levels(sensor_manager, caplog):

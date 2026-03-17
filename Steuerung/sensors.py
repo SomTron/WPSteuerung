@@ -122,11 +122,13 @@ class SensorManager:
                 
                 # Wenn temp None ist (z.B. CRC-Fehler), auch retryen
                 if attempt < retries - 1:
-                    logging.warning(f"Sensor {sensor_key} ({sensor_id}) lieferte None. Retry {attempt + 1}/{retries}...")
+                    log_level = logging.DEBUG if attempt < retries - 2 else logging.WARNING
+                    logging.log(log_level, f"Sensor {sensor_key} ({sensor_id}) lieferte None. Retry {attempt + 1}/{retries}...")
                     await asyncio.sleep(0.2)
             except asyncio.TimeoutError:
                 if attempt < retries - 1:
-                    logging.warning(f"Timeout bei Sensor {sensor_key} ({sensor_id}). Retry {attempt + 1}/{retries}...")
+                    log_level = logging.DEBUG if attempt < retries - 2 else logging.WARNING
+                    logging.log(log_level, f"Timeout bei Sensor {sensor_key} ({sensor_id}). Retry {attempt + 1}/{retries}...")
                     await asyncio.sleep(0.2)
                 else:
                     logging.error(f"Finaler Timeout bei Sensor {sensor_key} ({sensor_id}) nach {retries} Versuchen.")
