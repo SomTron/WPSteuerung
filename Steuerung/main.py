@@ -330,14 +330,15 @@ async def check_and_send_alerts(session, state):
             # Filtere bekannte Infos, die keine Alarme sein sollen
             is_solar = "Solarfenster" in current_type
             is_zieltemp = "Zieltemp" in current_type
-            
-            if not is_solar and not is_zieltemp:
+            is_waiting_setpoint = "Warten auf Einschaltpunkt" in current_type
+
+            if not is_solar and not is_zieltemp and not is_waiting_setpoint:
                 emoji = "⚠️"
                 if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
                     emoji = "🚨"
                 elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
                     emoji = "⏳"
-                
+
                 # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
                 msg = f"{emoji} *Kompressor blockiert:* {current_blocking}"
                 logging.info(f"Sende Einmal-Alarm: {current_type} (Voll: {current_blocking})")
