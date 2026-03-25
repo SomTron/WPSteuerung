@@ -59,6 +59,11 @@ class ControlState:
         self.blocking_reason: Optional[str] = None  # Current blocking reason
         self.last_blocking_reason: Optional[str] = None  # For change detection
         self.activation_reason: Optional[str] = None  # Reason why compressor switched on
+        
+        # Adaptive PV Logic Fields
+        self.pv_strategy: str = "balanced"
+        self.heating_deadline: Optional[datetime] = None
+        self.estimated_runtime_minutes: int = 0
 
     def __repr__(self):
         return f"<ControlState(kompressor_ein={self.kompressor_ein}, solar_ueberschuss_aktiv={self.solar_ueberschuss_aktiv}, blocking_reason='{self.blocking_reason}')>"
@@ -165,6 +170,10 @@ class State:
     @property
     def basis_ausschaltpunkt(self):
         return self.config.Heizungssteuerung.AUSSCHALTPUNKT
+
+    @property
+    def heating_rate(self):
+        return self.config.Heizungssteuerung.HEATING_RATE
 
     @property
     def bot_token(self):

@@ -15,6 +15,12 @@ from logic_utils import (
     get_validated_reduction,
     check_log_throttle
 )
+from adaptive_logic import (
+    get_pv_strategy,
+    get_heating_deadline,
+    should_delay_for_peak,
+    estimate_heating_runtime
+)
 from safety_logic import (
     check_sensors_and_safety, 
     handle_critical_compressor_error, 
@@ -146,6 +152,39 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     # Batterie-Vorrang-Modus: PV-Plan erlaubt, aber Batterie wird noch nicht stark genug geladen
     batterie_vorrang = pv_plan_erlaubt and not state.control.solar_ueberschuss_aktiv
 
+    # --- Start Adaptive Logic Integration ---
+    # 3) PV-Strategie und Deadline ermitteln
+    state.control.pv_strategy = get_pv_strategy(state)
+    
+    # Zieltemperatur für Deadline: 
+    # Wenn morgen schlecht -> Deadline für Oversupply (ausschaltpunkt_erhoeht)
+    # Wenn morgen gut -> Deadline für Normalmodus (basis_ausschaltpunkt)
+    target_for_deadline = state.basis_ausschaltpunkt - total_reduction
+    if state.control.pv_strategy == "aggressive":
+        target_for_deadline = state.ausschaltpunkt_erhoeht
+        
+    state.control.heating_deadline = get_heating_deadline(state, target_for_deadline)
+    state.control.estimated_runtime_minutes = int(estimate_heating_runtime(
+        state.sensors.t_mittig if state.sensors.t_mittig is not None else 40.0, 
+        target_for_deadline, 
+        state.heating_rate
+    ) * 60)
+
+    # 4) Strategische Verzögerung (Warten auf Peak) vs. Deadline
+    now = datetime.now(state.local_tz)
+    is_after_deadline = now >= state.control.heating_deadline if state.control.heating_deadline else False
+    
+    wait_for_peak = False
+    if not is_after_deadline:
+        wait_for_peak = should_delay_for_peak(state, state.control.pv_strategy)
+
+    # 5) Überschuss-Gating mit strategischer Verzögerung
+    if wait_for_peak:
+        # Im Wartemodus: Überschuss nur aktiv wenn WIRKLICH viel eingespeist wird (Peak Shaving)
+        # Wir heben die Schwelle für den Solar-Modus temporär an
+        state.control.solar_ueberschuss_aktiv = feedin_excess 
+    # --- End Adaptive Logic Integration ---
+
     if state.bademodus_aktiv:
         res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4, "regelfuehler": t_unten}
     elif state.control.solar_ueberschuss_aktiv:
@@ -168,7 +207,15 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     elif is_night:
         res = {"modus": "Nachtmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
     else:
-        res = {"modus": "Normalmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        # Im Normalmodus: Wenn wir nach der Deadline sind, erzwingen wir das Aufheizen
+        mode_name = "Normalmodus"
+        if is_after_deadline:
+            mode_name = "Normalmodus (Deadline erreicht)"
+            # Einschaltpunkt anheben um den Start zu forcieren
+            res = {"modus": mode_name, "ausschaltpunkt": target_for_deadline, "einschaltpunkt": target_for_deadline, "regelfuehler": t_mittig}
+        else:
+            if wait_for_peak: mode_name = "Normalmodus (Warte auf PV-Peak)"
+            res = {"modus": mode_name, "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
 
     res["solar_ueberschuss_aktiv"] = state.control.solar_ueberschuss_aktiv
     

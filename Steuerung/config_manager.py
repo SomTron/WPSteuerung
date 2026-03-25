@@ -29,6 +29,12 @@ class HeizungssteuerungConfig(BaseModel):
     API_HOST: str = Field(default="0.0.0.0")
     API_PORT: int = Field(default=8000)
     WP_POWER_EXPECTED: float = Field(default=600.0, description="Erwarteter Verbrauch der Wärmepumpe in Watt")
+    # Adaptive PV-Überschussregelung: Temperatur-Offsets pro Prognose-Stufe
+    PV_PROGNOSE_LOW_OFFSET: float = Field(default=0.0, description="Temperatur-Offset bei LOW PV-Prognose (°C)")
+    PV_PROGNOSE_MID_OFFSET: float = Field(default=1.0, description="Temperatur-Offset bei MID PV-Prognose (°C)")
+    PV_PROGNOSE_HIGH_OFFSET: float = Field(default=2.0, description="Temperatur-Offset bei HIGH PV-Prognose (°C)")
+    PV_PROGNOSE_AUSSCHLAGUNG_HIGH: float = Field(default=3.0, description="Zusätzlicher Ausschaltpunkt-Offset bei HIGH PV-Prognose (°C)")
+    HEATING_RATE: float = Field(default=2.0, description="Geschätzte Aufheizrate des Boilers in °C pro Stunde (für Deadline-Berechnung)")
 
 class HealthcheckConfig(BaseModel):
     HEALTHCHECK_URL: str = Field(default="")

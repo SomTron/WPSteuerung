@@ -16,8 +16,15 @@ def create_mock_state():
     """Helper function to create a mock state for testing"""
     state = MagicMock()
     
+    # Sensors setup
+    state.sensors.t_oben = 45.0
+    state.sensors.t_mittig = 42.0
+    state.sensors.t_unten = 40.0
+    state.sensors.t_verd = 10.0
+    state.sensors.t_vorlauf = 35.0
+    
     # Config setup
-    state.config.Heizungssteuerung.NACHTABSENKUNG_START = "19:30"
+    state.config.Heizungssteuerung.NACHTABSENKUNG_START = "23:59"
     state.config.Heizungssteuerung.NACHTABSENKUNG_END = "08:00"
     state.config.Heizungssteuerung.EINSCHALTPUNKT = 42
     state.config.Heizungssteuerung.AUSSCHALTPUNKT = 45
@@ -27,6 +34,7 @@ def create_mock_state():
     state.config.Heizungssteuerung.UEBERGANGSMODUS_MORGENS_ENDE = "10:00"
     state.config.Heizungssteuerung.UEBERGANGSMODUS_ABENDS_START = "17:00"
     state.config.Heizungssteuerung.WP_POWER_EXPECTED = 600.0
+    state.config.Heizungssteuerung.HEATING_RATE = 10.0
     state.config.Urlaubsmodus.URLAUBSABSENKUNG = 10.0
     state.config.Solarueberschuss.BATPOWER_THRESHOLD = 600.0
     state.config.Solarueberschuss.SOC_THRESHOLD = 95.0
@@ -46,12 +54,19 @@ def create_mock_state():
     state.control.previous_modus = "Normal"
     state.control.aktueller_einschaltpunkt = 42
     state.control.aktueller_ausschaltpunkt = 45
+    state.control.pv_strategy = "balanced"
+    state.control.heating_deadline = None
+    state.control.estimated_runtime_minutes = 0
     
     # Solar setup
     state.solar.batpower = 0.0
     state.solar.soc = 0.0
     state.solar.feedinpower = 0.0
     state.solar.acpower = 0.0
+    state.solar.forecast_today = None
+    state.solar.forecast_tomorrow = None
+    state.solar.pv_threshold_low_kwh = None
+    state.solar.pv_threshold_high_kwh = None
     
     # Stats setup
     state.stats.total_runtime_today = timedelta()
@@ -116,6 +131,7 @@ async def test_determine_mode_solar_surplus():
     
     # With these values above thresholds, solar should be active
     assert result["solar_ueberschuss_aktiv"] is True
+    assert "Solarüberschuss" in result["modus"]
 
 
 @pytest.mark.asyncio

@@ -157,6 +157,10 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompres
     
     status_lines.extend([
         f"Laufzeit: {format_time(current_runtime)} (Heute: {format_time(total_runtime)})", "",
+        "💡 *PV-Strategie*",
+        f"Strategie: *{state.control.pv_strategy.upper()}*",
+        f"Deadline: {state.control.heating_deadline.strftime('%H:%M') if state.control.heating_deadline else '-'}",
+        f"Geschützt. Aufh: {state.control.estimated_runtime_minutes} min", "",
         "⚙️ *Regelung*",
         f"Sensor: {active_sensor}",
         f"Ein: {t_soll_ein:.1f}°C | Aus: {t_soll_aus:.1f}°C", "",

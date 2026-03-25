@@ -118,6 +118,9 @@ def get_status(request: Request):
             "runtime_today":   str(_safe(stats, "total_runtime_today", "0:00:00")).split('.')[0],
             "activation_reason": _safe(control, "activation_reason"),
             "blocking_reason":   _safe(control, "blocking_reason"),
+            "pv_strategy":       _safe(control, "pv_strategy"),
+            "heating_deadline":  _safe(control, "heating_deadline").strftime("%H:%M") if _safe(control, "heating_deadline") else None,
+            "estimated_runtime": _safe(control, "estimated_runtime_minutes"),
         },
         "setpoints": {
             "einschaltpunkt":    _safe(control, "aktueller_einschaltpunkt"),

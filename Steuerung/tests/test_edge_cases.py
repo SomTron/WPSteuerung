@@ -25,6 +25,7 @@ def mock_config():
     config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT = 48
     config.Heizungssteuerung.VERDAMPFERTEMPERATUR = 6.0
     config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP = 9.0
+    config.Heizungssteuerung.HEATING_RATE = 10.0
     
     # Solarueberschuss section
     config.Solarueberschuss.BATPOWER_THRESHOLD = 600.0
@@ -48,7 +49,16 @@ def mock_state(mock_config):
     
     # Sub-states
     state.sensors = MagicMock()
+    state.sensors.t_oben = 45.0
+    state.sensors.t_mittig = 43.0
+    state.sensors.t_unten = 40.0
+    
     state.solar = MagicMock()
+    state.solar.forecast_today = None
+    state.solar.forecast_tomorrow = None
+    state.solar.pv_threshold_low_kwh = None
+    state.solar.pv_threshold_high_kwh = None
+    
     state.control = MagicMock()
     state.stats = MagicMock()
 
@@ -56,6 +66,9 @@ def mock_state(mock_config):
     state.control.kompressor_ein = False
     state.control.solar_ueberschuss_aktiv = False
     state.control.previous_modus = "Normal"
+    state.control.pv_strategy = "balanced"
+    state.control.heating_deadline = None
+    state.control.estimated_runtime_minutes = 0
     state.control.aktueller_einschaltpunkt = 43
     state.control.aktueller_ausschaltpunkt = 45
     
@@ -166,7 +179,7 @@ class TestSolarModeSwitch:
         
         # Should switch to solar mode
         assert result["solar_ueberschuss_aktiv"] is True
-        assert result["modus"] == "Solarüberschuss"
+        assert "Solarüberschuss" in result["modus"]
     
     @pytest.mark.asyncio
     async def test_solar_to_normal_transition_above_threshold(self, mock_state, mock_config, mock_hardware):

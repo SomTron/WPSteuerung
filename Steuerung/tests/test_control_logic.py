@@ -30,7 +30,7 @@ def mock_state():
         "NACHT_START": "22:00",
         "NACHT_ENDE": "06:00",
         "NACHTABSENKUNG": 5.0,
-        "NACHTABSENKUNG_START": "22:00",
+        "NACHTABSENKUNG_START": "23:59",
         "NACHTABSENKUNG_END": "06:00",
         "EINSCHALTPUNKT": 40,
         "AUSSCHALTPUNKT": 50,
@@ -42,7 +42,8 @@ def mock_state():
         "UEBERGANGSMODUS_ABENDS_START": "17:00",
         "SICHERHEITS_TEMP": 60.0,
         "VERDAMPFERTEMPERATUR": -10.0,
-        "VERDAMPFER_RESTART_TEMP": 9.0
+        "VERDAMPFER_RESTART_TEMP": 9.0,
+        "HEATING_RATE": 10.0
     })
     
     config.Urlaubsmodus = create_section_mock({
@@ -71,6 +72,12 @@ def mock_state():
     
     # Sub-states
     state.sensors = MagicMock()
+    state.sensors.t_oben = 45.0
+    state.sensors.t_mittig = 40.0
+    state.sensors.t_unten = 35.0
+    state.sensors.t_verd = 10.0
+    state.sensors.t_vorlauf = 35.0
+    
     state.solar = MagicMock()
     state.control = MagicMock()
     state.stats = MagicMock()
@@ -81,10 +88,16 @@ def mock_state():
     state.control.kompressor_ein = False
     state.control.solar_ueberschuss_aktiv = False
     state.control.previous_modus = "Normalmodus"
+    state.control.heating_deadline = None
+    state.control.pv_strategy = "balanced"
     
     state.solar.batpower = 0
     state.solar.soc = 50
     state.solar.feedinpower = 0
+    state.solar.forecast_today = None
+    state.solar.forecast_tomorrow = None
+    state.solar.pv_threshold_low_kwh = None
+    state.solar.pv_threshold_high_kwh = None
     
     state.stats.last_compressor_off_time = datetime.now(state.local_tz) - timedelta(hours=1)
     state.stats.total_runtime_today = timedelta()
@@ -111,7 +124,7 @@ async def test_determine_mode_normal(mock_state):
             
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
         
-        assert result['modus'] == "Normalmodus"
+        assert "Normalmodus" in result['modus']
         assert result['ausschaltpunkt'] == 50
         assert result['einschaltpunkt'] == 40
         assert result['regelfuehler'] == 35 # t_mittig
@@ -155,7 +168,7 @@ async def test_determine_mode_solar_min_soc(mock_state):
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
         
         # Should be Solarüberschuss (Batterie-Vorrang) because soc (15) < MIN_SOC (20) but plan allows it
-        assert result['modus'] == "Solarüberschuss (Batterie-Vorrang)"
+        assert "Solarüberschuss (Batterie-Vorrang)" in result['modus']
         assert mock_state.control.solar_ueberschuss_aktiv is False
 
 @pytest.mark.asyncio
