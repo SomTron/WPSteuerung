@@ -278,6 +278,12 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
             continue
         
         try:
+            # 0. Check Authorization: only process messages from the configured chat_id
+            msg_chat_id = message.get('chat', {}).get('id')
+            if str(msg_chat_id) != str(chat_id):
+                logging.warning(f"Unauthorized Telegram message from chat_id {msg_chat_id}: {text}")
+                continue
+
             # 1. Check for Active Conversation State
             chat_state = conversation_states.get(chat_id)
             if chat_state == "awaiting_custom_duration":
@@ -324,12 +330,15 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     
                 updates = await get_telegram_updates(session, state.bot_token, last_update_id)
                 if updates is not None:
-                    t_boiler_oben = await read_temperature_func("oben")
-                    t_boiler_unten = await read_temperature_func("unten")
-                    t_boiler_mittig = await read_temperature_func("mittig")
-                    t_verd = await read_temperature_func("verd")
-                    t_vorlauf = await read_temperature_func("vorlauf")
-                    
+                    if updates:  # Only read sensors if there are actually messages to process
+                        t_boiler_oben = await read_temperature_func("oben")
+                        t_boiler_unten = await read_temperature_func("unten")
+                        t_boiler_mittig = await read_temperature_func("mittig")
+                        t_verd = await read_temperature_func("verd")
+                        t_vorlauf = await read_temperature_func("vorlauf")
+                    else:
+                        t_boiler_oben = t_boiler_unten = t_boiler_mittig = t_verd = t_vorlauf = None
+
                     last_update_id = await process_telegram_messages_async(
                         session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, t_vorlauf, 
                         updates, last_update_id, kompressor_status_func(), current_runtime_func(), 

@@ -111,6 +111,11 @@ async def verify_compressor_running(state, session, current_t_vorlauf, current_t
     if state.kompressor_verification_last_check:
         if safe_timedelta(now, state.kompressor_verification_last_check, state.local_tz) < timedelta(minutes=VERIFICATION_CHECK_INTERVAL):
             return True, None
+
+    if current_t_vorlauf is None or current_t_unten is None:
+        # Skip verification if sensors are missing (safety_logic will handle sensor errors)
+        return True, None
+
     state.kompressor_verification_last_check = now
 
     # Vorlauf muss STEIGEN
