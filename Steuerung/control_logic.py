@@ -266,15 +266,15 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
     
     # Set blocking reason if conditions not met
     if not state.control.kompressor_ein:
-        if not pause_ok and pause_remaining:
+        if not temp_ok:
+            # Clear old pause messages if we're now just waiting for the temperature
+            state.control.blocking_reason = "Warten auf Einschaltpunkt"
+        elif not solar_ok and solar_block_reason:
+            state.control.blocking_reason = solar_block_reason
+        elif not pause_ok and pause_remaining:
             minutes = int(pause_remaining.total_seconds() // 60)
             seconds = int(pause_remaining.total_seconds() % 60)
             state.control.blocking_reason = f"Min. Pause (noch {minutes}m {seconds}s)"
-        elif not solar_ok and solar_block_reason:
-            state.control.blocking_reason = solar_block_reason
-        elif not temp_ok:
-            # Clear old pause messages if we're now just waiting for the temperature
-            state.control.blocking_reason = "Warten auf Einschaltpunkt"
         else:
             state.control.blocking_reason = None
     

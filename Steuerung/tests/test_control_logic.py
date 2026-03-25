@@ -154,8 +154,8 @@ async def test_determine_mode_solar_min_soc(mock_state):
         
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
         
-        # Should be Normalmodus because soc (15) < MIN_SOC (20)
-        assert result['modus'] == "Normalmodus"
+        # Should be Solarüberschuss (Batterie-Vorrang) because soc (15) < MIN_SOC (20) but plan allows it
+        assert result['modus'] == "Solarüberschuss (Batterie-Vorrang)"
         assert mock_state.control.solar_ueberschuss_aktiv is False
 
 @pytest.mark.asyncio
@@ -314,7 +314,7 @@ async def test_determine_mode_plan_blocks_solar_when_today_high_tomorrow_low(moc
 
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
 
-        assert result['modus'] == "Normalmodus"
+        assert result['modus'] == "Normalmodus (PV-Plan: heute/morgen nicht HIGH)"
         assert mock_state.control.solar_ueberschuss_aktiv is False
 
     # Wenn aber tatsächlich eingespeist wird: Überschussmodus trotz "schlechtem" Plan
@@ -350,7 +350,7 @@ async def test_determine_mode_plan_blocks_solar_when_today_low_tomorrow_high(moc
 
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
 
-        assert result['modus'] == "Normalmodus"
+        assert result['modus'] == "Normalmodus (PV-Plan: heute/morgen nicht HIGH)"
         assert mock_state.control.solar_ueberschuss_aktiv is False
 
     # Mit echter Einspeisung: Überschussmodus auch bei schlechtem Forecast-Plan
@@ -383,7 +383,7 @@ async def test_determine_mode_plan_blocks_solar_when_both_low(mock_state):
 
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
 
-        assert result['modus'] == "Normalmodus"
+        assert result['modus'] == "Normalmodus (PV-Plan: heute/morgen nicht HIGH)"
         assert mock_state.control.solar_ueberschuss_aktiv is False
 
     mock_state.solar.feedinpower = 1000
