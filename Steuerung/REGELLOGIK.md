@@ -43,7 +43,26 @@ Je nach Modus wechselt der Regelfühler automatisch:
 
 ---
 
-## 4. Schwellenwerte (Beispiel)
+## 4. Nachtmodus (Nachtabsenkung)
+
+Ab Erreichen der `NACHTABSENKUNG_START` Zeit (z.B. 22:00 Uhr) schaltet das System in den Nachtmodus:
+
+- **Ziel**: Minimierung der Laufzeit während der Nacht zur Geräuschreduzierung und Batterieschonung.
+- **Absenkung**: Die Zieltemperatur wird um den Wert `NACHTABSENKUNG` (z.B. 5.0°C) reduziert.
+- **Regelfühler**: `t_mittig`.
+
+---
+
+## 5. Übergangsmodi (Morgens / Abends)
+
+In den Zeiten vor und nach dem Kern-Solarfenster (Solar Window) greifen die Übergangsstrategien:
+
+### Morgens-Übergang (`NACHTABSENKUNG_END` bis `UEBERGANGSMODUS_MORGENS_ENDE`)
+- **Ziel**: Den Boiler bereits vor dem großen PV-Überschuss effizient (aus der Batterie oder erstem PV-Strom) auf das normale Niveau zu heben, falls er sehr weit abgekühlt ist.
+- **Frostschutz**: Sinkt die Temperatur unter den Nacht-Einschaltpunkt, wird auch hier geheizt.
+
+### Abends-Übergang (`UEBERGANGSMODUS_ABENDS_START` bis `NACHTABSENKUNG_START`)
+- **Ziel**: Das Temperaturniveau nach Ende des Solar-Fensters so lange wie möglich zu halten, bevor die Nachtabsenkung greift.
 
 - **Batterieladen > 600W**: Erster Trigger für Überschuss.
 - **Einspeisung > 600W**: Sofortiger Start (Peak Shaving), wenn die Batterie voll ist oder nicht mehr schneller laden kann.
