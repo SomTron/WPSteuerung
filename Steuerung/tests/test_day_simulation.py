@@ -92,7 +92,10 @@ def create_mock_state(config):
     state.solar.batpower = 0
     state.solar.soc = 50
     state.solar.feedinpower = 0
-    state.solar.forecast_tomorrow = 0
+    state.solar.forecast_today = None
+    state.solar.forecast_tomorrow = None
+    state.solar.pv_threshold_low_kwh = None
+    state.solar.pv_threshold_high_kwh = None
     
     state.urlaubsmodus_aktiv = False
     state.bademodus_aktiv = False
@@ -102,6 +105,11 @@ def create_mock_state(config):
     state.basis_einschaltpunkt = float(config['Heizungssteuerung']['EINSCHALTPUNKT'])
     state.ausschaltpunkt_erhoeht = float(config['Heizungssteuerung']['AUSSCHALTPUNKT_ERHOEHT'])
     state.einschaltpunkt_erhoeht = float(config['Heizungssteuerung']['EINSCHALTPUNKT_ERHOEHT'])
+    state.heating_rate = 2.0
+    state.control.learned_heating_rate = 2.0
+    state.control.pv_strategy = "balanced"
+    state.control.heating_deadline = None
+    state.control.estimated_runtime_minutes = 0
     
     return state
 
@@ -167,7 +175,10 @@ async def run_simulation_scenario(scenario_name, steps, config):
             
             mock_state.solar.batpower = bat_power
             mock_state.solar.soc = soc
-            mock_state.sensors.t_verd = t_verd # Optional but good
+            mock_state.sensors.t_verd = t_verd
+            mock_state.sensors.t_mittig = t_mittig
+            mock_state.sensors.t_unten = t_unten
+            mock_state.sensors.t_oben = t_oben
             
             setpoints = await determine_mode_and_setpoints(mock_state, t_unten, t_mittig)
             

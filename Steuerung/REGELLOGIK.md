@@ -29,7 +29,8 @@ Basierend auf der Prognose für heute und morgen wird täglich eine Strategie ge
 Um sicherzustellen, dass das Wasser immer warm ist, berechnet das System eine "Deadline":
 
 - **Formel**: `Deadline = Ende_Solarfenster - Benötigte_Aufheizzeit`
-- **Aufheizzeit**: Wird berechnet aus `(Zieltemp - Ist-Temp) / Aufheizrate (ca. 2.0°C/h)`.
+- **Aufheizzeit**: Wird berechnet aus `(Zieltemp - Ist-Temp) / Aufheizrate`.
+- **Selbstlernend**: Die Steuerung nutzt keine festen Werte, sondern lernt die tatsächliche Aufheizrate deines Systems bei jedem Heizvorgang (Exponential Moving Average). Beim Start wird der Wert zudem aus der Historie (`heizungsdaten.csv`) geschätzt.
 - **Verhalten**: Vor Erreichen der Deadline wartet die WP auf hohen Überschuss (Peak Shaving). Nach Erreichen der Deadline schaltet sie ein, um das Ziel rechtzeitig zu erreichen.
 
 ---

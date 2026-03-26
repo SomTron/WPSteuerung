@@ -126,6 +126,17 @@ async def setup_application():
     except Exception as e:
         logging.debug(f"Adaptive PV-Schwellen (Startup) konnten nicht berechnet werden: {e}")
     
+    # 6c. Gelernte Aufheizrate initialisieren
+    try:
+        from utils_history import estimate_heating_rate_from_csv
+        from utils import HEIZUNGSDATEN_CSV
+        hist_rate = estimate_heating_rate_from_csv(HEIZUNGSDATEN_CSV)
+        if hist_rate is not None:
+            state.control.learned_heating_rate = hist_rate
+            logging.info(f"Aufheizrate (Startup): Initialisiert mit {hist_rate:.2f}°C/h aus Historie.")
+    except Exception as e:
+        logging.debug(f"Aufheizrate-Initialisierung fehlgeschlagen: {e}")
+    
     
     # 7. CSV Header Check (Once at startup)
     try:

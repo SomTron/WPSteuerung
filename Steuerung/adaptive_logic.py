@@ -61,7 +61,9 @@ def get_heating_deadline(state, target_t: float) -> datetime:
         # Hier als Schätzung einen Mix oder t_mittig
         current_t = state.sensors.t_mittig if state.sensors.t_mittig is not None else 40.0
         
-        runtime_h = estimate_heating_runtime(current_t, target_t)
+        # Nutze gelernte Rate falls vorhanden
+        rate = getattr(state.control, "learned_heating_rate", state.heating_rate)
+        runtime_h = estimate_heating_runtime(current_t, target_t, rate_per_hour=rate)
         deadline = deadline_base - timedelta(hours=runtime_h)
         
         return deadline

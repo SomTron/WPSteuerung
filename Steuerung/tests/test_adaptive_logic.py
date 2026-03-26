@@ -41,6 +41,7 @@ def test_get_heating_deadline():
     state.config.Heizungssteuerung.NACHTABSENKUNG_START = "18:00"
     state.sensors.t_mittig = 40.0
     state.heating_rate = 2.0
+    state.control.learned_heating_rate = 2.0
     
     # 52°C target, 40°C ist -> 12°C delta -> 6 hours runtime
     # Window end 18:00 -> Deadline 12:00

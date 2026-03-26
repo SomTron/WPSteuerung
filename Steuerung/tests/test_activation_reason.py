@@ -43,6 +43,10 @@ async def test_status_message_includes_reason():
     state.control.aktueller_einschaltpunkt = 40.0
     state.control.aktueller_ausschaltpunkt = 50.0
     state.control.blocking_reason = None
+    state.control.pv_strategy = "balanced"
+    state.control.heating_deadline = None
+    state.control.estimated_runtime_minutes = 0
+    state.control.learned_heating_rate = 2.0
     state.control.activation_reason = "Solarüberschuss"
     state.battery_capacity = 0
     

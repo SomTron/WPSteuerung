@@ -10,7 +10,11 @@ def mock_state():
     state.local_tz = pytz.timezone("Europe/Vienna")
     state.config.Heizungssteuerung.WP_POWER_EXPECTED = 600.0
     state.battery_capacity = 10.0
-    state.control.blocking_reason = "Test Reason"
+    state.control.blocking_reason = "Zu oft getaktet"
+    state.control.pv_strategy = "balanced"
+    state.control.heating_deadline = None
+    state.control.estimated_runtime_minutes = 0
+    state.control.learned_heating_rate = 2.0
     state.control.aktueller_einschaltpunkt = 40.0
     state.control.aktueller_ausschaltpunkt = 45.0
     state.control.solar_ueberschuss_aktiv = False

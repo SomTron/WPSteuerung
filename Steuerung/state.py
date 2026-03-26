@@ -64,6 +64,21 @@ class ControlState:
         self.pv_strategy: str = "balanced"
         self.heating_deadline: Optional[datetime] = None
         self.estimated_runtime_minutes: int = 0
+        
+        # Self-calculating heating rate
+        self.learned_heating_rate: float = float(config.Heizungssteuerung.HEATING_RATE)
+        self.heating_start_temp: Optional[float] = None
+        self.heating_start_time: Optional[datetime] = None
+        
+        # Self-calculating heating rate
+        self.learned_heating_rate: float = float(config.Heizungssteuerung.HEATING_RATE)
+        self.heating_start_temp: Optional[float] = None
+        self.heating_start_time: Optional[datetime] = None
+        
+        # Self-calculating heating rate
+        self.learned_heating_rate: float = float(config.Heizungssteuerung.HEATING_RATE)
+        self.heating_start_temp: Optional[float] = None
+        self.heating_start_time: Optional[datetime] = None
 
     def __repr__(self):
         return f"<ControlState(kompressor_ein={self.kompressor_ein}, solar_ueberschuss_aktiv={self.solar_ueberschuss_aktiv}, blocking_reason='{self.blocking_reason}')>"
@@ -239,6 +254,10 @@ class State:
             self.stats.last_compressor_on_time = now
             self.control.activation_reason = self.control.previous_modus
             
+            # Startwerte für Aufheizrate-Berechnung
+            self.control.heating_start_time = now
+            self.control.heating_start_temp = self.sensors.t_mittig
+            
             # Startwerte für Verifizierung speichern
             self.kompressor_verification_start_time = now
             self.kompressor_verification_start_t_verd = self.sensors.t_verd
@@ -268,6 +287,33 @@ class State:
                 elapsed = safe_timedelta(now, self.stats.last_compressor_on_time, self.local_tz)
                 self.stats.total_runtime_today += elapsed
                 self.stats.last_completed_cycle = now
+                
+                # Gelernte Aufheizrate aktualisieren
+                if self.control.heating_start_time and self.control.heating_start_temp is not None:
+                    try:
+                        duration_h = elapsed.total_seconds() / 3600.0
+                        # Nur Läufe > 20 Min und mit tatsächlicher Erwärmung werten
+                        if duration_h > 0.33:
+                            current_t = self.sensors.t_mittig
+                            if current_t is not None and current_t > self.control.heating_start_temp:
+                                actual_rate = (current_t - self.control.heating_start_temp) / duration_h
+                                
+                                # EMA (Alpha 0.2 -> 20% neues Gewicht)
+                                old_rate = self.control.learned_heating_rate
+                                alpha = 0.2
+                                self.control.learned_heating_rate = (alpha * actual_rate) + ((1 - alpha) * old_rate)
+                                
+                                logging.info(
+                                    f"Aufheizrate gelernt: {actual_rate:.2f}°C/h. "
+                                    f"Neuer Durchschnitt (EMA): {self.control.learned_heating_rate:.2f}°C/h"
+                                )
+                    except Exception as e:
+                        logging.error(f"Fehler bei Aufheizrate-Update: {e}")
+                
+                # Reset Tracking
+                self.control.heating_start_time = None
+                self.control.heating_start_temp = None
+
                 logging.info(f"Kompressor AUS. Laufzeit: {elapsed}")
             else:
                 logging.info("Kompressor AUS")

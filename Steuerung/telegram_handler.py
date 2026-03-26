@@ -160,6 +160,7 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompres
         "💡 *PV-Strategie*",
         f"Strategie: *{state.control.pv_strategy.upper()}*",
         f"Deadline: {state.control.heating_deadline.strftime('%H:%M') if state.control.heating_deadline else '-'}",
+        f"Aufheizrate: {state.control.learned_heating_rate:.2f}°C/h",
         f"Geschützt. Aufh: {state.control.estimated_runtime_minutes} min", "",
         "⚙️ *Regelung*",
         f"Sensor: {active_sensor}",
