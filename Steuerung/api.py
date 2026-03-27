@@ -153,7 +153,12 @@ def get_status(request: Request):
                 next_switch_reason = "Ziel erreicht"
         else:
             # Schätze wann EIN - unter Berücksichtigung von PV-Plan, Strategie und Deadline
-            now = datetime.now(shared_state.local_tz)
+            # Sicherer Zugriff auf Zeitzone
+            import pytz
+            local_tz = getattr(shared_state, "local_tz", None)
+            if local_tz is None or not isinstance(local_tz, pytz.BaseTzInfo):
+                local_tz = pytz.timezone("Europe/Berlin")
+            now = datetime.now(local_tz)
 
             pv_strategy = _safe(control, "pv_strategy", "balanced")
             heating_deadline = _safe(control, "heating_deadline")
@@ -182,7 +187,7 @@ def get_status(request: Request):
                 # Temperatur muss noch sinken - prüfe strategische Faktoren
 
                 # 1. Wenn Deadline existiert und bevor Deadline -> Einschalten zur Deadline
-                if heating_deadline and now < heating_deadline:
+                if heating_deadline is not None and isinstance(heating_deadline, datetime) and now < heating_deadline:
                     minutes_to_deadline = int((heating_deadline - now).total_seconds() / 60)
                     # Prüfen ob Temperatur bis Deadline voraussichtlich erreicht wird
                     cooling_rate = 1.0

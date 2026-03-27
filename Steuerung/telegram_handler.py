@@ -161,15 +161,24 @@ def _get_pv_plan_classification(state) -> str:
 def _estimate_next_switch(state, t_oben, t_unten, t_mittig, kompressor_status) -> str:
     """Schätzt die nächste Kompressorumschaltung basierend auf aktueller Tendenz und PV-Plan."""
     from datetime import datetime, timedelta
+    import pytz
 
-    now = datetime.now(state.local_tz)
-    regelfuehler = t_mittig if state.control.active_rule_sensor == "Mittig" else t_unten
+    # Sicherer Zugriff auf Zeitzone
+    local_tz = getattr(state, "local_tz", pytz.timezone("Europe/Berlin"))
+    if not isinstance(local_tz, pytz.BaseTzInfo):
+        local_tz = pytz.timezone("Europe/Berlin")
+    now = datetime.now(local_tz)
+
+    regelfuehler = t_mittig if getattr(state.control, "active_rule_sensor", None) == "Mittig" else t_unten
 
     if regelfuehler is None:
         return "N/A (Sensor fehlt)"
 
-    einschaltpunkt = state.control.aktueller_einschaltpunkt
-    ausschaltpunkt = state.control.aktueller_ausschaltpunkt
+    einschaltpunkt = getattr(state.control, "aktueller_einschaltpunkt", None)
+    ausschaltpunkt = getattr(state.control, "aktueller_ausschaltpunkt", None)
+
+    if einschaltpunkt is None or ausschaltpunkt is None:
+        return "N/A (Setpunkt fehlt)"
 
     # PV-Plan Werte für strategische Entscheidungen
     pv_plan_heute = getattr(state.solar, "forecast_today", None)
@@ -177,8 +186,11 @@ def _estimate_next_switch(state, t_oben, t_unten, t_mittig, kompressor_status) -
     low = getattr(state.solar, "pv_threshold_low_kwh", None)
     high = getattr(state.solar, "pv_threshold_high_kwh", None)
 
+    def _is_numeric(val):
+        return val is not None and isinstance(val, (int, float))
+
     def _classify(val):
-        if val is None or low is None or high is None:
+        if not _is_numeric(val) or not _is_numeric(low) or not _is_numeric(high):
             return None
         if val < low:
             return "LOW"
@@ -198,8 +210,8 @@ def _estimate_next_switch(state, t_oben, t_unten, t_mittig, kompressor_status) -
             return "AUS in ~0 min (Ziel erreicht)"
 
         # Aufheizrate verwenden (°C/h) -> Zeit bis Ziel in Minuten
-        rate = getattr(state.control, "learned_heating_rate", state.heating_rate)
-        if rate <= 0:
+        rate = getattr(state.control, "learned_heating_rate", getattr(state, "heating_rate", 2.0))
+        if rate is None or rate <= 0:
             rate = 2.0  # Fallback
         minutes = int((delta / rate) * 60)
 
@@ -213,15 +225,16 @@ def _estimate_next_switch(state, t_oben, t_unten, t_mittig, kompressor_status) -
 
         if delta_temp <= 0:
             # Eigentlich sollte jetzt eingeschaltet werden - prüfe ob blockiert
-            if state.control.blocking_reason:
-                return f"EIN blockiert: {state.control.blocking_reason[:35]}"
+            blocking_reason = getattr(state.control, "blocking_reason", None)
+            if blocking_reason:
+                return f"EIN blockiert: {str(blocking_reason)[:35]}"
             return "EIN in ~0 min (unter Ziel)"
 
         # Deadline-basierte Berechnung
-        heating_deadline = state.control.heating_deadline
-        modus = state.control.previous_modus or ""
+        heating_deadline = getattr(state.control, "heating_deadline", None)
+        modus = getattr(state.control, "previous_modus", "") or ""
 
-        if heating_deadline and now < heating_deadline:
+        if heating_deadline and isinstance(heating_deadline, datetime) and now < heating_deadline:
             minutes_to_deadline = int((heating_deadline - now).total_seconds() / 60)
             cooling_rate = 1.0
             temp_drop_by_deadline = (minutes_to_deadline / 60) * cooling_rate
