@@ -132,6 +132,130 @@ async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_bo
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
+def _get_pv_plan_classification(state) -> str:
+    """Ermittelt die PV-Plan Klassifizierung (heute/morgen) als Text."""
+    today = getattr(state.solar, "forecast_today", None)
+    tomorrow = getattr(state.solar, "forecast_tomorrow", None)
+    low = getattr(state.solar, "pv_threshold_low_kwh", None)
+    high = getattr(state.solar, "pv_threshold_high_kwh", None)
+
+    # Prüfen ob Werte numerisch sind (nicht MagicMock oder None)
+    def _is_numeric(val):
+        return val is not None and isinstance(val, (int, float))
+
+    if not all(_is_numeric(v) for v in (today, tomorrow, low, high)):
+        return "N/A"
+
+    def _classify(val: float) -> str:
+        if val < low:
+            return "🔴 LOW"
+        if val > high:
+            return "🟢 HIGH"
+        return "🟡 MID"
+
+    today_cls = _classify(today)
+    tomorrow_cls = _classify(tomorrow)
+    return f"Heute: {today_cls} | Morgen: {tomorrow_cls}"
+
+
+def _estimate_next_switch(state, t_oben, t_unten, t_mittig, kompressor_status) -> str:
+    """Schätzt die nächste Kompressorumschaltung basierend auf aktueller Tendenz und PV-Plan."""
+    from datetime import datetime, timedelta
+
+    now = datetime.now(state.local_tz)
+    regelfuehler = t_mittig if state.control.active_rule_sensor == "Mittig" else t_unten
+
+    if regelfuehler is None:
+        return "N/A (Sensor fehlt)"
+
+    einschaltpunkt = state.control.aktueller_einschaltpunkt
+    ausschaltpunkt = state.control.aktueller_ausschaltpunkt
+
+    # PV-Plan Werte für strategische Entscheidungen
+    pv_plan_heute = getattr(state.solar, "forecast_today", None)
+    pv_plan_morgen = getattr(state.solar, "forecast_tomorrow", None)
+    low = getattr(state.solar, "pv_threshold_low_kwh", None)
+    high = getattr(state.solar, "pv_threshold_high_kwh", None)
+
+    def _classify(val):
+        if val is None or low is None or high is None:
+            return None
+        if val < low:
+            return "LOW"
+        if val > high:
+            return "HIGH"
+        return "MID"
+
+    pv_plan_heute_cls = _classify(pv_plan_heute)
+    pv_plan_morgen_cls = _classify(pv_plan_morgen)
+    pv_plan_erlaubt_solar = (pv_plan_heute_cls == "HIGH" and pv_plan_morgen_cls == "HIGH")
+
+    # Aktuelle Temperaturdifferenz und Trend
+    if kompressor_status:
+        # Kompressor ist EIN -> schätze wann AUS (bei Erreichen von ausschaltpunkt)
+        delta = ausschaltpunkt - regelfuehler
+        if delta <= 0:
+            return "AUS in ~0 min (Ziel erreicht)"
+
+        # Aufheizrate verwenden (°C/h) -> Zeit bis Ziel in Minuten
+        rate = getattr(state.control, "learned_heating_rate", state.heating_rate)
+        if rate <= 0:
+            rate = 2.0  # Fallback
+        minutes = int((delta / rate) * 60)
+
+        # Begrenzen auf sinnvolle Werte
+        if minutes > 480:  # Max 8h
+            return "AUS >8h (unsicher)"
+        return f"AUS in ~{minutes} min (bei {ausschaltpunkt:.1f}°C)"
+    else:
+        # Kompressor ist AUS -> schätze wann EIN unter Berücksichtigung von PV-Plan & Deadline
+        delta_temp = regelfuehler - einschaltpunkt
+
+        if delta_temp <= 0:
+            # Eigentlich sollte jetzt eingeschaltet werden - prüfe ob blockiert
+            if state.control.blocking_reason:
+                return f"EIN blockiert: {state.control.blocking_reason[:35]}"
+            return "EIN in ~0 min (unter Ziel)"
+
+        # Deadline-basierte Berechnung
+        heating_deadline = state.control.heating_deadline
+        modus = state.control.previous_modus or ""
+
+        if heating_deadline and now < heating_deadline:
+            minutes_to_deadline = int((heating_deadline - now).total_seconds() / 60)
+            cooling_rate = 1.0
+            temp_drop_by_deadline = (minutes_to_deadline / 60) * cooling_rate
+            expected_temp_at_deadline = regelfuehler - temp_drop_by_deadline
+
+            if expected_temp_at_deadline <= einschaltpunkt:
+                if minutes_to_deadline > 480:
+                    return f"EIN >8h (Deadline {heating_deadline.strftime('%H:%M')})"
+                return f"EIN in ~{minutes_to_deadline} min (Deadline {heating_deadline.strftime('%H:%M')})"
+
+        # Normale Abkühlung
+        cooling_rate = 1.0
+        minutes = int((delta_temp / cooling_rate) * 60)
+
+        # PV-Plan-basierte Verzögerung
+        if not pv_plan_erlaubt_solar and "Solar" not in modus:
+            if pv_plan_morgen_cls == "HIGH":
+                # Warte auf morgen
+                tomorrow_solar_start = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+                minutes_to_tomorrow = int((tomorrow_solar_start - now).total_seconds() / 60)
+                minutes = max(minutes, minutes_to_tomorrow)
+                if minutes > 480:
+                    return "EIN >8h (PV-Plan: Warte auf morgen)"
+                return f"EIN in ~{minutes} min (PV-Plan: Warte auf morgen)"
+            else:
+                if minutes > 480:
+                    return "EIN >8h (PV-Plan: kein HIGH)"
+                return f"EIN in ~{minutes} min (PV-Plan: kein HIGH)"
+
+        if minutes > 480:
+            return "EIN >8h (unsicher)"
+        return f"EIN in ~{minutes} min (bei {einschaltpunkt:.1f}°C)"
+
+
 def compose_status_message(t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompressor_status, current_runtime, total_runtime, mode_str, vpn_ip, forecast_text, solax_data, state):
     """Baut die Statusnachricht zusammen (ohne Senden)."""
     active_sensor = state.control.active_rule_sensor if state.control.active_rule_sensor else "Automatisch"
@@ -139,6 +263,12 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompres
     t_soll_aus = state.control.aktueller_ausschaltpunkt
     feedinpower = solax_data.get("feedinpower", 0)
     bat_power = solax_data.get("batPower", 0)
+
+    # PV-Plan Klassifizierung
+    pv_plan_text = _get_pv_plan_classification(state)
+
+    # Nächste Umschaltung
+    next_switch_text = _estimate_next_switch(state, t_oben, t_unten, t_mittig, kompressor_status)
 
     status_lines = [
         "📊 *SYSTEMSTATUS*", "",
@@ -149,19 +279,22 @@ def compose_status_message(t_oben, t_unten, t_mittig, t_verd, t_vorlauf, kompres
         "🛠️ *Kompressor*",
         f"Status: *{'EIN' if kompressor_status else 'AUS'}*",
     ]
-    
+
     if kompressor_status and state.control.activation_reason:
         status_lines.append(f"💡 Grund: {state.control.activation_reason}")
     if not kompressor_status and state.control.blocking_reason:
         status_lines.append(f"🚫 Blockiert: {state.control.blocking_reason}")
-    
+
     status_lines.extend([
-        f"Laufzeit: {format_time(current_runtime)} (Heute: {format_time(total_runtime)})", "",
+        f"Laufzeit: {format_time(current_runtime)} (Heute: {format_time(total_runtime)})",
+        f"🔄 Nächste Umschaltung: {next_switch_text}", "",
         "💡 *PV-Strategie*",
         f"Strategie: *{state.control.pv_strategy.upper()}*",
         f"Deadline: {state.control.heating_deadline.strftime('%H:%M') if state.control.heating_deadline else '-'}",
         f"Aufheizrate: {state.control.learned_heating_rate:.2f}°C/h",
         f"Geschützt. Aufh: {state.control.estimated_runtime_minutes} min", "",
+        "📅 *PV-Plan*",
+        pv_plan_text, "",
         "⚙️ *Regelung*",
         f"Sensor: {active_sensor}",
         f"Ein: {t_soll_ein:.1f}°C | Aus: {t_soll_aus:.1f}°C", "",

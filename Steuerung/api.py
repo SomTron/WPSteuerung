@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 from utils_history import read_history_data
 
@@ -103,6 +103,128 @@ def get_status(request: Request):
 
     kompressor_ein = _safe(control, "kompressor_ein", False)
 
+    # PV-Plan Klassifizierung berechnen
+    today = _safe(solar, "forecast_today")
+    tomorrow = _safe(solar, "forecast_tomorrow")
+    low_thr = _safe(solar, "pv_threshold_low_kwh")
+    high_thr = _safe(solar, "pv_threshold_high_kwh")
+
+    def _classify_pv(val, low, high):
+        if val is None or low is None or high is None:
+            return None
+        if val < low:
+            return "LOW"
+        if val > high:
+            return "HIGH"
+        return "MID"
+
+    pv_plan_today = _classify_pv(today, low_thr, high_thr)
+    pv_plan_tomorrow = _classify_pv(tomorrow, low_thr, high_thr)
+
+    # Nächste Umschaltung schätzen unter Berücksichtigung der PV-Plan-Logik
+    t_mittig = _safe(sensors, "t_mittig")
+    t_unten = _safe(sensors, "t_unten")
+    active_sensor = _safe(control, "active_rule_sensor", "Mittig")
+    regelfuehler = t_mittig if active_sensor == "Mittig" else t_unten
+
+    next_switch = None
+    next_switch_target = None
+    next_switch_minutes = None
+    next_switch_reason = None
+
+    if regelfuehler is not None:
+        einschaltpunkt = _safe(control, "aktueller_einschaltpunkt")
+        ausschaltpunkt = _safe(control, "aktueller_ausschaltpunkt")
+        rate = getattr(control, "learned_heating_rate", 2.0) if hasattr(control, "learned_heating_rate") else 2.0
+
+        if kompressor_ein:
+            # Schätze wann AUS
+            delta = (ausschaltpunkt - regelfuehler) if ausschaltpunkt and regelfuehler else None
+            if delta is not None and delta > 0 and rate > 0:
+                minutes = int((delta / rate) * 60)
+                next_switch = "AUS" if minutes <= 480 else (">8h" if minutes > 480 else None)
+                next_switch_target = ausschaltpunkt
+                next_switch_minutes = minutes if minutes <= 480 else None
+                next_switch_reason = "Temperatur erreicht"
+            elif delta is not None and delta <= 0:
+                next_switch = "AUS"
+                next_switch_minutes = 0
+                next_switch_target = ausschaltpunkt
+                next_switch_reason = "Ziel erreicht"
+        else:
+            # Schätze wann EIN - unter Berücksichtigung von PV-Plan, Strategie und Deadline
+            now = datetime.now(shared_state.local_tz)
+
+            pv_strategy = _safe(control, "pv_strategy", "balanced")
+            heating_deadline = _safe(control, "heating_deadline")
+            solar_ueberschuss_aktiv = _safe(control, "solar_ueberschuss_aktiv", False)
+            modus = _safe(control, "previous_modus", "")
+
+            # Prüfen ob PV-Plan ein Einschalten erlaubt (heute/morgen beide HIGH = Solarüberschuss möglich)
+            pv_plan_erlaubt_solar = (pv_plan_today == "HIGH" and pv_plan_tomorrow == "HIGH")
+
+            # Basis: Temperatur-basierte Einschaltzeit (Abkühlrate ~1.0 °C/h)
+            delta_temp = (regelfuehler - einschaltpunkt) if einschaltpunkt and regelfuehler else None
+
+            if delta_temp is not None and delta_temp <= 0:
+                # Eigentlich sollte jetzt eingeschaltet werden
+                if _safe(control, "blocking_reason"):
+                    next_switch = "EIN (blockiert)"
+                    next_switch_minutes = 0
+                    next_switch_target = einschaltpunkt
+                    next_switch_reason = _safe(control, "blocking_reason")[:40]
+                else:
+                    next_switch = "EIN"
+                    next_switch_minutes = 0
+                    next_switch_target = einschaltpunkt
+                    next_switch_reason = "unter Einschaltpunkt"
+            elif delta_temp is not None and delta_temp > 0:
+                # Temperatur muss noch sinken - prüfe strategische Faktoren
+
+                # 1. Wenn Deadline existiert und bevor Deadline -> Einschalten zur Deadline
+                if heating_deadline and now < heating_deadline:
+                    minutes_to_deadline = int((heating_deadline - now).total_seconds() / 60)
+                    # Prüfen ob Temperatur bis Deadline voraussichtlich erreicht wird
+                    cooling_rate = 1.0
+                    temp_drop_by_deadline = (minutes_to_deadline / 60) * cooling_rate
+                    expected_temp_at_deadline = regelfuehler - temp_drop_by_deadline
+
+                    if expected_temp_at_deadline <= einschaltpunkt:
+                        next_switch = "EIN"
+                        next_switch_minutes = minutes_to_deadline if minutes_to_deadline <= 480 else None
+                        next_switch_target = einschaltpunkt
+                        next_switch_reason = f"Deadline ({heating_deadline.strftime('%H:%M')})"
+                    else:
+                        # Temperatur reicht bis Deadline nicht -> normale Abkühlung
+                        minutes = int((delta_temp / cooling_rate) * 60)
+                        next_switch = "EIN" if minutes <= 480 else (">8h" if minutes > 480 else None)
+                        next_switch_minutes = minutes if minutes <= 480 else None
+                        next_switch_target = einschaltpunkt
+                        next_switch_reason = "Abkühlung + Deadline"
+                else:
+                    # Keine Deadline oder schon vorbei -> normale Abkühlung
+                    cooling_rate = 1.0
+                    minutes = int((delta_temp / cooling_rate) * 60)
+
+                    # 2. PV-Plan-basierte Verzögerung: Wenn PV-Plan nicht HIGH/HIGH, warte auf besseres Fenster
+                    if not pv_plan_erlaubt_solar and "Solar" not in modus:
+                        # PV-Plan blockiert Solarüberschuss -> nächstes mögliches Fenster prüfen
+                        # Wenn morgen HIGH: Verschiebe auf morgen (Solarfenster)
+                        if pv_plan_tomorrow == "HIGH":
+                            # Schätze Zeit bis morgen Solarfenster (ca. 10:00-14:00)
+                            tomorrow_solar_start = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+                            minutes_to_tomorrow = int((tomorrow_solar_start - now).total_seconds() / 60)
+                            minutes = max(minutes, minutes_to_tomorrow)
+                            next_switch_reason = "PV-Plan: Warte auf morgen"
+                        else:
+                            next_switch_reason = "PV-Plan: kein HIGH"
+
+                    next_switch = "EIN" if minutes <= 480 else (">8h" if minutes > 480 else None)
+                    next_switch_minutes = minutes if minutes <= 480 else None
+                    next_switch_target = einschaltpunkt
+                    if not next_switch_reason:
+                        next_switch_reason = "Abkühlung"
+
     return {
         "temperatures": {
             "oben":      _safe(sensors, "t_oben"),
@@ -121,6 +243,10 @@ def get_status(request: Request):
             "pv_strategy":       _safe(control, "pv_strategy"),
             "heating_deadline":  _safe(control, "heating_deadline").strftime("%H:%M") if _safe(control, "heating_deadline") else None,
             "estimated_runtime": _safe(control, "estimated_runtime_minutes"),
+            "next_switch":       next_switch,
+            "next_switch_minutes": next_switch_minutes if 'next_switch_minutes' in locals() else None,
+            "next_switch_target":  next_switch_target,
+            "next_switch_reason":  next_switch_reason if 'next_switch_reason' in locals() else None,
         },
         "setpoints": {
             "einschaltpunkt":    _safe(control, "aktueller_einschaltpunkt"),
@@ -142,13 +268,21 @@ def get_status(request: Request):
             "pv_power":           _safe(solar, "acpower", 0),
             "battery_capacity_kwh": bat_kwh,
         },
+        "pv_plan": {
+            "today":        pv_plan_today,
+            "tomorrow":     pv_plan_tomorrow,
+            "threshold_low":  low_thr,
+            "threshold_high": high_thr,
+            "forecast_today_kwh":    today,
+            "forecast_tomorrow_kwh": tomorrow,
+        },
         "forecast": {
-            "today":    _safe(solar, "forecast_today"),
-            "tomorrow": _safe(solar, "forecast_tomorrow"),
+            "today":    today,
+            "tomorrow": tomorrow,
             "sunrise":  _safe(solar, "sunrise_today"),
             "sunset":   _safe(solar, "sunset_today"),
-            "threshold_low":  _safe(solar, "pv_threshold_low_kwh"),
-            "threshold_high": _safe(solar, "pv_threshold_high_kwh"),
+            "threshold_low":  low_thr,
+            "threshold_high": high_thr,
         },
         "system": {
             "exclusion_reason": _safe(control, "ausschluss_grund"),
