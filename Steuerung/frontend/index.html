@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="de">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -11,8 +12,10 @@
     <!-- Chart.js + date-fns adapter (für Zeitachse) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0/cdn.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script
+        src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
+
 <body>
     <!-- API-Key Modal -->
     <div id="api-key-modal" class="modal-overlay hidden">
@@ -20,7 +23,8 @@
             <h2>🔒 API-Key erforderlich</h2>
             <p>Bitte gib deinen API-Key ein. Er wird sicher im Browser gespeichert.</p>
             <input type="password" id="api-key-input" placeholder="API-Key eingeben..." autocomplete="current-password">
-            <button id="api-key-submit" class="btn primary-btn" style="width:100%; margin-top:12px;">Speichern &amp; Verbinden</button>
+            <button id="api-key-submit" class="btn primary-btn" style="width:100%; margin-top:12px;">Speichern &amp;
+                Verbinden</button>
             <p id="api-key-error" class="text-danger hidden">Ungültiger Key. Bitte erneut versuchen.</p>
         </div>
     </div>
@@ -58,8 +62,12 @@
                     </div>
                 </div>
                 <div class="info-row mt-3">
-                    <span class="label">Status Info:</span>
+                    <span class="label">🔄 Nächste Umschaltung:</span>
                     <span id="system-reason" class="text-sm">--</span>
+                </div>
+                <div class="info-row">
+                    <span class="label">ℹ️ Status Info:</span>
+                    <span id="system-status-info" class="text-sm">--</span>
                 </div>
             </section>
 
@@ -169,7 +177,8 @@
                             <span class="label">Sonne: </span>
                             <span id="forecast-sun" class="value text-sm">--</span>
                         </div>
-                        <div style="display:flex; justify-content:space-between; margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.1)">
+                        <div
+                            style="display:flex; justify-content:space-between; margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.1)">
                             <span class="label" style="font-size:0.85em; opacity:0.8">PV-Schwellen: </span>
                             <span id="forecast-thresholds" class="value text-sm" style="font-size:0.85em">--</span>
                         </div>
@@ -180,7 +189,7 @@
             <!-- Modi & Steuerung -->
             <section class="card glass controls" id="card-modes">
                 <h2>Modi &amp; Steuerung</h2>
-                
+
                 <div class="mode-toggles">
                     <div class="toggle-row">
                         <div class="toggle-info">
@@ -213,4 +222,5 @@
     </div>
     <script src="app.js"></script>
 </body>
+
 </html>
