@@ -67,7 +67,13 @@
                 </div>
                 <div class="info-row">
                     <span class="label">ℹ️ Status Info:</span>
-                    <span id="system-status-info" class="text-sm">--</span>
+                    <span id="system-status-info" class="text-sm" style="color: var(--text-muted);">--</span>
+                </div>
+                <div class="chart-legend mt-3">
+                    <div class="legend-item">
+                        <span class="legend-color" style="background: rgba(16, 185, 129, 0.3);"></span>
+                        <span class="legend-label">Kompressor EIN</span>
+                    </div>
                 </div>
             </section>
 
@@ -81,7 +87,7 @@
                         <button class="range-btn" data-hours="168">7d</button>
                     </div>
                 </div>
-                <div class="chart-container">
+                <div class="chart-container" id="chart-container">
                     <canvas id="historyChart"></canvas>
                 </div>
             </section>

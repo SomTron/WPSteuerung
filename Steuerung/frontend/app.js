@@ -78,6 +78,8 @@ const el = {
 
     btnOn: document.getElementById('btn-force-on'),
     btnOff: document.getElementById('btn-force-off'),
+
+    chartContainer: document.getElementById('chart-container'),
 };
 
 // ── State ─────────────────────────────────────────────────────────────────
@@ -85,6 +87,8 @@ let isFetching = false;
 let isConnected = true;
 let chartInstance = null;
 let currentHours = 6;
+let chartDataCache = null;
+let chartRenderTimeout = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function formatTemp(val) {
@@ -98,14 +102,51 @@ function setStaleMode(stale) {
     cards.forEach(c => c.classList.toggle('stale', stale));
 }
 
+/** Debounce function for chart rendering */
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+/** Downsample data for better performance on larger time ranges */
+function downsampleData(data, maxPoints = 100) {
+    if (data.length <= maxPoints) return data;
+
+    const bucketSize = Math.ceil(data.length / maxPoints);
+    const downsampled = [];
+
+    for (let i = 0; i < data.length; i += bucketSize) {
+        const bucket = data.slice(i, i + bucketSize);
+        // Take average of bucket
+        const avg = { ...bucket[0] };
+        if (typeof bucket[0].t_oben === 'number') {
+            avg.t_oben = bucket.reduce((sum, d) => sum + (d.t_oben || 0), 0) / bucket.length;
+            avg.t_mittig = bucket.reduce((sum, d) => sum + (d.t_mittig || 0), 0) / bucket.length;
+            avg.t_unten = bucket.reduce((sum, d) => sum + (d.t_unten || 0), 0) / bucket.length;
+            avg.t_verd = bucket.reduce((sum, d) => sum + (d.t_verd || 0), 0) / bucket.length;
+        }
+        // Keep kompressor state (any ON in bucket = ON)
+        avg.kompressor = bucket.some(d => d.kompressor === 'True' || d.kompressor === 'EIN') ? 'EIN' : 'AUS';
+        downsampled.push(avg);
+    }
+
+    return downsampled;
+}
+
 // ── Status Fetch ──────────────────────────────────────────────────────────
 async function fetchStatus() {
     try {
         const res = await fetch(`${API_BASE}/status`, { headers: buildHeaders() });
 
         if (res.status === 401) {
-            // API key wrong or missing → show modal
-            showKeyModal(isConnected === false); // show error only if was already connected
+            showKeyModal(isConnected === false);
             el.connDot.classList.add('offline');
             el.connText.textContent = 'Auth erforderlich';
             return;
@@ -149,7 +190,7 @@ async function fetchStatus() {
         }
         el.reason.textContent = nextSwitchText;
 
-        // Status Info: Activation reason (running) OR blocking reason (stopped)
+        // Status Info
         let statusInfo = 'Keine Sperre';
         if (isEin && data.compressor.activation_reason) {
             statusInfo = `✅ ${data.compressor.activation_reason}`;
@@ -186,7 +227,6 @@ async function fetchStatus() {
             el.fcToday.textContent = `${data.forecast.today?.toFixed(1) || '--'} kWh`;
             el.fcTomorrow.textContent = `${data.forecast.tomorrow?.toFixed(1) || '--'} kWh`;
             el.fcSun.textContent = `${data.forecast.sunrise || '--:--'} – ${data.forecast.sunset || '--:--'}`;
-            // PV-Schwellenwerte anzeigen
             const low = data.forecast.threshold_low;
             const high = data.forecast.threshold_high;
             if (typeof low === 'number' && typeof high === 'number') {
@@ -196,12 +236,11 @@ async function fetchStatus() {
             }
         }
 
-        // PV-Plan Klassifizierung (LOW/MID/HIGH)
+        // PV-Plan Klassifizierung
         if (data.pv_plan) {
             const todayPlan = data.pv_plan.today || '--';
             const tomorrowPlan = data.pv_plan.tomorrow || '--';
 
-            // Emoji für Klassifizierung
             const getPlanEmoji = (cls) => {
                 if (cls === 'HIGH') return '🟢';
                 if (cls === 'MID') return '🟡';
@@ -251,31 +290,70 @@ async function sendCommand(cmd, params = {}) {
 // ── History Chart ─────────────────────────────────────────────────────────
 async function renderHistoryChart(hours = 24) {
     currentHours = hours;
+
+    // Clear any pending render
+    if (chartRenderTimeout) clearTimeout(chartRenderTimeout);
+
+    // Show loading state
+    if (el.chartContainer) {
+        el.chartContainer.style.opacity = '0.5';
+    }
+
     try {
         const res = await fetch(`${API_BASE}/history?hours=${hours}`, { headers: buildHeaders() });
         if (!res.ok) throw new Error('Chart data network error');
         const json = await res.json();
 
-        if (!json.data || json.data.length === 0) return;
+        if (!json.data || json.data.length === 0) {
+            if (el.chartContainer) el.chartContainer.style.opacity = '1';
+            return;
+        }
 
-        const labels = json.data.map(d => new Date(d.timestamp));
-        const tOben = json.data.map(d => d.t_oben);
-        const tMittig = json.data.map(d => d.t_mittig);
-        const tUnten = json.data.map(d => d.t_unten);
-        const tVerd = json.data.map(d => d.t_verd);
-        const komp = json.data.map(d => (d.kompressor === 'True' || d.kompressor === 'EIN') ? 100 : 0);
+        // Downsample data for larger time ranges
+        let chartData = json.data;
+        if (hours >= 24) {
+            chartData = downsampleData(chartData, hours === 168 ? 150 : 100);
+        }
+
+        const labels = chartData.map(d => new Date(d.timestamp));
+        const tOben = chartData.map(d => d.t_oben);
+        const tMittig = chartData.map(d => d.t_mittig);
+        const tUnten = chartData.map(d => d.t_unten);
+        const tVerd = chartData.map(d => d.t_verd);
+        const komp = chartData.map(d => (d.kompressor === 'True' || d.kompressor === 'EIN') ? 100 : 0);
 
         const ctx = document.getElementById('historyChart').getContext('2d');
 
+        // Configure time scale based on time range
+        let stepSize = 1;
+        let unit = 'hour';
+        if (hours >= 168) {
+            stepSize = 12;
+            unit = 'day';
+        } else if (hours >= 24) {
+            stepSize = 4;
+            unit = 'hour';
+        } else {
+            stepSize = 2;
+            unit = 'hour';
+        }
+
         if (chartInstance) {
+            // Update existing chart
             chartInstance.data.labels = labels;
             chartInstance.data.datasets[0].data = tOben;
             chartInstance.data.datasets[1].data = tMittig;
             chartInstance.data.datasets[2].data = tUnten;
             chartInstance.data.datasets[3].data = tVerd;
             chartInstance.data.datasets[4].data = komp;
-            chartInstance.update('none'); // skip animation on refresh
+
+            // Update time scale config
+            chartInstance.options.scales.x.time.stepSize = stepSize;
+            chartInstance.options.scales.x.time.unit = unit;
+
+            chartInstance.update('none');
         } else {
+            // Create new chart
             Chart.defaults.color = '#94a3b8';
             Chart.defaults.font.family = "'Outfit', sans-serif";
 
@@ -284,51 +362,153 @@ async function renderHistoryChart(hours = 24) {
                 data: {
                     labels,
                     datasets: [
-                        { label: 'Oben', data: tOben, borderColor: '#ef4444', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0, borderWidth: 2 },
-                        { label: 'Mittig', data: tMittig, borderColor: '#f59e0b', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0, borderWidth: 2 },
-                        { label: 'Unten', data: tUnten, borderColor: '#10b981', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0, borderWidth: 2 },
-                        { label: 'Verdampfer', data: tVerd, borderColor: '#0ea5e9', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0, borderWidth: 2, hidden: true },
-                        { label: 'Kompressor', data: komp, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.05)', type: 'bar', yAxisID: 'y1' },
+                        {
+                            label: 'Oben',
+                            data: tOben,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'transparent',
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2,
+                            fill: false
+                        },
+                        {
+                            label: 'Mittig',
+                            data: tMittig,
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'transparent',
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2,
+                            fill: false
+                        },
+                        {
+                            label: 'Unten',
+                            data: tUnten,
+                            borderColor: '#10b981',
+                            backgroundColor: 'transparent',
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2,
+                            fill: false
+                        },
+                        {
+                            label: 'Verdampfer',
+                            data: tVerd,
+                            borderColor: '#0ea5e9',
+                            backgroundColor: 'transparent',
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2,
+                            hidden: true,
+                            fill: false
+                        },
+                        {
+                            label: 'Kompressor',
+                            data: komp,
+                            borderColor: 'rgba(16, 185, 129, 0.3)',
+                            backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                            type: 'bar',
+                            yAxisID: 'y1',
+                            barThickness: 'flex',
+                            maxBarThickness: 50
+                        },
                     ],
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    animation: { duration: 400 },
-                    interaction: { mode: 'index', intersect: false },
+                    animation: { duration: 300 },
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                        axis: 'x'
+                    },
                     scales: {
                         x: {
                             type: 'time',
                             time: {
                                 displayFormats: { hour: 'HH:mm', day: 'dd.MM' },
                                 tooltipFormat: 'dd.MM HH:mm',
-                                unit: 'hour',
-                                stepSize: 2,
+                                unit: unit,
+                                stepSize: stepSize,
                                 minUnit: 'hour'
                             },
-                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            grid: {
+                                color: 'rgba(255,255,255,0.05)',
+                                drawOnChartArea: false
+                            },
                         },
-                        y: { position: 'left', grid: { color: 'rgba(255,255,255,0.05)' } },
-                        y1: { position: 'right', min: 0, max: 100, display: false, grid: { drawOnChartArea: false } },
+                        y: {
+                            position: 'left',
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            suggestedMin: 5,
+                            suggestedMax: 60
+                        },
+                        y1: {
+                            position: 'right',
+                            min: 0,
+                            max: 100,
+                            display: false,
+                            grid: { drawOnChartArea: false }
+                        },
                     },
                     plugins: {
-                        legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } },
-                        tooltip: { backgroundColor: 'rgba(15,23,42,0.9)', titleColor: '#fff', bodyColor: '#cbd5e1', borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 },
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                usePointStyle: true,
+                                boxWidth: 8,
+                                padding: 15
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15,23,42,0.95)',
+                            titleColor: '#fff',
+                            bodyColor: '#cbd5e1',
+                            borderColor: 'rgba(255,255,255,0.1)',
+                            borderWidth: 1,
+                            padding: 12,
+                            displayColors: true,
+                            callbacks: {
+                                label: function (context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        if (context.dataset.label === 'Kompressor') {
+                                            label += context.parsed.y > 0 ? 'EIN' : 'AUS';
+                                        } else {
+                                            label += context.parsed.y.toFixed(1) + ' °C';
+                                        }
+                                    }
+                                    return label;
+                                }
+                            }
+                        },
                     },
                 },
             });
         }
     } catch (e) {
         console.error('Error drawing chart', e);
+    } finally {
+        if (el.chartContainer) {
+            el.chartContainer.style.opacity = '1';
+        }
     }
 }
+
+// Debounced chart render for button clicks
+const debouncedRenderChart = debounce(renderHistoryChart, 100);
 
 // ── Chart Range Buttons ───────────────────────────────────────────────────
 document.querySelectorAll('.range-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        renderHistoryChart(parseInt(btn.dataset.hours));
+        debouncedRenderChart(parseInt(btn.dataset.hours));
     });
 });
 
