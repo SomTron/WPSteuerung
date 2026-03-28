@@ -103,6 +103,33 @@ def get_status(request: Request):
 
     kompressor_ein = _safe(control, "kompressor_ein", False)
 
+    # Laufzeiten berechnen
+    from datetime import timedelta
+    current_runtime = timedelta()
+    total_runtime_today = _safe(stats, "total_runtime_today", timedelta())
+    
+    if kompressor_ein:
+        # Wenn Kompressor EIN ist, berechne aktuelle Laufzeit
+        last_on_time = _safe(stats, "last_compressor_on_time")
+        if last_on_time:
+            try:
+                local_tz = getattr(shared_state, "local_tz", None)
+                if local_tz is None:
+                    import pytz
+                    local_tz = pytz.timezone("Europe/Berlin")
+                now = datetime.now(local_tz)
+                current_runtime = now - last_on_time
+                # Stelle sicher, dass es nicht negativ ist
+                if current_runtime.total_seconds() < 0:
+                    current_runtime = timedelta()
+            except Exception:
+                current_runtime = timedelta()
+        # Heutige Laufzeit inkl. aktueller Laufzeit
+        total_runtime_today = total_runtime_today + current_runtime
+
+    runtime_current_str = str(current_runtime).split('.')[0] if kompressor_ein else "0:00:00"
+    runtime_today_str = str(total_runtime_today).split('.')[0]
+
     # PV-Plan Klassifizierung berechnen
     today = _safe(solar, "forecast_today")
     tomorrow = _safe(solar, "forecast_tomorrow")
@@ -241,8 +268,8 @@ def get_status(request: Request):
         },
         "compressor": {
             "status":          "EIN" if kompressor_ein else "AUS",
-            "runtime_current": str(_safe(stats, "last_runtime", "0:00:00")).split('.')[0] if kompressor_ein else "0:00:00",
-            "runtime_today":   str(_safe(stats, "total_runtime_today", "0:00:00")).split('.')[0],
+            "runtime_current": runtime_current_str,
+            "runtime_today":   runtime_today_str,
             "activation_reason": _safe(control, "activation_reason"),
             "blocking_reason":   _safe(control, "blocking_reason"),
             "pv_strategy":       _safe(control, "pv_strategy"),

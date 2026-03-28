@@ -51,24 +51,33 @@
                     <h2>Kompressor</h2>
                     <span id="compressor-badge" class="badge badge-off">AUS</span>
                 </div>
-                <div class="status-details">
-                    <div class="stat-item">
-                        <span class="label">Aktuelle Laufzeit</span>
-                        <span id="runtime-current" class="value highlight">--:--:--</span>
+
+                <!-- Laufzeiten im Grid -->
+                <div class="runtime-grid">
+                    <div class="runtime-box">
+                        <span class="runtime-icon">⏱️</span>
+                        <span class="runtime-label">Aktuell</span>
+                        <span id="runtime-current" class="runtime-value highlight">--:--:--</span>
                     </div>
-                    <div class="stat-item">
-                        <span class="label">Laufzeit Heute</span>
-                        <span id="runtime-today" class="value">--:--:--</span>
+                    <div class="runtime-divider"></div>
+                    <div class="runtime-box">
+                        <span class="runtime-icon">📅</span>
+                        <span class="runtime-label">Heute</span>
+                        <span id="runtime-today" class="runtime-value">--:--:--</span>
                     </div>
                 </div>
-                <div class="info-row mt-3">
-                    <span class="label">🔄 Nächste Umschaltung:</span>
-                    <span id="system-reason" class="text-sm">--</span>
+
+                <div class="info-block mt-3">
+                    <div class="info-row">
+                        <span class="label">🔄 Nächste Umschaltung:</span>
+                        <span id="system-reason" class="text-sm">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">ℹ️ Status Info:</span>
+                        <span id="system-status-info" class="text-sm">--</span>
+                    </div>
                 </div>
-                <div class="info-row">
-                    <span class="label">ℹ️ Status Info:</span>
-                    <span id="system-status-info" class="text-sm" style="color: var(--text-muted);">--</span>
-                </div>
+
                 <div class="chart-legend mt-3">
                     <div class="legend-item">
                         <span class="legend-color" style="background: rgba(16, 185, 129, 0.3);"></span>
