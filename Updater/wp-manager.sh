@@ -70,23 +70,59 @@ while true; do
         7) sudo systemctl start wpsteuerung; wait_for_key ;;
         8) ls -la "$TARGET_DIR"; wait_for_key ;;
         9) 
-            CSV_PATH="$TARGET_DIR/csv log/heizungsdaten.csv"
-            if [ -f "$CSV_PATH" ]; then
-                printf "${CYAN}Bereite heizungsdaten.csv für Upload vor...${NC}\n"
-                cp "$CSV_PATH" "./heizungsdaten_upload.csv"
-                gzip -f "./heizungsdaten_upload.csv"
-                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\n"
-                UPLOAD_URL=$(curl -F "reqtype=fileupload" -F "fileToUpload=@./heizungsdaten_upload.csv.gz" https://catbox.moe/user/api.php)
-                if [ $? -eq 0 ] && [ -n "$UPLOAD_URL" ]; then
-                    printf "${GREEN}Upload erfolgreich!${NC}\n"
-                    printf "${YELLOW}URL: ${BLUE}$UPLOAD_URL${NC}\n"
-                    # Optional: In die Zwischenablage kopieren oder in Log schreiben
-                else
-                    printf "${RED}Fehler beim Upload!${NC}\n"
+            printf "${BLUE}Verfügbare CSV-Dateien zum Upload:${NC}\n"
+            # Sammle Dateien (Aktuelle zuerst, dann Backups absteigend sortiert)
+            FILES_LIST="$TARGET_DIR/csv log/heizungsdaten.csv"
+            if [ -d "$TARGET_DIR/backup" ]; then
+                BACKUP_FILES=$(ls -1t "$TARGET_DIR/backup"/backup_*.csv 2>/dev/null)
+                if [ -n "$BACKUP_FILES" ]; then
+                    FILES_LIST="$FILES_LIST $BACKUP_FILES"
                 fi
-                rm -f "./heizungsdaten_upload.csv.gz"
+            fi
+            
+            i=1
+            # Zähle Zeilen in FILES_LIST durch Konvertierung in Zeilen
+            NUM_FILES=0
+            for f in $FILES_LIST; do
+                if [ -f "$f" ]; then
+                    printf "${YELLOW}%2d)${NC} %s\n" $i "$(basename "$f")"
+                    i=$((i+1))
+                    NUM_FILES=$((NUM_FILES+1))
+                fi
+            done
+            
+            if [ "$NUM_FILES" -eq 0 ]; then
+                printf "${RED}Keine CSV-Dateien gefunden!${NC}\n"
             else
-                printf "${RED}Fehler: $CSV_PATH nicht gefunden!${NC}\n"
+                printf "\nWähle Datei (1-%d, 0 zum Abbrechen): " "$NUM_FILES"
+                read csv_choice
+                
+                # Validierung der Eingabe
+                if [ "$csv_choice" -gt 0 ] 2>/dev/null && [ "$csv_choice" -le "$NUM_FILES" ]; then
+                    # Extrahiere Pfad (Wandle Leerzeichen-getrennte Liste in Zeilen um und nimm Zeile n)
+                    CSV_PATH=$(echo "$FILES_LIST" | tr ' ' '\n' | sed -n "${csv_choice}p")
+                    FNAME=$(basename "$CSV_PATH")
+                    
+                    printf "${CYAN}Bereite $FNAME für Upload vor...${NC}\n"
+                    # Vorherige Upload-Reste entfernen
+                    rm -f "./upload_tmp.csv" "./upload_tmp.csv.gz"
+                    cp "$CSV_PATH" "./upload_tmp.csv"
+                    gzip -f "./upload_tmp.csv"
+                    
+                    printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\n"
+                    UPLOAD_URL=$(curl -F "reqtype=fileupload" -F "fileToUpload=@./upload_tmp.csv.gz" https://catbox.moe/user/api.php)
+                    if [ $? -eq 0 ] && [ -n "$UPLOAD_URL" ]; then
+                        printf "${GREEN}Upload erfolgreich!${NC}\n"
+                        printf "${YELLOW}URL: ${BLUE}$UPLOAD_URL${NC}\n"
+                        # URL auch in Log schreiben
+                        echo "$(date): Upload $FNAME -> $UPLOAD_URL" >> "$TARGET_DIR/upload_history.log"
+                    else
+                        printf "${RED}Fehler beim Upload!${NC}\n"
+                    fi
+                    rm -f "./upload_tmp.csv.gz"
+                else
+                    printf "${YELLOW}Abgebrochen oder ungültige Wahl.${NC}\n"
+                fi
             fi
             wait_for_key
             ;;
