@@ -104,34 +104,83 @@ while true; do
                     # Verarbeite Auswahl (Kommas durch Leerzeichen ersetzen für die Loop)
                     csv_choices=$(echo "$csv_choices" | tr ',' ' ')
                     
-                    for choice in $csv_choices; do
-                        # Validierung der Wahl
-                        if [ "$choice" -gt 0 ] 2>/dev/null && [ "$choice" -le "$NUM_FILES" ]; then
-                            CSV_PATH=$(sed -n "${choice}p" "$TMP_FILES_LIST")
-                            FNAME=$(basename "$CSV_PATH")
-                            
-                            printf "${CYAN}--- Upload: $FNAME ---${NC}\n"
-                            # Vorherige Upload-Reste entfernen
-                            rm -f "./upload_tmp.csv" "./upload_tmp.csv.gz"
-                            cp "$CSV_PATH" "./upload_tmp.csv"
-                            gzip -f "./upload_tmp.csv"
-                            
-                            printf "${CYAN}Sende zu Catbox.moe...${NC}\n"
-                            UPLOAD_URL=$(curl -v -F "reqtype=fileupload" -F "fileToUpload=@./upload_tmp.csv.gz" https://catbox.moe/user/api.php 2>/dev/null)
+                    # Prüfen ob mehrere Dateien gewählt wurden
+                    CHOICE_COUNT=$(echo "$csv_choices" | wc -w)
+                    MERGE_ALL="n"
+                    if [ "$CHOICE_COUNT" -gt 1 ]; then
+                        printf "${YELLOW}Möchtest du alle $CHOICE_COUNT Dateien in eine Datei zusammenführen? (j/n): ${NC}"
+                        read merge_prompt
+                        if [ "$merge_prompt" = "j" ] || [ "$merge_prompt" = "y" ]; then
+                            MERGE_ALL="j"
+                        fi
+                    fi
+
+                    if [ "$MERGE_ALL" = "j" ]; then
+                        # --- MODUS: ZUSAMMENGEFÜHRTER UPLOAD ---
+                        MERGED_FILE="./upload_merged.csv"
+                        rm -f "$MERGED_FILE" "$MERGED_FILE.gz"
+                        printf "${CYAN}Führe $CHOICE_COUNT Dateien zusammen...${NC}\n"
+                        
+                        processed_count=0
+                        for choice in $csv_choices; do
+                            if [ "$choice" -gt 0 ] 2>/dev/null && [ "$choice" -le "$NUM_FILES" ]; then
+                                CSV_PATH=$(sed -n "${choice}p" "$TMP_FILES_LIST")
+                                if [ "$processed_count" -eq 0 ]; then
+                                    # Erste Datei mit Header kopieren
+                                    cat "$CSV_PATH" > "$MERGED_FILE"
+                                else
+                                    # Weitere Dateien ohne Header anhängen
+                                    tail -n +2 "$CSV_PATH" >> "$MERGED_FILE"
+                                fi
+                                processed_count=$((processed_count+1))
+                            fi
+                        done
+                        
+                        if [ "$processed_count" -gt 0 ]; then
+                            printf "${CYAN}Komprimiere und lade Bundle hoch...${NC}\n"
+                            gzip -f "$MERGED_FILE"
+                            UPLOAD_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@${MERGED_FILE}.gz" https://catbox.moe/user/api.php)
                             
                             if [ $? -eq 0 ] && [ -n "$UPLOAD_URL" ] && echo "$UPLOAD_URL" | grep -q "http"; then
-                                printf "${GREEN}Erfolgreich!${NC}\n"
+                                printf "${GREEN}Zusammengeführter Upload erfolgreich!${NC}\n"
                                 printf "${YELLOW}URL: ${BLUE}$UPLOAD_URL${NC}\n"
-                                echo "$(date): [MULTI] Upload $FNAME -> $UPLOAD_URL" >> "$TARGET_DIR/upload_history.log"
+                                echo "$(date): [MERGED] ($processed_count Dateien) -> $UPLOAD_URL" >> "$TARGET_DIR/upload_history.log"
                             else
-                                printf "${RED}Fehler beim Upload von $FNAME!${NC}\n"
+                                printf "${RED}Fehler beim Upload des Bundles!${NC}\n"
                                 [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: $UPLOAD_URL${NC}\n"
                             fi
-                            rm -f "./upload_tmp.csv.gz"
-                        else
-                            printf "${RED}Überspringe ungültige Auswahl: $choice${NC}\n"
+                            rm -f "${MERGED_FILE}.gz"
                         fi
-                    done
+                    else
+                        # --- MODUS: EINZELNER UPLOAD ---
+                        for choice in $csv_choices; do
+                            # Validierung der Wahl
+                            if [ "$choice" -gt 0 ] 2>/dev/null && [ "$choice" -le "$NUM_FILES" ]; then
+                                CSV_PATH=$(sed -n "${choice}p" "$TMP_FILES_LIST")
+                                FNAME=$(basename "$CSV_PATH")
+                                
+                                printf "${CYAN}--- Upload: $FNAME ---${NC}\n"
+                                rm -f "./upload_tmp.csv" "./upload_tmp.csv.gz"
+                                cp "$CSV_PATH" "./upload_tmp.csv"
+                                gzip -f "./upload_tmp.csv"
+                                
+                                printf "${CYAN}Sende zu Catbox.moe...${NC}\n"
+                                UPLOAD_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@./upload_tmp.csv.gz" https://catbox.moe/user/api.php)
+                                
+                                if [ $? -eq 0 ] && [ -n "$UPLOAD_URL" ] && echo "$UPLOAD_URL" | grep -q "http"; then
+                                    printf "${GREEN}Erfolgreich!${NC}\n"
+                                    printf "${YELLOW}URL: ${BLUE}$UPLOAD_URL${NC}\n"
+                                    echo "$(date): [MULTI] Upload $FNAME -> $UPLOAD_URL" >> "$TARGET_DIR/upload_history.log"
+                                else
+                                    printf "${RED}Fehler beim Upload von $FNAME!${NC}\n"
+                                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: $UPLOAD_URL${NC}\n"
+                                fi
+                                rm -f "./upload_tmp.csv.gz"
+                            else
+                                printf "${RED}Überspringe ungültige Auswahl: $choice${NC}\n"
+                            fi
+                        done
+                    fi
                 fi
             fi
             rm -f "$TMP_FILES_LIST"
