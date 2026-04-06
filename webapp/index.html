@@ -503,7 +503,32 @@
     </div>
 
     <script>
-        const API_BASE = "/api";
+        // ============================================================
+        // API-Konfiguration
+        // ============================================================
+        // Bei Wireguard-Zugriff: Hier die Server-IP und den Port eintragen
+        // Beispiel: const API_CONFIG_URL = "http://192.168.178.100:5000";
+        //
+        // "auto" = Automatisch aktuelle Adresse verwenden (empfohlen)
+        // ============================================================
+        const API_CONFIG_URL = "auto";
+
+        function getApiBaseUrl() {
+            if (API_CONFIG_URL && API_CONFIG_URL !== "auto") {
+                return API_CONFIG_URL;
+            }
+            // Automatisch: Gleiche Adresse wie die HTML-Datei
+            const protocol = window.location.protocol || "http:";
+            const hostname = window.location.hostname || "localhost";
+            const port = window.location.port;
+
+            if (port) {
+                return `${protocol}//${hostname}:${port}`;
+            }
+            return `${protocol}//${hostname}`;
+        }
+
+        const API_BASE = `${getApiBaseUrl()}/api`;
         let statusData = null;
         let chart = null;
         let refreshInterval = null;
@@ -607,10 +632,20 @@
             }
         };
 
+        let connectionRetryCount = 0;
+        const MAX_RETRIES = 3;
+
         async function fetchStatus() {
             try {
-                const response = await fetch(`${API_BASE}/status`);
-                if (!response.ok) throw new Error('API Fehler');
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s Timeout
+
+                const response = await fetch(`${API_BASE}/status`, {
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 statusData = await response.json();
 
                 // Temperaturdaten zur Historie hinzufügen
@@ -623,10 +658,23 @@
                     updateValues();
                 }
 
+                connectionRetryCount = 0; // Zurücksetzen bei Erfolg
                 updateConnectionStatus(true);
             } catch (error) {
+                const isTimeout = error.name === 'AbortError';
+                const errorMsg = isTimeout
+                    ? 'Zeitüberschreitung - Server nicht erreichbar'
+                    : `Verbindungsfehler: ${error.message}`;
+
                 console.error('Fehler beim Abrufen der Daten:', error);
                 updateConnectionStatus(false);
+
+                // Toast nur beim ersten Fehler anzeigen
+                if (connectionRetryCount === 0) {
+                    showToast(`⚠️ ${errorMsg}`, 'error', 5000);
+                }
+
+                connectionRetryCount++;
             }
         }
 
@@ -859,7 +907,7 @@
                 statusEl.textContent = 'Verbunden';
                 dotEl.style.background = 'var(--accent-success)';
             } else {
-                statusEl.textContent = 'Verbindung unterbrochen';
+                statusEl.textContent = `Verbindung unterbrochen (API: ${getApiBaseUrl()})`;
                 dotEl.style.background = 'var(--accent-secondary)';
             }
         }
