@@ -587,19 +587,19 @@
 
                 const yScale = scales.y;
 
-                // Maximale Temperatur im aktuellen Sichtbereich finden
+                // Maximale Temperatur im aktuellen Sichtbereich finden (mit reduce statt spread)
                 const allTemps = [
                     ...temperatureHistory.oben,
                     ...temperatureHistory.mittig,
                     ...temperatureHistory.unten,
                     ...temperatureHistory.verdampfer
-                ].filter(v => v !== null && v !== undefined);
+                ].filter(v => v !== null && v !== undefined && typeof v === 'number');
 
-                const maxTemp = allTemps.length > 0 ? Math.max(...allTemps, 60) : 60;
+                const maxTemp = allTemps.length > 0
+                    ? allTemps.reduce((max, val) => val > max ? val : max, -50)
+                    : 60;
+                const maxTempSafe = Math.max(maxTemp, 60); // Mindestens 60°C
                 const minTemp = 0; // Unten bei 0 beginnen
-
-                const yTop = yScale.getPixelForValue(maxTemp);
-                const yBottom = yScale.getPixelForValue(minTemp);
 
                 temperatureHistory.kompressor.forEach((isRunning, index) => {
                     if (!isRunning || index >= meta.data.length) return;
@@ -620,7 +620,7 @@
                     }
 
                     // Hintergrund zeichnet einen Bereich von der y-Achse unten bis zur maximalen Temperatur
-                    const yMaxPixel = yScale.getPixelForValue(maxTemp);
+                    const yMaxPixel = yScale.getPixelForValue(maxTempSafe);
                     const yMinPixel = yScale.getPixelForValue(minTemp);
                     const height = yMinPixel - yMaxPixel;
 
@@ -633,7 +633,6 @@
         };
 
         let connectionRetryCount = 0;
-        const MAX_RETRIES = 3;
 
         async function fetchStatus() {
             try {
@@ -919,11 +918,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ command, params })
                 });
-                const result = await response.json();
-                console.log('Control result:', result);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                await response.json();
                 await fetchStatus();
             } catch (error) {
-                console.error('Fehler beim Senden des Befehls:', error);
+                showToast(`❌ Befehl fehlgeschlagen: ${error.message}`, 'error');
             }
         }
 
@@ -933,14 +932,31 @@
             const { temperatures, compressor, mode, energy, system, setpoints } = statusData;
             const isRunning = compressor.status === 'EIN';
 
-            // Update Kompressor
-            document.getElementById('compressor-status').className = `badge ${isRunning ? 'badge-success' : 'badge-danger'}`;
-            document.getElementById('compressor-status').textContent = isRunning ? '● AKTIV' : '○ AUS';
-            document.getElementById('runtime-today').textContent = compressor.runtime_today;
+            // Helper: Safe update mit NULL-Check
+            const setText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            };
 
-            const runtimeCurrentRow = document.getElementById('runtime-current-row');
+            // Update Kompressor
+            setText('compressor-status', '');
+            const compEl = document.getElementById('compressor-status');
+            if (compEl) {
+                compEl.className = `badge ${isRunning ? 'badge-success' : 'badge-danger'}`;
+                compEl.textContent = isRunning ? '● AKTIV' : '○ AUS';
+            }
+            setText('runtime-today', compressor.runtime_today);
+
+            const runtimeCurrentEl = document.getElementById('runtime-current');
+            if (runtimeCurrentEl) {
+                runtimeCurrentEl.textContent = compressor.runtime_current;
+            }
+
+            const runtimeRow = document.getElementById('runtime-current-row');
             if (isRunning) {
-                if (!runtimeCurrentRow) {
+                if (runtimeRow) {
+                    runtimeRow.style.display = '';
+                } else {
                     const row = document.createElement('div');
                     row.className = 'info-row';
                     row.id = 'runtime-current-row';
@@ -948,53 +964,54 @@
                         <span class="info-label">Aktuelle Laufzeit</span>
                         <span class="info-value" id="runtime-current">${compressor.runtime_current}</span>
                     `;
-                    document.getElementById('runtime-today-row').after(row);
-                } else {
-                    document.getElementById('runtime-current').textContent = compressor.runtime_current;
+                    const todayRow = document.getElementById('runtime-today-row');
+                    if (todayRow) todayRow.after(row);
                 }
-            } else if (runtimeCurrentRow) {
-                runtimeCurrentRow.remove();
+            } else if (runtimeRow) {
+                runtimeRow.style.display = 'none';
             }
 
             const btn = document.getElementById('compressor-btn');
-            btn.className = `btn ${isRunning ? 'btn-danger' : 'btn-primary'}`;
-            btn.textContent = isRunning ? 'Ausschalten' : 'Einschalten';
-            btn.onclick = () => sendControl(isRunning ? 'force_off' : 'force_on');
+            if (btn) {
+                btn.className = `btn ${isRunning ? 'btn-danger' : 'btn-primary'}`;
+                btn.textContent = isRunning ? 'Ausschalten' : 'Einschalten';
+                btn.onclick = () => sendControl(isRunning ? 'force_off' : 'force_on');
+            }
 
             // Update Temperaturen
-            document.getElementById('temp-boiler').textContent = temperatures.boiler?.toFixed(1) || 'N/A';
-            document.getElementById('temp-oben').textContent = temperatures.oben?.toFixed(1) || 'N/A';
-            document.getElementById('temp-mittig').textContent = temperatures.mittig?.toFixed(1) || 'N/A';
-            document.getElementById('temp-unten').textContent = temperatures.unten?.toFixed(1) || 'N/A';
-            document.getElementById('temp-verdampfer').textContent = temperatures.verdampfer?.toFixed(1) || 'N/A';
+            setText('temp-boiler', temperatures.boiler?.toFixed(1) ?? 'N/A');
+            setText('temp-oben', temperatures.oben?.toFixed(1) ?? 'N/A');
+            setText('temp-mittig', temperatures.mittig?.toFixed(1) ?? 'N/A');
+            setText('temp-unten', temperatures.unten?.toFixed(1) ?? 'N/A');
+            setText('temp-verdampfer', temperatures.verdampfer?.toFixed(1) ?? 'N/A');
 
             // Update Sollwerte
             if (setpoints) {
-                document.getElementById('setpoint-ein').textContent = setpoints.einschaltpunkt || 'N/A';
-                document.getElementById('setpoint-aus').textContent = setpoints.ausschaltpunkt || 'N/A';
-                document.getElementById('setpoint-sicherheit').textContent = setpoints.sicherheits_temp || 'N/A';
-                document.getElementById('setpoint-verdampfer').textContent = setpoints.verdampfertemperatur || 'N/A';
+                setText('setpoint-ein', setpoints.einschaltpunkt ?? 'N/A');
+                setText('setpoint-aus', setpoints.ausschaltpunkt ?? 'N/A');
+                setText('setpoint-sicherheit', setpoints.sicherheits_temp ?? 'N/A');
+                setText('setpoint-verdampfer', setpoints.verdampfertemperatur ?? 'N/A');
             }
 
             // Update Modi
-            document.getElementById('mode-current').textContent = mode.current || 'Normal';
+            setText('mode-current', mode.current || 'Normal');
 
             const switchBath = document.getElementById('switch-bath');
-            switchBath.className = `switch ${mode.bath_active ? 'active' : ''}`;
+            if (switchBath) switchBath.className = `switch ${mode.bath_active ? 'active' : ''}`;
 
             const switchHoliday = document.getElementById('switch-holiday');
-            switchHoliday.className = `switch ${mode.holiday_active ? 'active' : ''}`;
+            if (switchHoliday) switchHoliday.className = `switch ${mode.holiday_active ? 'active' : ''}`;
 
             const switchSolar = document.getElementById('switch-solar');
-            switchSolar.className = `switch ${mode.solar_active ? 'active' : ''}`;
+            if (switchSolar) switchSolar.className = `switch ${mode.solar_active ? 'active' : ''}`;
 
             // Update Energie
-            document.getElementById('energy-soc').textContent = energy.soc || 0;
-            document.getElementById('energy-battery').textContent = energy.battery_power || 0;
-            document.getElementById('energy-feedin').textContent = energy.feed_in || 0;
+            setText('energy-soc', energy.soc ?? 0);
+            setText('energy-battery', energy.battery_power ?? 0);
+            setText('energy-feedin', energy.feed_in ?? 0);
 
             // Update System
-            document.getElementById('system-update').textContent = system.last_update;
+            setText('system-update', system.last_update);
 
             const exclusionReasonEl = document.getElementById('exclusion-reason-row');
             if (system.exclusion_reason) {
@@ -1004,11 +1021,12 @@
                     row.id = 'exclusion-reason-row';
                     row.innerHTML = `
                         <span class="info-label">Status</span>
-                        <span class="info-value badge badge-warning" id="exclusion-reason">${system.exclusion_reason}</span>
+                        <span class="info-value badge badge-warning" id="exclusion-reason">${escapeHtml(system.exclusion_reason)}</span>
                     `;
-                    document.getElementById('system-update-row').after(row);
+                    const sysRow = document.getElementById('system-update-row');
+                    if (sysRow) sysRow.after(row);
                 } else {
-                    document.getElementById('exclusion-reason').textContent = system.exclusion_reason;
+                    setText('exclusion-reason', system.exclusion_reason);
                 }
             } else if (exclusionReasonEl) {
                 exclusionReasonEl.remove();
@@ -1129,15 +1147,15 @@
                             <span class="info-label">Aktueller Modus</span>
                             <span class="info-value" id="mode-current">${mode.current || 'Normal'}</span>
                         </div>
-                        <div class="toggle-switch" onclick="toggleMode('bademodus', ${mode.bath_active})">
+                        <div class="toggle-switch" onclick="toggleMode('bademodus', ${JSON.stringify(mode.bath_active)})">
                             <span class="toggle-label">🛁 Bademodus</span>
                             <div class="switch ${mode.bath_active ? 'active' : ''}" id="switch-bath"></div>
                         </div>
-                        <div class="toggle-switch" onclick="toggleMode('urlaubsmodus', ${mode.holiday_active})">
+                        <div class="toggle-switch" onclick="toggleMode('urlaubsmodus', ${JSON.stringify(mode.holiday_active)})">
                             <span class="toggle-label">🌴 Urlaubsmodus</span>
                             <div class="switch ${mode.holiday_active ? 'active' : ''}" id="switch-holiday"></div>
                         </div>
-                        <div class="toggle-switch" onclick="toggleMode('solar', ${mode.solar_active})">
+                        <div class="toggle-switch" onclick="toggleMode('solar', ${JSON.stringify(mode.solar_active)})">
                             <span class="toggle-label">☀️ Solar aktiv</span>
                             <div class="switch ${mode.solar_active ? 'active' : ''}" id="switch-solar"></div>
                         </div>
@@ -1197,6 +1215,11 @@
         }
 
         function toggleMode(modeName, currentState) {
+            // Debounce: Verhindert Mehrfachklicks
+            if (toggleMode._pending) return;
+            toggleMode._pending = true;
+            setTimeout(() => { toggleMode._pending = false; }, 1000);
+
             sendControl('set_mode', { mode: modeName, active: !currentState });
         }
 
