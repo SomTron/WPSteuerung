@@ -429,8 +429,64 @@
         };
         const MAX_DATA_POINTS = 60;
 
-        // DEBUG: Confirm JavaScript is running
-        alert('APP VERSION 2.0 - API_BASE: ' + API_BASE);
+        // Plugin zum Zeichnen des Kompressor-Hintergrunds
+        const compressorBackgroundPlugin = {
+            id: 'compressorBackground',
+            beforeDatasetsDraw(chart) {
+                if (!temperatureHistory.kompressor || temperatureHistory.kompressor.length === 0) return;
+
+                const { ctx, scales } = chart;
+                const meta = chart.getDatasetMeta(0); // Temperatur-Dataset
+                if (!meta || !meta.data || meta.data.length === 0) return;
+
+                ctx.save();
+
+                const yScale = scales.y;
+
+                // Maximale Temperatur im aktuellen Sichtbereich finden
+                const allTemps = [
+                    ...temperatureHistory.oben,
+                    ...temperatureHistory.mittig,
+                    ...temperatureHistory.unten,
+                    ...temperatureHistory.verdampfer
+                ].filter(v => v !== null && v !== undefined);
+
+                const maxTemp = allTemps.length > 0 ? Math.max(...allTemps, 60) : 60;
+                const minTemp = 0; // Unten bei 0 beginnen
+
+                const yTop = yScale.getPixelForValue(maxTemp);
+                const yBottom = yScale.getPixelForValue(minTemp);
+
+                temperatureHistory.kompressor.forEach((isRunning, index) => {
+                    if (!isRunning || index >= meta.data.length) return;
+
+                    const currentPoint = meta.data[index];
+                    if (!currentPoint) return;
+
+                    const x = currentPoint.x;
+
+                    // Breite eines Segments berechnen
+                    let width;
+                    if (index < meta.data.length - 1 && meta.data[index + 1]) {
+                        width = meta.data[index + 1].x - x;
+                    } else if (index > 0 && meta.data[index - 1]) {
+                        width = x - meta.data[index - 1].x;
+                    } else {
+                        width = (scales.x.end - scales.x.start) / temperatureHistory.kompressor.length;
+                    }
+
+                    // Hintergrund zeichnet einen Bereich von der y-Achse unten bis zur maximalen Temperatur
+                    const yMaxPixel = yScale.getPixelForValue(maxTemp);
+                    const yMinPixel = yScale.getPixelForValue(minTemp);
+                    const height = yMinPixel - yMaxPixel;
+
+                    ctx.fillStyle = 'rgba(255, 107, 107, 0.15)';
+                    ctx.fillRect(x, yMaxPixel, width, height);
+                });
+
+                ctx.restore();
+            }
+        };
 
         async function fetchStatus() {
             try {
@@ -485,14 +541,10 @@
                     temperatureHistory.mittig.push(point.t_mittig);
                     temperatureHistory.unten.push(point.t_unten);
                     temperatureHistory.verdampfer.push(point.t_verd);
-                    
-                    // Kompressor State (1 für EIN, 0 für AUS). Wir nutzen einen großen Wert 
-                    // (Höhe des Diagramms) um den Hintergrund zu füllen
-                    let k_state = 0;
-                    if (point.kompressor === '1' || point.kompressor === 'EIN') {
-                        k_state = 65; // Maximale erwartete Temperatur zur Füllung
-                    }
-                    temperatureHistory.kompressor.push(k_state);
+
+                    // Kompressor State als boolean speichern
+                    const isRunning = point.kompressor === '1' || point.kompressor === 'EIN' || point.kompressor === 1;
+                    temperatureHistory.kompressor.push(isRunning);
                 });
 
                 if (chart) {
@@ -519,9 +571,9 @@
             temperatureHistory.mittig.push(temps.mittig);
             temperatureHistory.unten.push(temps.unten);
             temperatureHistory.verdampfer.push(temps.verdampfer);
-            
+
             let isRunning = statusData && statusData.compressor && statusData.compressor.status === 'EIN';
-            temperatureHistory.kompressor.push(isRunning ? 65 : 0);
+            temperatureHistory.kompressor.push(isRunning);
 
             // Nur die letzten MAX_DATA_POINTS behalten
             if (temperatureHistory.timestamps.length > MAX_DATA_POINTS) {
@@ -544,6 +596,7 @@
 
             chart = new Chart(ctx, {
                 type: 'line',
+                plugins: [compressorBackgroundPlugin],
                 data: {
                     labels: temperatureHistory.timestamps,
                     datasets: [
@@ -580,17 +633,6 @@
                             borderWidth: 2,
                             pointRadius: 0,
                             tension: 0.4
-                        },
-                        {
-                            label: 'Kompressor',
-                            data: temperatureHistory.kompressor,
-                            borderColor: 'transparent',
-                            backgroundColor: 'rgba(255, 60, 60, 0.1)',
-                            borderWidth: 0,
-                            pointRadius: 0,
-                            fill: true,
-                            stepped: true,
-                            tension: 0
                         }
                     ]
                 },
@@ -617,12 +659,23 @@
                             bodyColor: '#a0a0c0',
                             borderColor: 'rgba(0, 212, 255, 0.3)',
                             borderWidth: 1,
-                            padding: 12
+                            padding: 12,
+                            callbacks: {
+                                afterBody: function (context) {
+                                    // Kompressor-Status im Tooltip anzeigen
+                                    const index = context[0].dataIndex;
+                                    const isRunning = temperatureHistory.kompressor[index];
+                                    if (isRunning !== undefined) {
+                                        return `Kompressor: ${isRunning ? 'EIN' : 'AUS'}`;
+                                    }
+                                    return '';
+                                }
+                            }
                         }
                     },
                     scales: {
                         y: {
-                            beginAtZero: false,
+                            beginAtZero: true,
                             grid: { color: 'rgba(255, 255, 255, 0.05)' },
                             ticks: {
                                 color: '#a0a0c0',
@@ -658,7 +711,6 @@
             chart.data.datasets[1].data = temperatureHistory.mittig;
             chart.data.datasets[2].data = temperatureHistory.unten;
             chart.data.datasets[3].data = temperatureHistory.verdampfer;
-            chart.data.datasets[4].data = temperatureHistory.kompressor;
             chart.update('none'); // Update without animation for smoother real-time refresh
         }
 
