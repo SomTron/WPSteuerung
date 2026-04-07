@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 import csv
 from collections import OrderedDict
+import asyncio
 
 def _compute_pv_geometry(config):
     """
@@ -160,13 +161,52 @@ def compute_adaptive_pv_thresholds_from_csv(
 
 async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
     """
-    Fetches solar radiation forecast from Open-Meteo.
+    Fetches solar radiation forecast from Open-Meteo with retry logic.
     Returns:
       (rad_today_m2, rad_tomorrow_m2,
        pv_today_kwh, pv_tomorrow_kwh,
        sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
 
     rad_* in kWh/m², PV-Werte als geschätzte Anlagenenergie in kWh.
+    """
+    max_retries = 3
+    base_delay = 5  # Sekunden
+    
+    for attempt in range(max_retries):
+        success, result = await _fetch_solar_forecast_once(session, config)
+        
+        if success:
+            return result
+        
+        # Wenn wir noch Retries haben, warte mit Exponential Backoff
+        if attempt < max_retries - 1:
+            # Bei Rate Limiting (429) länger warten
+            error_type = result.get("error_type", "unknown") if result else "unknown"
+            if error_type == "rate_limit":
+                delay = base_delay * (2 ** attempt) * 3  # 15s, 30s, 60s
+            elif error_type == "server_error":
+                delay = base_delay * (2 ** attempt) * 2  # 10s, 20s, 40s
+            else:
+                delay = base_delay * (2 ** attempt)  # 5s, 10s, 20s
+            
+            logging.warning(
+                f"Solar forecast attempt {attempt + 1}/{max_retries} failed, "
+                f"retrying in {delay}s..."
+            )
+            await asyncio.sleep(delay)
+        else:
+            logging.error(
+                f"Solar forecast failed after {max_retries} attempts. "
+                f"Using fallback values."
+            )
+    
+    # Alle Versuche fehlgeschlagen
+    return None, None, None, None, None, None, None, None
+
+
+async def _fetch_solar_forecast_once(session: aiohttp.ClientSession, config=None):
+    """
+    Einzelner Fetch-Versuch. Gibt (success, result_tuple) zurück.
     """
     # Use config values or defaults
     lat = config.Wetterprognose.LATITUDE if config else 46.7142
@@ -263,20 +303,39 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
                     sunrise_today, sunset_today,
                     sunrise_tomorrow, sunset_tomorrow
                 )
-                
-                return (
+
+                result = (
                     rad_today, rad_tomorrow,
                     pv_today, pv_tomorrow,
                     sunrise_today, sunset_today,
                     sunrise_tomorrow, sunset_tomorrow
                 )
+                return True, result
             else:
                 error_text = await response.text()
                 logging.error(f"Error fetching solar forecast: Status {response.status}, Details: {error_text}")
-                return None, None, None, None, None, None, None, None
+                
+                # Fehler-Typ klassifizieren für Backoff-Strategie
+                if response.status == 429:
+                    return False, {"error_type": "rate_limit"}
+                elif response.status >= 500:
+                    return False, {"error_type": "server_error"}
+                else:
+                    return False, {"error_type": "client_error"}
+                    
+    except aiohttp.ClientError as e:
+        # Netzwerk-Fehler (Connection reset, timeout, etc.)
+        error_type = "network_error"
+        if "Connection reset" in str(e) or "timeout" in str(e).lower():
+            error_type = "network_error"
+        
+        logging.error(f"Network error in get_solar_forecast: {e}")
+        return False, {"error_type": error_type}
     except Exception as e:
         logging.error(f"Unexpected error in get_solar_forecast: {e}")
-        return None, None, None, None, None, None, None, None
+        return False, {"error_type": "unknown"}
+    
+    # success path - wird unten im Code erreicht bei response.status == 200
 
 async def log_forecast_to_csv(rad_today, rad_tomorrow, pv_today, pv_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow):
     """Logs the forecast results to a separate CSV file."""

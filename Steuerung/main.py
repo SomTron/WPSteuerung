@@ -280,6 +280,10 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             sr_tomorrow,
             ss_tomorrow,
         ) = await get_solar_forecast(session, state.config)
+        
+        # Update timestamp regardless of success to avoid too frequent retries
+        state.last_forecast_update = now_local
+        
         if pv_today_kwh is not None:
             # Speichere sowohl PV-Gesamtenergie als auch Strahlung pro m² im State
             state.solar.forecast_today = pv_today_kwh
@@ -290,7 +294,11 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.solar.sunset_today = ss_today
             state.solar.sunrise_tomorrow = sr_tomorrow
             state.solar.sunset_tomorrow = ss_tomorrow
-            state.last_forecast_update = now_local
+        else:
+            logging.warning(
+                "Solar forecast unavailable, using cached/empty values. "
+                f"Next update in 6 hours."
+            )
 
     # 3. Adaptive PV-Schwellen (typ. 1x/Tag reicht, laufen aber unabhängig von Forecast)
     try:
