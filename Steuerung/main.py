@@ -279,6 +279,8 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             ss_today,
             sr_tomorrow,
             ss_tomorrow,
+            peak_start,
+            peak_end
         ) = await get_solar_forecast(session, state.config)
         
         # Update timestamp regardless of success to avoid too frequent retries
@@ -294,6 +296,8 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.solar.sunset_today = ss_today
             state.solar.sunrise_tomorrow = sr_tomorrow
             state.solar.sunset_tomorrow = ss_tomorrow
+            state.solar.peak_start_hour = peak_start
+            state.solar.peak_end_hour = peak_end
         else:
             logging.warning(
                 "Solar forecast unavailable, using cached/empty values. "

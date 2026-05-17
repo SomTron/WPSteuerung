@@ -143,6 +143,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
             night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction_val
             if regelfuehler <= night_einschaltpunkt:
                 is_critical_frost = True
+                
+    state.control.is_critical_frost = is_critical_frost
 
     # PV-Plan-Status für aussagekräftige Modus-Namen
     plan_allow = _plan_allows_solar_oversupply_today(state)
@@ -164,8 +166,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         target_for_deadline = state.ausschaltpunkt_erhoeht
         
     state.control.heating_deadline = get_heating_deadline(state, target_for_deadline)
+    fallback_t = float(getattr(state.config.Heizungssteuerung, "FALLBACK_T_MITTIG", 40.0))
     state.control.estimated_runtime_minutes = int(estimate_heating_runtime(
-        state.sensors.t_mittig if state.sensors.t_mittig is not None else 40.0, 
+        state.sensors.t_mittig if state.sensors.t_mittig is not None else fallback_t, 
         target_for_deadline, 
         state.heating_rate
     ) * 60)
@@ -186,7 +189,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     # --- End Adaptive Logic Integration ---
 
     if state.bademodus_aktiv:
-        res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4, "regelfuehler": t_unten}
+        hysteresis = float(getattr(state.config.Heizungssteuerung, "BADEMODUS_HYSTERESE", 4.0))
+        res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - hysteresis, "regelfuehler": t_unten}
     elif state.control.solar_ueberschuss_aktiv:
         res = {"modus": "Solarüberschuss", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.einschaltpunkt_erhoeht, "regelfuehler": t_unten}
     elif batterie_vorrang:
@@ -223,6 +227,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         # Optional: Logik für Solarüberschuss während Übergangsmodus/Regulär etc. kann hier noch feiner getrennt werden falls gewünscht.
         logging.info(f"Wechsel zu Modus: {res['modus']}")
         state.control.previous_modus = res["modus"]
+        state.control.last_modus_switch_time = datetime.now(state.local_tz)
     
     return res
 
@@ -252,10 +257,7 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
     # Wenn im Übergangsmodus, kein Solarueberschuss aktiv und Batterie reicht nicht aus -> AUS
     if ist_uebergangsmodus_aktiv(state) and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
         # Check for critical frost (don't turn off if it's too cold)
-        nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
-        night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction
-        
-        is_critical_frost = regelfuehler is not None and regelfuehler <= night_einschaltpunkt
+        is_critical_frost = getattr(state.control, "is_critical_frost", False)
         
         if not is_critical_frost:
             # Check if battery is sufficient to bridge the remaining window
@@ -282,9 +284,8 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
     solar_block_reason = None
     if within_uebergangsmodus and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
         # Restore critical cold exception: allow even without solar if it's very cold
-        nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
-        night_einschaltpunkt = state.basis_einschaltpunkt - nacht_reduction
-        if regelfuehler is not None and regelfuehler > night_einschaltpunkt:
+        is_critical_frost = getattr(state.control, "is_critical_frost", False)
+        if not is_critical_frost:
             solar_ok = False
             solar_block_reason = "Solarfenster (kein Überschuss)"
 
@@ -337,6 +338,16 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
         if (t_mittig is not None and t_mittig >= target):
             # ONLY switch off if min runtime reached
             if elapsed >= state.min_laufzeit:
+                # Soft transition delay
+                cooldown_min = float(getattr(state.config.Heizungssteuerung, "MODUS_WECHSEL_COOLDOWN_MINUTES", 5.0))
+                switch_time = getattr(state.control, "last_modus_switch_time", None)
+                if switch_time:
+                    time_since_switch = safe_timedelta(datetime.now(state.local_tz), switch_time, state.local_tz)
+                    if time_since_switch < timedelta(minutes=cooldown_min):
+                        if check_log_throttle(state, "log_mode_switch_cooldown", interval_minutes=5):
+                            logging.info(f"Modus-Wechsel AUS verzögert: Sanfter Übergang Cooldown ({cooldown_min}m) aktiv.")
+                        return False
+
                 if await set_kompressor_status_func(False, force=True):
                     logging.info(f"Modus-Wechsel AUS: T_Oben ({t_oben:.1f}) oder T_Mittig ({t_mittig:.1f}) >= Ziel ({target:.1f}). Laufzeit: {elapsed}")
                     return True

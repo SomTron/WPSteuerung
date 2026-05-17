@@ -40,6 +40,8 @@ class SolarState:
         self.sunset_today: Optional[str] = None
         self.sunrise_tomorrow: Optional[str] = None
         self.sunset_tomorrow: Optional[str] = None
+        self.peak_start_hour: int = 11
+        self.peak_end_hour: int = 15
 
     def __repr__(self):
         return f"<SolarState(acpower={self.acpower}, feedinpower={self.feedinpower}, batpower={self.batpower}, soc={self.soc})>"
@@ -64,6 +66,7 @@ class ControlState:
         self.pv_strategy: str = "balanced"
         self.heating_deadline: Optional[datetime] = None
         self.estimated_runtime_minutes: int = 0
+        self.is_critical_frost: bool = False
         
         # Self-calculating heating rate
         self.learned_heating_rate: float = float(config.Heizungssteuerung.HEATING_RATE)

@@ -201,7 +201,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
             )
     
     # Alle Versuche fehlgeschlagen
-    return None, None, None, None, None, None, None, None
+    return None, None, None, None, None, None, None, None, 11, 15
 
 
 async def _fetch_solar_forecast_once(session: aiohttp.ClientSession, config=None):
@@ -274,6 +274,25 @@ async def _fetch_solar_forecast_once(session: aiohttp.ClientSession, config=None
                 sunrise_tomorrow = sun_data.get(tomorrow_str, {}).get("sunrise")
                 sunset_tomorrow = sun_data.get(tomorrow_str, {}).get("sunset")
 
+                # Peak-Fenster dynamisch berechnen
+                peak_start = 11
+                peak_end = 15
+                today_hourly_rad = []
+                for t_str, rad in zip(times, total_radiation):
+                    if t_str.startswith(today_str):
+                        try:
+                            hour = int(t_str.split("T")[1][:2])
+                            today_hourly_rad.append((hour, rad))
+                        except Exception:
+                            pass
+                
+                if today_hourly_rad:
+                    # Finde die Stunde mit der höchsten Einstrahlung
+                    best_hour = max(today_hourly_rad, key=lambda x: x[1])[0]
+                    # Fenster +/- 2 Stunden um den Peak legen
+                    peak_start = max(0, best_hour - 2)
+                    peak_end = min(23, best_hour + 2)
+
                 # PV-Gesamtenergie abschätzen (kWh)
                 pv_today = None
                 pv_tomorrow = None
@@ -308,7 +327,8 @@ async def _fetch_solar_forecast_once(session: aiohttp.ClientSession, config=None
                     rad_today, rad_tomorrow,
                     pv_today, pv_tomorrow,
                     sunrise_today, sunset_today,
-                    sunrise_tomorrow, sunset_tomorrow
+                    sunrise_tomorrow, sunset_tomorrow,
+                    peak_start, peak_end
                 )
                 return True, result
             else:

@@ -77,9 +77,11 @@ def should_delay_for_peak(state, strategy: str) -> bool:
         return False
         
     now = datetime.now(state.local_tz)
-    # Peak-Fenster meist zwischen 11:00 und 15:00
-    peak_start = now.replace(hour=11, minute=0, second=0, microsecond=0)
-    peak_end = now.replace(hour=15, minute=0, second=0, microsecond=0)
+    peak_start_hour = getattr(state.solar, "peak_start_hour", 11)
+    peak_end_hour = getattr(state.solar, "peak_end_hour", 15)
+    
+    peak_start = now.replace(hour=peak_start_hour, minute=0, second=0, microsecond=0)
+    peak_end = now.replace(hour=peak_end_hour, minute=0, second=0, microsecond=0)
     
     if peak_start <= now <= peak_end:
         return False # Wir sind bereits im Peak
@@ -87,7 +89,12 @@ def should_delay_for_peak(state, strategy: str) -> bool:
     if now < peak_start:
         # Nur warten, wenn Batterie noch nicht voll ist
         soc = state.solar.soc if state.solar.soc is not None else 0.0
-        if soc < 90:
+        try:
+            target_soc = float(getattr(state.config.Solarueberschuss, "PEAK_SHAVING_TARGET_SOC", 90.0))
+        except Exception:
+            target_soc = 90.0
+            
+        if soc < target_soc:
             return True
             
     return False
