@@ -85,9 +85,14 @@ def _plan_allows_solar_oversupply_today(state) -> Optional[bool]:
         today_cls = _classify(today)
         tomorrow_cls = _classify(tomorrow)
 
-        if today_cls == "high" and tomorrow_cls == "high":
+        # Plan-Gating: Batterie-Lade-Trigger nur aktivieren, wenn BEIDE Tage ausreichend Sonne versprechen.
+        # Bei "morgen LOW" schonen wir die Batterie (echter feedin_excess greift trotzdem immer).
+        if today_cls == "high" and tomorrow_cls in ("mid", "high"):
             return True
-
+        # mid/mid oder mid/high -> solider Tag, Solar-Modus erlaubt
+        if today_cls == "mid" and tomorrow_cls in ("mid", "high"):
+            return True
+        # high/low, mid/low, low/any -> kein Plan-Gating (klassische feedin_excess-Bedingung entscheidet)
         return False
     except Exception as e:
         logging.debug(f"Plan-basierte PV-Klassifizierung nicht möglich: {e}")
@@ -162,8 +167,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
                 
     state.control.is_critical_frost = is_critical_frost
 
-    # PV-Plan-Status für aussagekräftige Modus-Namen
-    plan_allow = _plan_allows_solar_oversupply_today(state)
+    # PV-Plan-Status für aussagekräftige Modus-Namen (plan_allow bereits von Zeile 133 bekannt)
     pv_plan_erlaubt = plan_allow is True  # None = unbekannt, False = blockiert, True = erlaubt
     pv_plan_blockiert = plan_allow is False
 
@@ -316,8 +320,16 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
     solar_ok = True
     solar_block_reason = None
     if within_uebergangsmodus and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
-        # Restore critical cold exception: allow even without solar if it's very cold
+        # Frostschutz: gecachten Wert prüfen, dann direkt aus regelfuehler berechnen.
+        # (Fallback nötig, wenn handle_compressor_on ohne determine_mode_and_setpoints aufgerufen wird.)
         is_critical_frost = (getattr(state.control, "is_critical_frost", False) is True)
+        if not is_critical_frost and regelfuehler is not None and isinstance(regelfuehler, (int, float)):
+            try:
+                nacht_reduction_val = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
+                frost_threshold = float(state.basis_einschaltpunkt) - nacht_reduction_val
+                is_critical_frost = regelfuehler <= frost_threshold
+            except (TypeError, ValueError, AttributeError):
+                pass
         if not is_critical_frost:
             solar_ok = False
             solar_block_reason = "Solarfenster (kein Überschuss)"
@@ -368,7 +380,7 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
         target = state.control.aktueller_ausschaltpunkt
         
         # Check if targets reached in the new mode
-        if (t_mittig is not None and t_mittig >= target):
+        if (t_mittig is not None and t_mittig >= target) or (t_oben is not None and t_oben >= target):
             # ONLY switch off if min runtime reached
             if elapsed >= state.min_laufzeit:
                 # Soft transition delay

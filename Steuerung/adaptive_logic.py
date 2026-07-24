@@ -29,8 +29,8 @@ def get_pv_strategy(state) -> str:
         if m_cls == "low": return "aggressive"
         return "balanced" # high/high or high/mid
     elif t_cls == "mid":
-        if m_cls == "high": return "balanced"
-        return "balanced"
+        if m_cls in ("mid", "high"): return "balanced"
+        return "conservative"  # mid/low: heute ok, morgen schlecht -> konservativ
     else: # today is low
         if m_cls == "high": return "conservative"
         return "cautious"
@@ -59,7 +59,9 @@ def get_heating_deadline(state, target_t: float) -> datetime:
         # Aufheizzeit abziehen
         # Wir nehmen t_unten für Überschuss, aber t_mittig für Komfort. 
         # Hier als Schätzung einen Mix oder t_mittig
-        current_t = state.sensors.t_mittig if state.sensors.t_mittig is not None else 40.0
+        # Konservativer Fallback (20°C statt 40°C), damit bei Sensor-Ausfall
+        # die Aufheizzeit nicht fälschlicherweise auf 0 geschätzt wird.
+        current_t = state.sensors.t_mittig if state.sensors.t_mittig is not None else 20.0
         
         # Nutze gelernte Rate falls vorhanden
         rate = getattr(state.control, "learned_heating_rate", state.heating_rate)

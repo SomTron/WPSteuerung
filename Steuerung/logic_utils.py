@@ -170,7 +170,9 @@ def is_battery_sufficient_for_transition(state) -> bool:
         if capacity_kwh <= 0 or soc <= min_soc:
             return False
             
-        available_wh = (soc - min_soc) / 100.0 * capacity_kwh * 1000.0
+        # Wirkungsgrad-Verlust der Batterie berücksichtigen (Entlade-Effizienz, Standard 92%)
+        efficiency = float(getattr(state.config.Solarueberschuss, "BATTERY_EFFICIENCY", 0.92))
+        available_wh = (soc - min_soc) / 100.0 * capacity_kwh * 1000.0 * efficiency
         
         sufficient = available_wh >= needed_wh
         if sufficient:
