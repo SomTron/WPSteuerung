@@ -111,7 +111,23 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     # 1) Klassische Überschuss-Bedingung (Batterie/FeedIn/SOC)
     cfg_su = state.config.Solarueberschuss
     battery_charge_excess = bat_p > cfg_su.BATPOWER_THRESHOLD
-    feedin_excess = (soc_v >= cfg_su.SOC_THRESHOLD and feed_p > cfg_su.FEEDINPOWER_THRESHOLD)
+    
+    try:
+        feedin_thresh = float(cfg_su.FEEDINPOWER_THRESHOLD)
+    except (TypeError, ValueError):
+        feedin_thresh = 600.0
+
+    try:
+        soc_thresh = float(cfg_su.SOC_THRESHOLD)
+    except (TypeError, ValueError):
+        soc_thresh = 95.0
+
+    # Echte Netzeinspeisung liegt vor, wenn feed_p > FEEDINPOWER_THRESHOLD,
+    # oder wenn der Akku voll geladen ist (soc >= SOC_THRESHOLD) und eingespeist wird.
+    feedin_excess = (
+        feed_p > feedin_thresh or
+        (soc_v >= soc_thresh and feed_p > 0)
+    )
 
     # 2) Plan-basierte Freigabe anhand der PV-Prognose heute/morgen
     plan_allow = _plan_allows_solar_oversupply_today(state)
@@ -189,7 +205,16 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     # --- End Adaptive Logic Integration ---
 
     if state.bademodus_aktiv:
-        hysteresis = float(getattr(state.config.Heizungssteuerung, "BADEMODUS_HYSTERESE", 4.0))
+        val = getattr(state.config.Heizungssteuerung, "BADEMODUS_HYSTERESE", 4.0)
+        if isinstance(val, (int, float)):
+            hysteresis = float(val)
+        elif isinstance(val, str):
+            try:
+                hysteresis = float(val)
+            except ValueError:
+                hysteresis = 4.0
+        else:
+            hysteresis = 4.0
         res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - hysteresis, "regelfuehler": t_unten}
     elif state.control.solar_ueberschuss_aktiv:
         res = {"modus": "Solarüberschuss", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.einschaltpunkt_erhoeht, "regelfuehler": t_unten}
@@ -256,9 +281,17 @@ async def handle_compressor_off(state, session, regelfuehler, ausschaltpunkt, mi
     # 2. NEU: Ausschalten in der Übergangszeit bei Verlust des PV-Überschusses
     # Wenn im Übergangsmodus, kein Solarueberschuss aktiv und Batterie reicht nicht aus -> AUS
     if ist_uebergangsmodus_aktiv(state) and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
-        # Check for critical frost (don't turn off if it's too cold)
-        is_critical_frost = getattr(state.control, "is_critical_frost", False)
-        
+        # Check for critical frost: zuerst gecachten Wert prüfen, dann direkt aus regelfuehler berechnen.
+        # (Fallback nötig, wenn handle_compressor_off ohne determine_mode_and_setpoints aufgerufen wird.)
+        is_critical_frost = (getattr(state.control, "is_critical_frost", False) is True)
+        if not is_critical_frost and regelfuehler is not None and isinstance(regelfuehler, (int, float)):
+            try:
+                nacht_reduction_val = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
+                frost_threshold = float(state.basis_einschaltpunkt) - nacht_reduction_val
+                is_critical_frost = regelfuehler <= frost_threshold
+            except (TypeError, ValueError, AttributeError):
+                pass
+
         if not is_critical_frost:
             # Check if battery is sufficient to bridge the remaining window
             if not is_battery_sufficient_for_transition(state):
@@ -284,7 +317,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
     solar_block_reason = None
     if within_uebergangsmodus and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
         # Restore critical cold exception: allow even without solar if it's very cold
-        is_critical_frost = getattr(state.control, "is_critical_frost", False)
+        is_critical_frost = (getattr(state.control, "is_critical_frost", False) is True)
         if not is_critical_frost:
             solar_ok = False
             solar_block_reason = "Solarfenster (kein Überschuss)"
@@ -330,7 +363,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
 
 async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_status_func: Callable):
     """Schaltet aus bei Moduswechsel wenn Zieltemp erreicht."""
-    if state.control.kompressor_ein and state.control.solar_ueberschuss_aktiv == False and not state.bademodus_aktiv:
+    if state.control.kompressor_ein and state.control.solar_ueberschuss_aktiv != True and state.bademodus_aktiv != True:
         elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
         target = state.control.aktueller_ausschaltpunkt
         
@@ -341,7 +374,7 @@ async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_st
                 # Soft transition delay
                 cooldown_min = float(getattr(state.config.Heizungssteuerung, "MODUS_WECHSEL_COOLDOWN_MINUTES", 5.0))
                 switch_time = getattr(state.control, "last_modus_switch_time", None)
-                if switch_time:
+                if switch_time and isinstance(switch_time, datetime):
                     time_since_switch = safe_timedelta(datetime.now(state.local_tz), switch_time, state.local_tz)
                     if time_since_switch < timedelta(minutes=cooldown_min):
                         if check_log_throttle(state, "log_mode_switch_cooldown", interval_minutes=5):

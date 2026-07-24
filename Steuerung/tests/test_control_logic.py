@@ -457,3 +457,22 @@ async def test_handle_compressor_on_prevents_immediate_off(mock_state):
     assert result is True
     set_kompressor_status.assert_called_once()
     assert mock_state.control.blocking_reason is None
+
+@pytest.mark.asyncio
+async def test_feedin_excess_triggers_solar_mode_even_if_soc_below_threshold(mock_state):
+    """Prüft, dass hohe Netzeinspeisung (z.B. 4730W) den Solarüberschuss auslöst, selbst wenn der Akku unter SOC_THRESHOLD liegt."""
+    mock_state.solar.feedinpower = 4730.0  # Hohe Einspeisung ins Netz
+    mock_state.solar.soc = 90.0           # Akku bei 90% (z.B. Sommer-Limit)
+    mock_state.solar.batpower = 0.0
+    mock_state.config.Solarueberschuss.SOC_THRESHOLD = 95.0
+    mock_state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD = 600.0
+    mock_state.config.Solarueberschuss.MIN_SOC = 15.0
+
+    with patch('control_logic.is_nighttime', return_value=False), \
+         patch('control_logic.ist_uebergangsmodus_aktiv', return_value=True), \
+         patch('control_logic.is_solar_window', return_value=True):
+
+        result = await determine_mode_and_setpoints(mock_state, t_unten=23.0, t_mittig=29.0)
+
+        assert mock_state.control.solar_ueberschuss_aktiv is True
+        assert result['modus'] == "Solarüberschuss"
