@@ -10,6 +10,8 @@ def state():
     state.local_tz = pytz.timezone("Europe/Berlin")
     state.stats.last_day = datetime.now(state.local_tz).date()
     state.stats.total_runtime_today = timedelta(hours=2)
+    state.control.kompressor_ein = False
+    state.stats.last_compressor_on_time = None
     return state
 
 def test_handle_day_transition_same_day(state):

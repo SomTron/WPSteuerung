@@ -3,8 +3,9 @@ import math
 from datetime import datetime, timedelta
 from typing import Optional
 from utils import safe_timedelta
+from constants import TEMP_MIN_VALID, TEMP_MAX_VALID, REDUCTION_MIN, REDUCTION_MAX, SOLAR_WINDOW_HOURS
 
-def is_valid_temperature(temp: Optional[float], min_temp: float = -50.0, max_temp: float = 150.0) -> bool:
+def is_valid_temperature(temp: Optional[float], min_temp: float = TEMP_MIN_VALID, max_temp: float = TEMP_MAX_VALID) -> bool:
     """Prüft, ob ein Temperaturwert gültig ist."""
     if temp is None: return False
     if not isinstance(temp, (int, float)): return False
@@ -47,12 +48,12 @@ def is_solar_window(config, state):
         end_hour, end_minute = map(int, end_time_str.split(':'))
         potential_night_setback_end_today = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
         
-        if now < potential_night_setback_end_today + timedelta(hours=2):
+        if now < potential_night_setback_end_today + timedelta(hours=SOLAR_WINDOW_HOURS):
             night_setback_end_time_today = potential_night_setback_end_today
         else:
             night_setback_end_time_today = potential_night_setback_end_today + timedelta(days=1)
         
-        within_solar = night_setback_end_time_today <= now < night_setback_end_time_today + timedelta(hours=2)
+        within_solar = night_setback_end_time_today <= now < night_setback_end_time_today + timedelta(hours=SOLAR_WINDOW_HOURS)
         return within_solar
     except Exception as e:
         logging.error(f"Fehler in is_solar_window: {e}")
@@ -87,8 +88,8 @@ def get_validated_reduction(config, section: str, key: str, default: float = 0.0
         else:
             return default
         reduction = float(value)
-        if reduction < 0 or reduction > 35:
+        if reduction < REDUCTION_MIN or reduction > REDUCTION_MAX:
             return default
         return reduction
-    except:
+    except Exception:
         return default

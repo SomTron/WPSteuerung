@@ -81,6 +81,9 @@ def mock_state(mock_config):
     state.uebergangsmodus_morgens_ende = time(10, 0)
     state.uebergangsmodus_abends_start = time(17, 0)
     
+    state.min_laufzeit = timedelta(minutes=5)
+    state.min_pause = timedelta(minutes=5)
+    
     return state
 
 
@@ -161,7 +164,7 @@ class TestSolarModeSwitch:
         
         # Should switch to solar mode
         assert result["solar_ueberschuss_aktiv"] is True
-        assert result["modus"] == "Solarüberschuss"
+        assert result["modus"] == "Solarueberschuss"
     
     @pytest.mark.asyncio
     async def test_solar_to_normal_transition_above_threshold(self, mock_state, mock_config, mock_hardware):

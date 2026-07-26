@@ -7,6 +7,7 @@ import io
 import pandas as pd
 from datetime import datetime, timedelta
 from utils import safe_timedelta
+from constants import DEFAULT_TIMEZONE, TELEGRAM_RATE_LIMIT_SECONDS
 
 # New Modules
 from telegram_api import (
@@ -89,7 +90,7 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
                 state.awaiting_urlaub_duration = False
                 return
 
-        local_tz = pytz.timezone("Europe/Berlin")
+        local_tz = pytz.timezone(DEFAULT_TIMEZONE)
         now = datetime.now(local_tz)
         state.urlaubsmodus_aktiv = True
         state.urlaubsmodus_start = now
@@ -109,7 +110,7 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
         # Check against lowercased button texts to prevent re-triggering logic if user clicks buttons unexpectedly
         if message_text in ["🌴 benutzerdefiniert", "❌ abbrechen", "🌴 1 tag", "🌴 3 tage", "🌴 7 tage", "🌴 14 tage"]: return
         duration_days = int(message_text.strip())
-        local_tz = pytz.timezone("Europe/Berlin")
+        local_tz = pytz.timezone(DEFAULT_TIMEZONE)
         now = datetime.now(local_tz)
         state.urlaubsmodus_aktiv = True
         state.urlaubsmodus_start = now
@@ -118,7 +119,8 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
         await send_telegram_message(session, chat_id, f"🌴 Urlaubsmodus aktiviert für {duration_days} Tage.", bot_token, reply_markup=keyboard)
         state.awaiting_urlaub_duration = False
         state.awaiting_custom_duration = False
-    except: pass
+    except Exception as e:
+        logging.error(f"Fehler bei benutzerdefinierter Dauer: {e}")
 
 async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     """Deaktiviert den Urlaubsmodus."""
@@ -210,10 +212,20 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     if not updates: return last_update_id
+
+    # Rate-Limiting: Prüfe ob letzte Nachricht zu schnell aufeinander folgt
+    now = datetime.now(state.local_tz)
+    if state.last_telegram_command_time:
+        elapsed = (now - state.last_telegram_command_time).total_seconds()
+        if elapsed < TELEGRAM_RATE_LIMIT_SECONDS:
+            logging.warning(f"Rate-Limit: Befehl ignoriert (nur {elapsed:.1f}s seit letztem Befehl, min. {TELEGRAM_RATE_LIMIT_SECONDS}s)")
+            return last_update_id
+
     for update in updates:
         message = update.get('message', {})
         text = message.get('text', "").strip().lower()
         if not text: continue
+        state.last_telegram_command_time = now
         
         try:
             if state.awaiting_custom_duration: await handle_custom_duration(session, chat_id, bot_token, config, state, text)

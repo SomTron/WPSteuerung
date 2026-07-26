@@ -1,4 +1,5 @@
 import asyncio
+
 import logging
 import threading
 import signal
@@ -15,7 +16,6 @@ from config_manager import ConfigManager
 from state import State
 from sensors import SensorManager
 from hardware import HardwareManager
-from hardware import HardwareManager
 from hardware_mock import MockHardwareManager
 from logging_config import setup_logging
 from solax import get_solax_data
@@ -29,6 +29,7 @@ from api import app, init_api
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV
 from weather_forecast import get_solar_forecast
 from logic_utils import is_nighttime, is_solar_window
+from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN
 
 # Global objects
 config_manager = ConfigManager()
@@ -228,24 +229,34 @@ async def update_system_data(session, state):
     state.sensors.t_verd = temps.get("verd")
     
     # 2. PV-Daten aktualisieren
-    await get_solax_data(session, state)
+    solax_result = await get_solax_data(session, state)
     if state.solar.last_api_data:
         state.solar.feedinpower = state.solar.last_api_data.get("feedinpower", 0)
         state.solar.batpower = state.solar.last_api_data.get("batPower", 0)
         state.solar.soc = state.solar.last_api_data.get("soc", 0)
+    elif solax_result is None:
+        # API fehlgeschlagen: Prüfe wie alt die letzten Daten sind
+        if state.solar.last_api_call:
+            now = datetime.now(state.local_tz)
+            age_min = (now - state.solar.last_api_call).total_seconds() / 60
+            if age_min > SOLAR_DATA_STALE_THRESHOLD_MIN:
+                logging.warning(f"Solar-Daten veraltet ({age_min:.0f} min), setze auf 0")
+                state.solar.feedinpower = 0
+                state.solar.batpower = 0
+                state.solar.soc = 0
 
 async def check_periodic_tasks(session, state, last_vpn_check):
     """Führt zeitgesteuerte Hintergrundaufgaben aus."""
     now_dt = datetime.now()
     now_local = datetime.now(state.local_tz)
     
-    # 1. VPN Check (alle 60s)
-    if (now_dt - last_vpn_check).total_seconds() >= 60:
+    # 1. VPN Check
+    if (now_dt - last_vpn_check).total_seconds() >= VPN_CHECK_INTERVAL_SEC:
         await check_vpn_status(state)
         last_vpn_check = now_dt
     
-    # 2. Solar Forecast (alle 6h)
-    if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= 6 * 3600:
+    # 2. Solar Forecast (alle FORECAST_UPDATE_INTERVAL_HOURS)
+    if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= FORECAST_UPDATE_INTERVAL_HOURS * 3600:
         rad_today, rad_tomorrow, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session, state.config)
         if rad_today is not None:
             state.solar.forecast_today = rad_today
@@ -305,16 +316,16 @@ async def check_and_send_alerts(session, state):
 
 async def run_logic_step(session, state):
     """Führt einen Schritt der Steuerungslogik aus."""
-    # 1. Druckschalter & Config
+        # 1. Druckschalter & Config
     if not await control_logic.check_pressure_and_config(
         session, state, handle_pressure_check, set_kompressor_status, state.update_config, lambda: "hash"
     ):
-        pass
+        return  # Druckfehler: Restliche Logik ueberspringen
 
     # 2. Kompressor-Verifizierung
     if state.control.kompressor_ein:
         is_running, error_msg = await control_logic.verify_compressor_running(state, session, state.sensors.t_verd, state.sensors.t_unten)
-        if not is_running and state.kompressor_verification_error_count >= 2:
+        if not is_running and state.kompressor_verification_error_count >= COMPRESSOR_VERIFICATION_ERROR_THRESHOLD:
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
             await set_kompressor_status(state, False, force=True)
             state.control.ausschluss_grund = "Kompressor läuft nicht (Verifizierung fehlgeschlagen)"
@@ -427,7 +438,7 @@ async def main_loop():
             await run_logic_step(session, state)
             await log_system_state(state)
             
-            await asyncio.sleep(10)
+            await asyncio.sleep(MAIN_LOOP_INTERVAL_SEC)
 
     except asyncio.CancelledError:
         pass

@@ -9,11 +9,12 @@ from datetime import datetime, timedelta
 from aiohttp import FormData
 from telegram_api import send_telegram_message
 from utils import check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER, HEIZUNGSDATEN_CSV
+from constants import DEFAULT_TIMEZONE
 
 async def get_boiler_temperature_history(session, hours, state, config):
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
     try:
-        local_tz = pytz.timezone("Europe/Berlin")
+        local_tz = pytz.timezone(DEFAULT_TIMEZONE)
         now = datetime.now(local_tz)
         time_ago = now - timedelta(hours=hours)
         logging.debug(f"⏳ Starte Temperaturverlauf für {hours} Stunden, Zeitfenster: {time_ago} bis {now}")

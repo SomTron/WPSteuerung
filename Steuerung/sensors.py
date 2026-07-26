@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta
 import pytz
 from typing import Optional, Dict, Tuple
+from constants import DEFAULT_TIMEZONE, SENSOR_RETRY_COUNT
 
 class SensorManager:
     def __init__(self, base_dir: str = "/sys/bus/w1/devices/"):
@@ -65,7 +66,7 @@ class SensorManager:
             logging.error(f"Unbekannter Sensor-Key: {sensor_key}")
             return None
 
-        now = datetime.now(pytz.timezone("Europe/Berlin"))
+        now = datetime.now(pytz.timezone(DEFAULT_TIMEZONE))
         
         # Cache prüfen
         if sensor_id in self.last_sensor_readings:
@@ -73,12 +74,20 @@ class SensorManager:
             if now - last_time < self.sensor_read_interval:
                 return value
 
-        # Tatsächliches Lesen (in Thread, da Datei-IO blockieren kann)
-        try:
-            temp = await asyncio.wait_for(asyncio.to_thread(self.read_temperature_raw, sensor_id), timeout=5.0)
-        except asyncio.TimeoutError:
-            logging.error(f"Timeout bei Sensor {sensor_key} ({sensor_id})")
-            return None
+                # Tatsächliches Lesen mit Retry (in Thread, da Datei-IO blockieren kann)
+        temp = None
+        for attempt in range(SENSOR_RETRY_COUNT):
+            try:
+                temp = await asyncio.wait_for(asyncio.to_thread(self.read_temperature_raw, sensor_id), timeout=5.0)
+                if temp is not None:
+                    break
+                # Bei None (z.B. CRC-Fehler): kurze Pause und nochmal versuchen
+                if attempt < SENSOR_RETRY_COUNT - 1:
+                    await asyncio.sleep(0.2)
+            except asyncio.TimeoutError:
+                logging.error(f"Timeout bei Sensor {sensor_key} ({sensor_id}) (Versuch {attempt + 1}/{SENSOR_RETRY_COUNT})")
+                if attempt < SENSOR_RETRY_COUNT - 1:
+                    await asyncio.sleep(0.2)
         
         if temp is not None:
              self.last_sensor_readings[sensor_id] = (now, temp)

@@ -4,6 +4,7 @@ import os
 import aiofiles
 from datetime import datetime, timedelta
 import pytz
+from constants import DEFAULT_TIMEZONE
 
 async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
     """
@@ -22,7 +23,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
         "longitude": lon,
         "daily": "sunrise,sunset",
         "hourly": "direct_radiation,diffuse_radiation",
-        "timezone": "Europe/Berlin",
+        "timezone": DEFAULT_TIMEZONE,
         "forecast_days": 3,
         "tilt": tilt
     }
@@ -64,7 +65,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
                         "sunset": ss.split("T")[1] if "T" in ss else None
                     }
                 
-                tz = pytz.timezone("Europe/Berlin")
+                tz = pytz.timezone(DEFAULT_TIMEZONE)
                 now = datetime.now(tz)
                 today_str = now.strftime("%Y-%m-%d")
                 tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -93,7 +94,9 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
 
 async def log_forecast_to_csv(rad_today, rad_tomorrow, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow):
     """Logs the forecast results to a separate CSV file."""
-    csv_file = "sonnen_prognose.csv"
+    # Use path relative to this script's directory for consistency
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_file = os.path.join(script_dir, "sonnen_prognose.csv")
     try:
         header = "Zeitstempel,Today_kWh,Tomorrow_kWh,Sunrise_Today,Sunset_Today,Sunrise_Tomorrow,Sunset_Tomorrow\n"
         file_exists = os.path.exists(csv_file)

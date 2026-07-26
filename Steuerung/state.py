@@ -4,6 +4,7 @@ import hashlib
 import pytz
 from datetime import datetime, timedelta
 from typing import Optional, Dict
+from constants import DEFAULT_TIMEZONE
 
 class SensorsState:
     def __init__(self):
@@ -42,6 +43,7 @@ class ControlState:
         self.active_rule_sensor: Optional[str] = None
         self.blocking_reason: Optional[str] = None  # Current blocking reason
         self.last_blocking_reason: Optional[str] = None  # For change detection
+        self.last_alert_type: Optional[str] = None  # For alert deduplication
 
 class StatsState:
     def __init__(self, now):
@@ -58,7 +60,8 @@ class State:
     def __init__(self, config_manager):
         self.config_manager = config_manager
         self.config = config_manager.get()
-        self.local_tz = pytz.timezone("Europe/Berlin")
+
+        self.local_tz = pytz.timezone(DEFAULT_TIMEZONE)
         now = datetime.now(self.local_tz)
 
         # Sub-States
@@ -82,6 +85,7 @@ class State:
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None
         self.last_solar_window_status: bool = False
+        self.last_telegram_command_time: Optional[datetime] = None  # Rate-Limiting
 
         # --- Compressor Verification ---
         self.kompressor_verification_start_time: Optional[datetime] = None
@@ -137,7 +141,7 @@ class State:
 
     @property
     def bot_token(self):
-        return self.config.Telegram.BOT_TOKEN
+                return self.config.Telegram.BOT_TOKEN
     
     @property
     def chat_id(self):
@@ -150,6 +154,20 @@ class State:
     @property
     def healthcheck_interval(self):
         return float(self.config.Healthcheck.HEALTHCHECK_INTERVAL_MINUTES)
+    
+    @property
+    def adaptive_hysteresis(self) -> float:
+        """Berechnet eine adaptive Hysterese basierend auf der Ausschaltpunkt-Erhoehung."""
+        basis = self.config.Heizungssteuerung.AUSSCHALTPUNKT - self.config.Heizungssteuerung.EINSCHALTPUNKT
+        erhoeht = self.config.Heizungssteuerung.AUSSCHALTPUNKT_ERHOEHT - self.config.Heizungssteuerung.EINSCHALTPUNKT_ERHOEHT
+        return max(basis, erhoeht, 3.0)  # Mindestens 3°C
+    
+    def set_blocking_reason(self, reason: Optional[str]) -> bool:
+        """Setzt den blocking_reason und gibt True zurueck wenn sich der Wert geaendert hat."""
+        if self.control.blocking_reason != reason:
+            self.control.blocking_reason = reason
+            return True
+        return False
     
     def update_config(self):
         """Reload config only if file has changed (detected via MD5 hash)."""

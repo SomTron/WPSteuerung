@@ -124,7 +124,7 @@ async def test_determine_mode_solar(mock_state):
         
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=35)
         
-        assert result['modus'] == "Solarüberschuss"
+        assert result['modus'] == "Solarueberschuss"
         assert result['ausschaltpunkt'] == 55 # erhoeht
         assert result['regelfuehler'] == 30 # t_unten
 
@@ -229,14 +229,14 @@ async def test_determine_mode_transition_frostschutz(mock_state):
          patch('control_logic.is_solar_window', return_value=False):
         
         # Scenario: Warm enough for night (37 > 35), but cold enough for transition (37 < 40)
-        # Normal transition mode
+                # Normal transition mode
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=37)
-        assert result['modus'] == "Übergangsmodus"
+        assert result['modus'] == "Uebergangsmodus"
         
         # Scenario: Colder than night limit (34 < 35)
         # Frostschutz should trigger
         result = await determine_mode_and_setpoints(mock_state, t_unten=30, t_mittig=34)
-        assert result['modus'] == "Übergangsmodus (Frostschutz)"
+        assert result['modus'] == "Uebergangsmodus (Frostschutz)"
 
 @pytest.mark.asyncio
 async def test_handle_compressor_on_prevents_immediate_off(mock_state):

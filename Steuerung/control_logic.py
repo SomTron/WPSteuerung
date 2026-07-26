@@ -3,6 +3,10 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Callable, Optional
 from utils import safe_timedelta
+from constants import CONFIG_CHECK_INTERVAL_SEC, BADEMODUS_HYSTERESIS, FROSTSCHUTZ_AUSSCHALTPUNKT_BOOST
+
+# Solar forecast integration: threshold for "much more solar tomorrow"
+SOLAR_FORECAST_BOOST_THRESHOLD: float = 1.2  # If tomorrow > 1.2x today, consider boosting
 
 # New Modules
 from logic_utils import (
@@ -41,7 +45,7 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
     if not only_pressure:
-        if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=60):
+        if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=CONFIG_CHECK_INTERVAL_SEC):
             state.update_config()
             state._last_config_check = datetime.now(state.local_tz)
     return True
@@ -63,28 +67,54 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
             bat_p > state.config.Solarueberschuss.BATPOWER_THRESHOLD or
             (soc_v >= state.config.Solarueberschuss.SOC_THRESHOLD and 
              feed_p > state.config.Solarueberschuss.FEEDINPOWER_THRESHOLD)
-    )
+        )
 
     within_uebergangsmodus = ist_uebergangsmodus_aktiv(state)
     
-    # Frostschutz-Check: Wenn im Übergangsmodus/Solarfenster die Temp unter den Nacht-Sollwert fällt
+        # Solar-Prognose-Boost: Wenn morgen deutlich mehr Solar erwartet wird,
+    # Einschaltpunkt leicht absenken, um heute noch mit Solar heizen zu koennen
+    solar_forecast_boost = 0.0
+    try:
+        forecast_today = float(state.solar.forecast_today) if state.solar.forecast_today is not None else 0.0
+        forecast_tomorrow = float(state.solar.forecast_tomorrow) if state.solar.forecast_tomorrow is not None else 0.0
+        if forecast_today > 0:
+            forecast_ratio = forecast_tomorrow / forecast_today
+            if forecast_ratio >= SOLAR_FORECAST_BOOST_THRESHOLD:
+                solar_forecast_boost = 1.0
+                logging.debug(f"Solar-Prognose-Boost: Morgen {forecast_ratio:.1f}x mehr als heute (+{solar_forecast_boost} C)")
+    except (TypeError, ValueError):
+        pass  # MagicMock or invalid types in tests/initialization
+
+    # Frostschutz-Check: Wenn im Uebergangsmodus/Solarfenster die Temp unter den Nacht-Sollwert faellt
     is_critical_frost = False
-    if regelfuehler := t_mittig: # Standard sensor for these modes
+    frostschutz_einschaltpunkt = None
+    if t_mittig is not None:  # Standard sensor for these modes
         night_einschaltpunkt = state.basis_einschaltpunkt - get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0)
-        if regelfuehler <= night_einschaltpunkt:
+        if t_mittig <= night_einschaltpunkt:
             is_critical_frost = True
+            frostschutz_einschaltpunkt = night_einschaltpunkt
 
     if state.bademodus_aktiv:
-        res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - 4, "regelfuehler": t_unten}
+        res = {"modus": "Bademodus", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.ausschaltpunkt_erhoeht - BADEMODUS_HYSTERESIS, "regelfuehler": t_unten}
     elif state.control.solar_ueberschuss_aktiv:
-        res = {"modus": "Solarüberschuss", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.einschaltpunkt_erhoeht, "regelfuehler": t_unten}
+        res = {"modus": "Solarueberschuss", "ausschaltpunkt": state.ausschaltpunkt_erhoeht, "einschaltpunkt": state.einschaltpunkt_erhoeht, "regelfuehler": t_unten}
     elif within_uebergangsmodus:
-        modus_name = "Übergangsmodus (Frostschutz)" if is_critical_frost else "Übergangsmodus"
-        res = {"modus": modus_name, "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        modus_name = "Uebergangsmodus (Frostschutz)" if is_critical_frost else "Uebergangsmodus"
+        if is_critical_frost and frostschutz_einschaltpunkt is not None:
+            frostschutz_einschaltpunkt_boosted = frostschutz_einschaltpunkt + FROSTSCHUTZ_AUSSCHALTPUNKT_BOOST
+            res = {"modus": modus_name, "ausschaltpunkt": frostschutz_einschaltpunkt_boosted, "einschaltpunkt": frostschutz_einschaltpunkt, "regelfuehler": t_mittig}
+        else:
+            base_ein = state.basis_einschaltpunkt - total_reduction - solar_forecast_boost
+            base_aus = state.basis_ausschaltpunkt - total_reduction
+            res = {"modus": modus_name, "ausschaltpunkt": base_aus, "einschaltpunkt": base_ein, "regelfuehler": t_mittig}
     elif is_night:
-        res = {"modus": "Nachtmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        base_ein = state.basis_einschaltpunkt - total_reduction - solar_forecast_boost
+        base_aus = state.basis_ausschaltpunkt - total_reduction
+        res = {"modus": "Nachtmodus", "ausschaltpunkt": base_aus, "einschaltpunkt": base_ein, "regelfuehler": t_mittig}
     else:
-        res = {"modus": "Normalmodus", "ausschaltpunkt": state.basis_ausschaltpunkt - total_reduction, "einschaltpunkt": state.basis_einschaltpunkt - total_reduction, "regelfuehler": t_mittig}
+        base_ein = state.basis_einschaltpunkt - total_reduction - solar_forecast_boost
+        base_aus = state.basis_ausschaltpunkt - total_reduction
+        res = {"modus": "Normalmodus", "ausschaltpunkt": base_aus, "einschaltpunkt": base_ein, "regelfuehler": t_mittig}
 
     res["solar_ueberschuss_aktiv"] = state.control.solar_ueberschuss_aktiv
     
@@ -168,7 +198,7 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
 
 async def handle_mode_switch(state, session, t_oben, t_mittig, set_kompressor_status_func: Callable):
     """Schaltet aus bei Moduswechsel wenn Zieltemp erreicht."""
-    if state.control.kompressor_ein and state.control.solar_ueberschuss_aktiv == False and not state.bademodus_aktiv:
+    if state.control.kompressor_ein and not state.control.solar_ueberschuss_aktiv and not state.bademodus_aktiv:
         elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
         target = state.control.aktueller_ausschaltpunkt
         

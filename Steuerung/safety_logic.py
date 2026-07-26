@@ -5,6 +5,13 @@ from typing import Optional, Callable
 from telegram_api import send_telegram_message
 from logic_utils import is_valid_temperature, check_log_throttle
 from utils import safe_timedelta
+from constants import (
+    TEMP_VERD_MIN_VALID, TEMP_VERD_MAX_VALID,
+    COMPRESSOR_VERIFICATION_DELAY_MIN, COMPRESSOR_VERIFICATION_CHECK_INTERVAL_MIN,
+    COMPRESSOR_VERD_DELTA_MIN, COMPRESSOR_VERD_START_TEMP_COLD,
+    COMPRESSOR_VERD_DELTA_COLD_MIN, COMPRESSOR_VERD_COLD_MAX,
+    COMPRESSOR_UNTEN_DELTA_MIN,
+)
 
 async def handle_critical_compressor_error(session, state, error_context: str):
     """Behandelt kritische Fehler beim Kompressor-Ausschalten."""
@@ -14,7 +21,7 @@ async def handle_critical_compressor_error(session, state, error_context: str):
         session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN))
 
 async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten):
-    """Prüft auf Sensorfehler."""
+    """Prueft auf Sensorfehler und setzt Zeitstempel bei Fehlern."""
     errors = []
     if not is_valid_temperature(t_boiler_oben): errors.append(f"T_Oben invalid: {t_boiler_oben}")
     if not is_valid_temperature(t_boiler_unten): errors.append(f"T_Unten invalid: {t_boiler_unten}")
@@ -22,10 +29,10 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
     if errors:
         error_msg = ", ".join(errors)
         state.control.blocking_reason = f"Sensorfehler: {error_msg}"
+        state.last_sensor_error_time = datetime.now(state.local_tz)
         if check_log_throttle(state, "last_sensor_error_time"):
             logging.error(f"Sensorfehler: {error_msg}")
         return False
-    # print("DEBUG: No sensor errors")
     state.last_sensor_error_time = None
     return True
 
@@ -47,7 +54,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
 
-    if not is_valid_temperature(t_verd, min_temp=-20.0, max_temp=50.0):
+    if not is_valid_temperature(t_verd, min_temp=TEMP_VERD_MIN_VALID, max_temp=TEMP_VERD_MAX_VALID):
         state.control.ausschluss_grund = "Verdampfertemperatur ungültig"
         state.control.blocking_reason = "Verdampfer ungültig"
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
@@ -76,30 +83,30 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     state.verdampfer_blocked = False
     return True
 
-async def verify_compressor_running(state, session, current_t_verd, current_t_unten, verification_delay_minutes=10):
+async def verify_compressor_running(state, session, current_t_verd, current_t_unten, verification_delay_minutes=COMPRESSOR_VERIFICATION_DELAY_MIN):
     """Verifiziert den Lauf des Kompressors über Temperaturänderungen."""
     now = datetime.now(state.local_tz)
     if not state.control.kompressor_ein or state.kompressor_verification_start_time is None:
         state.kompressor_verification_start_time = None
         return True, None
-    
+
     elapsed = safe_timedelta(now, state.kompressor_verification_start_time, state.local_tz)
     if elapsed < timedelta(minutes=verification_delay_minutes): return True, None
-    
+
     if state.kompressor_verification_last_check:
-        if safe_timedelta(now, state.kompressor_verification_last_check, state.local_tz) < timedelta(minutes=1):
+        if safe_timedelta(now, state.kompressor_verification_last_check, state.local_tz) < timedelta(minutes=COMPRESSOR_VERIFICATION_CHECK_INTERVAL_MIN):
             return True, None
     state.kompressor_verification_last_check = now
 
     verd_delta = state.kompressor_verification_start_t_verd - current_t_verd
     unten_delta = abs(current_t_unten - state.kompressor_verification_start_t_unten)
-    
-    verd_ok = verd_delta >= 1.5
-    if not verd_ok and state.kompressor_verification_start_t_verd < 15.0:
-        if verd_delta >= -0.5 and current_t_verd < 12.0:
+
+    verd_ok = verd_delta >= COMPRESSOR_VERD_DELTA_MIN
+    if not verd_ok and state.kompressor_verification_start_t_verd < COMPRESSOR_VERD_START_TEMP_COLD:
+        if verd_delta >= COMPRESSOR_VERD_DELTA_COLD_MIN and current_t_verd < COMPRESSOR_VERD_COLD_MAX:
             verd_ok = True
-    
-    unten_ok = unten_delta >= 0.2
+
+    unten_ok = unten_delta >= COMPRESSOR_UNTEN_DELTA_MIN
     
     if verd_ok and unten_ok:
         state.kompressor_verification_failed = False
@@ -110,8 +117,8 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
     state.kompressor_verification_error_count += 1
     
     error_parts = []
-    if not verd_ok: error_parts.append(f"Verdampfer: nur {verd_delta:.1f}°C Abfall (Soll: >1.5°C)")
-    if not unten_ok: error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >0.2°C)")
+    if not verd_ok: error_parts.append(f"Verdampfer: nur {verd_delta:.1f}°C Abfall (Soll: >{COMPRESSOR_VERD_DELTA_MIN}°C)")
+    if not unten_ok: error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >{COMPRESSOR_UNTEN_DELTA_MIN}°C)")
     
     error_msg = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)
     if state.bot_token:

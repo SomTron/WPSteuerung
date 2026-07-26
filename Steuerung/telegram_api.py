@@ -1,4 +1,5 @@
 import aiohttp
+
 import asyncio
 import logging
 import socket
@@ -60,29 +61,23 @@ async def send_telegram_message(session, chat_id, message, bot_token, reply_mark
                     logging.debug(f"Fehlgeschlagene Nachricht: '{message}' (Länge={len(message)})")
                     return False
         except (aiohttp.ClientConnectionError, OSError) as e:
-            if attempt == retries:
-                logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
+            is_last_attempt = attempt == retries - 1
+            if is_last_attempt:
+                logging.error(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt + 1}/{retries}): {e}")
             else:
-                logging.debug(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries}): {e}")
-            if attempt < retries:
-                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.debug(f"Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch {attempt + 1}/{retries}): {e}")
+                backoff = retry_delay * (2 ** attempt)
                 logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
                 await asyncio.sleep(backoff)
-            else:
-                logging.error("Alle Versuche fehlgeschlagen (Netzwerkfehler).")
-                return False
         except asyncio.TimeoutError:
-            if attempt == retries:
-                logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
+            is_last_attempt = attempt == retries - 1
+            if is_last_attempt:
+                logging.error(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt + 1}/{retries})")
             else:
-                logging.debug(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt}/{retries})")
-            if attempt < retries:
-                backoff = retry_delay * (2 ** (attempt - 1))
+                logging.debug(f"Timeout beim Senden der Telegram-Nachricht (Versuch {attempt + 1}/{retries})")
+                backoff = retry_delay * (2 ** attempt)
                 logging.debug(f"Warte {backoff} Sekunden vor dem nächsten Versuch...")
                 await asyncio.sleep(backoff)
-            else:
-                logging.error("Alle Versuche fehlgeschlagen (Timeout).")
-                return False
         except Exception as e:
             logging.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}", exc_info=True)
             logging.debug(f"Fehlgeschlagene Nachricht: '{message}' (Länge={len(message)})")
@@ -149,10 +144,11 @@ async def _send_healthcheck_ping(session: aiohttp.ClientSession, url: str) -> bo
 async def start_healthcheck_task(session: aiohttp.ClientSession, state):
     """
     Hintergrund-Task: Pinged periodisch die HEALTHCHECK_URL aus dem State.
-    """
+        """
     import pytz
     from datetime import datetime, timedelta
-    local_tz = pytz.timezone("Europe/Berlin")
+    from constants import DEFAULT_TIMEZONE
+    local_tz = pytz.timezone(DEFAULT_TIMEZONE)
 
     # Optional: Start-Ping senden (Healthchecks.io unterstützt /start)
     start_url = state.healthcheck_url if state.healthcheck_url.endswith("/start") else state.healthcheck_url + "/start"
@@ -179,10 +175,10 @@ async def start_healthcheck_task(session: aiohttp.ClientSession, state):
             await asyncio.sleep(sleep_sec)
 
         except asyncio.CancelledError:
-            # Beim Programmende → Fail-Ping senden
-            fail_url = state.healthcheck_url + "/fail"
-            await _send_healthcheck_ping(session, fail_url)
-            logging.info("Healthcheck-Task beendet – Fail-Ping gesendet")
+            # Graceful Shutdown → NICHT als Fail melden!
+            # Healthchecks.io erwartet Pings alle X Minuten; ein geordneter Shutdown
+            # ist kein Fehlerzustand und sollte keinen Fail-Ping auslösen.
+            logging.info("Healthcheck-Task beendet (graceful Shutdown)")
             break
 
         except Exception as e:

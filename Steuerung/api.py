@@ -1,26 +1,65 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any
 import logging
 from datetime import datetime
+import re
+
+# Allowed commands and modes for validation
+ALLOWED_COMMANDS = {"force_on", "force_off", "set_mode"}
+ALLOWED_MODES = {"bademodus", "urlaubsmodus"}
+ALLOWED_SECTIONS = {"Heizungssteuerung", "Telegram", "Hardware", "Sicherheitsgrenzen", "Solar"}
 
 # Data Models
 class ConfigUpdate(BaseModel):
-    section: str
-    key: str
-    value: str
+    section: str = Field(..., min_length=1, max_length=50)
+    key: str = Field(..., min_length=1, max_length=50)
+    value: str = Field(..., min_length=0, max_length=500)
+
+    @field_validator('section')
+    @classmethod
+    def section_must_be_valid(cls, v):
+        """Prueft, dass der Section-Name nur erlaubte Werte enthaelt."""
+        if v not in ALLOWED_SECTIONS:
+            raise ValueError(f"Section '{v}' ist nicht erlaubt. Erlaubt: {', '.join(sorted(ALLOWED_SECTIONS))}")
+        return v
+
+    @field_validator('key')
+    @classmethod
+    def key_must_be_safe(cls, v):
+        """Prueft, dass der Key-Name nur erlaubte Zeichen enthaelt (keine Injections)."""
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', v):
+            raise ValueError(f"Key '{v}' enthaelt unerlaubte Zeichen. Nur Buchstaben, Zahlen und Unterstriche erlaubt.")
+        return v
 
 class ControlCommand(BaseModel):
-    command: str # "force_on", "force_off", "set_mode"
+    command: str = Field(..., min_length=1, max_length=50)
     params: Optional[Dict[str, Any]] = None
+
+    @field_validator('command')
+    @classmethod
+    def command_must_be_allowed(cls, v):
+        """Prueft, dass der Command-Name in der erlaubten Liste steht."""
+        if v not in ALLOWED_COMMANDS:
+            raise ValueError(f"Command '{v}' ist nicht erlaubt. Erlaubt: {', '.join(sorted(ALLOWED_COMMANDS))}")
+        return v
+
+    @model_validator(mode='after')
+    def validate_mode_if_set_mode(self):
+        """Prueft, dass der Modus erlaubte Werte hat, wenn command=set_mode."""
+        if self.command == 'set_mode' and self.params:
+            mode = self.params.get('mode')
+            if mode and mode not in ALLOWED_MODES:
+                raise ValueError(f"Modus '{mode}' ist nicht erlaubt. Erlaubt: {', '.join(sorted(ALLOWED_MODES))}")
+        return self
 
 app = FastAPI(title="WPSteuerung API", description="API for Heat Pump Control Android App", version="1.0.0")
 
 # CORS Middleware hinzufügen
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In Produktion spezifische Origins angeben
+    allow_origins=["*"],  # TODO: In Produktion spezifische Origins angeben (Sicherheitsrisiko!)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -102,7 +141,7 @@ def update_config(config: ConfigUpdate):
              new_value = float(config.value)
              
         setattr(section_obj, config.key, new_value)
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid value for {config.key}: {str(e)}")
 
     # Trigger config save/reload not fully implemented yet for INI write-back
@@ -128,19 +167,19 @@ async def control_system(cmd: ControlCommand):
             return {"status": "success", "message": "Compressor forced OFF"}
             
     elif cmd.command == "set_mode":
-        mode = cmd.params.get("mode")
+        mode = cmd.params.get("mode") if cmd.params else None
         if mode == "bademodus":
-            shared_state.bademodus_aktiv = cmd.params.get("active", False)
+            shared_state.bademodus_aktiv = cmd.params.get("active", False) if cmd.params else False
             return {"status": "success", "message": f"Bademodus set to {shared_state.bademodus_aktiv}"}
         elif mode == "urlaubsmodus":
-            shared_state.urlaubsmodus_aktiv = cmd.params.get("active", False)
+            shared_state.urlaubsmodus_aktiv = cmd.params.get("active", False) if cmd.params else False
             return {"status": "success", "message": f"Urlaubsmodus set to {shared_state.urlaubsmodus_aktiv}"}
 
     raise HTTPException(status_code=400, detail="Unknown command")
 
 @app.get("/history")
-def get_history(hours: int = 24):
-    """Get historical data from CSV"""
+def get_history(hours: int = Query(default=24, ge=1, le=168)):
+    """Get historical data from CSV. Hours must be between 1 and 168 (7 days)."""
     import os
     import pandas as pd
     

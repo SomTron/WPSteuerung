@@ -4,18 +4,36 @@ import aiohttp
 from datetime import datetime, timedelta
 import pytz
 import pandas as pd
+from constants import DEFAULT_TIMEZONE
 
 API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
 
 async def get_solax_data(session, state):
-    local_tz = pytz.timezone("Europe/Berlin")
+    """
+    Holt aktuelle Solax-Daten mit Freshness-Check.
+    Gibt None zurück wenn Daten zu alt sind (>30 min) oder API nicht erreichbar.
+    """
+    local_tz = pytz.timezone(DEFAULT_TIMEZONE)
     now = datetime.now(local_tz)
+
+    # Freshness-Konstanten
+    CACHE_TTL = timedelta(minutes=5)        # Cache für 5 Minuten
+    MAX_DATA_AGE = timedelta(minutes=30)    # Daten älter als 30 min gelten als stale
 
     # Stelle sicher, dass state.solar.last_api_call zeitzonenbewusst ist
     if state.solar.last_api_call and state.solar.last_api_call.tzinfo is None:
         state.solar.last_api_call = local_tz.localize(state.solar.last_api_call)
 
-    if state.solar.last_api_call and (now - state.solar.last_api_call) < timedelta(minutes=5):
+    # Prüfe ob gecachte Daten zu alt sind (stale)
+    if state.solar.last_api_call and (now - state.solar.last_api_call) > MAX_DATA_AGE:
+        logging.warning(
+            f"Solax-Daten sind {int((now - state.solar.last_api_call).total_seconds() / 60)} min alt "
+            f"(> {MAX_DATA_AGE.total_seconds() / 60} min) – zwinge frischen Abruf"
+        )
+        state.solar.last_api_call = None  # Cache invalidieren
+
+    # Gib gecachte Daten zurück wenn noch frisch genug
+    if state.solar.last_api_call and (now - state.solar.last_api_call) < CACHE_TTL:
         return state.solar.last_api_data
 
     max_retries = 3
@@ -54,7 +72,7 @@ async def fetch_solax_data(session, state):
     """
     Holt die aktuellen Solax-Daten und gibt sie mit Fallback-Werten zurück.
     """
-    now = datetime.now(pytz.timezone("Europe/Berlin"))
+    now = datetime.now(pytz.timezone(DEFAULT_TIMEZONE))
     
     fallback_data = {
         "acpower": 0,
@@ -74,7 +92,7 @@ async def fetch_solax_data(session, state):
         if "utcDateTime" in solax_data:
             try:
                 # utcDateTime format check needed? usually standard ISO or similar
-                upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert("Europe/Berlin")
+                upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert(DEFAULT_TIMEZONE)
                 # delay = (now - upload_time).total_seconds()
             except Exception:
                 pass
@@ -94,5 +112,11 @@ async def fetch_solax_data(session, state):
         logging.error(f"Fehler beim Abrufen von Solax-Daten: {e}", exc_info=True)
         return {
             "solax_data": fallback_data,
-            # ... defaults
+            "acpower": 0,
+            "feedinpower": 0,
+            "batPower": 0,
+            "soc": 0,
+            "powerdc1": 0,
+            "powerdc2": 0,
+            "consumeenergy": 0,
         }
