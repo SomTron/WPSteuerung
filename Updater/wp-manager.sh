@@ -29,20 +29,35 @@ while true; do
     CUR_BRANCH=$(cd "$TARGET_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "Unknown")
     CUR_COMMIT=$(cd "$TARGET_DIR" && git log -1 --oneline 2>/dev/null || echo "No commits")
     
-    if systemctl is-active --quiet wpsteuerung; then
+        if systemctl is-active --quiet wpsteuerung; then
         SVC_STATUS="${GREEN}✓ AKTIV${NC}"
     else
         SVC_STATUS="${RED}✗ INAKTIV${NC}"
     fi
 
+    # VPN / WireGuard Status
+    if systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+        VPN_STATUS="${GREEN}✓ AKTIV${NC}"
+        VPN_IP=$(wg show wg0 2>/dev/null | grep 'endpoint' | head -1 | awk '{print $2}' | cut -d: -f1)
+        if [ -n "$VPN_IP" ]; then
+            VPN_INFO=" ($VPN_IP)"
+        else
+            VPN_INFO=""
+        fi
+    else
+        VPN_STATUS="${RED}✗ INAKTIV${NC}"
+        VPN_INFO=""
+    fi
+
     clear
     printf "${BLUE}==============================================${NC}\n"
-    printf "${BLUE}           WPSteuerung Manager v1.3           ${NC}\n"
+    printf "${BLUE}           WPSteuerung Manager v1.4           ${NC}\n"
     printf "${BLUE}==============================================${NC}\n"
     printf "Target:  $TARGET_DIR\n"
     printf "Branch:  ${YELLOW}$CUR_BRANCH${NC}\n"
     printf "Commit:  $CUR_COMMIT\n"
     printf "Service: $SVC_STATUS\n"
+    printf "VPN:     $VPN_STATUS${VPN_INFO}\n"
     printf "${BLUE}----------------------------------------------${NC}\n\n"
     
     printf "1) 📜   Live-Logs (tail -f)\n"
