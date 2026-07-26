@@ -1,8 +1,9 @@
 #!/bin/sh
 # wp-manager.sh - Management script for WPSteuerung
-# Located in RPI_updater repo, targets ../WPSteuerung
+# Located in Updater repo, targets ../Steuerung (relative to script location)
 
-TARGET_DIR="../Steuerung"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TARGET_DIR="$(dirname "$SCRIPT_DIR")/Steuerung"
 LOG_FILE="$TARGET_DIR/heizungssteuerung.log"
 ERROR_LOG_FILE="$TARGET_DIR/error.log"
 
