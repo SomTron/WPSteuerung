@@ -64,7 +64,7 @@ while true; do
         1) tail -f "$LOG_FILE" ;;
         2) tail -n 200 "$LOG_FILE" | more; wait_for_key ;;
         3) tail -n 200 "$ERROR_LOG_FILE" | more; wait_for_key ;;
-        4) sh ./rpi-deploy.sh; wait_for_key ;;
+        4) sh "$SCRIPT_DIR/rpi-deploy.sh"; wait_for_key ;;
         5) sudo systemctl restart wpsteuerung; wait_for_key ;;
         6) sudo systemctl stop wpsteuerung; wait_for_key ;;
         7) sudo systemctl start wpsteuerung; wait_for_key ;;
