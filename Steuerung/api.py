@@ -1,8 +1,11 @@
-from fastapi import FastAPI, HTTPException, Body, Query
+from fastapi import FastAPI, HTTPException, Body, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any
 import logging
+import os
 from datetime import datetime
 import re
 
@@ -69,6 +72,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Static files: Serve webapp directory
+_webapp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webapp")
+_webapp_dir = os.path.normpath(_webapp_dir)
+if os.path.isdir(_webapp_dir):
+    app.mount("/static", StaticFiles(directory=_webapp_dir), name="static")
+
+@app.get("/", response_class=HTMLResponse)
+def serve_index():
+    """Serve the main dashboard HTML page."""
+    index_path = os.path.join(_webapp_dir, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path, media_type="text/html")
+    raise HTTPException(status_code=404, detail="Webapp not found")
+
+@app.get("/index.html", response_class=HTMLResponse)
+def serve_index_html():
+    """Serve the main dashboard HTML page (direct URL)."""
+    return serve_index()
 
 # Global state reference (will be injected from main.py)
 shared_state = None
