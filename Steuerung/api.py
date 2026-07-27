@@ -6,6 +6,11 @@ import logging
 from datetime import datetime
 import re
 
+try:
+    from priority_control_logic import _is_nachtsperre_aktiv
+except ImportError:
+    _is_nachtsperre_aktiv = None
+
 # Allowed commands and modes for validation
 ALLOWED_COMMANDS = {"force_on", "force_off", "set_mode"}
 ALLOWED_MODES = {"bademodus", "urlaubsmodus"}
@@ -79,15 +84,15 @@ def get_status():
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
 
-    pc = shared_state.priority_config
+        pc = shared_state.priority_config
     priority_info = {}
     if pc:
-        from priority_control import _is_nachtsperre_aktiv
-        nightsperre = _is_nachtsperre_aktiv(pc, datetime.now(shared_state.local_tz))
+        nightsperre = False
+        if _is_nachtsperre_aktiv:
+            nightsperre = _is_nachtsperre_aktiv(pc, datetime.now(shared_state.local_tz))
         priority_info = {
             "beschreibung": pc.beschreibung,
             "wp_leistung": pc.wp.leistung_watt,
-            "wp_vorlauftemp": pc.wp.vorlauftemp,
             "zyklus_interval": pc.zyklus.interval_minuten,
             "zyklus_min_laufzeit": pc.zyklus.mindestlaufzeit_minuten,
             "zyklus_min_pause": pc.zyklus.mindestpausenzeit_minuten,
@@ -97,35 +102,42 @@ def get_status():
             "sicherheit_max": pc.sicherheit.max_temp_c,
             "sicherheit_ueberhitzung": pc.sicherheit.ueberhitzung_c,
             "sicherheit_notfall": pc.sicherheit.notfall_c,
-            "regeln": [
-                {"name": "PV_mitte", "typ": "pv", "prio": 80,
-                 "schwellwert": pc.pv.schwellwert_pv_w,
-                 "sensor": pc.pv.sensor,
-                 "ein": pc.pv.ein_c,
-                 "aus": pc.pv.aus_c},
-                {"name": "PV_unten", "typ": "pv", "prio": 80,
-                 "schwellwert": pc.pv.schwellwert_pv_unten_w,
-                 "sensor": "unten",
-                 "ein": pc.pv.ein_c,
-                 "aus": pc.pv.aus_c},
-                {"name": "Komfort", "typ": "komfort", "prio": 60,
-                 "notfall": pc.komfort.notfall_c,
-                 "min_pvid": pc.komfort.mindest_pv_w,
-                 "ein": pc.komfort.ein_c,
-                 "aus": pc.komfort.aus_c},
-                {"name": "Zeitfenster", "typ": "zeitfenster", "prio": 53,
-                 "start": pc.zeitfenster.start_uhrzeit,
-                 "ende": pc.zeitfenster.ende_uhrzeit,
-                 "ein": pc.zeitfenster.ein_c,
-                 "aus": pc.zeitfenster.aus_c,
-                 "min_pv": pc.zeitfenster.mindest_pv_w},
-                {"name": "Abweichung", "typ": "abweichung", "prio": 47,
-                 "soll": pc.abweichung.soll_c,
-                 "sensor": pc.abweichung.sensor,
-                 "ein": pc.abweichung.ein_c,
-                 "aus": pc.abweichung.aus_c},
-            ]
+            "regeln": [],
         }
+        # PV-Regeln
+        for pv in pc.pv_regeln:
+            priority_info["regeln"].append({
+                "name": pv.name, "typ": "pv", "prio": pv.prioritaet,
+                "schwellwert": pv.pv_schwelle_watt,
+                "sensor": pv.temperaturfuehler,
+                "ein": pv.einschalten_bei_c,
+                "aus": pv.ausschalten_bei_c,
+            })
+        # Komfort
+        priority_info["regeln"].append({
+            "name": "Komfort", "typ": "komfort", "prio": pc.komfort.prioritaet,
+            "notfall": pc.komfort.notfall_einschalten_bei_c,
+            "min_pvid": pc.komfort.min_pv_fuer_komfort_watt,
+            "ein": pc.komfort.komfort_einschalten_bei_c,
+            "aus": pc.komfort.ausschalten_bei_c,
+        })
+        # Zeitfenster
+        priority_info["regeln"].append({
+            "name": "Zeitfenster", "typ": "zeitfenster", "prio": pc.zeitfenster.prioritaet,
+            "start": pc.zeitfenster.start_uhr,
+            "ende": pc.zeitfenster.ende_uhr,
+            "ein": pc.zeitfenster.max_temp_fuer_einschalten_c,
+            "aus": pc.zeitfenster.max_temp_fuer_einschalten_c,
+            "min_pv": pc.zeitfenster.min_pv_watt,
+        })
+        # Abweichung
+        priority_info["regeln"].append({
+            "name": "Abweichung", "typ": "abweichung", "prio": pc.abweichung.prioritaet,
+            "soll": pc.abweichung.solltemperatur_c,
+            "sensor": pc.abweichung.temperaturfuehler,
+            "ein": pc.abweichung.einschalten_bei_abweichung_k,
+            "aus": pc.abweichung.ausschalten_bei_abweichung_k,
+        })
 
     return {
         "temperatures": {

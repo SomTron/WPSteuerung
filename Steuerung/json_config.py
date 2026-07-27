@@ -42,12 +42,12 @@ class WochenendeConfig(BaseModel):
 
 class PVRegel(BaseModel):
     """Eine einzelne PV-Steuerungsregel."""
-    name: str = Field(description="Eindeutiger Name der Regel")
+    name: str = Field(default="PV Regel", description="Eindeutiger Name der Regel")
     prioritaet: int = Field(default=80, description="Priorität (hoeher = wichtiger)")
-    pv_schwelle_watt: float = Field(description="Minimale PV-Leistung zum Einschalten (W)")
-    temperaturfuehler: str = Field(description="Welcher Fühler: oben/mitte/unten")
-    einschalten_bei_c: float = Field(description="Einschalten bei Temperatur <= (°C)")
-    ausschalten_bei_c: float = Field(description="Ausschalten bei Temperatur >= (°C)")
+    pv_schwelle_watt: float = Field(default=200.0, description="Minimale PV-Leistung zum Einschalten (W)")
+    temperaturfuehler: str = Field(default="mitte", description="Welcher Fühler: oben/mitte/unten")
+    einschalten_bei_c: float = Field(default=40.0, description="Einschalten bei Temperatur <= (°C)")
+    ausschalten_bei_c: float = Field(default=45.0, description="Ausschalten bei Temperatur >= (°C)")
     weiterlaufen_ab_pv_watt: float = Field(default=50.0, description="Weiterlaufen ab PV-Leistung (W)")
 
 
@@ -63,21 +63,21 @@ class KomfortConfig(BaseModel):
 class ZeitfensterConfig(BaseModel):
     """Zeitfenster-Regel: Heizt zu bestimmten Uhrzeiten."""
     prioritaet: int = Field(default=53, description="Priorität")
-    start_uhr: int = Field(description="Start-Stunde (0-23)")
-    ende_uhr: int = Field(description="Ende-Stunde (0-23)")
+    start_uhr: int = Field(default=6, description="Start-Stunde (0-23)")
+    ende_uhr: int = Field(default=16, description="Ende-Stunde (0-23)")
     modus: str = Field(default="einschalten", description="Modus: einschalten oder ausschalten")
     temperaturfuehler: str = Field(default="mitte", description="Welcher Fühler: oben/mitte/unten")
-    max_temp_fuer_einschalten_c: float = Field(description="Einschalten wenn Temp <= (°C)")
+    max_temp_fuer_einschalten_c: float = Field(default=50.0, description="Einschalten wenn Temp <= (°C)")
     min_pv_watt: float = Field(default=0.0, description="Minimale PV-Leistung (W)")
 
 
 class AbweichungConfig(BaseModel):
     """Abweichungsregel: Hält Temperatur nahe am Sollwert."""
     prioritaet: int = Field(default=47, description="Priorität")
-    solltemperatur_c: float = Field(description="Solltemperatur (°C)")
+    solltemperatur_c: float = Field(default=40.0, description="Solltemperatur (°C)")
     temperaturfuehler: str = Field(default="unten", description="Welcher Fühler: oben/mitte/unten")
-    einschalten_bei_abweichung_k: float = Field(description="Einschalten bei Abweichung >= (K)")
-    ausschalten_bei_abweichung_k: float = Field(description="Ausschalten bei Abweichung <= (K)")
+    einschalten_bei_abweichung_k: float = Field(default=3.0, description="Einschalten bei Abweichung >= (K)")
+    ausschalten_bei_abweichung_k: float = Field(default=0.5, description="Ausschalten bei Abweichung <= (K)")
 
 
 class WPSteuerungConfig(BaseModel):

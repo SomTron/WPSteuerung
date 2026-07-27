@@ -1,0 +1,10 @@
+post_onboarding:  {
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE
+}
+agent_onboarding_completed:  AGENT_ONBOARDING_STATE_COMPLETED
+migrate_convos_into_projects:  MIGRATION_STATUS_COMPLETED
+installation_uuid:  "72ce155d-f36b-417a-b63a-273dfe927668"
+migrate_retroactive_projects:  RETROACTIVE_MIGRATION_STATUS_COMPLETED_UNNECESSARY
