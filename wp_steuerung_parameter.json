@@ -1,0 +1,66 @@
+{
+  "beschreibung": "600W WP Steuerung - optimierte Parameter (Pareto)",
+  "wp": {
+    "leistung_watt": 600,
+    "typ": "binaer_ein_aus"
+  },
+  "zyklus": {
+    "interval_minuten": 15,
+    "mindestlaufzeit_minuten": 60,
+    "mindestpausenzeit_minuten": 30
+  },
+  "sicherheit": {
+    "nachtsperre_start": 19,
+    "nachtsperre_ende": 8,
+    "max_temp_c": 48,
+    "ueberhitzung_c": 58,
+    "notfall_c": 36
+  },
+  "wochenende": {
+    "aktiv": true,
+    "fruehestens_uhr": 9
+  },
+  "pv_regeln": [
+    {
+      "name": "PV_mitte",
+      "prioritaet": 80,
+      "pv_schwelle_watt": 700,
+      "temperaturfuehler": "mitte",
+      "einschalten_bei_c": 42,
+      "ausschalten_bei_c": 48,
+      "weiterlaufen_ab_pv_watt": 50
+    },
+    {
+      "name": "PV_unten",
+      "prioritaet": 80,
+      "pv_schwelle_watt": 500,
+      "temperaturfuehler": "unten",
+      "einschalten_bei_c": 42,
+      "ausschalten_bei_c": 48,
+      "weiterlaufen_ab_pv_watt": 50
+    }
+  ],
+  "komfort": {
+    "prioritaet": 60,
+    "notfall_einschalten_bei_c": 36,
+    "komfort_einschalten_bei_c": 38,
+    "ausschalten_bei_c": 42,
+    "min_pv_fuer_komfort_watt": 50
+  },
+  "zeitfenster": {
+    "prioritaet": 53,
+    "start_uhr": 16,
+    "ende_uhr": 17,
+    "modus": "einschalten",
+    "temperaturfuehler": "mitte",
+    "max_temp_fuer_einschalten_c": 44.5,
+    "min_pv_watt": 410
+  },
+  "abweichung": {
+    "prioritaet": 47,
+    "solltemperatur_c": 44,
+    "temperaturfuehler": "unten",
+    "einschalten_bei_abweichung_k": 4.9,
+    "ausschalten_bei_abweichung_k": 0.7
+  }
+}

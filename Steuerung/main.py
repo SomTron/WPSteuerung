@@ -20,6 +20,7 @@ from hardware_mock import MockHardwareManager
 from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
+import priority_control_logic as pcl
 from telegram_handler import telegram_task
 from telegram_ui import send_welcome_message
 from telegram_api import start_healthcheck_task, send_telegram_message, create_robust_aiohttp_session
@@ -185,7 +186,7 @@ async def setup_application():
         state=state,
         get_temperature_history_func=get_boiler_temperature_history,
         get_runtime_bar_chart_func=get_runtime_bar_chart,
-        is_nighttime_func=control_logic.is_nighttime,
+                is_nighttime_func=lambda config: pcl._is_nachtsperre_aktiv(state.priority_config, datetime.now(state.local_tz)),
         is_solar_window_func=control_logic.is_solar_window
     ))
     
@@ -315,9 +316,9 @@ async def check_and_send_alerts(session, state):
     state.control.last_blocking_reason = current_blocking
 
 async def run_logic_step(session, state):
-    """Führt einen Schritt der Steuerungslogik aus."""
-        # 1. Druckschalter & Config
-    if not await control_logic.check_pressure_and_config(
+    """Fuehrt einen Schritt der Steuerungslogik aus (Pareto-Prioritaeten)."""
+    # 1. Druckschalter & Config
+    if not await pcl.check_pressure_and_config(
         session, state, handle_pressure_check, set_kompressor_status, state.update_config, lambda: "hash"
     ):
         return  # Druckfehler: Restliche Logik ueberspringen
@@ -328,42 +329,53 @@ async def run_logic_step(session, state):
         if not is_running and state.kompressor_verification_error_count >= COMPRESSOR_VERIFICATION_ERROR_THRESHOLD:
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
             await set_kompressor_status(state, False, force=True)
-            state.control.ausschluss_grund = "Kompressor läuft nicht (Verifizierung fehlgeschlagen)"
+            state.control.ausschluss_grund = "Kompressor laeuft nicht (Verifizierung fehlgeschlagen)"
             state.stats.last_compressor_off_time = datetime.now(state.local_tz) + timedelta(minutes=10)
 
-    # 3. Sensoren & Safety
-    if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
-        result = await control_logic.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig)
-        state.control.aktueller_einschaltpunkt = result["einschaltpunkt"]
-        state.control.aktueller_ausschaltpunkt = result["ausschaltpunkt"]
-        state.control.solar_ueberschuss_aktiv = result["solar_ueberschuss_aktiv"]
-        state.last_solar_window_status = control_logic.is_solar_window(state.config, state)
-        
-        regelfuehler = result["regelfuehler"]
-        
-        # Save active sensor name for status message
-        if regelfuehler == state.sensors.t_mittig:
-            state.control.active_rule_sensor = "Mittig"
-        elif regelfuehler == state.sensors.t_unten:
-            state.control.active_rule_sensor = "Unten"
-        else:
-            state.control.active_rule_sensor = "Unknown"
+    # 3. Sensoren & Safety (Sicherheits-Check)
+    if await pcl.check_safety_limits(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
+        # 3b. Sensoren-Check (behalten wir vom alten System)
+        if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
+            # 4. Prioritaeten-Engine: Regel bewerten
+            result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig)
+            
+            # 5. Schaltentscheidung
+            should_on = result.get("soll_einschalten", False)
+            state.control._soll_einschalten = should_on
+            
+            regelfuehler = result["regelfuehler"]
+            ausschaltpunkt = state.control.aktueller_ausschaltpunkt
+            einschaltpunkt = state.control.aktueller_einschaltpunkt
 
-        await control_logic.handle_compressor_off(state, session, regelfuehler, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.sensors.t_oben, set_kompressor_status)
-        await control_logic.handle_compressor_on(state, session, regelfuehler, state.control.aktueller_einschaltpunkt, state.control.aktueller_ausschaltpunkt, state.min_laufzeit, state.min_pause, state.last_solar_window_status, state.sensors.t_oben, set_kompressor_status)
-        await control_logic.handle_mode_switch(state, session, state.sensors.t_oben, state.sensors.t_mittig, set_kompressor_status)
-        
-        # 4. Sofort-Alarme prüfen
-        await check_and_send_alerts(session, state)
+            if state.control.kompressor_ein:
+                # Kompressor laeuft: Ausschalten pruefen
+                await pcl.handle_compressor_off(
+                    state, session, regelfuehler, ausschaltpunkt,
+                    state.min_laufzeit, state.sensors.t_oben, set_kompressor_status
+                )
+            else:
+                # Kompressor aus: Einschalten pruefen
+                await pcl.handle_compressor_on(
+                    state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
+                    state.min_laufzeit, state.min_pause, False, state.sensors.t_oben,
+                    set_kompressor_status
+                )
+            
+            # 6. Sofort-Alarme pruefen
+            await check_and_send_alerts(session, state)
 
 async def log_system_state(state):
     """Schreibt CSV-Log und aktualisiert LCD."""
-    # 1. LCD Update
+        # 1. LCD Update (Pareto-Prioritaeten)
+    pv_w = state.solar.feedinpower if state.solar.feedinpower else 0
+    rule_name = getattr(state.control, 'active_rule_name', '') or ''
+    if rule_name and len(rule_name) > 12:
+        rule_name = rule_name[:12]
     hardware_manager.write_lcd(
-        f"Oben:{state.sensors.t_oben if state.sensors.t_oben else 'Err':.1f} Unt:{state.sensors.t_unten if state.sensors.t_unten else 'Err':.1f}",
-        f"Mit :{state.sensors.t_mittig if state.sensors.t_mittig else 'Err':.1f} Verd:{state.sensors.t_verd if state.sensors.t_verd else 'Err':.0f}",
-        f"Ziel:{state.control.aktueller_einschaltpunkt:.0f}/{state.control.aktueller_ausschaltpunkt:.0f} {'ON' if state.control.kompressor_ein else 'OFF'}",
-        f"{state.control.previous_modus[:10] if state.control.previous_modus else ''} {state.solar.soc if state.solar.soc else 0}%"
+        f"E:{state.sensors.t_oben if state.sensors.t_oben else 0:.1f} U:{state.sensors.t_unten if state.sensors.t_unten else 0:.1f}",
+        f"M:{state.sensors.t_mittig if state.sensors.t_mittig else 0:.1f} V:{state.sensors.t_verd if state.sensors.t_verd else 0:.0f}",
+        f"{'ON' if state.control.kompressor_ein else 'OFF'} PV:{pv_w:.0f}W {rule_name[:7]}",
+        f"{state.solar.soc if state.solar.soc else 0}% {state.control.previous_modus[:7] if state.control.previous_modus else ''}"
     )
 
     # 2. CSV Logging
@@ -396,8 +408,8 @@ async def log_system_state(state):
             fmt_csv(solax.get("powerdc1", 0)), fmt_csv(solax.get("powerdc2", 0)),
             fmt_csv(solax.get("consumeenergy", 0)),
             fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
-            "1" if state.control.solar_ueberschuss_aktiv else "0",
-            "1" if control_logic.is_nighttime(state.config) else "0",
+                        "1" if state.control.solar_ueberschuss_aktiv else "0",
+            "1" if pcl._is_nachtsperre_aktiv(state.priority_config, datetime.now(state.local_tz)) else "0",
             power_source, fmt_csv(state.solar.forecast_tomorrow)
         ]
         

@@ -78,7 +78,55 @@ def init_api(state, funcs):
 def get_status():
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
-    
+
+    pc = shared_state.priority_config
+    priority_info = {}
+    if pc:
+        from priority_control import _is_nachtsperre_aktiv
+        nightsperre = _is_nachtsperre_aktiv(pc, datetime.now(shared_state.local_tz))
+        priority_info = {
+            "beschreibung": pc.beschreibung,
+            "wp_leistung": pc.wp.leistung_watt,
+            "wp_vorlauftemp": pc.wp.vorlauftemp,
+            "zyklus_interval": pc.zyklus.interval_minuten,
+            "zyklus_min_laufzeit": pc.zyklus.mindestlaufzeit_minuten,
+            "zyklus_min_pause": pc.zyklus.mindestpausenzeit_minuten,
+            "nachtsperre_aktiv": nightsperre,
+            "nachtsperre_start": pc.sicherheit.nachtsperre_start,
+            "nachtsperre_ende": pc.sicherheit.nachtsperre_ende,
+            "sicherheit_max": pc.sicherheit.max_temp_c,
+            "sicherheit_ueberhitzung": pc.sicherheit.ueberhitzung_c,
+            "sicherheit_notfall": pc.sicherheit.notfall_c,
+            "regeln": [
+                {"name": "PV_mitte", "typ": "pv", "prio": 80,
+                 "schwellwert": pc.pv.schwellwert_pv_w,
+                 "sensor": pc.pv.sensor,
+                 "ein": pc.pv.ein_c,
+                 "aus": pc.pv.aus_c},
+                {"name": "PV_unten", "typ": "pv", "prio": 80,
+                 "schwellwert": pc.pv.schwellwert_pv_unten_w,
+                 "sensor": "unten",
+                 "ein": pc.pv.ein_c,
+                 "aus": pc.pv.aus_c},
+                {"name": "Komfort", "typ": "komfort", "prio": 60,
+                 "notfall": pc.komfort.notfall_c,
+                 "min_pvid": pc.komfort.mindest_pv_w,
+                 "ein": pc.komfort.ein_c,
+                 "aus": pc.komfort.aus_c},
+                {"name": "Zeitfenster", "typ": "zeitfenster", "prio": 53,
+                 "start": pc.zeitfenster.start_uhrzeit,
+                 "ende": pc.zeitfenster.ende_uhrzeit,
+                 "ein": pc.zeitfenster.ein_c,
+                 "aus": pc.zeitfenster.aus_c,
+                 "min_pv": pc.zeitfenster.mindest_pv_w},
+                {"name": "Abweichung", "typ": "abweichung", "prio": 47,
+                 "soll": pc.abweichung.soll_c,
+                 "sensor": pc.abweichung.sensor,
+                 "ein": pc.abweichung.ein_c,
+                 "aus": pc.abweichung.aus_c},
+            ]
+        }
+
     return {
         "temperatures": {
             "oben": shared_state.sensors.t_oben,
@@ -89,7 +137,7 @@ def get_status():
         },
         "compressor": {
             "status": "EIN" if shared_state.control.kompressor_ein else "AUS",
-            "runtime_current": str(shared_state.stats.last_runtime).split('.')[0] if shared_state.control.kompressor_ein else "0:00:00",
+            "runtime_current": str(shared_state.stats.current_runtime).split('.')[0] if shared_state.control.kompressor_ein else "0:00:00",
             "runtime_today": str(shared_state.stats.total_runtime_today).split('.')[0]
         },
         "setpoints": {
@@ -99,20 +147,31 @@ def get_status():
             "verdampfertemperatur": shared_state.verdampfertemperatur
         },
         "mode": {
-            "current": shared_state.control.previous_modus,
+            "current": shared_state.control.previous_modus or "",
             "solar_active": shared_state.control.solar_ueberschuss_aktiv,
             "holiday_active": shared_state.urlaubsmodus_aktiv,
-            "bath_active": shared_state.bademodus_aktiv
+            "bath_active": shared_state.bademodus_aktiv,
+            "nightsperre_active": priority_info.get("nachtsperre_aktiv", False) if priority_info else False,
+            "active_rule": getattr(shared_state.control, 'active_rule_name', '') or '',
+            "active_rule_sensor": getattr(shared_state.control, 'active_rule_sensor', '') or '',
+            "blocking_reason": getattr(shared_state.control, 'blocking_reason', '') or '',
+            "soll_einschalten": getattr(shared_state.control, '_soll_einschalten', False),
         },
         "energy": {
             "battery_power": shared_state.solar.batpower,
             "soc": shared_state.solar.soc,
-            "feed_in": shared_state.solar.feedinpower
+            "feed_in": shared_state.solar.feedinpower,
+            "ac_power": getattr(shared_state.solar, 'acpower', None),
+            "forecast_today": getattr(shared_state.solar, 'forecast_today', None),
+            "forecast_tomorrow": getattr(shared_state.solar, 'forecast_tomorrow', None),
+            "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
+            "sunset": getattr(shared_state.solar, 'sunset_today', ''),
         },
         "system": {
-            "exclusion_reason": shared_state.control.ausschluss_grund,
-            "last_update": datetime.now().strftime("%H:%M:%S")
-        }
+            "exclusion_reason": shared_state.control.ausschluss_grund or "",
+            "last_update": datetime.now().strftime("%H:%M:%S"),
+        },
+        "priority": priority_info,
     }
 
 @app.post("/config")
