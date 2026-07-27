@@ -106,7 +106,7 @@ def get_status():
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
 
-        pc = shared_state.priority_config
+    pc = shared_state.priority_config
     priority_info = {}
     if pc:
         nightsperre = False
