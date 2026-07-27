@@ -128,7 +128,9 @@ case "$choice" in
         fi
         ;;
 
-    2)
+        2)
+        printf "\n${CYAN}Hole neueste Branch-Informationen...${NC}\n"
+        git fetch --all > /dev/null 2>&1
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
         printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
@@ -138,7 +140,6 @@ case "$choice" in
         target_branch=$(echo "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
 
         printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
-        git fetch --all
 
         # Pruefe ob Branch lokal existiert, sonst tracke remote
         if git show-ref --verify --quiet "refs/heads/$target_branch"; then
@@ -159,7 +160,9 @@ case "$choice" in
         esac
         ;;
 
-    3)
+        3)
+        printf "\n${CYAN}Hole neueste Branch-Informationen...${NC}\n"
+        git fetch --all > /dev/null 2>&1
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
         printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
@@ -167,9 +170,6 @@ case "$choice" in
 
         # Bereinige Branch-Namen
         target_branch=$(echo "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
-
-        printf "\n${CYAN}Hole Informationen von GitHub...${NC}\n"
-        git fetch --all > /dev/null 2>&1
 
         # Informationen über aktuellen Stand
         CUR_COMMIT=$(git rev-parse --short HEAD)
