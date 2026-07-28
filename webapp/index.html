@@ -189,7 +189,7 @@
             flex: 1;
         }
 
-        .btn-small {
+                .btn-small {
             padding: 8px 16px;
             border: none;
             border-radius: 8px;
@@ -204,6 +204,46 @@
         .btn-small:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px var(--shadow);
+        }
+
+        .time-range-group {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .time-btn {
+            padding: 6px 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }
+
+        .time-btn:hover {
+            background: rgba(0, 212, 255, 0.1);
+            border-color: rgba(0, 212, 255, 0.3);
+            color: var(--text-primary);
+        }
+
+        .time-btn.active {
+            background: rgba(0, 212, 255, 0.2);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        .chart-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
         }
 
         .temp-display {
@@ -553,11 +593,13 @@
     </div>
 
         <script>
-        const API_BASE = window.location.origin;
+                const API_BASE = window.location.origin;
         let statusData = null;
         let chart = null;
-        let temperatureHistory = { timestamps: [], oben: [], mittig: [], unten: [], verdampfer: [] };
+        let temperatureHistory = { timestamps: [], oben: [], mittig: [], unten: [], verdampfer: [], sollwerte: [] };
         const MAX_DATA_POINTS = 120;
+        let currentHistoryHours = 24;
+        let isLoadingHistory = false;
 
         async function fetchStatus() {
             try {
@@ -565,14 +607,17 @@
                 if (!response.ok) throw new Error('API Fehler');
                 statusData = await response.json();
 
-                // Temperaturdaten zur Historie hinzufügen
-                addToHistory(statusData.temperatures);
+                // Live-Daten nur hinzufuegen wenn wir im Live-Modus sind (< 2h)
+                if (currentHistoryHours <= 2 && !isLoadingHistory) {
+                    addToHistory(statusData.temperatures);
+                }
 
-                // Nur beim ersten Mal oder wenn die Struktur sich ändert
-                                if (!document.getElementById('compressor-card')) {
+                // Nur beim ersten Mal oder wenn die Struktur sich aendert
+                if (!document.getElementById('compressor-card')) {
                     renderApp();
                 } else {
                     updateValues();
+                    updateChartSollwert();
                 }
 
                 updateHeader();
@@ -583,46 +628,75 @@
             }
         }
 
-        async function loadHistory() {
+        async function loadHistory(hours) {
+            if (isLoadingHistory) return;
+            isLoadingHistory = true;
+            currentHistoryHours = hours;
+
+            // Buttons aktualisieren
+            document.querySelectorAll('.time-btn').forEach(btn => {
+                btn.classList.toggle('active', parseInt(btn.dataset.hours) === hours);
+            });
+
             try {
-                const hours = 24;
                 const response = await fetch(`${API_BASE}/history?hours=${hours}`);
                 if (!response.ok) throw new Error('History API Fehler');
                 const historyData = await response.json();
 
-                // Clear current history
+                // Historische Daten laden
                 temperatureHistory = {
                     timestamps: [],
                     oben: [],
                     mittig: [],
                     unten: [],
-                    verdampfer: []
+                    verdampfer: [],
+                    sollwerte: []
                 };
 
-                // Load historical data
                 historyData.data.forEach(point => {
                     const timestamp = new Date(point.timestamp);
-                    const timeStr = timestamp.toLocaleTimeString('de-DE', {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    });
+                    const timeStr = hours <= 24
+                        ? timestamp.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+                        : timestamp.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' +
+                          timestamp.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 
                     temperatureHistory.timestamps.push(timeStr);
                     temperatureHistory.oben.push(point.t_oben);
                     temperatureHistory.mittig.push(point.t_mittig);
                     temperatureHistory.unten.push(point.t_unten);
                     temperatureHistory.verdampfer.push(point.t_verd);
+                    temperatureHistory.sollwerte.push(null);  // Wird in updateChartSollwert ergaenzt
                 });
 
-                                if (chart) {
+                // Sollwerte aus historischen Daten berechnen (Kompressor-an/aus als Marker)
+                updateChartSollwert();
+
+                if (chart) {
                     updateChart();
                 }
             } catch (error) {
                 console.error('Fehler beim Laden der Historie:', error);
+            } finally {
+                isLoadingHistory = false;
             }
         }
 
-        function addToHistory(temps) {
+        function updateChartSollwert() {
+            if (!statusData || !chart) return;
+            const { setpoints, mode } = statusData;
+            const sollwert = setpoints?.einschaltpunkt;
+            if (sollwert == null || temperatureHistory.timestamps.length === 0) return;
+
+            // Sollwert-Linie als Konstante ueber den gesamten Zeitraum
+            temperatureHistory.sollwerte = temperatureHistory.timestamps.map(() => sollwert);
+            chart.data.datasets[4].data = temperatureHistory.sollwerte;
+            chart.data.datasets[4].label = 'Soll (' + (mode.active_rule_sensor || '?') + ')';
+            chart.update('none');
+        }
+
+                function addToHistory(temps) {
+            if (currentHistoryHours > 2) return;  // Nur im Live-Modus
+
             const now = new Date();
             const timeStr = now.toLocaleTimeString('de-DE', {
                 hour: '2-digit',
@@ -630,11 +704,14 @@
                 second: '2-digit'
             });
 
+            const sollwert = statusData?.setpoints?.einschaltpunkt ?? null;
+
             temperatureHistory.timestamps.push(timeStr);
             temperatureHistory.oben.push(temps.oben);
             temperatureHistory.mittig.push(temps.mittig);
             temperatureHistory.unten.push(temps.unten);
             temperatureHistory.verdampfer.push(temps.verdampfer);
+            temperatureHistory.sollwerte.push(sollwert);
 
             // Nur die letzten MAX_DATA_POINTS behalten
             if (temperatureHistory.timestamps.length > MAX_DATA_POINTS) {
@@ -643,6 +720,7 @@
                 temperatureHistory.mittig.shift();
                 temperatureHistory.unten.shift();
                 temperatureHistory.verdampfer.shift();
+                temperatureHistory.sollwerte.shift();
             }
 
             if (chart) {
@@ -651,45 +729,47 @@
         }
 
                 function createChart() {
-            const ctx = document.getElementById('tempChart');
-            if (!ctx) return;
-            if (chart) chart.destroy();
-            chart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: temperatureHistory.timestamps,
-                    datasets: [
-                        { label: 'Oben', data: temperatureHistory.oben, borderColor: '#00d4ff', borderWidth: 2, pointRadius: 0, tension: 0.3 },
-                        { label: 'Mitte', data: temperatureHistory.mittig, borderColor: '#51cf66', borderWidth: 2, pointRadius: 0, tension: 0.3 },
-                        { label: 'Unten', data: temperatureHistory.unten, borderColor: '#ffa94d', borderWidth: 2, pointRadius: 0, tension: 0.3 },
-                        { label: 'Verdampfer', data: temperatureHistory.verdampfer, borderColor: '#ff6b6b', borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y1' }
-                    ]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: true, position: 'top', labels: { color: '#a0a0c0', font: { size: 11 }, usePointStyle: true } },
-                        tooltip: { mode: 'index', intersect: false, backgroundColor: 'rgba(22, 33, 62, 0.95)', titleColor: '#fff', bodyColor: '#a0a0c0', borderColor: 'rgba(0, 212, 255, 0.3)', borderWidth: 1 }
-                    },
-                    scales: {
-                        y: { beginAtZero: false, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', callback: v => v + ' °C' }, title: { display: true, text: 'Boiler (°C)', color: '#a0a0c0' } },
-                        y1: { position: 'right', beginAtZero: false, grid: { display: false }, ticks: { color: '#ff6b6b', callback: v => v + ' °C' }, title: { display: true, text: 'Verdampfer (°C)', color: '#ff6b6b' } },
-                        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', maxRotation: 45, minRotation: 45, maxTicksLimit: 20 } }
-                    },
-                    interaction: { mode: 'nearest', axis: 'x', intersect: false }
+                    const ctx = document.getElementById('tempChart');
+                    if (!ctx) return;
+                    if (chart) chart.destroy();
+                    chart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: temperatureHistory.timestamps,
+                            datasets: [
+                                { label: 'Oben', data: temperatureHistory.oben, borderColor: '#00d4ff', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+                                { label: 'Mitte', data: temperatureHistory.mittig, borderColor: '#51cf66', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+                                { label: 'Unten', data: temperatureHistory.unten, borderColor: '#ffa94d', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+                                { label: 'Verdampfer', data: temperatureHistory.verdampfer, borderColor: '#ff6b6b', borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y1' },
+                                { label: 'Soll', data: temperatureHistory.sollwerte, borderColor: '#b197fc', borderWidth: 2, borderDash: [8, 4], pointRadius: 0, tension: 0, fill: false }
+                            ]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: true, position: 'top', labels: { color: '#a0a0c0', font: { size: 11 }, usePointStyle: true } },
+                                tooltip: { mode: 'index', intersect: false, backgroundColor: 'rgba(22, 33, 62, 0.95)', titleColor: '#fff', bodyColor: '#a0a0c0', borderColor: 'rgba(0, 212, 255, 0.3)', borderWidth: 1 }
+                            },
+                            scales: {
+                                y: { beginAtZero: false, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', callback: v => v + ' °C' }, title: { display: true, text: 'Boiler (°C)', color: '#a0a0c0' } },
+                                y1: { position: 'right', beginAtZero: false, grid: { display: false }, ticks: { color: '#ff6b6b', callback: v => v + ' °C' }, title: { display: true, text: 'Verdampfer (°C)', color: '#ff6b6b' } },
+                                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', maxRotation: 45, minRotation: 45, maxTicksLimit: 20 } }
+                            },
+                            interaction: { mode: 'nearest', axis: 'x', intersect: false }
+                        }
+                    });
                 }
-            });
-        }
 
-        function updateChart() {
-            if (!chart) return;
-            chart.data.labels = temperatureHistory.timestamps;
-            chart.data.datasets[0].data = temperatureHistory.oben;
-            chart.data.datasets[1].data = temperatureHistory.mittig;
-            chart.data.datasets[2].data = temperatureHistory.unten;
-            chart.data.datasets[3].data = temperatureHistory.verdampfer;
-            chart.update('none');
-        }
+                function updateChart() {
+                    if (!chart) return;
+                    chart.data.labels = temperatureHistory.timestamps;
+                    chart.data.datasets[0].data = temperatureHistory.oben;
+                    chart.data.datasets[1].data = temperatureHistory.mittig;
+                    chart.data.datasets[2].data = temperatureHistory.unten;
+                    chart.data.datasets[3].data = temperatureHistory.verdampfer;
+                    chart.data.datasets[4].data = temperatureHistory.sollwerte;
+                    chart.update('none');
+                }
 
                 function updateHeader() {
             if (!statusData) return;
@@ -904,13 +984,23 @@
 
             const nachtsperreTxt = priority ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : 'N/A';
 
-            document.getElementById('app').innerHTML = `
+                        document.getElementById('app').innerHTML = `
                 <div class="grid grid-wide">
                     <div class="card">
-                        <div class="card-header">
-                            <div class="card-icon blue">📈</div>
-                            <div class="card-title">Temperaturverlauf</div>
-                            <button class="btn-small" onclick="loadHistory()">24h Laden</button>
+                        <div class="chart-header-row">
+                            <div style="display:flex; align-items:center; gap:12px">
+                                <div class="card-icon blue">📈</div>
+                                <div class="card-title">Temperaturverlauf</div>
+                            </div>
+                            <div class="time-range-group">
+                                <button class="time-btn${currentHistoryHours === 1 ? ' active' : ''}" data-hours="1" onclick="loadHistory(1)">1h</button>
+                                <button class="time-btn${currentHistoryHours === 6 ? ' active' : ''}" data-hours="6" onclick="loadHistory(6)">6h</button>
+                                <button class="time-btn${currentHistoryHours === 12 ? ' active' : ''}" data-hours="12" onclick="loadHistory(12)">12h</button>
+                                <button class="time-btn${currentHistoryHours === 24 ? ' active' : ''}" data-hours="24" onclick="loadHistory(24)">24h</button>
+                                <button class="time-btn${currentHistoryHours === 48 ? ' active' : ''}" data-hours="48" onclick="loadHistory(48)">2T</button>
+                                <button class="time-btn${currentHistoryHours === 72 ? ' active' : ''}" data-hours="72" onclick="loadHistory(72)">3T</button>
+                                <button class="time-btn${currentHistoryHours === 168 ? ' active' : ''}" data-hours="168" onclick="loadHistory(168)">7T</button>
+                            </div>
                         </div>
                         <div style="height: 300px;"><canvas id="tempChart"></canvas></div>
                     </div>
@@ -1051,11 +1141,14 @@
             }
         }
 
-        // Auto-refresh every 5 seconds
+                // Auto-refresh every 5 seconds
         setInterval(fetchStatus, 5000);
 
         // Initial load
-        fetchStatus();
+        fetchStatus().then(() => {
+            // Nach dem ersten Fetch Historie laden
+            loadHistory(currentHistoryHours);
+        });
 
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {
