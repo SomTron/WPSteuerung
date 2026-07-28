@@ -612,12 +612,13 @@
                     addToHistory(statusData.temperatures);
                 }
 
-                // Nur beim ersten Mal oder wenn die Struktur sich aendert
+                                // Nur beim ersten Mal oder wenn die Struktur sich aendert
                 if (!document.getElementById('compressor-card')) {
                     renderApp();
                 } else {
                     updateValues();
-                    updateChartSollwert();
+                    updateSollwertLabel();
+                    highlightActiveSensor();
                 }
 
                 updateHeader();
@@ -628,7 +629,7 @@
             }
         }
 
-        async function loadHistory(hours) {
+                async function loadHistory(hours) {
             if (isLoadingHistory) return;
             isLoadingHistory = true;
             currentHistoryHours = hours;
@@ -665,15 +666,16 @@
                     temperatureHistory.mittig.push(point.t_mittig);
                     temperatureHistory.unten.push(point.t_unten);
                     temperatureHistory.verdampfer.push(point.t_verd);
-                    temperatureHistory.sollwerte.push(null);  // Wird in updateChartSollwert ergaenzt
+                    // Sollwerte direkt aus CSV (Einschaltpunkt-Spalte)
+                    temperatureHistory.sollwerte.push(point.einschaltpunkt);
                 });
 
-                // Sollwerte aus historischen Daten berechnen (Kompressor-an/aus als Marker)
-                updateChartSollwert();
-
+                // Chart aktualisieren
                 if (chart) {
                     updateChart();
                 }
+                // Sollwert-Label setzen
+                updateSollwertLabel();
             } catch (error) {
                 console.error('Fehler beim Laden der Historie:', error);
             } finally {
@@ -681,29 +683,26 @@
             }
         }
 
-                function updateChartSollwert() {
+                function updateSollwertLabel() {
             if (!statusData || !chart) return;
-            const { setpoints, mode } = statusData;
-            const sollwert = setpoints?.einschaltpunkt;
-            if (sollwert == null || temperatureHistory.timestamps.length === 0) return;
+            const mode = statusData.mode;
+            const sensorName = mode.active_rule_sensor || '?';
+            chart.data.datasets[4].label = 'Einschaltpunkt (' + sensorName + ')';
+            chart.update('none');
+        }
 
-            // Sollwert-Linie als Konstante ueber den gesamten Zeitraum
-            temperatureHistory.sollwerte = temperatureHistory.timestamps.map(() => sollwert);
-            chart.data.datasets[4].data = temperatureHistory.sollwerte;
-            chart.data.datasets[4].label = 'Soll (' + (mode.active_rule_sensor || '?') + ')';
-
-            // Aktiven Regelfuehler hervorheben ( dicks, andere duenner )
-            const activeSensor = (mode.active_rule_sensor || '').toLowerCase();
+        function highlightActiveSensor() {
+            if (!statusData || !chart) return;
+            const activeSensor = (statusData.mode.active_rule_sensor || '').toLowerCase();
             const sensorMap = { 'oben': 0, 'mittig': 1, 'mitte': 1, 'unten': 2 };
             const sensorColors = { 'oben': '#00d4ff', 'mittig': '#51cf66', 'mitte': '#51cf66', 'unten': '#ffa94d' };
             const sensorColorsBright = { 'oben': '#33e0ff', 'mittig': '#7adf85', 'mitte': '#7adf85', 'unten': '#ffb870' };
 
-                        // Alle Boiler-Sensoren zuruecksetzen (gedimmt)
+            // Alle Boiler-Sensoren zuruecksetzen (gedimmt)
             for (let i = 0; i <= 2; i++) {
                 chart.data.datasets[i].borderWidth = 1.5;
                 chart.data.datasets[i].pointRadius = 0;
                 chart.data.datasets[i].borderColor = Object.values(sensorColors)[i];
-                chart.data.datasets[i].borderAlpha = 0.4;
                 chart.data.datasets[i].order = 2;
             }
 
@@ -711,19 +710,21 @@
             const idx = sensorMap[activeSensor];
             if (idx !== undefined) {
                 chart.data.datasets[idx].borderWidth = 3;
-                chart.data.datasets[idx].pointRadius = 0;
                 chart.data.datasets[idx].borderColor = sensorColorsBright[activeSensor];
                 chart.data.datasets[idx].order = 1;
             } else {
-                // Kein aktiver Sensor bekannt: Alle normal anzeigen
                 for (let i = 0; i <= 2; i++) {
                     chart.data.datasets[i].borderWidth = 2;
-                    chart.data.datasets[i].order = 2;
                 }
             }
 
             chart.update('none');
         }
+
+                function updateChartSollwert() {
+                    // Sollwerte kommen jetzt direkt aus der CSV - nichts zu tun
+                    // Label wird in updateSollwertLabel() gesetzt
+                }
 
                 function addToHistory(temps) {
             if (currentHistoryHours > 2) return;  // Nur im Live-Modus
@@ -772,7 +773,7 @@
                                 { label: 'Mitte', data: temperatureHistory.mittig, borderColor: '#51cf66', borderWidth: 2, pointRadius: 0, tension: 0.3 },
                                 { label: 'Unten', data: temperatureHistory.unten, borderColor: '#ffa94d', borderWidth: 2, pointRadius: 0, tension: 0.3 },
                                 { label: 'Verdampfer', data: temperatureHistory.verdampfer, borderColor: '#ff6b6b', borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y1' },
-                                { label: 'Soll', data: temperatureHistory.sollwerte, borderColor: '#b197fc', borderWidth: 2, borderDash: [8, 4], pointRadius: 0, tension: 0, fill: false }
+                                { label: 'Einschaltpunkt', data: temperatureHistory.sollwerte, borderColor: '#b197fc', borderWidth: 2, borderDash: [8, 4], pointRadius: 0, tension: 0, fill: false, spanGaps: true }
                             ]
                         },
                         options: {
@@ -1158,7 +1159,7 @@
                     </div>
                 </div>
             `;
-            setTimeout(createChart, 100);
+            setTimeout(() => { createChart(); highlightActiveSensor(); }, 100);
         }
 
                 function toggleMode(modeName, currentState) {

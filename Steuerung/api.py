@@ -9,6 +9,8 @@ import os
 from datetime import datetime
 import re
 
+from utils import HEIZUNGSDATEN_CSV
+
 try:
     from priority_control_logic import _is_nachtsperre_aktiv
 except ImportError:
@@ -295,7 +297,7 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
     import os
     import pandas as pd
     
-    csv_path = "heizungsdaten.csv"
+    csv_path = HEIZUNGSDATEN_CSV
     if not os.path.exists(csv_path):
         raise HTTPException(status_code=404, detail="No historical data available")
     
@@ -309,15 +311,28 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
         # Convert to JSON-friendly format
         data = []
         for _, row in df.iterrows():
-            data.append({
+            entry = {
                 "timestamp": row['Zeitstempel'].strftime("%Y-%m-%d %H:%M:%S"),
-                "t_oben": row['T_Oben'],
-                "t_mittig": row['T_Mittig'],
-                "t_unten": row['T_Unten'],
-                "t_verd": row['T_Verd'],
-                "kompressor": row['Kompressor']
-            })
+                "t_oben": row['T_Oben'] if pd.notna(row.get('T_Oben')) else None,
+                "t_mittig": row['T_Mittig'] if pd.notna(row.get('T_Mittig')) else None,
+                "t_unten": row['T_Unten'] if pd.notna(row.get('T_Unten')) else None,
+                "t_verd": row['T_Verd'] if pd.notna(row.get('T_Verd')) else None,
+                "kompressor": row.get('Kompressor', ''),
+            }
+            # Sollwerte aus CSV (falls vorhanden)
+            if 'Einschaltpunkt' in df.columns:
+                val = row.get('Einschaltpunkt')
+                entry["einschaltpunkt"] = float(val) if pd.notna(val) and str(val).strip() != '' else None
+            else:
+                entry["einschaltpunkt"] = None
+            if 'Ausschaltpunkt' in df.columns:
+                val = row.get('Ausschaltpunkt')
+                entry["ausschaltpunkt"] = float(val) if pd.notna(val) and str(val).strip() != '' else None
+            else:
+                entry["ausschaltpunkt"] = None
+            data.append(entry)
         
         return {"data": data, "count": len(data)}
     except Exception as e:
+        logging.error(f"Error reading history: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")
