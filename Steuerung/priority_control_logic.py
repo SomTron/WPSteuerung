@@ -249,10 +249,12 @@ async def handle_compressor_on(
             pause_ok = False
             pause_remaining = min_pause - elapsed_pause
 
-    # Nicht einschalten wenn bereits Temperaturen ueber Ausschaltpunkt
+    # Nur pruefen ob der Regelfuehler der aktiven Regel ueber Ausschaltpunkt liegt.
+    # t_oben wird hier NICHT geprueft, da:
+    #   1. check_safety_limits() bereits t_oben >= max_temp_c / ueberhitzung_c abfaengt
+    #   2. Der Boiler stratifiziert ist - t_oben kann hoch sein waehrend unten noch kalt ist.
     stop_condition = (
-        (regelfuehler is not None and regelfuehler >= ausschaltpunkt) or
-        (t_oben is not None and t_oben >= ausschaltpunkt)
+        regelfuehler is not None and regelfuehler >= ausschaltpunkt
     )
     
     if not state.control.kompressor_ein:
@@ -262,8 +264,8 @@ async def handle_compressor_on(
         if should_on and pause_ok:
             if stop_condition:
                 logging.info(
-                    f"Einschalten unterdrueckt: Ausschaltpunkt ({ausschaltpunkt}) bereits erreicht "
-                    f"(Regelfuehler={regelfuehler}, Oben={t_oben})"
+                    f"Einschalten unterdrueckt: Regelfuehler ({regelfuehler:.1f}) >= "
+                    f"Ausschaltpunkt ({ausschaltpunkt:.1f})"
                 )
                 state.control.blocking_reason = "Zieltemp erreicht"
                 return False
