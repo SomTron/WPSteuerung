@@ -681,7 +681,7 @@
             }
         }
 
-        function updateChartSollwert() {
+                function updateChartSollwert() {
             if (!statusData || !chart) return;
             const { setpoints, mode } = statusData;
             const sollwert = setpoints?.einschaltpunkt;
@@ -691,6 +691,37 @@
             temperatureHistory.sollwerte = temperatureHistory.timestamps.map(() => sollwert);
             chart.data.datasets[4].data = temperatureHistory.sollwerte;
             chart.data.datasets[4].label = 'Soll (' + (mode.active_rule_sensor || '?') + ')';
+
+            // Aktiven Regelfuehler hervorheben ( dicks, andere duenner )
+            const activeSensor = (mode.active_rule_sensor || '').toLowerCase();
+            const sensorMap = { 'oben': 0, 'mittig': 1, 'mitte': 1, 'unten': 2 };
+            const sensorColors = { 'oben': '#00d4ff', 'mittig': '#51cf66', 'mitte': '#51cf66', 'unten': '#ffa94d' };
+            const sensorColorsBright = { 'oben': '#33e0ff', 'mittig': '#7adf85', 'mitte': '#7adf85', 'unten': '#ffb870' };
+
+                        // Alle Boiler-Sensoren zuruecksetzen (gedimmt)
+            for (let i = 0; i <= 2; i++) {
+                chart.data.datasets[i].borderWidth = 1.5;
+                chart.data.datasets[i].pointRadius = 0;
+                chart.data.datasets[i].borderColor = Object.values(sensorColors)[i];
+                chart.data.datasets[i].borderAlpha = 0.4;
+                chart.data.datasets[i].order = 2;
+            }
+
+            // Aktiven Sensor hervorheben (dick, leuchtend, in front)
+            const idx = sensorMap[activeSensor];
+            if (idx !== undefined) {
+                chart.data.datasets[idx].borderWidth = 3;
+                chart.data.datasets[idx].pointRadius = 0;
+                chart.data.datasets[idx].borderColor = sensorColorsBright[activeSensor];
+                chart.data.datasets[idx].order = 1;
+            } else {
+                // Kein aktiver Sensor bekannt: Alle normal anzeigen
+                for (let i = 0; i <= 2; i++) {
+                    chart.data.datasets[i].borderWidth = 2;
+                    chart.data.datasets[i].order = 2;
+                }
+            }
+
             chart.update('none');
         }
 
