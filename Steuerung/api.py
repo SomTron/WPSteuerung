@@ -152,7 +152,7 @@ def get_status():
             "aus": pc.zeitfenster.max_temp_fuer_einschalten_c,
             "min_pv": pc.zeitfenster.min_pv_watt,
         })
-        # Abweichung
+                # Abweichung
         priority_info["regeln"].append({
             "name": "Abweichung", "typ": "abweichung", "prio": pc.abweichung.prioritaet,
             "soll": pc.abweichung.solltemperatur_c,
@@ -160,6 +160,24 @@ def get_status():
             "ein": pc.abweichung.einschalten_bei_abweichung_k,
             "aus": pc.abweichung.ausschalten_bei_abweichung_k,
         })
+        # Wochenende
+        priority_info["regeln"].append({
+            "name": "Wochenende", "typ": "wochenende", "prio": 100,
+            "aktiv": pc.wochenende.aktiv,
+            "fruehestens_uhr": pc.wochenende.fruehestens_uhr,
+        })
+
+    # Regel-Ergebnisse (Entscheidungen) aus State
+    regel_ergebnisse = []
+    if shared_state.control.alle_ergebnisse:
+        for e in shared_state.control.alle_ergebnisse:
+            regel_ergebnisse.append({
+                "name": e.name,
+                "prio": e.prioritaet,
+                "aktiv": e.aktiv,
+                "einschalten": e.einschalten,  # True/False/None
+                "grund": e.grund,
+            })
 
     return {
         "temperatures": {
@@ -201,11 +219,12 @@ def get_status():
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
         },
-        "system": {
+                "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund or "",
             "last_update": datetime.now().strftime("%H:%M:%S"),
         },
         "priority": priority_info,
+        "regel_ergebnisse": regel_ergebnisse,
     }
 
 @app.post("/config")

@@ -131,6 +131,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         for e in alle_ergebnisse
     )
     
+    # Alle Ergebnisse im State speichern fuer API/HTML-Anzeige
+    state.control.alle_ergebnisse = alle_ergebnisse
+    
     # Ergebnis aufbereiten
     should_on = gewinner is not None and gewinner.einschalten is True
     

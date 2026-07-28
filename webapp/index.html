@@ -401,13 +401,18 @@
             color: #ffa94d;
         }
 
-        .rule-card {
+                .rule-card {
             padding: 10px 14px;
             border-radius: 10px;
             margin: 6px 0;
             border-left: 3px solid transparent;
             font-size: 0.85rem;
             transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .rule-card:hover {
+            background: rgba(255, 255, 255, 0.05);
         }
 
         .rule-card.winner {
@@ -419,6 +424,12 @@
             background: rgba(255, 255, 255, 0.02);
             border-left-color: rgba(255, 255, 255, 0.1);
             opacity: 0.6;
+        }
+
+        .rule-card.inactive {
+            background: rgba(255, 255, 255, 0.01);
+            border-left-color: rgba(255, 107, 107, 0.3);
+            opacity: 0.4;
         }
 
         .rule-header {
@@ -440,6 +451,36 @@
         .rule-detail {
             color: var(--text-secondary);
             font-size: 0.8rem;
+        }
+
+        .rule-decision {
+            display: none;
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .rule-decision.visible {
+            display: block;
+        }
+
+        .rule-decision .decision-ein {
+            color: var(--accent-success);
+            font-weight: 600;
+        }
+
+        .rule-decision .decision-aus {
+            color: var(--accent-secondary);
+            font-weight: 600;
+        }
+
+        .rule-decision .decision-keine {
+            color: var(--text-secondary);
+            font-weight: 600;
         }
 
         .loading {
@@ -739,20 +780,45 @@
             else if (mode.soll_einschalten) { rd.textContent = 'EINSCHALTEN empfohlen'; rd.className = 'badge badge-success'; }
             else { rd.textContent = 'AUS - kein Bedarf'; rd.className = 'badge badge-danger'; }
 
-            // Prioritaeten-Regeln aktualisieren
+                        // Prioritaeten-Regeln aktualisieren
             if (priority && priority.regeln) {
                 const container = document.getElementById('rules-list');
                 if (container) {
-                    container.innerHTML = priority.regeln.map(function(r) {
+                    container.innerHTML = priority.regeln.map(function(r, idx) {
                         const isWinner = ruleName === r.name;
                         let detail = '';
-                        if (r.typ === 'pv') detail = 'PV >= ' + r.schwellwert + 'W | ' + r.ein + '-' + r.aus + ' C';
-                        else if (r.typ === 'komfort') detail = 'Notfall ' + r.notfall + 'C | MinPV ' + r.min_pvid + 'W';
-                        else if (r.typ === 'zeitfenster') detail = r.start + '-' + r.ende + ' | PV >= ' + r.min_pv + 'W';
-                        else if (r.typ === 'abweichung') detail = 'Soll ' + r.soll + 'C | +' + r.ein + 'K / -' + r.aus + 'K';
-                        return '<div class="rule-card ' + (isWinner ? 'winner' : 'loser') + '">' +
+                        if (r.typ === 'pv') detail = 'Sensor: ' + r.sensor + ' | PV >= ' + r.schwellwert + 'W | ' + r.ein + '-' + r.aus + ' C';
+                        else if (r.typ === 'komfort') detail = 'Notfall ' + r.notfall + 'C | Komfort ' + r.ein + 'C | MinPV ' + r.min_pvid + 'W';
+                        else if (r.typ === 'zeitfenster') detail = r.start + '-' + r.ende + ' Uhr | max ' + r.ein + 'C | PV >= ' + r.min_pv + 'W';
+                        else if (r.typ === 'abweichung') detail = 'Sensor: ' + r.sensor + ' | Soll ' + r.soll + 'C | +' + r.ein + 'K / -' + r.aus + 'K';
+                        else if (r.typ === 'wochenende') detail = 'Aktiv: ' + (r.aktiv ? 'Ja' : 'Nein') + ' | Fruehestens ' + r.fruehestens_uhr + ' Uhr';
+
+                        // Entscheidungsdetails aus regel_ergebnisse
+                        let decisionHtml = '';
+                        if (statusData && statusData.regel_ergebnisse) {
+                            const erg = statusData.regel_ergebnisse.find(e => e.name === r.name);
+                            if (erg) {
+                                let statusClass = 'decision-keine';
+                                let statusText = 'Keine Aktion';
+                                if (erg.einschalten === true) { statusClass = 'decision-ein'; statusText = 'EINSCHALTEN'; }
+                                else if (erg.einschalten === false) { statusClass = 'decision-aus'; statusText = 'AUSSCHALTEN'; }
+                                decisionHtml = '<div class="rule-decision" id="rule-decision-' + idx + '">' +
+                                    '<div>Status: <span class="' + statusClass + '">' + statusText + '</span></div>' +
+                                    '<div>Aktiv: ' + (erg.aktiv ? 'Ja' : 'Nein') + '</div>' +
+                                    '<div style="margin-top:4px">' + (erg.grund || '') + '</div></div>';
+                            }
+                        }
+
+                        let stateClass = isWinner ? 'winner' : 'loser';
+                        if (!isWinner && statusData && statusData.regel_ergebnisse) {
+                            const erg = statusData.regel_ergebnisse.find(e => e.name === r.name);
+                            if (erg && !erg.aktiv) stateClass = 'inactive';
+                        }
+
+                        return '<div class="rule-card ' + stateClass + '" onclick="toggleRuleDetail(' + idx + ')">' +
                             '<div class="rule-header"><span class="rule-name">' + (isWinner ? '> ' : '') + r.name + '</span><span class="rule-prio">P' + r.prio + '</span></div>' +
-                            '<div class="rule-detail">' + detail + '</div></div>';
+                            '<div class="rule-detail">' + detail + '</div>' +
+                            decisionHtml + '</div>';
                     }).join('');
                 }
             }
@@ -798,16 +864,42 @@
             const { temperatures, compressor, mode, energy, system, setpoints, priority } = statusData;
             const isRunning = compressor.status === 'EIN';
 
-            const regelnHtml = (priority && priority.regeln) ? priority.regeln.map(r => {
+                        const regelnHtml = (priority && priority.regeln) ? priority.regeln.map((r, idx) => {
                 const isWinner = mode.active_rule === r.name;
                 let detail = '';
-                if (r.typ === 'pv') detail = 'PV >= ' + r.schwellwert + 'W | ' + r.ein + '-' + r.aus + ' C';
-                else if (r.typ === 'komfort') detail = 'Notfall ' + r.notfall + 'C | MinPV ' + r.min_pvid + 'W';
-                else if (r.typ === 'zeitfenster') detail = r.start + '-' + r.ende + ' | PV >= ' + r.min_pv + 'W';
-                else if (r.typ === 'abweichung') detail = 'Soll ' + r.soll + 'C | +' + r.ein + 'K / -' + r.aus + 'K';
-                return '<div class="rule-card ' + (isWinner ? 'winner' : 'loser') + '">' +
+                if (r.typ === 'pv') detail = 'Sensor: ' + r.sensor + ' | PV >= ' + r.schwellwert + 'W | ' + r.ein + '-' + r.aus + ' C';
+                else if (r.typ === 'komfort') detail = 'Notfall ' + r.notfall + 'C | Komfort ' + r.ein + 'C | MinPV ' + r.min_pvid + 'W';
+                else if (r.typ === 'zeitfenster') detail = r.start + '-' + r.ende + ' Uhr | Sensor: ' + (r.sensor || 'mitte') + ' | max ' + r.ein + 'C | PV >= ' + r.min_pv + 'W';
+                else if (r.typ === 'abweichung') detail = 'Sensor: ' + r.sensor + ' | Soll ' + r.soll + 'C | +' + r.ein + 'K / -' + r.aus + 'K';
+                else if (r.typ === 'wochenende') detail = 'Aktiv: ' + (r.aktiv ? 'Ja' : 'Nein') + ' | Fruehestens ' + r.fruehestens_uhr + ' Uhr';
+
+                // Entscheidungsdetails aus regel_ergebnisse
+                let decisionHtml = '';
+                if (statusData && statusData.regel_ergebnisse) {
+                    const erg = statusData.regel_ergebnisse.find(e => e.name === r.name);
+                    if (erg) {
+                        let statusClass = 'decision-keine';
+                        let statusText = 'Keine Aktion';
+                        if (erg.einschalten === true) { statusClass = 'decision-ein'; statusText = 'EINSCHALTEN'; }
+                        else if (erg.einschalten === false) { statusClass = 'decision-aus'; statusText = 'AUSSCHALTEN'; }
+                        decisionHtml = '<div class="rule-decision" id="rule-decision-' + idx + '">' +
+                            '<div>Status: <span class="' + statusClass + '">' + statusText + '</span></div>' +
+                            '<div>Aktiv: ' + (erg.aktiv ? 'Ja' : 'Nein') + '</div>' +
+                            '<div style="margin-top:4px">' + (erg.grund || '') + '</div></div>';
+                    }
+                }
+
+                let stateClass = isWinner ? 'winner' : 'loser';
+                if (!isWinner && (!statusData || !statusData.regel_ergebnisse)) stateClass = 'loser';
+                if (!isWinner && statusData && statusData.regel_ergebnisse) {
+                    const erg = statusData.regel_ergebnisse.find(e => e.name === r.name);
+                    if (erg && !erg.aktiv) stateClass = 'inactive';
+                }
+
+                return '<div class="rule-card ' + stateClass + '" onclick="toggleRuleDetail(' + idx + ')">' +
                     '<div class="rule-header"><span class="rule-name">' + (isWinner ? '> ' : '') + r.name + '</span><span class="rule-prio">P' + r.prio + '</span></div>' +
-                    '<div class="rule-detail">' + detail + '</div></div>';
+                    '<div class="rule-detail">' + detail + '</div>' +
+                    decisionHtml + '</div>';
             }).join('') : '<div class="rule-detail">Keine Konfiguration geladen</div>';
 
             const nachtsperreTxt = priority ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : 'N/A';
@@ -878,11 +970,12 @@
                         <div class="info-row"><span class="info-label">Min. Verdampfer</span><span class="info-value"><span id="setpoint-verdampfer">${setpoints?.verdampfertemperatur ?? 'N/A'}</span> °C</span></div>
                     </div>
 
-                    <!-- Prioritaets-Regeln -->
+                                        <!-- Prioritaets-Regeln -->
                     <div class="card">
                         <div class="card-header">
                             <div class="card-icon yellow">🏆</div>
                             <div class="card-title">Prioritaeten</div>
+                            <span style="font-size:0.7rem; color:var(--text-secondary)">Klick = Details</span>
                         </div>
                         <div id="rules-list">${regelnHtml}</div>
                     </div>
@@ -947,8 +1040,15 @@
             setTimeout(createChart, 100);
         }
 
-        function toggleMode(modeName, currentState) {
+                function toggleMode(modeName, currentState) {
             sendControl('set_mode', { mode: modeName, active: !currentState });
+        }
+
+        function toggleRuleDetail(ruleId) {
+            const el = document.getElementById('rule-decision-' + ruleId);
+            if (el) {
+                el.classList.toggle('visible');
+            }
         }
 
         // Auto-refresh every 5 seconds

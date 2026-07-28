@@ -48,6 +48,7 @@ class ControlState:
         self.last_alert_type: Optional[str] = None
         self.komfort_aktiv: bool = False
         self._soll_einschalten: bool = False
+        self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
 
 class StatsState:
     def __init__(self, now):
