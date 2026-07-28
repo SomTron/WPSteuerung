@@ -308,11 +308,15 @@ async def handle_mode_switch(
 async def check_safety_limits(session, state, t_oben, t_unten, t_mittig, t_verd, set_kompressor_status_func: Callable):
     """
     Erweiterte Sicherheitspruefungen basierend auf der JSON-Config.
-    Prueft: Ueberhitzung, Nachtsperre, Notfall.
+    Prueft nur Ueberhitzung.
+    
+    Hinweis: max_temp_c (48C) ist kein Abschaltpunkt mehr, da der Boiler
+    kurzzeitig darueber gehen kann (z.B. 49C) ohne Probleme.
+    Nur ueberhitzung_c (58C) fuehrt zur sofortigen Abschaltung.
     """
     cfg = state.priority_config.sicherheit
     
-    # 1. Ueberhitzungsschutz
+    # 1. Ueberhitzungsschutz (einzige harte Abschaltung)
     if t_oben is not None and t_oben >= cfg.ueberhitzung_c:
         state.control.blocking_reason = f"UEBERHITZUNG ({t_oben:.1f}C >= {cfg.ueberhitzung_c}C)"
         if state.control.kompressor_ein:
@@ -320,13 +324,10 @@ async def check_safety_limits(session, state, t_oben, t_unten, t_mittig, t_verd,
             await set_kompressor_status_func(state, False, force=True)
         return False
     
-    # 2. Max-Temperatur
+    # 2. Max-Temperatur nur als Warnung (kein Abschalten)
     if t_oben is not None and t_oben >= cfg.max_temp_c:
-        state.control.blocking_reason = f"Max-Temp ({t_oben:.1f}C >= {cfg.max_temp_c}C)"
-        if state.control.kompressor_ein:
-            logging.warning(f"Max-Temperatur erreicht: {t_oben:.1f}C")
-            await set_kompressor_status_func(state, False, force=True)
-        return False
+        if check_log_throttle(state, "log_max_temp_warn", interval_min=5):
+            logging.warning(f"Max-Temperatur erreicht: {t_oben:.1f}C >= {cfg.max_temp_c}C (kein Abschalten)")
     
     return True
 
