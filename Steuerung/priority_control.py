@@ -144,6 +144,7 @@ def evaluate_komfort(
     - Ausschalten: Temp >= Ausschalt-Schwelle
     """
     temp = _parse_sensor(temp_dict, "unten")
+    temp_oben = _parse_sensor(temp_dict, "oben")
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     
     result = RegelErgebnis(
@@ -157,10 +158,17 @@ def evaluate_komfort(
         result.grund = "Sensor 'unten' nicht verfuegbar"
         return result
     
-    # Notfall: Auch bei Nachtsperre!
-    if temp <= komfort.notfall_einschalten_bei_c:
+    # Notfall: Auch bei Nachtsperre! (obener Sensor, da in der Nacht die
+    # Schichtung relevant ist und oben die Nutztemperatur repraesentiert)
+    if temp_oben is not None and temp_oben <= komfort.notfall_einschalten_bei_c:
         result.einschalten = True
-        result.grund = f"NOTFALL: unten {temp:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
+        result.grund = f"NOTFALL: oben {temp_oben:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
+        return result
+    
+    # Wenn oben-Sensor nicht verfuegbar: Fallback auf unten
+    if temp_oben is None and temp <= komfort.notfall_einschalten_bei_c:
+        result.einschalten = True
+        result.grund = f"NOTFALL (Fallback unten): unten {temp:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
         return result
     
     # Bei Nachtsperre: Nur Notfall, kein Komfort
