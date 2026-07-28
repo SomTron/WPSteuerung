@@ -165,8 +165,15 @@ def evaluate_komfort(
         result.grund = f"NOTFALL: oben {temp_oben:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
         return result
     
-    # Wenn oben-Sensor nicht verfuegbar: Fallback auf unten
-    if temp_oben is None and temp <= komfort.notfall_einschalten_bei_c:
+    # Wenn oben-Sensor nicht verfuegbar: Fallback auf mittig
+    temp_mittig = _parse_sensor(temp_dict, "mittig")
+    if temp_oben is None and temp_mittig is not None and temp_mittig <= komfort.notfall_einschalten_bei_c:
+        result.einschalten = True
+        result.grund = f"NOTFALL (Fallback mittig): mittig {temp_mittig:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
+        return result
+    
+    # Wenn oben UND mittig nicht verfuegbar: Fallback auf unten
+    if temp_oben is None and temp_mittig is None and temp <= komfort.notfall_einschalten_bei_c:
         result.einschalten = True
         result.grund = f"NOTFALL (Fallback unten): unten {temp:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
         return result
