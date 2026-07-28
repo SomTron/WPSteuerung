@@ -347,7 +347,7 @@ def get_priority_control_status(state) -> dict:
         "sensoren": state.control.active_rule_sensor,
         "nachtsperre_aktiv": _is_nachtsperre_aktiv(cfg, datetime.now(state.local_tz)),
         "komfort_aktiv": getattr(state.control, 'komfort_aktiv', False),
-        "anzahl_regeln": len(cfg.pv_regeln) + 3,  # PV + Komfort + Zeitfenster + Abweichung
+        "anzahl_regeln": len(cfg.pv_regeln) + 4,  # Wochenende + PV + Komfort + Zeitfenster + Abweichung
     }
 
 

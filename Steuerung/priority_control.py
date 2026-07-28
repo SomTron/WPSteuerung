@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from json_config import (
     WPSteuerungConfig, PVRegel, KomfortConfig,
-    ZeitfensterConfig, AbweichungConfig
+    ZeitfensterConfig, AbweichungConfig, WochenendeConfig
 )
 
 
@@ -126,6 +126,51 @@ def evaluate_pv_regel(
     result.einschalten = None
     result.grund = f"Keine Bedingung erfuellt (PV={pv_leistung:.0f}W, {sensor_name}={temp:.1f}C)"
     return result
+
+
+def evaluate_wochenende(
+    wochenende: WochenendeConfig,
+    now: datetime,
+) -> RegelErgebnis:
+    """
+    Wochenende-Regel: Blockiert Einschalten am Wochenende vor fruehestens_uhr.
+    
+    - Wenn Wochenende UND aktuelle Stunde < fruehestens_uhr -> AUS
+    - Sonst -> inaktiv (andere Regeln entscheiden)
+    """
+    if not wochenende.aktiv:
+        return RegelErgebnis(
+            name="Wochenende",
+            prioritaet=100,  # Hoechste Prioritaet, da blockierend
+            aktiv=False,
+            grund="Wochenende-Regel inaktiv"
+        )
+    
+    if not _is_weekend(now):
+        return RegelErgebnis(
+            name="Wochenende",
+            prioritaet=100,
+            aktiv=False,
+            grund="Kein Wochenende"
+        )
+    
+    # Wochenende aktiv: Pruefe ob vor fruehestens_uhr
+    if now.hour < wochenende.fruehestens_uhr:
+        return RegelErgebnis(
+            name="Wochenende",
+            prioritaet=100,  # Hoechste Prioritaet: blockiert alles andere
+            aktiv=True,
+            einschalten=False,
+            grund=f"Wochenende: Vor {wochenende.fruehestens_uhr} Uhr ({now.hour}:xx) -> AUS"
+        )
+    
+    return RegelErgebnis(
+        name="Wochenende",
+        prioritaet=100,
+        aktiv=True,
+        einschalten=None,  # Keine Aktion, andere Regeln dufen entscheiden
+        grund=f"Wochenende: Ab {wochenende.fruehestens_uhr} Uhr erlaubt ({now.hour}:xx)"
+    )
 
 
 def evaluate_komfort(
@@ -327,6 +372,10 @@ def bewerte_alle_regeln(
     nachtsperre_ende = config.sicherheit.nachtsperre_ende
     
     ergebnisse: List[RegelErgebnis] = []
+    
+    # 0. Wochenende-Regel (hoechste Prioritaet: blockiert Einschalten am Wochenende vor fruehestens_uhr)
+    ergebnis = evaluate_wochenende(config.wochenende, now)
+    ergebnisse.append(ergebnis)
     
     # 1. PV-Regeln bewerten
     for pv_regel in config.pv_regeln:
