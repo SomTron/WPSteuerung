@@ -113,12 +113,26 @@ case "$choice" in
         printf "  Datum:  %s\n" "$REM_DATE"
         printf "  Info:   %s\n" "$REM_MSG"
 
-        printf "\nUpdate durchfuehren? (j/n): "
+                                                printf "\nUpdate durchfuehren? (j/n): "
         read confirm
         if [ "$confirm" = "j" ] || [ "$confirm" = "J" ]; then
             printf "\n${CYAN}Aktualisiere Branch '%s'...${NC}\n" "$CURRENT_BRANCH"
             git pull origin "$CURRENT_BRANCH"
             printf "${GREEN}Code aktualisiert!${NC}\n"
+            # Service automatisch neu starten
+            if systemctl is-active --quiet "$SERVICE_NAME"; then
+                printf "${CYAN}Starte Service neu...${NC}\n"
+                sudo systemctl restart "$SERVICE_NAME"
+                sleep 2
+                if systemctl is-active --quiet "$SERVICE_NAME"; then
+                    printf "${GREEN}Service erfolgreich neu gestartet!${NC}\n"
+                else
+                    printf "${RED}WARNUNG: Service konnte nicht gestartet werden!${NC}\n"
+                    printf "Pruefe mit: sudo journalctl -u $SERVICE_NAME -n 20\n"
+                fi
+            else
+                printf "${YELLOW}Service ist nicht aktiv, ueberspringe Neustart.${NC}\n"
+            fi
             printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
             sleep 1
             exec sh "$SCRIPT_PATH" "$@"
@@ -207,8 +221,22 @@ case "$choice" in
                 git checkout -b "$target_branch" "origin/$target_branch" || git checkout "$target_branch"
             fi
 
-            git pull origin "$target_branch"
+                        git pull origin "$target_branch"
             printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
+            # Service automatisch neu starten
+            if systemctl is-active --quiet "$SERVICE_NAME"; then
+                printf "${CYAN}Starte Service neu...${NC}\n"
+                sudo systemctl restart "$SERVICE_NAME"
+                sleep 2
+                if systemctl is-active --quiet "$SERVICE_NAME"; then
+                    printf "${GREEN}Service erfolgreich neu gestartet!${NC}\n"
+                else
+                    printf "${RED}WARNUNG: Service konnte nicht gestartet werden!${NC}\n"
+                    printf "Pruefe mit: sudo journalctl -u $SERVICE_NAME -n 20\n"
+                fi
+            else
+                printf "${YELLOW}Service ist nicht aktiv, ueberspringe Neustart.${NC}\n"
+            fi
             printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
             sleep 1
             exec sh "$SCRIPT_PATH" "$@"
