@@ -112,14 +112,19 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         
         # Ein/Ausschaltpunkte aus Regel ermitteln
         if gewinner.einschalten is True:
-            # Einschaltpunkt = hoechster Temp-Wert in der Regel
             eps = _extract_einschaltpunkt(gewinner, state.priority_config)
             ausp = _extract_ausschaltpunkt(gewinner, state.priority_config)
             state.control.aktueller_einschaltpunkt = eps
             state.control.aktueller_ausschaltpunkt = ausp
         else:
-            state.control.aktueller_einschaltpunkt = state.priority_config.sicherheit.max_temp_c
-            state.control.aktueller_ausschaltpunkt = state.priority_config.sicherheit.max_temp_c
+            # Regel sagt AUS: korrekte Setpoints aus der Regel extrahieren,
+            # damit handle_compressor_off() den Kompressor auch abschalten kann.
+            # Wenn wir hier max_temp_c setzen, wuerde der Kompressor nie ausschalten,
+            # weil z.B. t_unten=43.2C < max_temp_c=48C.
+            eps = _extract_einschaltpunkt(gewinner, state.priority_config)
+            ausp = _extract_ausschaltpunkt(gewinner, state.priority_config)
+            state.control.aktueller_einschaltpunkt = max(eps, ausp)  # hoch, damit kein Neueinschalten
+            state.control.aktueller_ausschaltpunkt = ausp            # korrekt, damit Abschaltung funktioniert
     else:
         # Keine Regel will einschalten: Standard = ausschalten
         state.control.aktueller_einschaltpunkt = state.priority_config.sicherheit.max_temp_c
