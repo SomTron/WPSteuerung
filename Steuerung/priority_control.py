@@ -308,6 +308,8 @@ def evaluate_abweichung(
     
     Einschalten wenn: Soll - Ist >= Einschalt-Abweichung
     Ausschalten wenn: Soll - Ist <= Ausschalt-Abweichung
+    
+    Bei Nachtsperre: Nur Ausschalten erlaubt, kein Einschalten
     (Negative Abweichung = Ist > Soll)
     """
     result = RegelErgebnis(
@@ -322,15 +324,22 @@ def evaluate_abweichung(
         result.grund = f"Sensor '{abw.temperaturfuehler}' nicht verfuegbar"
         return result
     
+    nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     abweichung = abw.solltemperatur_c - temp  # Positiv = zu kalt, Negativ = zu warm
     
-    # Ausschalten: Ziel erreicht oder ueberschritten
+    # Ausschalten: Ziel erreicht oder ueberschritten (immer erlaubt, auch Nachts)
     if abweichung <= abw.ausschalten_bei_abweichung_k:
         result.einschalten = False
         result.grund = (
             f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
             f"{abweichung:.1f}K <= +{abw.ausschalten_bei_abweichung_k}K -> AUS"
         )
+        return result
+    
+    # Bei Nachtsperre: Kein Einschalten (Blockierungsgrund anzeigen)
+    if nachtsperre:
+        result.aktiv = False
+        result.grund = f"Nachtsperre (kein Einschalten, {abw.temperaturfuehler}={temp:.1f}C)"
         return result
     
     # Einschalten: Zu kalt
@@ -415,6 +424,15 @@ def bewerte_alle_regeln(
     # Nach Prioritaet sortieren (hoeher zuerst)
     aktive_regeln.sort(key=lambda e: e.prioritaet, reverse=True)
     gewinner = aktive_regeln[0]
+    
+    # Notfall-Pruefung: Wenn Wochenende blockiert, aber Komfort-Notfall aktiv ist,
+    # ueberschreibt der Notfall die Wochenende-Sperre.
+    if gewinner.name == "Wochenende" and gewinner.einschalten is False:
+        for e in ergebnisse:
+            if e.name == "Komfort" and e.aktiv and e.einschalten is True and "NOTFALL" in e.grund:
+                logging.info(f"Notfall ueberschreibt Wochenende-Sperre: {e.grund}")
+                gewinner = e
+                break
     
     logging.debug(
         f"Regel-Bewertung: {len(ergebnisse)} Regeln, "

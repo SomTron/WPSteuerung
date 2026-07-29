@@ -43,8 +43,7 @@ def set_last_compressor_off_time(state, time_val):
 
 async def check_pressure_and_config(
     session, state, handle_pressure_check_func: Callable,
-    set_kompressor_status_func: Callable, reload_config_func: Callable,
-    calculate_file_hash_func: Callable, only_pressure: bool = False
+    set_kompressor_status_func: Callable, only_pressure: bool = False
 ):
     """Prueft Druckschalter und aktualisiert Konfiguration bei Bedarf."""
     pressure_ok = await handle_pressure_check_func(session, state)
@@ -82,9 +81,27 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     if pv_leistung < 0:
         pv_leistung = 0.0
     
-    # Alle Regeln bewerten
+    # --- Bademodus/Urlaubsmodus-Kopplung ---
+    # Wir arbeiten mit einer Kopie der Config, um die original-Config nicht zu aendern.
+    # Falls Bademodus/Urlaub aktiv, passen wir die Solltemperatur der Abweichungs-Regel an.
+    import copy
+    effektive_config = copy.deepcopy(state.priority_config)
+    
+    if state.bademodus_aktiv:
+        # Bademodus: Solltemperatur +3°C (fuer warmes Wasser)
+        erhoehung = 3.0
+        effektive_config.abweichung.solltemperatur_c += erhoehung
+        logging.debug(f"Bademodus aktiv: Solltemperatur +{erhoehung}C auf {effektive_config.abweichung.solltemperatur_c}C")
+    
+    if state.urlaubsmodus_aktiv:
+        # Urlaubsmodus: Solltemperatur senken (Sparmodus)
+        absenkung = float(state.config.Urlaubsmodus.URLAUBSABSENKUNG) if hasattr(state.config, 'Urlaubsmodus') else 5.0
+        effektive_config.abweichung.solltemperatur_c -= absenkung
+        logging.debug(f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C")
+    
+    # Alle Regeln bewerten (mit effektiver Config)
     gewinner, alle_ergebnisse = bewerte_alle_regeln(
-        config=state.priority_config,
+        config=effektive_config,
         temp_dict=temp_dict,
         pv_leistung=pv_leistung,
         kompressor_ein=state.control.kompressor_ein,
@@ -257,7 +274,7 @@ async def handle_compressor_off(
 
 async def handle_compressor_on(
     state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
-    min_laufzeit, min_pause, within_solar_window, t_oben,
+    min_laufzeit, min_pause, t_oben,
     set_kompressor_status_func: Callable
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""

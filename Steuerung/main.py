@@ -319,8 +319,8 @@ async def run_logic_step(session, state):
     """Fuehrt einen Schritt der Steuerungslogik aus (Pareto-Prioritaeten)."""
     # 1. Druckschalter & Config
     if not await pcl.check_pressure_and_config(
-        session, state, handle_pressure_check, set_kompressor_status, state.update_config, lambda: "hash"
-    ):
+            session, state, handle_pressure_check, set_kompressor_status
+        ):
         return  # Druckfehler: Restliche Logik ueberspringen
 
     # 2. Kompressor-Verifizierung
@@ -356,10 +356,10 @@ async def run_logic_step(session, state):
             else:
                 # Kompressor aus: Einschalten pruefen
                 await pcl.handle_compressor_on(
-                    state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
-                    state.min_laufzeit, state.min_pause, False, state.sensors.t_oben,
-                    set_kompressor_status
-                )
+                                    state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
+                                    state.min_laufzeit, state.min_pause, state.sensors.t_oben,
+                                    set_kompressor_status
+                                )
             
             # 6. Sofort-Alarme pruefen
             await check_and_send_alerts(session, state)
