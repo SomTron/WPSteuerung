@@ -327,8 +327,8 @@ async def check_safety_limits(session, state, t_oben, t_unten, t_mittig, t_verd,
             await set_kompressor_status_func(state, False, force=True)
         return False
     
-    # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 1)
-    max_temp_warn = cfg.max_temp_c + 1.0
+    # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
+    max_temp_warn = cfg.max_temp_c + 2.0
     if t_oben is not None and t_oben >= max_temp_warn:
         if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
             logging.warning(f"Temperatur ueber Normalbereich: {t_oben:.1f}C >= {max_temp_warn}C (kein Abschalten)")
