@@ -142,12 +142,29 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     # Ergebnis aufbereiten
     should_on = gewinner is not None and gewinner.einschalten is True
     
+    # Regelfuehler dynamisch aus der aktiven Regel ermitteln, nicht hartcodiert t_unten
+    regelfuehler = t_unten  # Fallback
+    if gewinner is not None:
+        if "unten" in gewinner.grund.lower() or "unten" in (gewinner.name or "").lower():
+            regelfuehler = t_unten
+        elif "mitte" in gewinner.grund.lower() or "mitte" in (gewinner.name or "").lower():
+            regelfuehler = t_mittig
+        elif "oben" in gewinner.grund.lower() or "oben" in (gewinner.name or "").lower():
+            regelfuehler = state.sensors.t_oben
+    
+    # Solarueberschuss aktiv wenn PV-Leistung >= niedrigste Schwelle aller PV-Regeln
+    if state.priority_config.pv_regeln:
+        min_pv_schwelle = min(r.pv_schwelle_watt for r in state.priority_config.pv_regeln)
+        solar_ueberschuss_aktiv = pv_leistung >= min_pv_schwelle
+    else:
+        solar_ueberschuss_aktiv = False
+    
     res = {
         "modus": gewinner.name if gewinner else "Keine Regel aktiv",
         "einschaltpunkt": state.control.aktueller_einschaltpunkt,
         "ausschaltpunkt": state.control.aktueller_ausschaltpunkt,
-        "regelfuehler": t_unten,  # Standard fuer die meiste Logik
-        "solar_ueberschuss_aktiv": pv_leistung > state.priority_config.pv_regeln[0].pv_schwelle_watt if state.priority_config.pv_regeln else False,
+        "regelfuehler": regelfuehler,
+        "solar_ueberschuss_aktiv": solar_ueberschuss_aktiv,
         "soll_einschalten": should_on,
         "gewinner_ergebnis": gewinner,
         "alle_ergebnisse": alle_ergebnisse,
