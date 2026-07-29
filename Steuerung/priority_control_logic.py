@@ -225,7 +225,7 @@ async def handle_compressor_off(
         else:
             remaining_min = int((min_laufzeit - elapsed).total_seconds() // 60)
             state.control.blocking_reason = f"Warte auf Mindestlaufzeit (noch {remaining_min}m)"
-            if check_log_throttle(state, "log_min_laufzeit_off", interval_min=5):
+            if check_log_throttle(state, "log_min_laufzeit_off", interval_minutes=5):
                 logging.info(
                     f"Abschaltwunsch unterdrueckt: Mindestlaufzeit noch nicht erreicht. "
                     f"Laufzeit: {elapsed}"
@@ -330,7 +330,7 @@ async def check_safety_limits(session, state, t_oben, t_unten, t_mittig, t_verd,
     # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 1)
     max_temp_warn = cfg.max_temp_c + 1.0
     if t_oben is not None and t_oben >= max_temp_warn:
-        if check_log_throttle(state, "log_max_temp_warn", interval_min=5):
+        if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
             logging.warning(f"Temperatur ueber Normalbereich: {t_oben:.1f}C >= {max_temp_warn}C (kein Abschalten)")
     
     return True
