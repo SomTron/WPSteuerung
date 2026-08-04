@@ -361,7 +361,10 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
     try:
         df = pd.read_csv(csv_path)
         # Filter last N hours
-        df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'])
+        if df['Zeitstempel'].dtype in ('float64', 'int64') or df['Zeitstempel'].dtype.kind == 'f':
+            df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'], unit='D', origin='1899-12-30')
+        else:
+            df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'])
         cutoff = datetime.now() - pd.Timedelta(hours=hours)
         df = df[df['Zeitstempel'] >= cutoff]
         
