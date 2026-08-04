@@ -318,7 +318,7 @@ async def check_and_send_alerts(session, state):
     # Der technische Statuswechsel wird weiterhin für andere Zwecke geloggt/gespeichert
     state.control.last_blocking_reason = current_blocking
 
-async def run_logic_step(session, state):
+async def run_logic_step(session, state, learning_engine=None):
     """Fuehrt einen Schritt der Steuerungslogik aus (Pareto-Prioritaeten)."""
     # 1. Druckschalter & Config
     if not await pcl.check_pressure_and_config(
@@ -450,7 +450,7 @@ async def main_loop():
             last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
             
             # Logik & Logging
-            await run_logic_step(session, state)
+            await run_logic_step(session, state, learning_engine=learning_engine)
             await log_system_state(state)
             
             await asyncio.sleep(MAIN_LOOP_INTERVAL_SEC)
