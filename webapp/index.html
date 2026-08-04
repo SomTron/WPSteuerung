@@ -904,6 +904,9 @@
                         else if (r.typ === 'zeitfenster') detail = r.start + '-' + r.ende + ' Uhr | max ' + r.ein + 'C | PV >= ' + r.min_pv + 'W';
                         else if (r.typ === 'abweichung') detail = 'Sensor: ' + r.sensor + ' | Soll ' + r.soll + 'C | +' + r.ein + 'K / -' + r.aus + 'K';
                         else if (r.typ === 'wochenende') detail = 'Aktiv: ' + (r.aktiv ? 'Ja' : 'Nein') + ' | Fruehestens ' + r.fruehestens_uhr + ' Uhr';
+                        else if (r.typ === 'forecast') detail = 'Vorheiz ' + r.vorheiz_c + 'C | max ' + r.max_c + 'C | schlecht<=' + r.schlecht_wmq + ' | gut>=' + r.gut_wmq + ' Wh/qm';
+                        else if (r.typ === 'adaptivepv') detail = 'Basis ' + r.basis_w + 'W | Sensor: ' + r.sensor + ' | max ' + r.max_c + 'C';
+                        else if (r.typ === 'calcstart') detail = 'Soll ' + r.soll_c + 'C um ' + r.ziel_uhr + ':00 | max ' + r.max_c + 'C';
 
                         // Entscheidungsdetails aus regel_ergebnisse
                         let decisionHtml = '';
@@ -984,6 +987,9 @@
                 else if (r.typ === 'zeitfenster') detail = r.start + '-' + r.ende + ' Uhr | Sensor: ' + (r.sensor || 'mitte') + ' | max ' + r.ein + 'C | PV >= ' + r.min_pv + 'W';
                 else if (r.typ === 'abweichung') detail = 'Sensor: ' + r.sensor + ' | Soll ' + r.soll + 'C | +' + r.ein + 'K / -' + r.aus + 'K';
                 else if (r.typ === 'wochenende') detail = 'Aktiv: ' + (r.aktiv ? 'Ja' : 'Nein') + ' | Fruehestens ' + r.fruehestens_uhr + ' Uhr';
+                else if (r.typ === 'forecast') detail = 'Vorheiz ' + r.vorheiz_c + 'C | max ' + r.max_c + 'C | schlecht<=' + r.schlecht_wmq + ' | gut>=' + r.gut_wmq + ' Wh/qm';
+                else if (r.typ === 'adaptivepv') detail = 'Basis ' + r.basis_w + 'W | Sensor: ' + r.sensor + ' | max ' + r.max_c + 'C';
+                else if (r.typ === 'calcstart') detail = 'Soll ' + r.soll_c + 'C um ' + r.ziel_uhr + ':00 | max ' + r.max_c + 'C';
 
                 // Entscheidungsdetails aus regel_ergebnisse
                 let decisionHtml = '';

@@ -168,6 +168,31 @@ def get_status():
             "aktiv": pc.wochenende.aktiv,
             "fruehestens_uhr": pc.wochenende.fruehestens_uhr,
         })
+        # Forecast-Regel (Prognose)
+        priority_info["regeln"].append({
+            "name": "Forecast", "typ": "forecast", "prio": pc.forecast.prioritaet,
+            "aktiv": pc.forecast.aktiv,
+            "vorheiz_c": pc.forecast.t_vorheiz_ab_c,
+            "max_c": pc.forecast.tmax_c,
+            "schlecht_wmq": pc.forecast.fc_schwelle_niedrig_wh,
+            "gut_wmq": pc.forecast.fc_schwelle_hoch_wh,
+        })
+        # AdaptivePV-Regel
+        priority_info["regeln"].append({
+            "name": "AdaptivePV", "typ": "adaptivepv", "prio": pc.adaptive_pv.prioritaet,
+            "aktiv": pc.adaptive_pv.aktiv,
+            "basis_w": pc.adaptive_pv.base_threshold_watt,
+            "sensor": pc.adaptive_pv.temperaturfuehler,
+            "max_c": pc.adaptive_pv.tmax_c,
+        })
+        # CalcStart-Regel
+        priority_info["regeln"].append({
+            "name": "CalcStart", "typ": "calcstart", "prio": pc.calculated_start.prioritaet,
+            "aktiv": pc.calculated_start.aktiv,
+            "soll_c": pc.calculated_start.solltemperatur_c,
+            "ziel_uhr": pc.calculated_start.target_uhr,
+            "max_c": pc.calculated_start.tmax_c,
+        })
 
     # Regel-Ergebnisse (Entscheidungen) aus State
     regel_ergebnisse = []
