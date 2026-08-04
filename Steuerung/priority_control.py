@@ -623,6 +623,9 @@ def bewerte_alle_regeln(
     forecast_wh_qm: Optional[float] = None,
     soc: Optional[float] = None,
     battery_power: Optional[float] = None,
+    learned_heating_rate_unten: Optional[float] = None,
+    learned_heating_rate_gesamt: Optional[float] = None,
+    learned_target_hour: Optional[float] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -688,7 +691,10 @@ def bewerte_alle_regeln(
     # 7. Calculated-Start-Regel (optimierter Startzeitpunkt)
     ergebnis = evaluate_calculated_start(
         config.calculated_start, temp_dict, now_hour, now.minute,
-        nachtsperre_start, nachtsperre_ende
+        nachtsperre_start, nachtsperre_ende,
+        learned_heating_rate_unten=learned_heating_rate_unten,
+        learned_heating_rate_gesamt=learned_heating_rate_gesamt,
+        learned_target_hour=learned_target_hour,
     )
     ergebnisse.append(ergebnis)
     
