@@ -323,6 +323,31 @@ async def control_system(cmd: ControlCommand):
 
     raise HTTPException(status_code=400, detail="Unknown command")
 
+
+
+@app.get("/debug/csv")
+def debug_csv():
+    """Debug: Zeigt CSV-Status und Daten an."""
+    import os as _os
+    csv_path = HEIZUNGSDATEN_CSV
+    result = {
+        "csv_path": csv_path,
+        "csv_exists": _os.path.exists(csv_path),
+    }
+    if result["csv_exists"]:
+        result["size_bytes"] = _os.path.getsize(csv_path)
+        try:
+            import pandas as _pd
+            df = _pd.read_csv(csv_path)
+            result["rows"] = len(df)
+            result["columns"] = list(df.columns)
+            result["first_timestamp"] = str(df.iloc[0]["Zeitstempel"]) if len(df) > 0 else None
+            result["last_timestamp"] = str(df.iloc[-1]["Zeitstempel"]) if len(df) > 0 else None
+            result["column_types"] = {str(k): str(v) for k, v in df.dtypes.items()}
+        except Exception as e:
+            result["read_error"] = str(e)
+    return result
+
 @app.get("/history")
 def get_history(hours: int = Query(default=24, ge=1, le=168)):
     """Get historical data from CSV. Hours must be between 1 and 168 (7 days)."""
