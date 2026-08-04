@@ -246,6 +246,13 @@ def get_status():
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
         },
+        "learning": shared_state.learning_engine.get_info() if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else {
+            "heat_rates": {"winter": {"avg": 3.0, "count": 0}, "transition": {"avg": 3.0, "count": 0}, "summer": {"avg": 3.0, "count": 0}},
+            "learned_target_hour": 17.0,
+            "target_hour_samples": 0,
+            "total_cycles": 0,
+            "total_usage_events": 0,
+        },
                 "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund or "",
             "last_update": datetime.now().strftime("%H:%M:%S"),

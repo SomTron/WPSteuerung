@@ -28,6 +28,7 @@ from telegram_charts import get_boiler_temperature_history, get_runtime_bar_char
 from vpn_manager import check_vpn_status
 from api import app, init_api
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV
+from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
 from logic_utils import is_nighttime, is_solar_window
 from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN
@@ -120,6 +121,8 @@ async def setup_application():
     
     # 2. State init
     state = State(config_manager)
+    learning_engine = LearningEngine()
+    state.learning_engine = learning_engine
     
     # 3. Logging setup
     setup_logging(enable_full_log=True, telegram_config=state.config.Telegram)
@@ -337,7 +340,7 @@ async def run_logic_step(session, state):
         # 3b. Sensoren-Check (behalten wir vom alten System)
         if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
             # 4. Prioritaeten-Engine: Regel bewerten
-            result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig)
+            result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig, learning_engine=learning_engine)
             
             # 5. Schaltentscheidung
             should_on = result.get("soll_einschalten", False)

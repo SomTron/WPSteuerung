@@ -64,7 +64,7 @@ async def check_pressure_and_config(
     return True
 
 
-async def determine_mode_and_setpoints(state, t_unten, t_mittig):
+async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
     """
     Bestimmt den Betriebsmodus basierend auf den Prioritaeten-Regeln.
     
@@ -108,6 +108,25 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
             forecast_wh_qm = None
     
     # Alle Regeln bewerten (mit effektiver Config)
+    # Learning Engine aktualisieren (Heizzyklen + Zapfprofil)
+    if learning_engine is not None:
+        learning_engine.update(
+            now=datetime.now(state.local_tz),
+            temp_dict=temp_dict,
+            compressor_is_on=state.control.kompressor_ein,
+        )
+        gelernte_rate_unten = learning_engine.get_learned_heating_rate(
+            datetime.now(state.local_tz).month, 'unten'
+        )
+        gelernte_rate_gesamt = learning_engine.get_learned_heating_rate(
+            datetime.now(state.local_tz).month, 'gesamt'
+        )
+        gelernte_zielzeit = learning_engine.get_learned_target_hour()
+    else:
+        gelernte_rate_unten = None
+        gelernte_rate_gesamt = None
+        gelernte_zielzeit = None
+
     gewinner, alle_ergebnisse = bewerte_alle_regeln(
         config=effektive_config,
         temp_dict=temp_dict,
@@ -115,6 +134,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         kompressor_ein=state.control.kompressor_ein,
         now=datetime.now(state.local_tz),
         forecast_wh_qm=forecast_wh_qm,
+        learned_heating_rate_unten=gelernte_rate_unten,
+        learned_heating_rate_gesamt=gelernte_rate_gesamt,
+        learned_target_hour=gelernte_zielzeit,
     )
     
     # Ergebnisse loggen (gethrottelt)
