@@ -450,7 +450,7 @@ async def main_loop():
             last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
             
             # Logik & Logging
-            await run_logic_step(session, state, learning_engine=learning_engine)
+            await run_logic_step(session, state, learning_engine=state.learning_engine)
             await log_system_state(state)
             
             await asyncio.sleep(MAIN_LOOP_INTERVAL_SEC)
