@@ -8,6 +8,7 @@ import logging
 import os
 from datetime import datetime
 import re
+import io
 
 from utils import HEIZUNGSDATEN_CSV
 
@@ -359,13 +360,14 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
         raise HTTPException(status_code=404, detail="No historical data available")
     
     try:
-        # Nur die letzten Zeilen lesen (Performance: 126k Zeilen parsen = timeout)
-        # ~30s/Takt * 2/min * 60min * 168h max = max ~20k Zeilen fuer 7d
-        ESTIMATED_ROWS_7D = 25000
-        df = pd.read_csv(csv_path, nrows=None)
-        total = len(df)
-        if total > ESTIMATED_ROWS_7D:
-            df = df.iloc[-ESTIMATED_ROWS_7D:]
+        # Nur die letzten ~25k Zeilen lesen (126k komplett parsen = timeout auf Pi)
+        from collections import deque
+        MAX_ROWS = 25000
+        with open(csv_path, "r", encoding="utf-8") as _f:
+            _header = _f.readline()
+            _tail = deque(_f, maxlen=MAX_ROWS)
+        _lines = [_header] + list(_tail)
+        df = pd.read_csv(io.StringIO("".join(_lines)))
         # Gemischte Formate: Excel-Serial (float) ODER ISO-String
         df['_ts_str'] = df['Zeitstempel'].astype(str)
         def _parse_ts(v):
