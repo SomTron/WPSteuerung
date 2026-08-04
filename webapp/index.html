@@ -1192,7 +1192,8 @@
                     </div>
                 </div>
             `;
-            setTimeout(() => { createChart(); highlightActiveSensor(); }, 100);
+            // Chart wird jetzt in loadHistory() erstellt, sobald CSV-Daten da sind
+            setTimeout(() => { if (!chart) createChart(); }, 2000);
         }
 
                 function toggleMode(modeName, currentState) {
