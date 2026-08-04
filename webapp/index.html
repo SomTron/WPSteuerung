@@ -760,6 +760,27 @@
             }
         }
 
+                function getBoilerRange() {
+                    let min = Infinity, max = -Infinity;
+                    const series = [temperatureHistory.oben, temperatureHistory.mittig, temperatureHistory.unten, temperatureHistory.sollwerte];
+                    series.forEach(arr => {
+                        arr.forEach(v => {
+                            if (v !== null && v !== undefined && !isNaN(v)) { min = Math.min(min, v); max = Math.max(max, v); }
+                        });
+                    });
+                    if (min === Infinity) { min = 0; max = 60; }
+                    const pad = Math.max((max - min) * 0.15, 3);
+                    return { min: Math.floor(min - pad), max: Math.ceil(max + pad) };
+                }
+                function getVerdampferRange() {
+                    let min = Infinity, max = -Infinity;
+                    temperatureHistory.verdampfer.forEach(v => {
+                        if (v !== null && v !== undefined && !isNaN(v)) { min = Math.min(min, v); max = Math.max(max, v); }
+                    });
+                    if (min === Infinity) { min = -10; max = 15; }
+                    const pad = Math.max((max - min) * 0.15, 3);
+                    return { min: Math.floor(min - pad), max: Math.ceil(max + pad) };
+                }
                 function createChart() {
                     const ctx = document.getElementById('tempChart');
                     if (!ctx) return;
@@ -783,8 +804,8 @@
                                 tooltip: { mode: 'index', intersect: false, backgroundColor: 'rgba(22, 33, 62, 0.95)', titleColor: '#fff', bodyColor: '#a0a0c0', borderColor: 'rgba(0, 212, 255, 0.3)', borderWidth: 1 }
                             },
                             scales: {
-                                y: { beginAtZero: false, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', callback: v => v + ' °C' }, title: { display: true, text: 'Boiler (°C)', color: '#a0a0c0' } },
-                                y1: { position: 'right', beginAtZero: false, grid: { display: false }, ticks: { color: '#ff6b6b', callback: v => v + ' °C' }, title: { display: true, text: 'Verdampfer (°C)', color: '#ff6b6b' } },
+                                y: { min: getBoilerRange().min, max: getBoilerRange().max, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', callback: v => v + ' °C' }, title: { display: true, text: 'Boiler (°C)', color: '#a0a0c0' } },
+                                y1: { position: 'right', min: getVerdampferRange().min, max: getVerdampferRange().max, grid: { display: false }, ticks: { color: '#ff6b6b', callback: v => v + ' °C' }, title: { display: true, text: 'Verdampfer (°C)', color: '#ff6b6b' } },
                                 x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', maxRotation: 45, minRotation: 45, maxTicksLimit: 20 } }
                             },
                             interaction: { mode: 'nearest', axis: 'x', intersect: false }
@@ -800,6 +821,12 @@
                     chart.data.datasets[2].data = temperatureHistory.unten;
                     chart.data.datasets[3].data = temperatureHistory.verdampfer;
                     chart.data.datasets[4].data = temperatureHistory.sollwerte;
+                    const yR = getBoilerRange();
+                    chart.options.scales.y.min = yR.min;
+                    chart.options.scales.y.max = yR.max;
+                    const y1R = getVerdampferRange();
+                    chart.options.scales.y1.min = y1R.min;
+                    chart.options.scales.y1.max = y1R.max;
                     chart.update('none');
                 }
 
