@@ -359,8 +359,13 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
         raise HTTPException(status_code=404, detail="No historical data available")
     
     try:
-        df = pd.read_csv(csv_path)
-        # Filter last N hours
+        # Nur die letzten Zeilen lesen (Performance: 126k Zeilen parsen = timeout)
+        # ~30s/Takt * 2/min * 60min * 168h max = max ~20k Zeilen fuer 7d
+        ESTIMATED_ROWS_7D = 25000
+        df = pd.read_csv(csv_path, nrows=None)
+        total = len(df)
+        if total > ESTIMATED_ROWS_7D:
+            df = df.iloc[-ESTIMATED_ROWS_7D:]
         # Gemischte Formate: Excel-Serial (float) ODER ISO-String
         df['_ts_str'] = df['Zeitstempel'].astype(str)
         def _parse_ts(v):
