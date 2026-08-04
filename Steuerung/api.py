@@ -361,10 +361,16 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
     try:
         df = pd.read_csv(csv_path)
         # Filter last N hours
-        if df['Zeitstempel'].dtype in ('float64', 'int64') or df['Zeitstempel'].dtype.kind == 'f':
-            df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'], unit='D', origin='1899-12-30')
-        else:
-            df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'])
+        # Gemischte Formate: Excel-Serial (float) ODER ISO-String
+        df['_ts_str'] = df['Zeitstempel'].astype(str)
+        def _parse_ts(v):
+            v = v.strip()
+            if v[:4].isdigit() and '-' in v:
+                try: return pd.to_datetime(v)
+                except: return pd.NaT
+            try: return pd.to_datetime(float(v), unit='D', origin='1899-12-30')
+            except: return pd.NaT
+        df['Zeitstempel'] = df['_ts_str'].apply(_parse_ts)
         cutoff = datetime.now() - pd.Timedelta(hours=hours)
         df = df[df['Zeitstempel'] >= cutoff]
         
