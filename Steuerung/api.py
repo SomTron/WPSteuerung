@@ -368,16 +368,17 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
             _tail = deque(_f, maxlen=MAX_ROWS)
         _lines = [_header] + list(_tail)
         df = pd.read_csv(io.StringIO("".join(_lines)))
-        # Gemischte Formate: Excel-Serial (float) ODER ISO-String
-        df['_ts_str'] = df['Zeitstempel'].astype(str)
-        def _parse_ts(v):
-            v = v.strip()
-            if v[:4].isdigit() and '-' in v:
-                try: return pd.to_datetime(v)
-                except: return pd.NaT
-            try: return pd.to_datetime(float(v), unit='D', origin='1899-12-30')
-            except: return pd.NaT
-        df['Zeitstempel'] = df['_ts_str'].apply(_parse_ts)
+        # Gemischte Formate vektorisiert (KEIN apply/Lambda!)
+        _ts_raw = df['Zeitstempel']
+        _ts_num = pd.to_numeric(_ts_raw, errors='coerce')
+        _is_num = _ts_num.notna()
+        if _is_num.any():
+            df.loc[_is_num, 'Zeitstempel'] = pd.to_datetime(
+                _ts_num[_is_num], unit='D', origin='1899-12-30')
+        if (~_is_num).any():
+            df.loc[~_is_num, 'Zeitstempel'] = pd.to_datetime(
+                _ts_raw[~_is_num].astype(str).str.strip(), errors='coerce')
+        df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'], errors='coerce')
         cutoff = datetime.now() - pd.Timedelta(hours=hours)
         df = df[df['Zeitstempel'] >= cutoff]
         
