@@ -639,6 +639,12 @@
                 btn.classList.toggle('active', parseInt(btn.dataset.hours) === hours);
             });
 
+            // Vorhandenen Chart zerstoeren (wichtig: Daten-Reset kommt danach)
+            if (chart) {
+                chart.destroy();
+                chart = null;
+            }
+
             try {
                 const response = await fetch(`${API_BASE}/history?hours=${hours}`);
                 if (!response.ok) throw new Error('History API Fehler');
@@ -670,14 +676,14 @@
                     temperatureHistory.sollwerte.push(point.einschaltpunkt);
                 });
 
-                // Chart aktualisieren
-                if (chart) {
-                    updateChart();
-                }
-                // Sollwert-Label setzen
+                // Chart mit den geladenen Daten neu erstellen
+                createChart();
                 updateSollwertLabel();
+                highlightActiveSensor();
             } catch (error) {
                 console.error('Fehler beim Laden der Historie:', error);
+                // Fallback: leeren Chart erstellen falls API fehlschlaegt
+                if (!chart) createChart();
             } finally {
                 isLoadingHistory = false;
             }
@@ -1193,7 +1199,7 @@
                 </div>
             `;
             // Chart wird jetzt in loadHistory() erstellt, sobald CSV-Daten da sind
-            setTimeout(() => { if (!chart) createChart(); }, 2000);
+            setTimeout(() => { if (!chart) createChart(); }, 5000);
         }
 
                 function toggleMode(modeName, currentState) {
