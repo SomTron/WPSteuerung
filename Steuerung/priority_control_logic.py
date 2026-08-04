@@ -99,6 +99,14 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         effektive_config.abweichung.solltemperatur_c -= absenkung
         logging.debug(f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C")
     
+    # Forecast-Daten aus State holen
+    forecast_wh_qm = getattr(state.solar, 'forecast_tomorrow', None)
+    if forecast_wh_qm is not None:
+        try:
+            forecast_wh_qm = float(forecast_wh_qm)
+        except (TypeError, ValueError):
+            forecast_wh_qm = None
+    
     # Alle Regeln bewerten (mit effektiver Config)
     gewinner, alle_ergebnisse = bewerte_alle_regeln(
         config=effektive_config,
@@ -106,6 +114,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig):
         pv_leistung=pv_leistung,
         kompressor_ein=state.control.kompressor_ein,
         now=datetime.now(state.local_tz),
+        forecast_wh_qm=forecast_wh_qm,
     )
     
     # Ergebnisse loggen (gethrottelt)
@@ -210,6 +219,12 @@ def _extract_einschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
         return config.zeitfenster.max_temp_fuer_einschalten_c
     elif name == "Abweichung":
         return config.abweichung.solltemperatur_c - config.abweichung.einschalten_bei_abweichung_k
+    elif name == "Forecast":
+        return config.forecast.t_vorheiz_ab_c
+    elif name == "AdaptivePV":
+        return config.adaptive_pv.base_threshold_watt
+    elif name == "CalcStart":
+        return config.calculated_start.solltemperatur_c
     
     return config.sicherheit.max_temp_c
 
@@ -228,6 +243,12 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
         return config.zeitfenster.max_temp_fuer_einschalten_c
     elif name == "Abweichung":
         return config.abweichung.solltemperatur_c - config.abweichung.ausschalten_bei_abweichung_k
+    elif name == "Forecast":
+        return config.forecast.tmax_c
+    elif name == "AdaptivePV":
+        return config.adaptive_pv.tmax_c
+    elif name == "CalcStart":
+        return config.calculated_start.tmax_c
     
     return config.sicherheit.max_temp_c
 
@@ -389,7 +410,7 @@ def get_priority_control_status(state) -> dict:
         "sensoren": state.control.active_rule_sensor,
         "nachtsperre_aktiv": _is_nachtsperre_aktiv(cfg, datetime.now(state.local_tz)),
         "komfort_aktiv": getattr(state.control, 'komfort_aktiv', False),
-        "anzahl_regeln": len(cfg.pv_regeln) + 4,  # Wochenende + PV + Komfort + Zeitfenster + Abweichung
+        "anzahl_regeln": len(cfg.pv_regeln) + 4 + 3,  # +Wochenende+PV+Komfort+Zeitfenster+Abweichung+Forecast+AdaptivePV+CalcStart
     }
 
 

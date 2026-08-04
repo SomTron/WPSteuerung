@@ -80,6 +80,44 @@ class AbweichungConfig(BaseModel):
     ausschalten_bei_abweichung_k: float = Field(default=0.5, description="Ausschalten bei Abweichung <= (K)")
 
 
+
+
+class ForecastConfig(BaseModel):
+    """Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter."""
+    prioritaet: int = Field(default=57, description="Prioritaet")
+    aktiv: bool = Field(default=True, description="Regel aktiv")
+    fc_schwelle_hoch_wh: float = Field(default=3000.0, description="Prognose ueber Wert = guter Solartag (Wh/qm)")
+    fc_schwelle_niedrig_wh: float = Field(default=800.0, description="Prognose unter Wert = schlechter Solartag (Wh/qm)")
+    t_vorheiz_ab_c: float = Field(default=44.0, description="Vorheizen wenn Temp kleiner gleich (Grad C)")
+    tmax_c: float = Field(default=48.0, description="Maximale Vorheiztemperatur (Grad C)")
+    vorheiz_start_uhr: int = Field(default=8, description="Vorheiz-Fenster Start-Stunde")
+    vorheiz_ende_uhr: int = Field(default=19, description="Vorheiz-Fenster Ende-Stunde")
+    sparen_start_uhr: int = Field(default=11, description="Spar-Fenster Start-Stunde")
+    sparen_ende_uhr: int = Field(default=15, description="Spar-Fenster Ende-Stunde")
+
+
+class AdaptivePVConfig(BaseModel):
+    """Adaptive-PV-Regel: PV-Schwelle passt sich an Temperatur und Prognose an."""
+    prioritaet: int = Field(default=55, description="Prioritaet")
+    aktiv: bool = Field(default=True, description="Regel aktiv")
+    base_threshold_watt: float = Field(default=300.0, description="Basis-PV-Schwelle (W)")
+    temperaturfuehler: str = Field(default="unten", description="Fuehler: oben/mitte/unten")
+    tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
+    t_aggressiv_kalt_c: float = Field(default=35.0, description="Schwelle x0.5 wenn Temp unter Wert (Grad C)")
+    t_normal_kalt_c: float = Field(default=38.0, description="Schwelle x0.7 wenn Temp unter Wert (Grad C)")
+
+
+class CalculatedStartConfig(BaseModel):
+    """Startzeit-Regel: Berechnet optimalen Einschaltzeitpunkt fuer Zieltemperatur."""
+    prioritaet: int = Field(default=72, description="Prioritaet")
+    aktiv: bool = Field(default=True, description="Regel aktiv")
+    solltemperatur_c: float = Field(default=44.0, description="Zieltemperatur (Grad C)")
+    target_uhr: int = Field(default=17, description="Zielzeit (Stunde) - typische Zapfzeit")
+    heizrate_unten_c_h: float = Field(default=3.0, description="Geschaetzte Heizrate unten (Grad C/h)")
+    heizrate_gesamt_c_h: float = Field(default=2.0, description="Geschaetzte Heizrate gesamt (Grad C/h)")
+    tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
+
+
 class WPSteuerungConfig(BaseModel):
     """Gesamtkonfiguration der Pareto-optimierten WP-Steuerung."""
     beschreibung: str = Field(default="WP Steuerung")
@@ -91,6 +129,9 @@ class WPSteuerungConfig(BaseModel):
     komfort: KomfortConfig = Field(default_factory=KomfortConfig)
     zeitfenster: ZeitfensterConfig = Field(default_factory=ZeitfensterConfig)
     abweichung: AbweichungConfig = Field(default_factory=AbweichungConfig)
+    forecast: ForecastConfig = Field(default_factory=ForecastConfig)
+    adaptive_pv: AdaptivePVConfig = Field(default_factory=AdaptivePVConfig)
+    calculated_start: CalculatedStartConfig = Field(default_factory=CalculatedStartConfig)
 
 
 class WPSteuerungConfigManager:

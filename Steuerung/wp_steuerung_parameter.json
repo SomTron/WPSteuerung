@@ -1,0 +1,96 @@
+{
+  "beschreibung": "600W WP Steuerung - optimierte Parameter (Pareto) mit PV-Shaping, Forecast, AdaptivePV, CalcStart",
+  "wp": {
+    "leistung_watt": 600,
+    "typ": "binaer_ein_aus"
+  },
+  "zyklus": {
+    "interval_minuten": 15,
+    "mindestlaufzeit_minuten": 60,
+    "mindestpausenzeit_minuten": 30
+  },
+  "sicherheit": {
+    "nachtsperre_start": 19,
+    "nachtsperre_ende": 8,
+    "max_temp_c": 48,
+    "ueberhitzung_c": 58,
+    "notfall_c": 36
+  },
+  "wochenende": {
+    "aktiv": true,
+    "fruehestens_uhr": 9
+  },
+  "pv_regeln": [
+    {
+      "name": "PV_mitte",
+      "prioritaet": 80,
+      "pv_schwelle_watt": 700,
+      "temperaturfuehler": "mitte",
+      "einschalten_bei_c": 42,
+      "ausschalten_bei_c": 48,
+      "weiterlaufen_ab_pv_watt": 50
+    },
+    {
+      "name": "PV_unten",
+      "prioritaet": 80,
+      "pv_schwelle_watt": 500,
+      "temperaturfuehler": "unten",
+      "einschalten_bei_c": 42,
+      "ausschalten_bei_c": 48,
+      "weiterlaufen_ab_pv_watt": 50
+    }
+  ],
+  "komfort": {
+    "prioritaet": 60,
+    "notfall_einschalten_bei_c": 36,
+    "komfort_einschalten_bei_c": 38,
+    "ausschalten_bei_c": 42,
+    "min_pv_fuer_komfort_watt": 50
+  },
+  "zeitfenster": {
+    "prioritaet": 53,
+    "start_uhr": 16,
+    "ende_uhr": 17,
+    "modus": "einschalten",
+    "temperaturfuehler": "mitte",
+    "max_temp_fuer_einschalten_c": 44.5,
+    "min_pv_watt": 410
+  },
+  "abweichung": {
+    "prioritaet": 47,
+    "solltemperatur_c": 44,
+    "temperaturfuehler": "unten",
+    "einschalten_bei_abweichung_k": 4.9,
+    "ausschalten_bei_abweichung_k": 0.7
+  },
+  "forecast": {
+    "prioritaet": 57,
+    "aktiv": true,
+    "fc_schwelle_hoch_wh": 3000,
+    "fc_schwelle_niedrig_wh": 800,
+    "t_vorheiz_ab_c": 44,
+    "tmax_c": 48,
+    "vorheiz_start_uhr": 8,
+    "vorheiz_ende_uhr": 19,
+    "sparen_start_uhr": 11,
+    "sparen_ende_uhr": 15
+  },
+  "adaptive_pv": {
+    "prioritaet": 55,
+    "aktiv": true,
+    "base_threshold_watt": 300,
+    "temperaturfuehler": "unten",
+    "tmax_c": 48,
+    "t_aggressiv_kalt_c": 35,
+    "t_normal_kalt_c": 38
+  },
+  "calculated_start": {
+    "prioritaet": 72,
+    "aktiv": true,
+    "solltemperatur_c": 44,
+    "target_uhr": 17,
+    "heizrate_unten_c_h": 3.0,
+    "heizrate_gesamt_c_h": 2.0,
+    "tmax_c": 48
+  }
+}

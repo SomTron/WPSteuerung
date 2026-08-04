@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 from json_config import (
     WPSteuerungConfig, PVRegel, KomfortConfig,
-    ZeitfensterConfig, AbweichungConfig, WochenendeConfig
+    ZeitfensterConfig, AbweichungConfig, WochenendeConfig,
+    ForecastConfig, AdaptivePVConfig, CalculatedStartConfig
 )
 
 
@@ -110,10 +111,19 @@ def evaluate_pv_regel(
         result.grund = f"{sensor_name} {temp:.1f}C >= {regel.ausschalten_bei_c}C -> AUS"
         return result
     
-    # Einschalten: PV hoch genug UND Temp niedrig
-    if pv_leistung >= regel.pv_schwelle_watt and temp <= regel.einschalten_bei_c:
+    # PV-SHAPING (Top-up / Erh?hte Temperaturen):
+    # Wenn genug PV-?berschuss vorhanden ist, heize den Boiler auf maximal
+    # Ausschalttemperatur (48?C) auf. Dies speichert ?bersch?ssige PV-Energie
+    # im Boiler, anstatt sie ins Netz zu exportieren.
+    #
+    # Das ist der Kern der "erh?hten Temperaturen": Die WP heizt den Boiler
+    # auch ?ber das Komfort-/Abweichungsziel hinaus, wenn PV vorhanden ist.
+    if pv_leistung >= regel.pv_schwelle_watt and temp <= regel.ausschalten_bei_c:
+        grund = f"PV-Shaping: {sensor_name} {temp:.1f}C < {regel.ausschalten_bei_c}C, PV {pv_leistung:.0f}W >= {regel.pv_schwelle_watt}W -> EIN"
+        if temp > regel.einschalten_bei_c:
+            grund += " (Top-up ueber Komfortziel)"
         result.einschalten = True
-        result.grund = f"PV {pv_leistung:.0f}W >= {regel.pv_schwelle_watt}W, {sensor_name} {temp:.1f}C <= {regel.einschalten_bei_c}C -> EIN"
+        result.grund = grund
         return result
     
     # Weiterlaufen: Kompressor laeuft schon und PV reicht fuer Weiterbetrieb
@@ -360,12 +370,251 @@ def evaluate_abweichung(
     return result
 
 
+
+def evaluate_forecast(
+    forecast_cfg: ForecastConfig,
+    temp_dict: Dict[str, Optional[float]],
+    forecast_wh_qm: Optional[float],
+    now_hour: int,
+    nachtsperre_start: int = 19,
+    nachtsperre_ende: int = 8,
+) -> RegelErgebnis:
+    """
+    Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter.
+    
+    - Morgen bewölkt (Prognose < Niedrig-Schwelle): Heute vorheizen
+    - Morgen sonnig (Prognose > Hoch-Schwelle): Heute sparen (nicht unnötig heizen)
+    """
+    result = RegelErgebnis(
+        name="Forecast",
+        prioritaet=forecast_cfg.prioritaet,
+        aktiv=forecast_cfg.aktiv
+    )
+    
+    if not forecast_cfg.aktiv:
+        result.grund = "Forecast-Regel inaktiv"
+        return result
+    
+    if forecast_wh_qm is None:
+        result.aktiv = False
+        result.grund = "Keine Prognose verfuegbar"
+        return result
+    
+    # Nachtsperre: Kein Vorheizen/Sparen waehrend der Sperrzeit
+    nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
+    if nachtsperre:
+        result.aktiv = False
+        result.grund = "Nachtsperre aktiv"
+        return result
+    
+    temp_oben = _parse_sensor(temp_dict, "oben")
+    temp_mitte = _parse_sensor(temp_dict, "mitte")
+    temp = temp_mitte if temp_mitte is not None else temp_oben
+    if temp is None:
+        result.aktiv = False
+        result.grund = "Kein Sensorwert verfuegbar"
+        return result
+    
+    # VORHEIZEN: Prognose morgen schlecht -> heute vorheizen
+    if forecast_wh_qm <= forecast_cfg.fc_schwelle_niedrig_wh:
+        if forecast_cfg.vorheiz_start_uhr <= now_hour < forecast_cfg.vorheiz_ende_uhr:
+            if temp <= forecast_cfg.t_vorheiz_ab_c:
+                result.einschalten = True
+                result.grund = (
+                    f"Forecast-Vorheiz: Morgen {forecast_wh_qm:.0f} Wh/qm <= "
+                    f"{forecast_cfg.fc_schwelle_niedrig_wh:.0f} (schlecht), "
+                    f"Temp {temp:.1f}C <= {forecast_cfg.t_vorheiz_ab_c}C -> EIN"
+                )
+                return result
+            result.einschalten = None
+            result.grund = (
+                f"Forecast: Morgen schlecht ({forecast_wh_qm:.0f} Wh/qm), "
+                f"aber Temp {temp:.1f}C > {forecast_cfg.t_vorheiz_ab_c}C"
+            )
+            return result
+    
+    # SPAREN: Prognose morgen gut -> heute sparen (nicht heizen)
+    if forecast_wh_qm >= forecast_cfg.fc_schwelle_hoch_wh:
+        if forecast_cfg.sparen_start_uhr <= now_hour < forecast_cfg.sparen_ende_uhr:
+            if temp >= forecast_cfg.t_vorheiz_ab_c:
+                result.einschalten = False
+                result.grund = (
+                    f"Forecast-Sparen: Morgen {forecast_wh_qm:.0f} Wh/qm >= "
+                    f"{forecast_cfg.fc_schwelle_hoch_wh:.0f} (gut), "
+                    f"Temp {temp:.1f}C >= {forecast_cfg.t_vorheiz_ab_c}C -> Sparen"
+                )
+                return result
+    
+    result.grund = f"Forecast {forecast_wh_qm:.0f} Wh/qm -> keine Aktion"
+    return result
+
+
+def evaluate_adaptive_pv(
+    adaptive_cfg: AdaptivePVConfig,
+    temp_dict: Dict[str, Optional[float]],
+    pv_leistung: float,
+    forecast_wh_qm: Optional[float],
+    now_hour: int = 12,
+    nachtsperre_start: int = 19,
+    nachtsperre_ende: int = 8,
+) -> RegelErgebnis:
+    """
+    Adaptive-PV-Regel: PV-Schwelle passt sich dynamisch an.
+    
+    - Temperaturabhängig: Bei kaltem Boiler wird die Schwelle gesenkt
+    - Prognoseabhängig: Bei schlechter Prognose wird die Schwelle gesenkt
+    """
+    result = RegelErgebnis(
+        name="AdaptivePV",
+        prioritaet=adaptive_cfg.prioritaet,
+        aktiv=adaptive_cfg.aktiv
+    )
+    
+    if not adaptive_cfg.aktiv:
+        result.grund = "AdaptivePV-Regel inaktiv"
+        return result
+    
+    # Nachtsperre: Kein Einschalten waehrend der Sperrzeit
+    nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
+    if nachtsperre:
+        result.aktiv = False
+        result.grund = "Nachtsperre aktiv"
+        return result
+    
+    sensor_name = adaptive_cfg.temperaturfuehler
+    temp = _parse_sensor(temp_dict, sensor_name)
+    if temp is None:
+        result.aktiv = False
+        result.grund = f"Sensor '{sensor_name}' nicht verfuegbar"
+        return result
+    
+    if temp >= adaptive_cfg.tmax_c:
+        result.einschalten = False
+        result.grund = f"AdaptivePV: {sensor_name} {temp:.1f}C >= {adaptive_cfg.tmax_c}C -> AUS"
+        return result
+    
+    # Dynamische Schwelle berechnen
+    schwelle = adaptive_cfg.base_threshold_watt
+    
+    # Temperatur-Anpassung
+    if temp < adaptive_cfg.t_aggressiv_kalt_c:
+        schwelle *= 0.5  # Sehr kalt: aggressiver heizen
+    elif temp < adaptive_cfg.t_normal_kalt_c:
+        schwelle *= 0.7  # Kalt: etwas niedrigere Schwelle
+    
+    # Prognose-Anpassung
+    if forecast_wh_qm is not None:
+        if forecast_wh_qm >= 4000:
+            schwelle *= 1.5  # Morgen sehr sonnig: höhere Schwelle = konservativer
+        elif forecast_wh_qm <= 1000:
+            schwelle *= 0.5  # Morgen bewölkt: niedrige Schwelle = PV jetzt nutzen
+    
+    if pv_leistung >= schwelle:
+        result.einschalten = True
+        result.grund = (
+            f"AdaptivePV: PV {pv_leistung:.0f}W >= {schwelle:.0f}W "
+            f"(Basis {adaptive_cfg.base_threshold_watt:.0f}W, {sensor_name}={temp:.1f}C) -> EIN"
+        )
+        return result
+    
+    result.grund = f"AdaptivePV: PV {pv_leistung:.0f}W < {schwelle:.0f}W"
+    return result
+
+
+def evaluate_calculated_start(
+    calc_cfg: CalculatedStartConfig,
+    temp_dict: Dict[str, Optional[float]],
+    now_hour: int,
+    now_minute: int,
+    nachtsperre_start: int = 19,
+    nachtsperre_ende: int = 8,
+) -> RegelErgebnis:
+    """
+    Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
+    
+    Berechnet aus Temperaturdifferenz und Heizrate die benötigte Zeit.
+    Wenn die verbleibende Zeit knapp wird -> einschalten.
+    """
+    result = RegelErgebnis(
+        name="CalcStart",
+        prioritaet=calc_cfg.prioritaet,
+        aktiv=calc_cfg.aktiv
+    )
+    
+    if not calc_cfg.aktiv:
+        result.grund = "CalcStart-Regel inaktiv"
+        return result
+    
+    # Nachtsperre: Kein Einschalten waehrend der Sperrzeit
+    nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
+    if nachtsperre:
+        result.aktiv = False
+        result.grund = "Nachtsperre aktiv"
+        return result
+    
+    temp_unten = _parse_sensor(temp_dict, "unten")
+    temp_mitte = _parse_sensor(temp_dict, "mitte")
+    temp_oben = _parse_sensor(temp_dict, "oben")
+    
+    if temp_unten is None or temp_mitte is None:
+        result.aktiv = False
+        result.grund = "Sensoren nicht verfuegbar"
+        return result
+    
+    # Bereits erreicht?
+    if temp_unten >= calc_cfg.tmax_c or temp_mitte >= calc_cfg.tmax_c or (temp_oben is not None and temp_oben >= calc_cfg.tmax_c):
+        result.einschalten = False
+        result.grund = f"CalcStart: Zieltemp {calc_cfg.tmax_c}C bereits erreicht -> AUS"
+        return result
+    
+    # Aktuelle Zeit
+    current_time = now_hour + now_minute / 60.0
+    
+    # Noch vor Zielzeit?
+    if current_time >= calc_cfg.target_uhr:
+        # Nach Zielzeit: nichts tun
+        result.grund = f"CalcStart: Nach Zielzeit ({now_hour}:{now_minute:02d} > {calc_cfg.target_uhr}:00)"
+        return result
+    
+    # Temperaturdifferenz berechnen
+    diff_unten = max(0, calc_cfg.solltemperatur_c - temp_unten)
+    diff_mitte = max(0, calc_cfg.solltemperatur_c - temp_mitte)
+    diff_oben = max(0, calc_cfg.solltemperatur_c - temp_oben) if temp_oben is not None else 0
+    diff_gesamt = diff_unten + diff_mitte + diff_oben
+    
+    if diff_gesamt <= 0:
+        result.grund = f"CalcStart: Soll {calc_cfg.solltemperatur_c}C bereits erreicht"
+        return result
+    
+    # Benoetigte Heizzeit
+    hours_needed = diff_unten / max(calc_cfg.heizrate_unten_c_h, 0.1)
+    hours_needed_mitte = diff_mitte / max(calc_cfg.heizrate_gesamt_c_h, 0.1)
+    hours_needed = max(hours_needed, hours_needed_mitte)
+    
+    time_left = calc_cfg.target_uhr - current_time
+    
+    if time_left <= hours_needed:
+        result.einschalten = True
+        result.grund = (
+            f"CalcStart: Noch {time_left:.1f}h bis {calc_cfg.target_uhr}:00, "
+            f"brauche {hours_needed:.1f}h (unten {diff_unten:.1f}K, "
+            f"{calc_cfg.solltemperatur_c:.0f}C Ziel) -> EIN"
+        )
+        return result
+    
+    result.grund = f"CalcStart: Noch {time_left:.1f}h Zeit, brauche {hours_needed:.1f}h"
+    return result
+
+
 def bewerte_alle_regeln(
     config: WPSteuerungConfig,
     temp_dict: Dict[str, Optional[float]],
     pv_leistung: float,
     kompressor_ein: bool,
     now: Optional[datetime] = None,
+    forecast_wh_qm: Optional[float] = None,
+    soc: Optional[float] = None,
+    battery_power: Optional[float] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -411,6 +660,27 @@ def bewerte_alle_regeln(
     ergebnis = evaluate_abweichung(
         config.abweichung, temp_dict, kompressor_ein,
         now_hour, nachtsperre_start, nachtsperre_ende
+    )
+    ergebnisse.append(ergebnis)
+    
+    # 5. Forecast-Regel (Prognose-basiert vorheizen/sparen)
+    ergebnis = evaluate_forecast(
+        config.forecast, temp_dict, forecast_wh_qm, now_hour,
+        nachtsperre_start, nachtsperre_ende
+    )
+    ergebnisse.append(ergebnis)
+    
+    # 6. Adaptive-PV-Regel (dynamische PV-Schwelle)
+    ergebnis = evaluate_adaptive_pv(
+        config.adaptive_pv, temp_dict, pv_leistung, forecast_wh_qm,
+        now_hour, nachtsperre_start, nachtsperre_ende
+    )
+    ergebnisse.append(ergebnis)
+    
+    # 7. Calculated-Start-Regel (optimierter Startzeitpunkt)
+    ergebnis = evaluate_calculated_start(
+        config.calculated_start, temp_dict, now_hour, now.minute,
+        nachtsperre_start, nachtsperre_ende
     )
     ergebnisse.append(ergebnis)
     
