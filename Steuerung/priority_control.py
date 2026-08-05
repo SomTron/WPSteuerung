@@ -538,6 +538,9 @@ def evaluate_calculated_start(
     now_minute: int,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
+    learned_heating_rate_unten: Optional[float] = None,
+    learned_heating_rate_gesamt: Optional[float] = None,
+    learned_target_hour: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -596,12 +599,17 @@ def evaluate_calculated_start(
         result.grund = f"CalcStart: Soll {calc_cfg.solltemperatur_c}C bereits erreicht"
         return result
     
+    # Gelernte Heizraten verwenden (falls vorhanden), sonst Config-Defaults
+    heizrate_unten = learned_heating_rate_unten if learned_heating_rate_unten is not None else calc_cfg.heizrate_unten_c_h
+    heizrate_gesamt = learned_heating_rate_gesamt if learned_heating_rate_gesamt is not None else calc_cfg.heizrate_gesamt_c_h
+    ziel_uhr = learned_target_hour if learned_target_hour is not None else float(calc_cfg.target_uhr)
+
     # Benoetigte Heizzeit
-    hours_needed = diff_unten / max(calc_cfg.heizrate_unten_c_h, 0.1)
-    hours_needed_mitte = diff_mitte / max(calc_cfg.heizrate_gesamt_c_h, 0.1)
+    hours_needed = diff_unten / max(heizrate_unten, 0.1)
+    hours_needed_mitte = diff_mitte / max(heizrate_gesamt, 0.1)
     hours_needed = max(hours_needed, hours_needed_mitte)
     
-    time_left = calc_cfg.target_uhr - current_time
+    time_left = ziel_uhr - current_time
     
     if time_left <= hours_needed:
         result.einschalten = True
@@ -625,6 +633,9 @@ def bewerte_alle_regeln(
     forecast_wh_qm: Optional[float] = None,
     soc: Optional[float] = None,
     battery_power: Optional[float] = None,
+    learned_heating_rate_unten: Optional[float] = None,
+    learned_heating_rate_gesamt: Optional[float] = None,
+    learned_target_hour: Optional[float] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -690,7 +701,10 @@ def bewerte_alle_regeln(
     # 7. Calculated-Start-Regel (optimierter Startzeitpunkt)
     ergebnis = evaluate_calculated_start(
         config.calculated_start, temp_dict, now_hour, now.minute,
-        nachtsperre_start, nachtsperre_ende
+        nachtsperre_start, nachtsperre_ende,
+        learned_heating_rate_unten=learned_heating_rate_unten,
+        learned_heating_rate_gesamt=learned_heating_rate_gesamt,
+        learned_target_hour=learned_target_hour,
     )
     ergebnisse.append(ergebnis)
     
