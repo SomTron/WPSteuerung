@@ -69,13 +69,14 @@ def evaluate_pv_regel(
     nachtsperre_ende: int,
 ) -> RegelErgebnis:
     """
-    Bewertet eine PV-Regel.
+    Bewertet eine PV-Regel mit Hysterese (einschalten_bei_c / ausschalten_bei_c).
     
     Logik:
     - Wenn Nachtsperre aktiv -> Regel inaktiv
-    - Wenn PV >= Schwelle UND Temp <= Einschalt-Schwelle -> EIN
-    - Wenn Kompressor schon laeuft UND PV >= Weiterlauf-Schwelle -> EIN (bleibt)
-    - Wenn Temp >= Ausschalt-Schwelle -> AUS
+    - Wenn Temp >= Ausschalt-Schwelle -> AUS (Schritt 1)
+    - Wenn Kompressor schon laeuft UND PV >= Weiterlauf-Schwelle -> EIN (Schritt 2, PV-Shaping bis Ausschaltpunkt)
+    - Wenn PV >= Schwelle UND Temp <= Einschalt-Schwelle -> EIN (Schritt 3, Neustart)
+    - In Hysterese (zwischen Ein- und Ausschaltpunkt) -> Keine Aktion (Schritt 4)
     """
     sensor_name = regel.temperaturfuehler
     temp = _parse_sensor(temp_dict, sensor_name)
@@ -105,34 +106,43 @@ def evaluate_pv_regel(
         aktiv=True
     )
     
-    # Ausschalten: Temp zu hoch (ZUERST pruefen!)
+    # 1. AUSSCHALTEN: Temp zu hoch (immer zuerst pruefen!)
     if temp >= regel.ausschalten_bei_c:
         result.einschalten = False
         result.grund = f"{sensor_name} {temp:.1f}C >= {regel.ausschalten_bei_c}C -> AUS"
         return result
     
-    # PV-SHAPING (Top-up / Erh?hte Temperaturen):
-    # Wenn genug PV-?berschuss vorhanden ist, heize den Boiler auf maximal
-    # Ausschalttemperatur (48?C) auf. Dies speichert ?bersch?ssige PV-Energie
-    # im Boiler, anstatt sie ins Netz zu exportieren.
-    #
-    # Das ist der Kern der "erh?hten Temperaturen": Die WP heizt den Boiler
-    # auch ?ber das Komfort-/Abweichungsziel hinaus, wenn PV vorhanden ist.
-    if pv_leistung >= regel.pv_schwelle_watt and temp <= regel.ausschalten_bei_c:
-        grund = f"PV-Shaping: {sensor_name} {temp:.1f}C < {regel.ausschalten_bei_c}C, PV {pv_leistung:.0f}W >= {regel.pv_schwelle_watt}W -> EIN"
-        if temp > regel.einschalten_bei_c:
-            grund += " (Top-up ueber Komfortziel)"
-        result.einschalten = True
-        result.grund = grund
-        return result
-    
-    # Weiterlaufen: Kompressor laeuft schon und PV reicht fuer Weiterbetrieb
+    # 2. WEITERLAUFEN (PV-Shaping): Kompressor laeuft schon und PV reicht fuer Weiterbetrieb.
+    #    Dies ermoeglicht das PV-Shaping von der Einschaltschwelle bis zum Ausschaltpunkt
+    #    (z.B. 42->48°C). Der Kompressor bleibt an, solange PV >= Weiterlauf-Schwelle,
+    #    auch wenn die Hysterese-Zone (42-48°C) durchschritten wird.
     if kompressor_ein and pv_leistung >= regel.weiterlaufen_ab_pv_watt:
         result.einschalten = True
-        result.grund = f"Weiterlauf: PV {pv_leistung:.0f}W >= {regel.weiterlaufen_ab_pv_watt}W (Kompressor laeuft)"
+        result.grund = (
+            f"PV-Shaping: {sensor_name} {temp:.1f}C, PV {pv_leistung:.0f}W >= "
+            f"{regel.weiterlaufen_ab_pv_watt}W (Weiterlauf bis {regel.ausschalten_bei_c}C)"
+        )
         return result
     
-    # Keine Aktion
+    # 3. EINSCHALTEN (Neustart): PV genug UND Temp unter Einschaltschwelle
+    if pv_leistung >= regel.pv_schwelle_watt and temp <= regel.einschalten_bei_c:
+        result.einschalten = True
+        result.grund = (
+            f"PV-Shaping: {sensor_name} {temp:.1f}C <= {regel.einschalten_bei_c}C, "
+            f"PV {pv_leistung:.0f}W >= {regel.pv_schwelle_watt}W -> EIN"
+        )
+        return result
+    
+    # 4. HYSTERESE: Temp zwischen Ein- und Ausschaltpunkt -> Keine Aktion
+    if regel.einschalten_bei_c < temp < regel.ausschalten_bei_c:
+        result.einschalten = None
+        result.grund = (
+            f"In Hysterese: {sensor_name} {temp:.1f}C zwischen "
+            f"{regel.einschalten_bei_c}C und {regel.ausschalten_bei_c}C (PV={pv_leistung:.0f}W)"
+        )
+        return result
+    
+    # 5. Keine Bedingung erfuellt
     result.einschalten = None
     result.grund = f"Keine Bedingung erfuellt (PV={pv_leistung:.0f}W, {sensor_name}={temp:.1f}C)"
     return result
@@ -528,9 +538,6 @@ def evaluate_calculated_start(
     now_minute: int,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
-    learned_heating_rate_unten: Optional[float] = None,
-    learned_heating_rate_gesamt: Optional[float] = None,
-    learned_target_hour: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -589,17 +596,12 @@ def evaluate_calculated_start(
         result.grund = f"CalcStart: Soll {calc_cfg.solltemperatur_c}C bereits erreicht"
         return result
     
-    # Gelernte Heizraten verwenden (falls vorhanden), sonst Config-Defaults
-    heizrate_unten = learned_heating_rate_unten if learned_heating_rate_unten is not None else calc_cfg.heizrate_unten_c_h
-    heizrate_gesamt = learned_heating_rate_gesamt if learned_heating_rate_gesamt is not None else calc_cfg.heizrate_gesamt_c_h
-    ziel_uhr = learned_target_hour if learned_target_hour is not None else float(calc_cfg.target_uhr)
-
     # Benoetigte Heizzeit
-    hours_needed = diff_unten / max(heizrate_unten, 0.1)
-    hours_needed_mitte = diff_mitte / max(heizrate_gesamt, 0.1)
+    hours_needed = diff_unten / max(calc_cfg.heizrate_unten_c_h, 0.1)
+    hours_needed_mitte = diff_mitte / max(calc_cfg.heizrate_gesamt_c_h, 0.1)
     hours_needed = max(hours_needed, hours_needed_mitte)
     
-    time_left = ziel_uhr - current_time
+    time_left = calc_cfg.target_uhr - current_time
     
     if time_left <= hours_needed:
         result.einschalten = True
@@ -623,9 +625,6 @@ def bewerte_alle_regeln(
     forecast_wh_qm: Optional[float] = None,
     soc: Optional[float] = None,
     battery_power: Optional[float] = None,
-    learned_heating_rate_unten: Optional[float] = None,
-    learned_heating_rate_gesamt: Optional[float] = None,
-    learned_target_hour: Optional[float] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -691,10 +690,7 @@ def bewerte_alle_regeln(
     # 7. Calculated-Start-Regel (optimierter Startzeitpunkt)
     ergebnis = evaluate_calculated_start(
         config.calculated_start, temp_dict, now_hour, now.minute,
-        nachtsperre_start, nachtsperre_ende,
-        learned_heating_rate_unten=learned_heating_rate_unten,
-        learned_heating_rate_gesamt=learned_heating_rate_gesamt,
-        learned_target_hour=learned_target_hour,
+        nachtsperre_start, nachtsperre_ende
     )
     ergebnisse.append(ergebnis)
     
