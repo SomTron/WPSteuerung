@@ -368,8 +368,29 @@ async def run_logic_step(session, state, learning_engine=None):
             await check_and_send_alerts(session, state)
 
 async def log_system_state(state):
-    """Schreibt CSV-Log und aktualisiert LCD."""
-        # 1. LCD Update (Pareto-Prioritaeten)
+    """Schreibt CSV-Log, aktualisiert LCD und loggt Temperaturen + Entscheidungen."""
+    # 1. Temperatur-Logging (INFO, jeder Durchlauf)
+    logging.info(
+        f"Sensoren: Oben={state.sensors.t_oben or 0:.1f}°C | Mittig={state.sensors.t_mittig or 0:.1f}°C | "
+        f"Unten={state.sensors.t_unten or 0:.1f}°C | Verd={state.sensors.t_verd or 0:.1f}°C"
+    )
+
+    # 2. Entscheidungs-Logging (Setpoints, Blocking, Regel)
+    komp_status = "EIN" if state.control.kompressor_ein else "AUS"
+    log_line = (
+        f"Status: {komp_status} | "
+        f"EP={state.control.aktueller_einschaltpunkt:.1f}°C | "
+        f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C"
+    )
+    if state.control.blocking_reason:
+        log_line += f" | Blocking: {state.control.blocking_reason}"
+    if state.control.active_rule_name:
+        log_line += f" | Regel: {state.control.active_rule_name}"
+    if state.control.previous_modus:
+        log_line += f" | Modus: {state.control.previous_modus}"
+    logging.info(log_line)
+
+    # 3. LCD Update
     pv_w = state.solar.feedinpower if state.solar.feedinpower else 0
     rule_name = getattr(state.control, 'active_rule_name', '') or ''
     if rule_name and len(rule_name) > 12:
@@ -381,7 +402,7 @@ async def log_system_state(state):
         f"{state.solar.soc if state.solar.soc else 0}% {state.control.previous_modus[:7] if state.control.previous_modus else ''}"
     )
 
-    # 2. CSV Logging
+    # 4. CSV Logging
     try:
         csv_file = HEIZUNGSDATEN_CSV
         log_dir = os.path.dirname(csv_file)

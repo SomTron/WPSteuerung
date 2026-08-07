@@ -191,7 +191,8 @@ class State:
                self.config = self.config_manager.get()
                self.last_config_hash = new_hash
            else:
-               logging.debug("Config file unchanged (hash match), skipping reload")
+               # DEBUG-Meldung entfernt - nervt im Log bei jedem Config-Check-Intervall
+               pass
 
            # JSON Priority Config
            if self.priority_config_manager.reload_if_changed():
