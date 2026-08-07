@@ -96,6 +96,7 @@ class State:
         self.last_solar_window_status: bool = False
         self.last_telegram_command_time: Optional[datetime] = None  # Rate-Limiting
         self._last_priority_log: Optional[datetime] = None
+        self._last_temp_log: Optional[datetime] = None
 
         # --- Compressor Verification ---
         self.kompressor_verification_start_time: Optional[datetime] = None
