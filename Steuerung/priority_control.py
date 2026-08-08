@@ -30,8 +30,11 @@ class RegelErgebnis:
 
 
 def _parse_sensor(temp_dict: Dict[str, Optional[float]], sensor_name: str) -> Optional[float]:
-    """Liest einen Sensorwert aus dem Dictionary."""
-    return temp_dict.get(sensor_name)
+    """Liest einen Sensorwert aus dem Dictionary (mit Alias-Unterstützung)."""
+    # Alias-Mapping: "mitte" -> "mittig" (abweichende Benennung im JSON vs. Code)
+    alias_map = {"mitte": "mittig"}
+    resolved = alias_map.get(sensor_name, sensor_name)
+    return temp_dict.get(resolved)
 
 
 def _is_nachtsperre(now_hour: int, start: int, ende: int) -> bool:
