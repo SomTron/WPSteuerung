@@ -421,9 +421,8 @@ def evaluate_forecast(
         return result
     
     temp_oben = _parse_sensor(temp_dict, "oben")
-    sensor_name = forecast_cfg.temperaturfuehler
-    temp_sensor = _parse_sensor(temp_dict, sensor_name)
-    temp = temp_sensor if temp_sensor is not None else temp_oben
+    temp_mitte = _parse_sensor(temp_dict, "mitte")
+    temp = temp_mitte if temp_mitte is not None else temp_oben
     if temp is None:
         result.aktiv = False
         result.grund = "Kein Sensorwert verfuegbar"
@@ -468,7 +467,6 @@ def evaluate_adaptive_pv(
     temp_dict: Dict[str, Optional[float]],
     pv_leistung: float,
     forecast_wh_qm: Optional[float],
-    kompressor_ein: bool,
     now_hour: int = 12,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
@@ -508,20 +506,6 @@ def evaluate_adaptive_pv(
         result.grund = f"AdaptivePV: {sensor_name} {temp:.1f}C >= {adaptive_cfg.tmax_c}C -> AUS"
         return result
     
-    # Hysterese: Nur einschalten wenn Temp unter Einschaltgrenze (tmax_c - 3K Default)
-    # Sonst soll die PV-Regel mit ihrer Hysterese (42/48°C) entscheiden
-    einschalten_bis_c = getattr(adaptive_cfg, 'einschalten_bis_c', None)
-    if einschalten_bis_c is None:
-        einschalten_bis_c = adaptive_cfg.tmax_c - 3.0
-    
-    if temp >= einschalten_bis_c and not kompressor_ein:
-        result.einschalten = None
-        result.grund = (
-            f"AdaptivePV: {sensor_name} {temp:.1f}C >= {einschalten_bis_c:.1f}C "
-            f"(Einschaltgrenze) -> Hysterese, kein Einschalten"
-        )
-        return result
-    
     # Dynamische Schwelle berechnen
     schwelle = adaptive_cfg.base_threshold_watt
     
@@ -557,7 +541,6 @@ def evaluate_calculated_start(
     now_minute: int,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
-    forecast_wh_qm: Optional[float] = None,
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
@@ -594,11 +577,13 @@ def evaluate_calculated_start(
         result.grund = "Sensoren nicht verfuegbar"
         return result
     
-    # Bereits erreicht?
-    if temp_unten >= calc_cfg.tmax_c or temp_mitte >= calc_cfg.tmax_c or (temp_oben is not None and temp_oben >= calc_cfg.tmax_c):
-        result.einschalten = False
-        result.grund = f"CalcStart: Zieltemp {calc_cfg.tmax_c}C bereits erreicht -> AUS"
-        return result
+    # Bereits erreicht? Nur unteren Fuehler pruefen (kaltester Punkt im Boiler)
+        # Der obere/mittige Fuehler kann durch Schichtung heiss sein, obwohl
+        # die WP noch viel Energie unten reinstecken kann (vor allem bei PV!)
+        if temp_unten is not None and temp_unten >= calc_cfg.tmax_c:
+            result.einschalten = False
+            result.grund = f"CalcStart: Zieltemp {calc_cfg.tmax_c}C unten bereits erreicht -> AUS"
+            return result
     
     # Aktuelle Zeit
     current_time = now_hour + now_minute / 60.0
@@ -631,59 +616,16 @@ def evaluate_calculated_start(
     
     time_left = ziel_uhr - current_time
     
-    # === Saisonale + Prognose-basierte Puffer-Berechnung ===
-    # Saison erkennen (0=Winter, 1=Sommer)
-    # Wir nutzen now_hour/min + wissen nicht direkt den Monat, aber wir
-    # kriegen ihn ueber das now datetime objekt... da wir nur now_hour haben,
-    # nutzen wir die Config-Puffer direkt mit Prognose-Anpassung.
-    
-    # Basis-Puffer aus Config
-    buffer_hours = time_left - hours_needed
-    
-    # Prognose-Anpassung: Heute viel PV erwartet? -> laenger warten
-    pv_faktor = 1.0
-    if forecast_wh_qm is not None:
-        if forecast_wh_qm >= 3000:  # Sehr sonnig
-            pv_faktor = 2.0
-            pv_label = "sehr sonnig"
-        elif forecast_wh_qm >= 1500:  # Sonnig
-            pv_faktor = 1.5
-            pv_label = "sonnig"
-        elif forecast_wh_qm <= 500:  # Bewoelkt
-            pv_faktor = 0.5
-            pv_label = "bewoelkt"
-        else:
-            pv_faktor = 1.0
-            pv_label = f"{forecast_wh_qm:.0f} Wh/qm"
-    else:
-        pv_label = "keine Prognose"
-    
-    effektiver_puffer = buffer_hours / max(pv_faktor, 0.1)
-    
-    if buffer_hours < 0:
-        # Bereits ueber Zielzeit oder zu spaet -> sofort heizen!
+    if time_left <= hours_needed:
         result.einschalten = True
         result.grund = (
-            f"CalcStart: ZU SPAET! Zeitablauf ({time_left:.1f}h < {hours_needed:.1f}h) "
-            f"-> EIN (Notfall)"
+            f"CalcStart: Noch {time_left:.1f}h bis {calc_cfg.target_uhr}:00, "
+            f"brauche {hours_needed:.1f}h (unten {diff_unten:.1f}K, "
+            f"{calc_cfg.solltemperatur_c:.0f}C Ziel) -> EIN"
         )
         return result
     
-    if effektiver_puffer < 0.5:
-        # Weniger als 30min effektiven Puffer -> heizen
-        result.einschalten = True
-        result.grund = (
-            f"CalcStart: Nur {effektiver_puffer:.1f}h Puffer (PV={pv_label}, "
-            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> EIN"
-        )
-        return result
-    
-    # Genug Puffer + gute PV-Prognose -> warten
-    result.einschalten = None
-    result.grund = (
-        f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht (PV={pv_label}, "
-        f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> warte auf PV"
-    )
+    result.grund = f"CalcStart: Noch {time_left:.1f}h Zeit, brauche {hours_needed:.1f}h"
     return result
 
 
@@ -694,7 +636,6 @@ def bewerte_alle_regeln(
     kompressor_ein: bool,
     now: Optional[datetime] = None,
     forecast_wh_qm: Optional[float] = None,
-    forecast_today_wh_qm: Optional[float] = None,
     soc: Optional[float] = None,
     battery_power: Optional[float] = None,
     learned_heating_rate_unten: Optional[float] = None,
@@ -757,7 +698,7 @@ def bewerte_alle_regeln(
     
     # 6. Adaptive-PV-Regel (dynamische PV-Schwelle)
     ergebnis = evaluate_adaptive_pv(
-        config.adaptive_pv, temp_dict, pv_leistung, forecast_wh_qm, kompressor_ein,
+        config.adaptive_pv, temp_dict, pv_leistung, forecast_wh_qm,
         now_hour, nachtsperre_start, nachtsperre_ende
     )
     ergebnisse.append(ergebnis)
@@ -766,7 +707,6 @@ def bewerte_alle_regeln(
     ergebnis = evaluate_calculated_start(
         config.calculated_start, temp_dict, now_hour, now.minute,
         nachtsperre_start, nachtsperre_ende,
-        forecast_wh_qm=forecast_today_wh_qm,
         learned_heating_rate_unten=learned_heating_rate_unten,
         learned_heating_rate_gesamt=learned_heating_rate_gesamt,
         learned_target_hour=learned_target_hour,
@@ -793,9 +733,11 @@ def bewerte_alle_regeln(
                 gewinner = e
                 break
     
-    # Bewertung wird nur alle 5 Minuten in priority_control_logic.py geloggt (INFO, throttelt)
-    # Hier nur minimales DEBUG, nicht bei jedem Durchlauf
-    
+    logging.debug(
+        f"Regel-Bewertung: {len(ergebnisse)} Regeln, "
+        f"{len(aktive_regeln)} aktiv, Gewinner: {gewinner.name} "
+        f"(Prio {gewinner.prioritaet}) -> {'EIN' if gewinner.einschalten else 'AUS'}"
+    )
     
     return gewinner, ergebnisse
 
