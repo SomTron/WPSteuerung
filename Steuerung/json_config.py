@@ -86,6 +86,7 @@ class ForecastConfig(BaseModel):
     """Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter."""
     prioritaet: int = Field(default=57, description="Prioritaet")
     aktiv: bool = Field(default=True, description="Regel aktiv")
+    temperaturfuehler: str = Field(default="mitte", description="Welcher Fuehler: oben/mitte/unten")
     fc_schwelle_hoch_wh: float = Field(default=3000.0, description="Prognose ueber Wert = guter Solartag (Wh/qm)")
     fc_schwelle_niedrig_wh: float = Field(default=800.0, description="Prognose unter Wert = schlechter Solartag (Wh/qm)")
     t_vorheiz_ab_c: float = Field(default=44.0, description="Vorheizen wenn Temp kleiner gleich (Grad C)")

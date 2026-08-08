@@ -421,8 +421,9 @@ def evaluate_forecast(
         return result
     
     temp_oben = _parse_sensor(temp_dict, "oben")
-    temp_mitte = _parse_sensor(temp_dict, "mitte")
-    temp = temp_mitte if temp_mitte is not None else temp_oben
+    sensor_name = forecast_cfg.temperaturfuehler
+    temp_sensor = _parse_sensor(temp_dict, sensor_name)
+    temp = temp_sensor if temp_sensor is not None else temp_oben
     if temp is None:
         result.aktiv = False
         result.grund = "Kein Sensorwert verfuegbar"
