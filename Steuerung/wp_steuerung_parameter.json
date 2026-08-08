@@ -32,7 +32,7 @@
     },
     {
       "name": "PV_unten",
-      "prioritaet": 80,
+      "prioritaet": 81,
       "pv_schwelle_watt": 500,
       "temperaturfuehler": "unten",
       "einschalten_bei_c": 42,
@@ -73,7 +73,8 @@
     "vorheiz_start_uhr": 8,
     "vorheiz_ende_uhr": 19,
     "sparen_start_uhr": 11,
-    "sparen_ende_uhr": 15
+    "sparen_ende_uhr": 15,
+    "temperaturfuehler": "unten"
   },
   "adaptive_pv": {
     "prioritaet": 55,
@@ -85,7 +86,7 @@
     "t_normal_kalt_c": 38
   },
   "calculated_start": {
-    "prioritaet": 72,
+    "prioritaet": 82,
     "aktiv": true,
     "solltemperatur_c": 44,
     "target_uhr": 17,
