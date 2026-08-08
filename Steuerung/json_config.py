@@ -86,7 +86,6 @@ class ForecastConfig(BaseModel):
     """Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter."""
     prioritaet: int = Field(default=57, description="Prioritaet")
     aktiv: bool = Field(default=True, description="Regel aktiv")
-    temperaturfuehler: str = Field(default="mitte", description="Welcher Fuehler: oben/mitte/unten")
     fc_schwelle_hoch_wh: float = Field(default=3000.0, description="Prognose ueber Wert = guter Solartag (Wh/qm)")
     fc_schwelle_niedrig_wh: float = Field(default=800.0, description="Prognose unter Wert = schlechter Solartag (Wh/qm)")
     t_vorheiz_ab_c: float = Field(default=44.0, description="Vorheizen wenn Temp kleiner gleich (Grad C)")
@@ -139,9 +138,12 @@ class WPSteuerungConfigManager:
     """Lädt und verwaltet die JSON-Konfiguration."""
 
     def __init__(self, config_path: str = "wp_steuerung_parameter.json"):
-        self.config_path = config_path
-        self.config: WPSteuerungConfig = WPSteuerungConfig()
-        self._last_mtime: Optional[float] = None
+            # Pfad relativ zum Verzeichnis dieser Datei (json_config.py) aufloesen
+            # So wird die Config immer gefunden, egal aus welchem Ordner der Prozess startet
+            _script_dir = os.path.dirname(os.path.abspath(__file__))
+            self.config_path = os.path.join(_script_dir, config_path)
+            self.config: WPSteuerungConfig = WPSteuerungConfig()
+            self._last_mtime: Optional[float] = None
 
     def load_config(self) -> bool:
         """
