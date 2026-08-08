@@ -10,6 +10,7 @@ import aiofiles
 import os
 from datetime import datetime, timedelta
 import pytz
+import re
 
 # Modules
 from config_manager import ConfigManager
@@ -273,24 +274,21 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             
     return last_vpn_check
 
+
+def _normalize_blocking_reason(text: str) -> str:
+    """Normalisiert blocking_reason fuer Alarm-Erkennung (entfernt dynamische Details)."""
+    if not text:
+        return ""
+    res = re.sub(r'\(.*?\)', '', text)
+    res = res.split(':')[0]
+    return res.strip()
+
+
 async def check_and_send_alerts(session, state):
     """Prüft auf Änderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
     current_blocking = state.control.blocking_reason
     
-    # Normalisierung: Dynamische Teile (Zeiten, Temperaturen) entfernen
-    # Beispiel: "Min. Pause (noch 1m 10s)" -> "Min. Pause"
-    # Beispiel: "Verdampfer zu kalt (5.0°C < 6°C)" -> "Verdampfer zu kalt"
-    # Beispiel: "Sensorfehler: T_Oben invalid" -> "Sensorfehler"
-    import re
-    def normalize(text):
-        if not text: return ""
-        # 1. Alles in Klammern entfernen (Zeiten, Werte)
-        res = re.sub(r'\(.*?\)', '', text)
-        # 2. Alles nach Doppelpunkt entfernen (Details)
-        res = res.split(':')[0]
-        return res.strip()
-
-    current_type = normalize(current_blocking)
+    current_type = _normalize_blocking_reason(current_blocking)
     last_type = getattr(state.control, 'last_alert_type', "")
     
     if current_type != last_type:

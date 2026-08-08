@@ -158,7 +158,7 @@ class LearningEngine:
             self._cycle_start_time = now
             self._cycle_start_temps = {
                 "unten": temp_dict.get("unten"),
-                "mitte": temp_dict.get("mitte"),
+                "mittig": temp_dict.get("mittig"),
                 "oben": temp_dict.get("oben"),
             }
 
@@ -190,8 +190,8 @@ class LearningEngine:
 
         start_unten = self._cycle_start_temps.get("unten") or 0
         end_unten = temp_dict.get("unten") or 0
-        start_mitte = self._cycle_start_temps.get("mitte") or 0
-        end_mitte = temp_dict.get("mitte") or 0
+        start_mitte = self._cycle_start_temps.get("mittig") or 0
+        end_mitte = temp_dict.get("mittig") or 0
 
         delta_unten = max(0.1, end_unten - start_unten)
         delta_mitte = max(0.1, end_mitte - start_mitte)

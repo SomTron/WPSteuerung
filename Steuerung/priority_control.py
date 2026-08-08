@@ -467,6 +467,7 @@ def evaluate_adaptive_pv(
     temp_dict: Dict[str, Optional[float]],
     pv_leistung: float,
     forecast_wh_qm: Optional[float],
+    kompressor_ein: bool,
     now_hour: int = 12,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
@@ -710,7 +711,7 @@ def bewerte_alle_regeln(
     
     # 6. Adaptive-PV-Regel (dynamische PV-Schwelle)
     ergebnis = evaluate_adaptive_pv(
-        config.adaptive_pv, temp_dict, pv_leistung, forecast_wh_qm,
+        config.adaptive_pv, temp_dict, pv_leistung, forecast_wh_qm, kompressor_ein,
         now_hour, nachtsperre_start, nachtsperre_ende
     )
     ergebnisse.append(ergebnis)
@@ -745,11 +746,9 @@ def bewerte_alle_regeln(
                 gewinner = e
                 break
     
-    logging.debug(
-        f"Regel-Bewertung: {len(ergebnisse)} Regeln, "
-        f"{len(aktive_regeln)} aktiv, Gewinner: {gewinner.name} "
-        f"(Prio {gewinner.prioritaet}) -> {'EIN' if gewinner.einschalten else 'AUS'}"
-    )
+    # Bewertung wird nur alle 5 Minuten in priority_control_logic.py geloggt (INFO, throttelt)
+    # Hier nur minimales DEBUG, nicht bei jedem Durchlauf
+    
     
     return gewinner, ergebnisse
 
