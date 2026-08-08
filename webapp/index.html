@@ -523,6 +523,16 @@
             font-weight: 600;
         }
 
+        .rule-grund {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            padding: 2px 6px;
+            background: var(--bg-card);
+            border-radius: 4px;
+            word-break: break-word;
+        }
+
         .loading {
             text-align: center;
             padding: 40px;
@@ -953,6 +963,7 @@
                                 decisionHtml = '<div class="rule-decision" id="rule-decision-' + idx + '">' +
                                     '<div>Status: <span class="' + statusClass + '">' + statusText + '</span></div>' +
                                     '<div>Aktiv: ' + (erg.aktiv ? 'Ja' : 'Nein') + '</div>' +
+                              '<div class="rule-grund">' + (erg.grund || '') + '</div>' +
                                     '<div style="margin-top:4px">' + (erg.grund || '') + '</div></div>';
                             }
                         }
@@ -1036,6 +1047,7 @@
                         decisionHtml = '<div class="rule-decision" id="rule-decision-' + idx + '">' +
                             '<div>Status: <span class="' + statusClass + '">' + statusText + '</span></div>' +
                             '<div>Aktiv: ' + (erg.aktiv ? 'Ja' : 'Nein') + '</div>' +
+                              '<div class="rule-grund">' + (erg.grund || '') + '</div>' +
                             '<div style="margin-top:4px">' + (erg.grund || '') + '</div></div>';
                     }
                 }

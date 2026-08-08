@@ -110,7 +110,7 @@ class AdaptivePVConfig(BaseModel):
 
 class CalculatedStartConfig(BaseModel):
     """Startzeit-Regel: Berechnet optimalen Einschaltzeitpunkt fuer Zieltemperatur."""
-    prioritaet: int = Field(default=72, description="Prioritaet")
+    prioritaet: int = Field(default=82, description="Prioritaet")
     aktiv: bool = Field(default=True, description="Regel aktiv")
     solltemperatur_c: float = Field(default=44.0, description="Zieltemperatur (Grad C)")
     target_uhr: int = Field(default=17, description="Zielzeit (Stunde) - typische Zapfzeit")

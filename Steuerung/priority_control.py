@@ -557,6 +557,7 @@ def evaluate_calculated_start(
     now_minute: int,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
+    forecast_wh_qm: Optional[float] = None,
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
@@ -630,16 +631,59 @@ def evaluate_calculated_start(
     
     time_left = ziel_uhr - current_time
     
-    if time_left <= hours_needed:
+    # === Saisonale + Prognose-basierte Puffer-Berechnung ===
+    # Saison erkennen (0=Winter, 1=Sommer)
+    # Wir nutzen now_hour/min + wissen nicht direkt den Monat, aber wir
+    # kriegen ihn ueber das now datetime objekt... da wir nur now_hour haben,
+    # nutzen wir die Config-Puffer direkt mit Prognose-Anpassung.
+    
+    # Basis-Puffer aus Config
+    buffer_hours = time_left - hours_needed
+    
+    # Prognose-Anpassung: Heute viel PV erwartet? -> laenger warten
+    pv_faktor = 1.0
+    if forecast_wh_qm is not None:
+        if forecast_wh_qm >= 3000:  # Sehr sonnig
+            pv_faktor = 2.0
+            pv_label = "sehr sonnig"
+        elif forecast_wh_qm >= 1500:  # Sonnig
+            pv_faktor = 1.5
+            pv_label = "sonnig"
+        elif forecast_wh_qm <= 500:  # Bewoelkt
+            pv_faktor = 0.5
+            pv_label = "bewoelkt"
+        else:
+            pv_faktor = 1.0
+            pv_label = f"{forecast_wh_qm:.0f} Wh/qm"
+    else:
+        pv_label = "keine Prognose"
+    
+    effektiver_puffer = buffer_hours / max(pv_faktor, 0.1)
+    
+    if buffer_hours < 0:
+        # Bereits ueber Zielzeit oder zu spaet -> sofort heizen!
         result.einschalten = True
         result.grund = (
-            f"CalcStart: Noch {time_left:.1f}h bis {calc_cfg.target_uhr}:00, "
-            f"brauche {hours_needed:.1f}h (unten {diff_unten:.1f}K, "
-            f"{calc_cfg.solltemperatur_c:.0f}C Ziel) -> EIN"
+            f"CalcStart: ZU SPAET! Zeitablauf ({time_left:.1f}h < {hours_needed:.1f}h) "
+            f"-> EIN (Notfall)"
         )
         return result
     
-    result.grund = f"CalcStart: Noch {time_left:.1f}h Zeit, brauche {hours_needed:.1f}h"
+    if effektiver_puffer < 0.5:
+        # Weniger als 30min effektiven Puffer -> heizen
+        result.einschalten = True
+        result.grund = (
+            f"CalcStart: Nur {effektiver_puffer:.1f}h Puffer (PV={pv_label}, "
+            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> EIN"
+        )
+        return result
+    
+    # Genug Puffer + gute PV-Prognose -> warten
+    result.einschalten = None
+    result.grund = (
+        f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht (PV={pv_label}, "
+        f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> warte auf PV"
+    )
     return result
 
 
@@ -650,6 +694,7 @@ def bewerte_alle_regeln(
     kompressor_ein: bool,
     now: Optional[datetime] = None,
     forecast_wh_qm: Optional[float] = None,
+    forecast_today_wh_qm: Optional[float] = None,
     soc: Optional[float] = None,
     battery_power: Optional[float] = None,
     learned_heating_rate_unten: Optional[float] = None,
@@ -721,6 +766,7 @@ def bewerte_alle_regeln(
     ergebnis = evaluate_calculated_start(
         config.calculated_start, temp_dict, now_hour, now.minute,
         nachtsperre_start, nachtsperre_ende,
+        forecast_wh_qm=forecast_today_wh_qm,
         learned_heating_rate_unten=learned_heating_rate_unten,
         learned_heating_rate_gesamt=learned_heating_rate_gesamt,
         learned_target_hour=learned_target_hour,

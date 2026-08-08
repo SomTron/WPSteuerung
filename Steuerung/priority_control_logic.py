@@ -100,12 +100,20 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         logging.debug(f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C")
     
     # Forecast-Daten aus State holen
+    # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
     forecast_wh_qm = getattr(state.solar, 'forecast_tomorrow', None)
     if forecast_wh_qm is not None:
         try:
             forecast_wh_qm = float(forecast_wh_qm)
         except (TypeError, ValueError):
             forecast_wh_qm = None
+    # CalcStart braucht die HEUTE-Prognose (PV-Erwartung zum Warten/Heizen)
+    forecast_today_wh = getattr(state.solar, 'forecast_today', None)
+    if forecast_today_wh is not None:
+        try:
+            forecast_today_wh = float(forecast_today_wh)
+        except (TypeError, ValueError):
+            forecast_today_wh = None
     
     # Alle Regeln bewerten (mit effektiver Config)
     # Learning Engine aktualisieren (Heizzyklen + Zapfprofil)
@@ -134,6 +142,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         kompressor_ein=state.control.kompressor_ein,
         now=datetime.now(state.local_tz),
         forecast_wh_qm=forecast_wh_qm,
+        forecast_today_wh_qm=forecast_today_wh,
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
         learned_target_hour=gelernte_zielzeit,

@@ -75,5 +75,14 @@
     "vorheiz_ende_uhr": 19,
     "sparen_start_uhr": 11,
     "sparen_ende_uhr": 15
+  },
+  "calculated_start": {
+    "prioritaet": 82,
+    "aktiv": true,
+    "solltemperatur_c": 44,
+    "target_uhr": 17,
+    "heizrate_unten_c_h": 3.0,
+    "heizrate_gesamt_c_h": 2.0,
+    "tmax_c": 48
   }
 }
