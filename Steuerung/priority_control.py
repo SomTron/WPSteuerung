@@ -506,6 +506,20 @@ def evaluate_adaptive_pv(
         result.grund = f"AdaptivePV: {sensor_name} {temp:.1f}C >= {adaptive_cfg.tmax_c}C -> AUS"
         return result
     
+    # Hysterese: Nur einschalten wenn Temp unter Einschaltgrenze (tmax_c - 3K Default)
+    # Sonst soll die PV-Regel mit ihrer Hysterese (42/48°C) entscheiden
+    einschalten_bis_c = getattr(adaptive_cfg, 'einschalten_bis_c', None)
+    if einschalten_bis_c is None:
+        einschalten_bis_c = adaptive_cfg.tmax_c - 3.0
+    
+    if temp >= einschalten_bis_c and not kompressor_ein:
+        result.einschalten = None
+        result.grund = (
+            f"AdaptivePV: {sensor_name} {temp:.1f}C >= {einschalten_bis_c:.1f}C "
+            f"(Einschaltgrenze) -> Hysterese, kein Einschalten"
+        )
+        return result
+    
     # Dynamische Schwelle berechnen
     schwelle = adaptive_cfg.base_threshold_watt
     
