@@ -25,79 +25,25 @@ fi
 query_logs_by_time() {
     target="$1"
     maxlines="${2:-50}"
-    
-    if [ ! -f "$LOG_FILE" ]; then
-        printf "${RED}Log-Datei nicht gefunden: $LOG_FILE${NC}\n"
-        return 1
-    fi
-    
-    printf "${CYAN}Durchsuche Log ab $target (max ${maxlines} Zeilen)...${NC}\n\n"
-    
-    awk -v target="$target" -v maxlines="$maxlines" '
-    BEGIN { found = 0; count = 0 }
-    {
-        if (match($0, /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
-            ts = substr($0, 1, 19)
-            if (ts >= target) found = 1
-        }
-        if (found) {
-            buf[count++] = $0
-            if (count >= maxlines) exit
-        }
-    }
-    END {
-        if (count == 0) {
-            print "Keine Logs nach " target " gefunden."
-        } else {
-            for (i = 0; i < count; i++) print buf[i]
-        }
-    }
-    ' "$LOG_FILE" | more
-    
+    python3 "$TARGET_DIR/log_query.py" --after "$target" --lines "$maxlines"
     wait_for_key
 }
 
 query_logs_by_duration() {
     hours="$1"
     maxlines="${2:-200}"
-    
-    if [ ! -f "$LOG_FILE" ]; then
-        printf "${RED}Log-Datei nicht gefunden: $LOG_FILE${NC}\n"
-        return 1
-    fi
-    
-    if date --version 2>/dev/null | grep -q GNU; then
-        target=$(date -d "-${hours} hours" "+%Y-%m-%d %H:%M:%S")
-    else
-        target=$(date -v-${hours}H "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
-        if [ -z "$target" ]; then
-            target=$(python3 -c "from datetime import datetime, timedelta; print((datetime.now() - timedelta(hours=${hours})).strftime('%Y-%m-%d %H:%M:%S'))" 2>/dev/null)
-        fi
-    fi
-    
-    printf "${CYAN}Letzte ${hours} Stunde(n) ab $target (max ${maxlines} Zeilen)...${NC}\n\n"
-    
-    awk -v target="$target" -v maxlines="$maxlines" '
-    BEGIN { found = 0; count = 0 }
-    {
-        if (match($0, /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
-            ts = substr($0, 1, 19)
-            if (ts >= target) found = 1
-        }
-        if (found) {
-            buf[count++] = $0
-            if (count >= maxlines) exit
-        }
-    }
-    END {
-        if (count == 0) {
-            print "Keine Logs gefunden."
-        } else {
-            for (i = 0; i < count; i++) print buf[i]
-        }
-    }
-    ' "$LOG_FILE" | more
-    
+    python3 -c "
+from datetime import datetime, timedelta
+import sys
+sys.path.insert(0, '$TARGET_DIR')
+from log_query import query_logs, tail_log
+target = datetime.now() - timedelta(hours=${hours})
+result, meta = query_logs(after=target, lines=${maxlines})
+for line in result:
+    sys.stdout.write(line)
+if not result:
+    print('Keine Logs in den letzten ${hours} Stunde(n) gefunden.')
+" 2>&1 | more
     wait_for_key
 }
 

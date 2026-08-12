@@ -229,3 +229,50 @@ def tail_log(
 
     meta["total_found"] = len(result)
     return result, meta
+
+
+def main():
+    """CLI entry point for querying logs."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Durchsuche das heizungssteuerung.log nach Datum/Zeit")
+    parser.add_argument("--after", help="Nur Zeilen NACH diesem Zeitpunkt (YYYY-MM-DD HH:MM:SS)")
+    parser.add_argument("--before", help="Nur Zeilen VOR diesem Zeitpunkt (YYYY-MM-DD HH:MM:SS)")
+    parser.add_argument("--lines", type=int, default=50, help="Maximale Anzahl Zeilen (default: 50, max: 500)")
+    parser.add_argument("--level", help="Filter: INFO, WARNING, ERROR, DEBUG, CRITICAL")
+    parser.add_argument("--log-path", help="Pfad zur Log-Datei")
+    parser.add_argument("--tail", action="store_true", help="Letzte X Zeilen anzeigen")
+    args = parser.parse_args()
+
+    log_path = args.log_path or _find_default_log_path()
+
+    if args.tail:
+        result, meta = tail_log(lines=args.lines, log_path=log_path)
+    elif args.after:
+        try:
+            after = datetime.strptime(args.after, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            print(f"Fehler: Datum-Format nicht erkannt: '{args.after}'. Erwartet: YYYY-MM-DD HH:MM:SS")
+            return 1
+        before = None
+        if args.before:
+            before = datetime.strptime(args.before, "%Y-%m-%d %H:%M:%S")
+        result, meta = query_logs(after=after, before=before, lines=args.lines,
+                                  level=args.level, log_path=log_path)
+    else:
+        result, meta = query_logs(lines=args.lines, level=args.level, log_path=log_path)
+
+    for line in result:
+        print(line, end="")
+
+    if not result:
+        if args.after:
+            print(f"Keine Logs nach {args.after} gefunden.")
+        else:
+            print("Keine Logs gefunden.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
