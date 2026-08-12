@@ -19,6 +19,89 @@ if [ ! -d "$TARGET_DIR" ]; then
     exit 1
 fi
 
+
+# Log-Abfrage-Hilfsfunktionen
+
+query_logs_by_time() {
+    target="$1"
+    maxlines="${2:-50}"
+    
+    if [ ! -f "$LOG_FILE" ]; then
+        printf "${RED}Log-Datei nicht gefunden: $LOG_FILE${NC}\n"
+        return 1
+    fi
+    
+    printf "${CYAN}Durchsuche Log ab $target (max ${maxlines} Zeilen)...${NC}\n\n"
+    
+    awk -v target="$target" -v maxlines="$maxlines" '
+    BEGIN { found = 0; count = 0 }
+    {
+        if (match($0, /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
+            ts = substr($0, 1, 19)
+            if (ts >= target) found = 1
+        }
+        if (found) {
+            buf[count++] = $0
+            if (count >= maxlines) exit
+        }
+    }
+    END {
+        if (count == 0) {
+            print "Keine Logs nach " target " gefunden."
+        } else {
+            for (i = 0; i < count; i++) print buf[i]
+        }
+    }
+    ' "$LOG_FILE" | more
+    
+    wait_for_key
+}
+
+query_logs_by_duration() {
+    hours="$1"
+    maxlines="${2:-200}"
+    
+    if [ ! -f "$LOG_FILE" ]; then
+        printf "${RED}Log-Datei nicht gefunden: $LOG_FILE${NC}\n"
+        return 1
+    fi
+    
+    if date --version 2>/dev/null | grep -q GNU; then
+        target=$(date -d "-${hours} hours" "+%Y-%m-%d %H:%M:%S")
+    else
+        target=$(date -v-${hours}H "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
+        if [ -z "$target" ]; then
+            target=$(python3 -c "from datetime import datetime, timedelta; print((datetime.now() - timedelta(hours=${hours})).strftime('%Y-%m-%d %H:%M:%S'))" 2>/dev/null)
+        fi
+    fi
+    
+    printf "${CYAN}Letzte ${hours} Stunde(n) ab $target (max ${maxlines} Zeilen)...${NC}\n\n"
+    
+    awk -v target="$target" -v maxlines="$maxlines" '
+    BEGIN { found = 0; count = 0 }
+    {
+        if (match($0, /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
+            ts = substr($0, 1, 19)
+            if (ts >= target) found = 1
+        }
+        if (found) {
+            buf[count++] = $0
+            if (count >= maxlines) exit
+        }
+    }
+    END {
+        if (count == 0) {
+            print "Keine Logs gefunden."
+        } else {
+            for (i = 0; i < count; i++) print buf[i]
+        }
+    }
+    ' "$LOG_FILE" | more
+    
+    wait_for_key
+}
+
+
 wait_for_key() {
     printf "\n${YELLOW}Press Enter to return to menu...${NC}"
     read dummy
@@ -70,6 +153,8 @@ while true; do
     printf "8) 📂   List Files\n"
     printf "9) ☁️    Upload CSV to Catbox\n"
     printf "10) 🆕  Update WP-Manager (this script)\n"
+    printf "11) 🔍  Query Logs by Time (enter datetime)\n"
+    printf "12) ⏱️  Query Logs by Duration (last N hours)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -111,6 +196,31 @@ while true; do
             printf "${GREEN}Update fertig. Starte Skript neu...${NC}\n"
             sleep 1
             exec sh "$0" "$@"
+            ;;
+
+        11)
+            printf "${CYAN}Bis zu welchem Datum/Uhrzeit zurueck?${NC}\n"
+            printf "Format: ${YELLOW}YYYY-MM-DD HH:MM:SS${NC} (z.B. ${GREEN}2026-08-08 16:00:00${NC})\n"
+            printf "Eingabe: "
+            read log_target
+            if [ -z "$log_target" ]; then
+                printf "${RED}Keine Eingabe, Abbruch.${NC}\n"
+                wait_for_key
+            else
+                printf "${CYAN}Wieviele Zeilen? (Default 50):${NC} "
+                read log_lines
+                log_lines="${log_lines:-50}"
+                query_logs_by_time "$log_target" "$log_lines"
+            fi
+            ;;
+        12)
+            printf "${CYAN}Letzte wieviele Stunden anzeigen? (z.B. 2, 4, 24):${NC} "
+            read log_hours
+            log_hours="${log_hours:-2}"
+            printf "${CYAN}Wieviele Zeilen? (Default 200):${NC} "
+            read log_lines
+            log_lines="${log_lines:-200}"
+            query_logs_by_duration "$log_hours" "$log_lines"
             ;;
         0) exit 0 ;;
         *) sleep 1 ;;
