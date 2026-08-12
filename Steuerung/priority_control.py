@@ -595,12 +595,12 @@ def evaluate_calculated_start(
         return result
     
     # Bereits erreicht? Nur unteren Fuehler pruefen (kaltester Punkt im Boiler)
-        # Der obere/mittige Fuehler kann durch Schichtung heiss sein, obwohl
-        # die WP noch viel Energie unten reinstecken kann (vor allem bei PV!)
-        if temp_unten is not None and temp_unten >= calc_cfg.tmax_c:
-            result.einschalten = False
-            result.grund = f"CalcStart: Zieltemp {calc_cfg.tmax_c}C unten bereits erreicht -> AUS"
-            return result
+    # Der obere/mittige Fuehler kann durch Schichtung heiss sein, obwohl
+    # die WP noch viel Energie unten reinstecken kann (vor allem bei PV!)
+    if temp_unten is not None and temp_unten >= calc_cfg.tmax_c:
+        result.einschalten = False
+        result.grund = f"CalcStart: Zieltemp {calc_cfg.tmax_c}C unten bereits erreicht -> AUS"
+        return result
     
     # Aktuelle Zeit
     current_time = now_hour + now_minute / 60.0
