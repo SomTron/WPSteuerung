@@ -10,7 +10,6 @@ import aiofiles
 import os
 from datetime import datetime, timedelta
 import pytz
-import re
 
 # Modules
 from config_manager import ConfigManager
@@ -31,7 +30,7 @@ from api import app, init_api
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
-from logic_utils import is_nighttime, is_solar_window, check_log_throttle
+from logic_utils import is_nighttime, is_solar_window
 from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN
 
 # Global objects
@@ -274,21 +273,24 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             
     return last_vpn_check
 
-
-def _normalize_blocking_reason(text: str) -> str:
-    """Normalisiert blocking_reason fuer Alarm-Erkennung (entfernt dynamische Details)."""
-    if not text:
-        return ""
-    res = re.sub(r'\(.*?\)', '', text)
-    res = res.split(':')[0]
-    return res.strip()
-
-
 async def check_and_send_alerts(session, state):
     """Prüft auf Änderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
     current_blocking = state.control.blocking_reason
     
-    current_type = _normalize_blocking_reason(current_blocking)
+    # Normalisierung: Dynamische Teile (Zeiten, Temperaturen) entfernen
+    # Beispiel: "Min. Pause (noch 1m 10s)" -> "Min. Pause"
+    # Beispiel: "Verdampfer zu kalt (5.0°C < 6°C)" -> "Verdampfer zu kalt"
+    # Beispiel: "Sensorfehler: T_Oben invalid" -> "Sensorfehler"
+    import re
+    def normalize(text):
+        if not text: return ""
+        # 1. Alles in Klammern entfernen (Zeiten, Werte)
+        res = re.sub(r'\(.*?\)', '', text)
+        # 2. Alles nach Doppelpunkt entfernen (Details)
+        res = res.split(':')[0]
+        return res.strip()
+
+    current_type = normalize(current_blocking)
     last_type = getattr(state.control, 'last_alert_type', "")
     
     if current_type != last_type:
@@ -367,25 +369,26 @@ async def run_logic_step(session, state, learning_engine=None):
 
 async def log_system_state(state):
     """Schreibt CSV-Log, aktualisiert LCD und loggt Temperaturen + Entscheidungen."""
-    # 1. Temperatur- und Entscheidungs-Logging (gethrottelt alle 5 Min)
-    if check_log_throttle(state, '_last_temp_log', interval_minutes=5.0):
-        logging.info(
-            f"Sensoren: Oben={state.sensors.t_oben or 0:.1f}°C | Mittig={state.sensors.t_mittig or 0:.1f}°C | "
-            f"Unten={state.sensors.t_unten or 0:.1f}°C | Verd={state.sensors.t_verd or 0:.1f}°C"
-        )
-        komp_status = "EIN" if state.control.kompressor_ein else "AUS"
-        log_line = (
-            f"Status: {komp_status} | "
-            f"EP={state.control.aktueller_einschaltpunkt:.1f}°C | "
-            f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C"
-        )
-        if state.control.blocking_reason:
-            log_line += f" | Blocking: {state.control.blocking_reason}"
-        if state.control.active_rule_name:
-            log_line += f" | Regel: {state.control.active_rule_name}"
-        if state.control.previous_modus:
-            log_line += f" | Modus: {state.control.previous_modus}"
-        logging.info(log_line)
+    # 1. Temperatur-Logging (INFO, jeder Durchlauf)
+    logging.info(
+        f"Sensoren: Oben={state.sensors.t_oben or 0:.1f}°C | Mittig={state.sensors.t_mittig or 0:.1f}°C | "
+        f"Unten={state.sensors.t_unten or 0:.1f}°C | Verd={state.sensors.t_verd or 0:.1f}°C"
+    )
+
+    # 2. Entscheidungs-Logging (Setpoints, Blocking, Regel)
+    komp_status = "EIN" if state.control.kompressor_ein else "AUS"
+    log_line = (
+        f"Status: {komp_status} | "
+        f"EP={state.control.aktueller_einschaltpunkt:.1f}°C | "
+        f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C"
+    )
+    if state.control.blocking_reason:
+        log_line += f" | Blocking: {state.control.blocking_reason}"
+    if state.control.active_rule_name:
+        log_line += f" | Regel: {state.control.active_rule_name}"
+    if state.control.previous_modus:
+        log_line += f" | Modus: {state.control.previous_modus}"
+    logging.info(log_line)
 
     # 3. LCD Update
     pv_w = state.solar.feedinpower if state.solar.feedinpower else 0
