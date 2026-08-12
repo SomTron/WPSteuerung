@@ -373,11 +373,15 @@ async def handle_compressor_on(
                 return True
     
     # Blocking-Reason setzen wenn Bedingungen nicht erfuellt
-    if not state.control.kompressor_ein:
-        if not pause_ok and pause_remaining:
-            minutes = int(pause_remaining.total_seconds() // 60)
-            seconds = int(pause_remaining.total_seconds() % 60)
-            state.control.blocking_reason = f"Min. Pause (noch {minutes}m {seconds}s)"
+        # Nur setzen, wenn ueberhaupt eine Regel einschalten will (sonst sinnlose Warnung)
+        if not state.control.kompressor_ein:
+            should_on = getattr(state.control, '_soll_einschalten', False)
+            if should_on and not pause_ok and pause_remaining:
+                minutes = int(pause_remaining.total_seconds() // 60)
+                seconds = int(pause_remaining.total_seconds() % 60)
+                state.control.blocking_reason = f"Min. Pause (noch {minutes}m {seconds}s)"
+            elif not should_on:
+                state.control.blocking_reason = None
     
     return False
 
