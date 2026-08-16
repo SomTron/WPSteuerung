@@ -301,6 +301,32 @@ async def handle_compressor_off(
         await handle_critical_compressor_error(session, state, "bei Ueberhitzung")
         return False
 
+    # --- NEU: Keine Regel aktiv -> Kompressor ausschalten ---
+    # Wenn keine Regel den Kompressor einschalten will (z.B. wegen Nachtsperre),
+    # muss der Kompressor ausgeschaltet werden, auch wenn der regelfuehler
+    # noch unter dem ausschaltpunkt liegt.
+    should_on = getattr(state.control, '_soll_einschalten', False)
+    if not should_on:
+        # Pruefe ob wir schon laenger als die Mindestlaufzeit laufen
+        elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
+        if elapsed >= min_laufzeit:
+            if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+                state.control.blocking_reason = None
+                logging.info(
+                    f"Keine Regel aktiv: Kompressor AUS. "
+                    f"Laufzeit: {elapsed}"
+                )
+                return True
+        else:
+            remaining_min = int((min_laufzeit - elapsed).total_seconds() // 60)
+            state.control.blocking_reason = f"Keine Regel aktiv, warte auf Mindestlaufzeit (noch {remaining_min}m)"
+            if check_log_throttle(state, "log_min_laufzeit_keine_regel", interval_minutes=5):
+                logging.info(
+                    f"Keine Regel aktiv, aber Mindestlaufzeit noch nicht erreicht. "
+                    f"Laufzeit: {elapsed}"
+                )
+        return False
+
     # Regel-basiertes Ausschalten
     if regelfuehler is not None and regelfuehler >= ausschaltpunkt:
         elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)

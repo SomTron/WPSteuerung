@@ -42,10 +42,19 @@ def mock_state_with_config():
     state.control.kompressor_ein = False
     state.control.blocking_reason = None
     state.control.previous_modus = "Normalmodus"
+    state.control._soll_einschalten = False  # Default: keine Regel aktiv
     
     # Stats
     state.stats.last_compressor_on_time = datetime.now(state.local_tz) - timedelta(minutes=30)
     state.stats.last_compressor_off_time = datetime.now(state.local_tz) - timedelta(minutes=5)
+    
+    # Log-Throttle-Attribute auf None setzen (wie ein frischer State)
+    # Sonst liefert MagicMock ein anderes MagicMock statt None -> TypeError in check_log_throttle
+    for attr in ['log_max_temp_warn', 'log_min_laufzeit_off', 'log_min_laufzeit_keine_regel']:
+        try:
+            delattr(state, attr)
+        except AttributeError:
+            pass
     
     return state
 
@@ -238,6 +247,78 @@ class TestHandleCompressorOff:
         )
         
         assert result is False  # Kompressor läuft nicht
+        mock_set_kompressor.assert_not_called()
+
+    # --- Neue Tests: Keine Regel aktiv (z.B. Nachtsperre) ---
+
+    @pytest.mark.asyncio
+    async def test_handle_compressor_off_no_rule_active_shuts_down(self, mock_state_with_config):
+        """Testet: Keine Regel aktiv (_soll_einschalten=False), Kompressor laeuft,
+           regelfuehler (t_unten=26.5°C) weit unter ausschaltpunkt (48°C)
+           -> MUSS trotzdem abschalten! (Bug-Fix fuer Nachtsperre-Szenario)"""
+        import priority_control_logic as pcl
+        
+        state = mock_state_with_config
+        state.control.kompressor_ein = True
+        state.control._soll_einschalten = False  # <-- Keine Regel will einschalten
+        state.stats.last_compressor_on_time = datetime.now(state.local_tz) - timedelta(minutes=30)
+        
+        mock_set_kompressor = AsyncMock(return_value=True)
+        
+        # Genau wie in Ihrem Log: t_unten=26.5°C, ausschaltpunkt=48°C
+        result = await pcl.handle_compressor_off(
+            state=state, session=None,
+            regelfuehler=26.5, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=15), t_oben=49.5,
+            set_kompressor_status_func=mock_set_kompressor
+        )
+        
+        assert result is True, "Muss ausschalten obwohl regelfuehler < ausschaltpunkt!"
+        mock_set_kompressor.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_compressor_off_no_rule_active_min_runtime(self, mock_state_with_config):
+        """Testet: Keine Regel aktiv, aber Mindestlaufzeit noch nicht erreicht -> warten."""
+        import priority_control_logic as pcl
+        
+        state = mock_state_with_config
+        state.control.kompressor_ein = True
+        state.control._soll_einschalten = False
+        state.stats.last_compressor_on_time = datetime.now(state.local_tz) - timedelta(minutes=10)
+        
+        mock_set_kompressor = AsyncMock(return_value=True)
+        
+        result = await pcl.handle_compressor_off(
+            state=state, session=None,
+            regelfuehler=26.5, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=15), t_oben=49.5,
+            set_kompressor_status_func=mock_set_kompressor
+        )
+        
+        assert result is False  # Mindestlaufzeit (15 Min) noch nicht erreicht
+        mock_set_kompressor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_compressor_off_regel_aktiv_vorrang(self, mock_state_with_config):
+        """Testet: Regel ist aktiv (_soll_einschalten=True) -> normale Abschaltlogik gilt weiter."""
+        import priority_control_logic as pcl
+        
+        state = mock_state_with_config
+        state.control.kompressor_ein = True
+        state.control._soll_einschalten = True  # <-- Regel WILL einschalten!
+        state.stats.last_compressor_on_time = datetime.now(state.local_tz) - timedelta(minutes=30)
+        
+        mock_set_kompressor = AsyncMock(return_value=True)
+        
+        # regelfuehler UNTER ausschaltpunkt -> soll NICHT abschalten
+        result = await pcl.handle_compressor_off(
+            state=state, session=None,
+            regelfuehler=40.0, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=15), t_oben=49.5,
+            set_kompressor_status_func=mock_set_kompressor
+        )
+        
+        assert result is False  # Regel aktiv, Temp noch nicht erreicht -> weiterlaufen
         mock_set_kompressor.assert_not_called()
 
 
