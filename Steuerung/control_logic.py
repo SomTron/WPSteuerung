@@ -169,7 +169,11 @@ async def handle_compressor_on(state, session, regelfuehler, einschaltpunkt, aus
             pause_remaining = min_pause - elapsed_pause
             
 
-    stop_condition = (regelfuehler is not None and regelfuehler >= ausschaltpunkt) or (t_oben is not None and t_oben >= ausschaltpunkt)
+    # Normalerweise darf t_oben nicht über dem Sollwert liegen.
+    # Im Frostschutz-Notbetrieb (wo ausschaltpunkt z.B. 38°C ist) soll eine wärmere Schichtung oben (z.B. 35°C) 
+    # aber nicht das Auftauen / Heizen blockieren, es sei denn der normale Ausschaltpunkt ist erreicht.
+    max_top_allowed = max(ausschaltpunkt, getattr(state, 'basis_ausschaltpunkt', ausschaltpunkt))
+    stop_condition = (regelfuehler is not None and regelfuehler >= ausschaltpunkt) or (t_oben is not None and t_oben >= max_top_allowed)
     
     if not state.control.kompressor_ein and temp_ok and solar_ok and pause_ok:
         if stop_condition:

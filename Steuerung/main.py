@@ -231,6 +231,7 @@ async def update_system_data(session, state):
     state.sensors.t_mittig = temps.get("mittig")
     state.sensors.t_unten = temps.get("unten")
     state.sensors.t_verd = temps.get("verd")
+    state.sensors.t_boiler = temps.get("oben")
     
     # 2. PV-Daten aktualisieren
     solax_result = await get_solax_data(session, state)
@@ -260,13 +261,13 @@ async def check_periodic_tasks(session, state, last_vpn_check):
         last_vpn_check = now_dt
     
     # 2. Solar Forecast (alle FORECAST_UPDATE_INTERVAL_HOURS)
-        if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= FORECAST_UPDATE_INTERVAL_HOURS * 3600:
-            rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session, state.config)
-            if rad_today is not None:
-                state.solar.forecast_today = rad_today
-                state.solar.forecast_tomorrow = rad_tomorrow
-                state.solar.forecast_day2 = rad_day2
-                state.solar.sunrise_today = sr_today
+    if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= FORECAST_UPDATE_INTERVAL_HOURS * 3600:
+        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session, state.config)
+        if rad_today is not None:
+            state.solar.forecast_today = rad_today
+            state.solar.forecast_tomorrow = rad_tomorrow
+            state.solar.forecast_day2 = rad_day2
+            state.solar.sunrise_today = sr_today
             state.solar.sunset_today = ss_today
             state.sunrise_tomorrow = sr_tomorrow
             state.sunset_tomorrow = ss_tomorrow
@@ -433,7 +434,7 @@ async def log_system_state(state):
             fmt_csv(solax.get("consumeenergy", 0)),
             fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
                         "1" if state.control.solar_ueberschuss_aktiv else "0",
-            "1" if pcl._is_nachtsperre_aktiv(state.priority_config, datetime.now(state.local_tz)) else "0",
+            "1" if getattr(state, "urlaubsmodus_aktiv", False) else "0",
             power_source, fmt_csv(state.solar.forecast_tomorrow)
         ]
         

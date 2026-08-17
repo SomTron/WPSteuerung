@@ -39,7 +39,7 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten)
 async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_verd, set_kompressor_status_func: Callable):
     """Sicherheitsabschaltung und Sensorprüfung."""
     state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd = t_oben, t_unten, t_mittig, t_verd
-    state.sensors.t_boiler = (t_oben + t_unten) / 2 if t_oben is not None and t_unten is not None else None
+    state.sensors.t_boiler = t_oben if t_oben is not None else ((t_mittig if t_mittig is not None else t_unten))
     
     if not await check_for_sensor_errors(session, state, t_oben, t_unten):
         state.control.ausschluss_grund = "Sensorfehler"
@@ -47,7 +47,31 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
         return False
 
-    safety_temp = state.config.Heizungssteuerung.SICHERHEITS_TEMP
+    safety_temp = None
+    if hasattr(state, 'priority_config') and getattr(state.priority_config, 'sicherheit', None):
+        val = getattr(state.priority_config.sicherheit, 'ueberhitzung_c', None)
+        # Nur echte numerische Werte (int/float) akzeptieren, keine Mocks/MagicMocks
+        if isinstance(val, (int, float)):
+            try:
+                candidate = float(val)
+                if candidate > 40.0:  # Plausibilitätscheck: Sicherheitstemp muss > 40°C sein
+                    safety_temp = candidate
+            except (TypeError, ValueError):
+                pass
+            
+    if safety_temp is None:
+        val = getattr(getattr(state, 'config', None), 'Heizungssteuerung', None)
+        if val is not None:
+            raw_temp = getattr(val, 'SICHERHEITS_TEMP', 58.0)
+            try:
+                safety_temp = float(raw_temp) if isinstance(raw_temp, (int, float)) else 58.0
+                if not (40.0 < safety_temp < 150.0):
+                    safety_temp = 58.0
+            except (TypeError, ValueError):
+                safety_temp = 58.0
+        else:
+            safety_temp = 58.0
+
     if (t_oben is not None and t_oben >= safety_temp) or (t_unten is not None and t_unten >= safety_temp):
         state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
         state.control.blocking_reason = f"Sicherheitstemp (>= {safety_temp}°C)"
