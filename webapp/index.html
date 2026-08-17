@@ -988,6 +988,8 @@
             document.getElementById('switch-holiday').className = 'switch' + (mode.holiday_active ? ' active' : '');
             document.getElementById('switch-solar').className = 'switch' + (mode.solar_active ? ' active' : '');
             document.getElementById('switch-night').className = 'switch' + (mode.nightsperre_active ? ' active' : '');
+            document.getElementById('switch-sommer').className = 'switch' + (mode.sommer_modus_aktiv ? ' active' : '');
+            document.getElementById('sommer-info').textContent = mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv';
 
             // Energie
             document.getElementById('energy-soc').textContent = energy.soc ?? 0;
@@ -996,6 +998,7 @@
             document.getElementById('energy-ac').textContent = energy.ac_power ?? 'N/A';
             document.getElementById('energy-forecast-today').textContent = energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : 'N/A';
             document.getElementById('energy-forecast-tomorrow').textContent = energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : 'N/A';
+            document.getElementById('energy-forecast-day2').textContent = energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : 'N/A';
 
             // System
             document.getElementById('system-update').textContent = system.last_update;
@@ -1176,6 +1179,11 @@
                             <span class="toggle-label">Nachtsperre</span>
                             <div class="switch ${mode.nightsperre_active ? 'active' : ''}" id="switch-night"></div>
                         </div>
+                        <div class="toggle-switch">
+                            <span class="toggle-label">Sommer-Modus</span>
+                            <div class="switch ${mode.sommer_modus_aktiv ? 'active' : ''}" id="switch-sommer"></div>
+                        <div class="info-row" style="font-size:0.8rem;color:var(--text-secondary)" id="sommer-info">${mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv'}</div>
+                        </div>
                     </div>
 
                     <!-- Energie & Solar -->
@@ -1194,6 +1202,7 @@
                         <div class="info-row"><span class="info-label">AC-Leistung</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? 'N/A'}</span> W</span></div>
                         <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : 'N/A'}</span></div>
                         <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-label">Prognose Uebermorgen</span><span class="info-value" id="energy-forecast-day2">${energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : 'N/A'}</span></div>
                     </div>
 
                     <!-- System Info -->

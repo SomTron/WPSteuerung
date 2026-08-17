@@ -119,6 +119,20 @@ class CalculatedStartConfig(BaseModel):
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
 
 
+class SommerModusConfig(BaseModel):
+    """Sommer-Modus: Reduziert Zieltemperaturen bei mehrtaegiger guter PV-Prognose.
+
+    Wenn fuer mehrere Tage hintereinander viel PV-Strom prognostiziert wird,
+    macht es keinen Sinn, den Boiler jeden Tag auf 48°C aufzuheizen.
+    Stattdessen werden die Solltemperaturen um temperatur_offset_c gesenkt,
+    da ja jeden Tag genug PV-Strom zum Heizen zur Verfuegung steht.
+    """
+    aktiv: bool = Field(default=True, description="Sommer-Modus aktiv")
+    mindest_prognose_wh: float = Field(default=2000.0, description="Mindest-Prognose pro Tag (Wh/qm)")
+    benoetigte_tage: int = Field(default=3, description="Wieviele Tage hintereinander gut sein muessen")
+    temperatur_offset_c: float = Field(default=-3.0, description="Temperatur-Offset (°C)")
+
+
 class WPSteuerungConfig(BaseModel):
     """Gesamtkonfiguration der Pareto-optimierten WP-Steuerung."""
     beschreibung: str = Field(default="WP Steuerung")
@@ -133,6 +147,7 @@ class WPSteuerungConfig(BaseModel):
     forecast: ForecastConfig = Field(default_factory=ForecastConfig)
     adaptive_pv: AdaptivePVConfig = Field(default_factory=AdaptivePVConfig)
     calculated_start: CalculatedStartConfig = Field(default_factory=CalculatedStartConfig)
+    sommer_modus: SommerModusConfig = Field(default_factory=SommerModusConfig)
 
 
 class WPSteuerungConfigManager:

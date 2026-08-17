@@ -27,6 +27,7 @@ class SolarState:
         self.last_api_data: Optional[dict] = None
         self.forecast_today: Optional[float] = None
         self.forecast_tomorrow: Optional[float] = None
+        self.forecast_day2: Optional[float] = None  # Übermorgen-Prognose (Sommer-Modus)
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
 
@@ -49,6 +50,11 @@ class ControlState:
         self.komfort_aktiv: bool = False
         self._soll_einschalten: bool = False
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
+        # Sommer-Modus Status (wird von determine_mode_and_setpoints gesetzt)
+        self.sommer_modus_aktiv: bool = False
+        self.sommer_modus_offset_c: float = 0.0
+        self.sommer_modus_tage_ueber: int = 0
+        self.sommer_modus_benoetigte: int = 3
 
 class StatsState:
     def __init__(self, now):

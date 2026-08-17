@@ -93,5 +93,11 @@
     "heizrate_unten_c_h": 3.0,
     "heizrate_gesamt_c_h": 2.0,
     "tmax_c": 48
+  },
+  "sommer_modus": {
+    "aktiv": true,
+    "mindest_prognose_wh": 2000,
+    "benoetigte_tage": 3,
+    "temperatur_offset_c": -3.0
   }
 }

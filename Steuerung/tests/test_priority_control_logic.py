@@ -345,3 +345,160 @@ class TestNoWrongParameterName:
         source = inspect.getsource(control_logic)
         assert 'interval_min=' not in source, \
             "control_logic.py verwendet noch 'interval_min=' statt 'interval_minutes='"
+
+
+class TestSommerModus:
+    """Tests fuer den Sommer-Modus (mehrtagige gute PV-Prognose senkt Temperaturen)."""
+    
+    @pytest.fixture
+    def mock_state_sommer(self):
+        """Erstellt einen Mock-State mit voller Priority-Config inkl. Sommer-Modus."""
+        state = MagicMock()
+        state.local_tz = pytz.timezone("Europe/Berlin")
+        now = datetime.now(state.local_tz)
+        
+        state.solar.feedinpower = 500.0
+        state.solar.forecast_today = 2500.0
+        state.solar.forecast_tomorrow = 3000.0
+        state.solar.forecast_day2 = 2800.0
+        
+        state.sensors.t_oben = 45.0
+        state.sensors.t_verd = 5.0
+        state.bademodus_aktiv = False
+        state.urlaubsmodus_aktiv = False
+        
+        state.control.kompressor_ein = False
+        state.control.blocking_reason = None
+        state.control.previous_modus = "Normalmodus"
+        state.control._soll_einschalten = False
+        state.control.alle_ergebnisse = []
+        
+        state.stats.last_compressor_on_time = now - timedelta(minutes=30)
+        state.stats.last_compressor_off_time = now - timedelta(minutes=5)
+        
+        from json_config import WPConfig, ZyklusConfig, SicherheitConfig
+        from json_config import KomfortConfig, ZeitfensterConfig, AbweichungConfig
+        from json_config import ForecastConfig, AdaptivePVConfig, CalculatedStartConfig
+        from json_config import SommerModusConfig, WPSteuerungConfig
+        
+        state.priority_config = WPSteuerungConfig(
+            beschreibung="Test Config",
+            wp=WPConfig(),
+            zyklus=ZyklusConfig(),
+            sicherheit=SicherheitConfig(
+                nachtsperre_start=19, nachtsperre_ende=8,
+                max_temp_c=48.0, ueberhitzung_c=58.0, notfall_c=36.0,
+            ),
+            komfort=KomfortConfig(
+                prioritaet=60, notfall_einschalten_bei_c=36.0,
+                komfort_einschalten_bei_c=38.0, ausschalten_bei_c=42.0,
+                min_pv_fuer_komfort_watt=50.0,
+            ),
+            zeitfenster=ZeitfensterConfig(),
+            abweichung=AbweichungConfig(
+                prioritaet=47, solltemperatur_c=40.0,
+                temperaturfuehler="unten", einschalten_bei_abweichung_k=3.0,
+                ausschalten_bei_abweichung_k=0.5,
+            ),
+            forecast=ForecastConfig(),
+            adaptive_pv=AdaptivePVConfig(),
+            calculated_start=CalculatedStartConfig(),
+            sommer_modus=SommerModusConfig(
+                aktiv=True, mindest_prognose_wh=2000.0,
+                benoetigte_tage=3, temperatur_offset_c=-3.0,
+            ),
+            pv_regeln=[],
+        )
+        
+        for attr in ['_last_priority_log', '_last_temp_log']:
+            try:
+                delattr(state, attr)
+            except AttributeError:
+                pass
+        
+        return state
+
+    @pytest.mark.asyncio
+    async def test_sommer_modus_aktiv_lowered_temperatures(self, mock_state_sommer):
+        """Sommer-Modus: Alle 3 Tage ueber Schwelle -> Temperaturen werden gesenkt."""
+        import priority_control_logic as pcl
+        
+        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
+            mock_bewerte.return_value = (None, [])
+            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
+            
+            args, kwargs = mock_bewerte.call_args
+            config = kwargs.get('config')
+            assert config is not None, "Config wurde nicht an bewerte_alle_regeln uebergeben"
+            
+            # Offset von -3.0C muss angewendet sein: 40.0 - 3.0 = 37.0
+            assert config.abweichung.solltemperatur_c == 37.0,                 f"Solltemperatur sollte 37.0C sein, ist {config.abweichung.solltemperatur_c}C"
+            # Komfort ausschalten: 42.0 - 3.0 = 39.0
+            assert config.komfort.ausschalten_bei_c == 39.0,                 f"Komfort ausschalten sollte 39.0C sein, ist {config.komfort.ausschalten_bei_c}C"
+    
+    @pytest.mark.asyncio
+    async def test_sommer_modus_inactive_low_forecast(self, mock_state_sommer):
+        """Sommer-Modus: Nur 2 von 3 Tagen ueber Schwelle -> kein Offset."""
+        import priority_control_logic as pcl
+        
+        mock_state_sommer.solar.forecast_day2 = 500.0  # zu niedrig
+        
+        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
+            mock_bewerte.return_value = (None, [])
+            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
+            
+            args, kwargs = mock_bewerte.call_args
+            config = kwargs.get('config')
+            assert config.abweichung.solltemperatur_c == 40.0,                 f"Solltemperatur sollte 40.0C bleiben, ist {config.abweichung.solltemperatur_c}C"
+    
+    @pytest.mark.asyncio
+    async def test_sommer_modus_inactive_deactivated(self, mock_state_sommer):
+        """Sommer-Modus: Config sagt deaktiviert -> kein Offset."""
+        import priority_control_logic as pcl
+        
+        mock_state_sommer.priority_config.sommer_modus.aktiv = False
+        
+        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
+            mock_bewerte.return_value = (None, [])
+            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
+            
+            args, kwargs = mock_bewerte.call_args
+            config = kwargs.get('config')
+            assert config.abweichung.solltemperatur_c == 40.0,                 f"Solltemperatur sollte 40.0C bleiben, ist {config.abweichung.solltemperatur_c}C"
+
+    @pytest.mark.asyncio
+    async def test_sommer_modus_inactive_no_day2_forecast(self, mock_state_sommer):
+        """Sommer-Modus: Keine Day2-Prognose -> kein Offset."""
+        import priority_control_logic as pcl
+        
+        mock_state_sommer.solar.forecast_day2 = None
+        
+        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
+            mock_bewerte.return_value = (None, [])
+            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
+            
+            args, kwargs = mock_bewerte.call_args
+            config = kwargs.get('config')
+            assert config.abweichung.solltemperatur_c == 40.0
+
+    @pytest.mark.asyncio
+    async def test_sommer_modus_pv_regeln_werden_angepasst(self, mock_state_sommer):
+        """Sommer-Modus: PV-Regeln bekommen ebenfalls den Offset."""
+        import priority_control_logic as pcl
+        from json_config import PVRegel
+        
+        mock_state_sommer.priority_config.pv_regeln = [
+            PVRegel(name="PV_1", einschalten_bei_c=40.0, ausschalten_bei_c=45.0),
+            PVRegel(name="PV_2", einschalten_bei_c=38.0, ausschalten_bei_c=43.0),
+        ]
+        
+        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
+            mock_bewerte.return_value = (None, [])
+            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
+            
+            args, kwargs = mock_bewerte.call_args
+            config = kwargs.get('config')
+            assert config.pv_regeln[0].einschalten_bei_c == 37.0  # 40.0 - 3.0
+            assert config.pv_regeln[0].ausschalten_bei_c == 42.0  # 45.0 - 3.0
+            assert config.pv_regeln[1].einschalten_bei_c == 35.0  # 38.0 - 3.0
+            assert config.pv_regeln[1].ausschalten_bei_c == 40.0  # 43.0 - 3.0

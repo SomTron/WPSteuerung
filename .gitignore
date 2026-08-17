@@ -33,3 +33,7 @@ __pycache__/
 
 # Generierte Prognose-Daten
 Steuerung/sonnen_prognose.csv
+# Cursor AI / IDE
+.antigravity/
+*.pyc
+__pycache__/

@@ -99,7 +99,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         effektive_config.abweichung.solltemperatur_c -= absenkung
         logging.debug(f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C")
     
-    # Forecast-Daten aus State holen
+
     # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
     forecast_wh_qm = getattr(state.solar, 'forecast_tomorrow', None)
     if forecast_wh_qm is not None:
@@ -114,6 +114,58 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_today_wh = float(forecast_today_wh)
         except (TypeError, ValueError):
             forecast_today_wh = None
+
+    
+    # --- Sommer-Modus: Temperatur senken bei mehrtagiger guter PV-Prognose ---
+    forecast_day2_wh_orig = getattr(state.solar, "forecast_day2", None)
+    forecast_day2_wh = None
+    if forecast_day2_wh_orig is not None:
+        try:
+            forecast_day2_wh = float(forecast_day2_wh_orig)
+        except (TypeError, ValueError):
+            pass
+    _sommer_aktiv = False
+    if (effektive_config.sommer_modus.aktiv
+            and forecast_today_wh is not None
+            and forecast_wh_qm is not None
+            and forecast_day2_wh is not None):
+        ft = float(forecast_today_wh)
+        fm = float(forecast_wh_qm)
+        fd = float(forecast_day2_wh)
+        schwelle = effektive_config.sommer_modus.mindest_prognose_wh
+        benoetigte = effektive_config.sommer_modus.benoetigte_tage
+        tage_ueber = sum(1 for v in [ft, fm, fd] if v >= schwelle)
+        if tage_ueber >= benoetigte:
+            offset = effektive_config.sommer_modus.temperatur_offset_c
+            effektive_config.abweichung.solltemperatur_c += offset
+            for pv in effektive_config.pv_regeln:
+                pv.einschalten_bei_c += offset
+                pv.ausschalten_bei_c += offset
+            effektive_config.komfort.ausschalten_bei_c += offset
+            effektive_config.forecast.tmax_c += offset
+            effektive_config.forecast.t_vorheiz_ab_c += offset
+            effektive_config.adaptive_pv.tmax_c += offset
+            effektive_config.calculated_start.tmax_c += offset
+            effektive_config.calculated_start.solltemperatur_c += offset
+            _sommer_aktiv = True
+            # Sommer-Modus Status im State speichern (fuer API/Frontend)
+            state.control.sommer_modus_aktiv = True
+            state.control.sommer_modus_offset_c = offset
+            state.control.sommer_modus_tage_ueber = tage_ueber
+            state.control.sommer_modus_benoetigte = benoetigte
+    else:
+        # Sommer-Modus inaktiv: State zuruecksetzen
+        state.control.sommer_modus_aktiv = False
+        state.control.sommer_modus_offset_c = 0.0
+        state.control.sommer_modus_tage_ueber = 0
+    if _sommer_aktiv:
+        logging.info(
+            f"Sommer-Modus AKTIV: {tage_ueber}/{benoetigte} Tage >= {schwelle:.0f} Wh/qm "
+            f"(heute={ft:.0f}, morgen={fm:.0f}, uebermorgen={fd:.0f}). "
+            f"Temp-Offset: {offset:+.1f}C"
+        )
+
+    # Forecast-Daten aus State holen
     
     # Alle Regeln bewerten (mit effektiver Config)
     # Learning Engine aktualisieren (Heizzyklen + Zapfprofil)

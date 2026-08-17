@@ -236,6 +236,10 @@ def get_status():
             "active_rule_sensor": getattr(shared_state.control, 'active_rule_sensor', '') or '',
             "blocking_reason": getattr(shared_state.control, 'blocking_reason', '') or '',
             "soll_einschalten": getattr(shared_state.control, '_soll_einschalten', False),
+            "sommer_modus_aktiv": getattr(shared_state.control, 'sommer_modus_aktiv', False),
+            "sommer_modus_offset_c": getattr(shared_state.control, 'sommer_modus_offset_c', 0.0),
+            "sommer_modus_tage_ueber": getattr(shared_state.control, 'sommer_modus_tage_ueber', 0),
+            "sommer_modus_benoetigte": getattr(shared_state.control, 'sommer_modus_benoetigte', 3),
         },
         "energy": {
             "battery_power": shared_state.solar.batpower,
@@ -244,6 +248,7 @@ def get_status():
             "ac_power": getattr(shared_state.solar, 'acpower', None),
             "forecast_today": getattr(shared_state.solar, 'forecast_today', None),
             "forecast_tomorrow": getattr(shared_state.solar, 'forecast_tomorrow', None),
+            "forecast_day2": getattr(shared_state.solar, 'forecast_day2', None),
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
         },
@@ -410,65 +415,3 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
     except Exception as e:
         logging.error(f"Error reading history: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")
-
-# Log-Abfrage
-
-@app.get("/logs/tail")
-def get_log_tail(lines: int = Query(default=50, ge=1, le=500)):
-    """Letzte X Zeilen des Logs (einfaches tail)."""
-    from log_query import tail_log
-
-    try:
-        zeilen, meta = tail_log(lines=lines)
-        return {
-            "meta": meta,
-            "lines": zeilen,
-            "count": len(zeilen),
-        }
-    except Exception as e:
-        logging.error(f"Error reading log: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/logs")
-def get_logs(
-    after: Optional[str] = Query(default=None, description="Start-Zeitpunkt (ISO: '2026-08-08 16:00:00')"),
-    before: Optional[str] = Query(default=None, description="End-Zeitpunkt (ISO)"),
-    lines: int = Query(default=50, ge=1, le=500, description="Maximale Anzahl Zeilen"),
-    level: Optional[str] = Query(default=None, description="Filter: DEBUG|INFO|WARNING|ERROR"),
-):
-    """
-    Durchsucht das Log nach einem Zeitbereich.
-
-    Beispiele:
-      GET /logs?after=2026-08-08+16:00:00
-      GET /logs?after=2026-08-08+16:00:00&lines=20
-      GET /logs?after=2026-08-08+16:00:00&before=2026-08-08+17:00:00&level=INFO
-    """
-    from log_query import query_logs
-
-    try:
-        after_dt = None
-        if after:
-            after_dt = datetime.strptime(after.strip(), "%Y-%m-%d %H:%M:%S")
-
-        before_dt = None
-        if before:
-            before_dt = datetime.strptime(before.strip(), "%Y-%m-%d %H:%M:%S")
-
-        zeilen, meta = query_logs(
-            after=after_dt,
-            before=before_dt,
-            lines=lines,
-            level=level,
-        )
-        return {
-            "meta": meta,
-            "lines": zeilen,
-            "count": len(zeilen),
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Ungueltiges Datumsformat. Erwartet: YYYY-MM-DD HH:MM:SS. Fehler: {str(e)}")
-    except Exception as e:
-        logging.error(f"Error reading log: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
