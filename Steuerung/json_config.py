@@ -78,6 +78,7 @@ class AbweichungConfig(BaseModel):
     temperaturfuehler: str = Field(default="unten", description="Welcher Fühler: oben/mitte/unten")
     einschalten_bei_abweichung_k: float = Field(default=3.0, description="Einschalten bei Abweichung >= (K)")
     ausschalten_bei_abweichung_k: float = Field(default=0.5, description="Ausschalten bei Abweichung <= (K)")
+    schichtung_min_oben_c: float = Field(default=42.0, description="2-Zonen-Schichtungs-Check: Nicht einschalten wenn oben >= (°C), vermeidet Netzstrom-Start bei Zapfen")
 
 
 

@@ -367,6 +367,22 @@ def evaluate_abweichung(
     
     # Einschalten: Zu kalt
     if abweichung >= abw.einschalten_bei_abweichung_k:
+        # 2-Zonen-Schichtungs-Check: Wenn der konfigurierte Fuehler nicht "oben" ist
+        # (z.B. unten/mittig), prüfe ob oben noch warm genug ist.
+        # Verhindert unnötige Netzstrom-Starts nach Zapfen, wenn oben noch warmes
+        # Wasser vorhanden ist (vermiedene Schichtungs-Falle).
+        if abw.temperaturfuehler != "oben" and abw.schichtung_min_oben_c > 0:
+            temp_oben = _parse_sensor(temp_dict, "oben")
+            if temp_oben is not None and temp_oben >= abw.schichtung_min_oben_c:
+                result.einschalten = None
+                result.grund = (
+                    f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                    f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                    f"aber oben {temp_oben:.1f}C >= {abw.schichtung_min_oben_c}C "
+                    f"(Schichtung) -> kein Einschalten"
+                )
+                return result
+        
         result.einschalten = True
         result.grund = (
             f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
@@ -660,7 +676,7 @@ def evaluate_calculated_start(
     else:
         pv_label = "keine Prognose"
     
-    effektiver_puffer = buffer_hours / max(pv_faktor, 0.1)
+    effektiver_puffer = buffer_hours * pv_faktor
     
     if buffer_hours < 0:
         # Bereits ueber Zielzeit oder zu spaet -> sofort heizen!
