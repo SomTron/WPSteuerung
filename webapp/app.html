@@ -11,6 +11,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -385,14 +386,123 @@
         }
 
         @media (max-width: 768px) {
-            h1 {
-                font-size: 2rem;
-            }
+                    h1 {
+                        font-size: 2rem;
+                    }
 
-            .grid {
-                grid-template-columns: 1fr;
-            }
-        }
+                    .grid {
+                        grid-template-columns: 1fr;
+                    }
+                }
+
+                /* ===== Chart-Styles für Zoom/Horizontal/Fullscreen ===== */
+                .chart-toolbar {
+                    display: flex;
+                    gap: 8px;
+                    align-items: center;
+                    flex-wrap: wrap;
+                }
+
+                .chart-toolbar .btn-icon {
+                    width: 36px;
+                    height: 36px;
+                    border: none;
+                    border-radius: 8px;
+                    background: rgba(255, 255, 255, 0.08);
+                    color: var(--text-secondary);
+                    font-size: 1.1rem;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    transition: all 0.2s ease;
+                }
+
+                .chart-toolbar .btn-icon:hover {
+                    background: rgba(255, 255, 255, 0.15);
+                    color: var(--text-primary);
+                    transform: translateY(-1px);
+                }
+
+                .chart-toolbar .btn-icon.active {
+                    background: rgba(0, 212, 255, 0.2);
+                    color: var(--accent-primary);
+                }
+
+                .chart-wrapper {
+                    position: relative;
+                    width: 100%;
+                    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+                    overflow: hidden;
+                }
+
+                .chart-wrapper canvas {
+                    width: 100% !important;
+                }
+
+                /* Horizontal-Modus: Chart scrollbar horizontal */
+                .chart-wrapper.horizontal-mode {
+                    overflow-x: auto;
+                    overflow-y: hidden;
+                }
+
+                .chart-wrapper.horizontal-mode canvas {
+                    min-width: 1200px !important;
+                    height: 350px !important;
+                }
+
+                /* Fullscreen-Modus */
+                .chart-wrapper.fullscreen {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100vw;
+                    height: 100vh;
+                    z-index: 9999;
+                    background: var(--bg-primary);
+                    padding: 24px;
+                    display: flex;
+                    flex-direction: column;
+                }
+
+                .chart-wrapper.fullscreen .chart-toolbar {
+                    flex-shrink: 0;
+                }
+
+                .chart-wrapper.fullscreen .chart-inner {
+                    flex: 1;
+                    min-height: 0;
+                    position: relative;
+                }
+
+                .chart-wrapper.fullscreen .chart-inner canvas {
+                    max-height: 100% !important;
+                    width: 100% !important;
+                }
+
+                .chart-wrapper.fullscreen.horizontal-mode {
+                    padding-bottom: 16px;
+                }
+
+                .chart-wrapper.fullscreen.horizontal-mode canvas {
+                    min-width: 2000px !important;
+                    height: calc(100vh - 120px) !important;
+                }
+
+                .chart-info {
+                    font-size: 0.8rem;
+                    color: var(--text-secondary);
+                    padding: 4px 0;
+                }
+
+                .chart-info kbd {
+                    display: inline-block;
+                    padding: 1px 6px;
+                    border-radius: 4px;
+                    background: rgba(255, 255, 255, 0.08);
+                    font-family: inherit;
+                    font-size: 0.75rem;
+                }
     </style>
 </head>
 
@@ -428,8 +538,9 @@
         };
         const MAX_DATA_POINTS = 60;
 
-        // DEBUG: Confirm JavaScript is running
-        alert('APP VERSION 2.0 - API_BASE: ' + API_BASE);
+        // Initial load and history load
+        fetchStatus();
+        setTimeout(loadHistory, 500);
 
         async function fetchStatus() {
             try {
@@ -525,55 +636,215 @@
         }
 
         function updateChart() {
-            chart.data.labels = temperatureHistory.timestamps;
-            chart.data.datasets[0].data = temperatureHistory.oben;
-            chart.data.datasets[1].data = temperatureHistory.mittig;
-            legend: {
-                display: true,
-                    position: 'top',
-                        labels: {
-                    color: '#a0a0c0',
-                        font: { size: 12 }
+                    chart.data.labels = temperatureHistory.timestamps;
+                    chart.data.datasets[0].data = temperatureHistory.oben;
+                    chart.data.datasets[1].data = temperatureHistory.mittig;
+                    chart.data.datasets[2].data = temperatureHistory.unten;
+                    chart.data.datasets[3].data = temperatureHistory.verdampfer;
+                    chart.update('none'); // 'none' = ohne Animation für Echtzeit-Updates
                 }
-            },
-            tooltip: {
-                mode: 'index',
-                    intersect: false,
-                        backgroundColor: 'rgba(22, 33, 62, 0.95)',
-                            titleColor: '#fff',
-                                bodyColor: '#a0a0c0',
+
+                function createChart() {
+                    const ctx = document.getElementById('tempChart').getContext('2d');
+
+                    // Chart.js mit Zoom-Plugin registrieren
+                    Chart.register(chartjsPluginZoom);
+
+                    chart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: temperatureHistory.timestamps,
+                            datasets: [
+                                {
+                                    label: 'Oben',
+                                    data: temperatureHistory.oben,
+                                    borderColor: '#ff6b6b',
+                                    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                                    borderWidth: 2,
+                                    pointRadius: 1,
+                                    pointHitRadius: 8,
+                                    tension: 0.3,
+                                    fill: false
+                                },
+                                {
+                                    label: 'Mitte',
+                                    data: temperatureHistory.mittig,
+                                    borderColor: '#ffd43b',
+                                    backgroundColor: 'rgba(255, 212, 59, 0.1)',
+                                    borderWidth: 2,
+                                    pointRadius: 1,
+                                    pointHitRadius: 8,
+                                    tension: 0.3,
+                                    fill: false
+                                },
+                                {
+                                    label: 'Unten',
+                                    data: temperatureHistory.unten,
+                                    borderColor: '#00d4ff',
+                                    backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                                    borderWidth: 2,
+                                    pointRadius: 1,
+                                    pointHitRadius: 8,
+                                    tension: 0.3,
+                                    fill: false
+                                },
+                                {
+                                    label: 'Verdampfer',
+                                    data: temperatureHistory.verdampfer,
+                                    borderColor: '#51cf66',
+                                    backgroundColor: 'rgba(81, 207, 102, 0.1)',
+                                    borderWidth: 2,
+                                    pointRadius: 1,
+                                    pointHitRadius: 8,
+                                    tension: 0.3,
+                                    fill: false,
+                                    yAxisID: 'y1'
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: {
+                                mode: 'index',
+                                intersect: false
+                            },
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'top',
+                                    labels: {
+                                        color: '#a0a0c0',
+                                        font: { size: 12 },
+                                        usePointStyle: true,
+                                        padding: 16
+                                    }
+                                },
+                                tooltip: {
+                                    mode: 'index',
+                                    intersect: false,
+                                    backgroundColor: 'rgba(22, 33, 62, 0.95)',
+                                    titleColor: '#fff',
+                                    bodyColor: '#a0a0c0',
                                     borderColor: 'rgba(0, 212, 255, 0.3)',
-                                        borderWidth: 1
-            }
-        },
-        scales: {
-            y: {
-                beginAtZero: false,
-                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                ticks: {
-                    color: '#a0a0c0',
-                        callback: function (value) {
-                            return value + ' °C';
+                                    borderWidth: 1,
+                                    padding: 12
+                                },
+                                zoom: {
+                                    pan: {
+                                        enabled: true,
+                                        mode: 'x',
+                                        threshold: 5
+                                    },
+                                    zoom: {
+                                        wheel: {
+                                            enabled: true,
+                                            speed: 0.05
+                                        },
+                                        pinch: {
+                                            enabled: true
+                                        },
+                                        drag: {
+                                            enabled: true,
+                                            backgroundColor: 'rgba(0, 212, 255, 0.08)',
+                                            borderColor: 'rgba(0, 212, 255, 0.4)',
+                                            borderWidth: 1
+                                        },
+                                        mode: 'x'
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: false,
+                                    position: 'left',
+                                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                    ticks: {
+                                        color: '#a0a0c0',
+                                        callback: function (value) {
+                                            return value + ' °C';
+                                        }
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: 'Boiler-Temperatur (°C)',
+                                        color: '#a0a0c0'
+                                    }
+                                },
+                                y1: {
+                                    beginAtZero: true,
+                                    position: 'right',
+                                    grid: { display: false },
+                                    ticks: {
+                                        color: '#51cf66',
+                                        callback: function (value) {
+                                            return value + ' °C';
+                                        }
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: 'Verdampfer (°C)',
+                                        color: '#51cf66'
+                                    }
+                                },
+                                x: {
+                                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                    ticks: {
+                                        color: '#a0a0c0',
+                                        maxRotation: 45,
+                                        minRotation: 30,
+                                        maxTicksLimit: 30,
+                                        autoSkip: true
+                                    }
+                                }
+                            }
                         }
+                    });
                 }
-            },
-            x: {
-                grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                ticks: {
-                    color: '#a0a0c0',
-                        maxRotation: 45,
-                            minRotation: 45
+
+                function resetChartZoom() {
+                    if (chart) {
+                        chart.resetZoom();
+                    }
                 }
-            }
-        },
-        interaction: {
-            mode: 'nearest',
-                axis: 'x',
-                    intersect: false
-        }
+
+                function toggleHorizontal() {
+                    const wrapper = document.getElementById('chart-wrapper');
+                    const btn = document.getElementById('btn-horizontal');
+                    wrapper.classList.toggle('horizontal-mode');
+                    btn.classList.toggle('active');
+                    if (chart) {
+                        chart.resize();
+                    }
                 }
-            });
-        }
+
+                function toggleFullscreen() {
+                    const wrapper = document.getElementById('chart-wrapper');
+                    const btn = document.getElementById('btn-fullscreen');
+                    wrapper.classList.toggle('fullscreen');
+                    btn.classList.toggle('active');
+                    if (chart) {
+                        chart.resize();
+                    }
+                    // Escape zum Beenden des Fullscreen
+                    if (wrapper.classList.contains('fullscreen')) {
+                        document.addEventListener('keydown', _fsEscapeHandler);
+                    } else {
+                        document.removeEventListener('keydown', _fsEscapeHandler);
+                    }
+                }
+
+                function _fsEscapeHandler(e) {
+                    if (e.key === 'Escape') {
+                        const wrapper = document.getElementById('chart-wrapper');
+                        if (wrapper.classList.contains('fullscreen')) {
+                            wrapper.classList.remove('fullscreen');
+                            document.getElementById('btn-fullscreen').classList.remove('active');
+                            if (chart) chart.resize();
+                            document.removeEventListener('keydown', _fsEscapeHandler);
+                        }
+                    }
+                }
 
         function updateConnectionStatus(connected) {
             const statusEl = document.getElementById('connection-status');
@@ -697,19 +968,29 @@
             const isRunning = compressor.status === 'EIN';
 
             document.getElementById('app').innerHTML = `
-                <!-- Temperatur-Diagramm -->
-                <div class="grid chart-container">
-                    <div class="card">
-                        <div class="card-header">
-                            <div class="card-icon">📈</div>
-                            <div class="card-title">Temperaturverlauf</div>
-                            <button class="btn-small" onclick="loadHistory()">📅 24h Laden</button>
-                        </div>
-                        <div style="height: 300px;">
-                            <canvas id="tempChart"></canvas>
-                        </div>
-                    </div>
-                </div>
+                <!-- Temperatur-Diagramm mit Zoom/Horizontal/Fullscreen -->
+                            <div class="grid chart-container">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <div class="card-icon">📈</div>
+                                        <div class="card-title">Temperaturverlauf</div>
+                                        <div class="chart-toolbar">
+                                            <button class="btn-icon" id="btn-zoom-reset" title="Zoom zurücksetzen" onclick="resetChartZoom()">⟲</button>
+                                            <button class="btn-icon" id="btn-horizontal" title="Horizontal-Modus (Breit)" onclick="toggleHorizontal()">↔</button>
+                                            <button class="btn-icon" id="btn-fullscreen" title="Vollbild" onclick="toggleFullscreen()">⛶</button>
+                                            <button class="btn-small" onclick="loadHistory()">📅 24h</button>
+                                        </div>
+                                    </div>
+                                    <div class="chart-wrapper" id="chart-wrapper">
+                                        <div class="chart-info">
+                                            <kbd>Mausrad</kbd> zoomen · <kbd>Ziehen</kbd> pan · <kbd>⟲</kbd> reset
+                                        </div>
+                                        <div class="chart-inner">
+                                            <canvas id="tempChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
 
                 <div class="grid">
                     <!-- Kompressor Status -->
@@ -874,12 +1155,9 @@
         }
 
         // Auto-refresh every 5 seconds
-        setInterval(fetchStatus, 5000);
+                setInterval(fetchStatus, 5000);
 
-        // Initial load
-        fetchStatus();
-
-        // Register service worker for PWA
+                // Register service worker for PWA
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('service-worker.js')
                 .then(reg => console.log('Service Worker registered'))
