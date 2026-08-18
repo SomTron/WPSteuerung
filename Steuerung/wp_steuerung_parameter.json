@@ -48,13 +48,14 @@
     "min_pv_fuer_komfort_watt": 50
   },
   "zeitfenster": {
-    "prioritaet": 53,
-    "start_uhr": 16,
-    "ende_uhr": 17,
-    "modus": "einschalten",
-    "temperaturfuehler": "mitte",
-    "max_temp_fuer_einschalten_c": 44.5,
-    "min_pv_watt": 410
+    "aktiv": false,
+        "prioritaet": 53,
+        "start_uhr": 16,
+        "ende_uhr": 17,
+        "modus": "einschalten",
+        "temperaturfuehler": "mitte",
+        "max_temp_fuer_einschalten_c": 44.5,
+        "min_pv_watt": 410
   },
   "abweichung": {
     "prioritaet": 47,

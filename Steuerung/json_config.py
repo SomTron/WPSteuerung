@@ -62,6 +62,7 @@ class KomfortConfig(BaseModel):
 
 class ZeitfensterConfig(BaseModel):
     """Zeitfenster-Regel: Heizt zu bestimmten Uhrzeiten."""
+    aktiv: bool = Field(default=True, description="Regel aktiv")
     prioritaet: int = Field(default=53, description="Priorität")
     start_uhr: int = Field(default=6, description="Start-Stunde (0-23)")
     ende_uhr: int = Field(default=16, description="Ende-Stunde (0-23)")

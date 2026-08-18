@@ -272,7 +272,34 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.sunrise_tomorrow = sr_tomorrow
             state.sunset_tomorrow = ss_tomorrow
             state.last_forecast_update = now_local
-            
+
+            # --- Sommer-Modus: Pruefe ob mehrtägig gute PV-Prognose ---
+            sommer_cfg = state.priority_config.sommer_modus
+            if sommer_cfg.aktiv and all(f is not None for f in [rad_today, rad_tomorrow, rad_day2]):
+                alle_gut = all(f >= sommer_cfg.mindest_prognose_wh for f in [rad_today, rad_tomorrow, rad_day2])
+                if alle_gut:
+                    state.sommer_modus_zaehler += 1
+                    if state.sommer_modus_zaehler >= sommer_cfg.benoetigte_tage:
+                        if not state.sommer_modus_aktiv:
+                            state.sommer_modus_aktiv = True
+                            logging.info(
+                                f"Sommer-Modus AKTIV: {state.sommer_modus_zaehler}. Tag guter "
+                                f"PV-Prognose (Offset {sommer_cfg.temperatur_offset_c:+.0f}C, "
+                                f"Schwelle >={sommer_cfg.mindest_prognose_wh:.0f} Wh/qm)"
+                            )
+                else:
+                    if state.sommer_modus_aktiv or state.sommer_modus_zaehler > 0:
+                        prev_active = state.sommer_modus_aktiv
+                        state.sommer_modus_aktiv = False
+                        state.sommer_modus_zaehler = 0
+                        if prev_active:
+                            logging.info("Sommer-Modus INAKTIV: PV-Prognose nicht mehr durchgehend gut")
+            elif sommer_cfg.aktiv:
+                if state.sommer_modus_aktiv:
+                    state.sommer_modus_aktiv = False
+                    state.sommer_modus_zaehler = 0
+                    logging.info("Sommer-Modus INAKTIV: Keine Prognosedaten verfuegbar")
+
     return last_vpn_check
 
 async def check_and_send_alerts(session, state):

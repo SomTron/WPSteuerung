@@ -290,6 +290,10 @@ def evaluate_zeitfenster(
         grund="Auserhalb Zeitfenster"
     )
     
+    if not zf.aktiv:
+        result.grund = "Zeitfenster-Regel inaktiv"
+        return result
+    
     if not _is_zeitfenster_active(now_hour, zf.start_uhr, zf.ende_uhr):
         return result
     

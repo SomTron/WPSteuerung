@@ -1,4 +1,4 @@
-"""
+﻿"""
 Prioritaetenbasierte Steuerungslogik (Pareto-optimiert).
 
 Ersetzt die modusbasierte Logik durch eine Regelengine mit Prioritaeten.
@@ -88,7 +88,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     effektive_config = copy.deepcopy(state.priority_config)
     
     if state.bademodus_aktiv:
-        # Bademodus: Solltemperatur +3°C (fuer warmes Wasser)
+        # Bademodus: Solltemperatur +3Â°C (fuer warmes Wasser)
         erhoehung = 3.0
         effektive_config.abweichung.solltemperatur_c += erhoehung
         logging.debug(f"Bademodus aktiv: Solltemperatur +{erhoehung}C auf {effektive_config.abweichung.solltemperatur_c}C")
@@ -98,8 +98,17 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         absenkung = float(state.config.Urlaubsmodus.URLAUBSABSENKUNG) if hasattr(state.config, 'Urlaubsmodus') else 5.0
         effektive_config.abweichung.solltemperatur_c -= absenkung
         logging.debug(f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C")
-    
 
+    # Sommer-Modus: Solltemperatur senken bei mehrtÃ¤gig guter PV-Prognose.
+    # Im Sommer scheint fast jeden Tag die Sonne, daher braucht der Boiler nicht
+    # jeden Tag auf 44Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
+    # Der Offset (default -3Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
+    if hasattr(state, 'sommer_modus_aktiv') and state.sommer_modus_aktiv:
+        offset = effektive_config.sommer_modus.temperatur_offset_c
+        effektive_config.abweichung.solltemperatur_c += offset
+        logging.debug(f"Sommer-Modus aktiv: Solltemperatur {offset:+.1f}C auf {effektive_config.abweichung.solltemperatur_c}C")
+
+    # Forecast-Daten aus State holen
     # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
     forecast_wh_qm = getattr(state.solar, 'forecast_tomorrow', None)
     if forecast_wh_qm is not None:
@@ -114,58 +123,6 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_today_wh = float(forecast_today_wh)
         except (TypeError, ValueError):
             forecast_today_wh = None
-
-    
-    # --- Sommer-Modus: Temperatur senken bei mehrtagiger guter PV-Prognose ---
-    forecast_day2_wh_orig = getattr(state.solar, "forecast_day2", None)
-    forecast_day2_wh = None
-    if forecast_day2_wh_orig is not None:
-        try:
-            forecast_day2_wh = float(forecast_day2_wh_orig)
-        except (TypeError, ValueError):
-            pass
-    _sommer_aktiv = False
-    if (effektive_config.sommer_modus.aktiv
-            and forecast_today_wh is not None
-            and forecast_wh_qm is not None
-            and forecast_day2_wh is not None):
-        ft = float(forecast_today_wh)
-        fm = float(forecast_wh_qm)
-        fd = float(forecast_day2_wh)
-        schwelle = effektive_config.sommer_modus.mindest_prognose_wh
-        benoetigte = effektive_config.sommer_modus.benoetigte_tage
-        tage_ueber = sum(1 for v in [ft, fm, fd] if v >= schwelle)
-        if tage_ueber >= benoetigte:
-            offset = effektive_config.sommer_modus.temperatur_offset_c
-            effektive_config.abweichung.solltemperatur_c += offset
-            for pv in effektive_config.pv_regeln:
-                pv.einschalten_bei_c += offset
-                pv.ausschalten_bei_c += offset
-            effektive_config.komfort.ausschalten_bei_c += offset
-            effektive_config.forecast.tmax_c += offset
-            effektive_config.forecast.t_vorheiz_ab_c += offset
-            effektive_config.adaptive_pv.tmax_c += offset
-            effektive_config.calculated_start.tmax_c += offset
-            effektive_config.calculated_start.solltemperatur_c += offset
-            _sommer_aktiv = True
-            # Sommer-Modus Status im State speichern (fuer API/Frontend)
-            state.control.sommer_modus_aktiv = True
-            state.control.sommer_modus_offset_c = offset
-            state.control.sommer_modus_tage_ueber = tage_ueber
-            state.control.sommer_modus_benoetigte = benoetigte
-    else:
-        # Sommer-Modus inaktiv: State zuruecksetzen
-        state.control.sommer_modus_aktiv = False
-        state.control.sommer_modus_offset_c = 0.0
-        state.control.sommer_modus_tage_ueber = 0
-    if _sommer_aktiv:
-        logging.info(
-            f"Sommer-Modus AKTIV: {tage_ueber}/{benoetigte} Tage >= {schwelle:.0f} Wh/qm "
-            f"(heute={ft:.0f}, morgen={fm:.0f}, uebermorgen={fd:.0f}). "
-            f"Temp-Offset: {offset:+.1f}C"
-        )
-
-    # Forecast-Daten aus State holen
     
     # Alle Regeln bewerten (mit effektiver Config)
     # Learning Engine aktualisieren (Heizzyklen + Zapfprofil)
@@ -220,10 +177,20 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             state.control.active_rule_sensor = "Oben"
         
         # Ein/Ausschaltpunkte aus Regel ermitteln
-        eps = _extract_einschaltpunkt(gewinner, state.priority_config)
-        ausp = _extract_ausschaltpunkt(gewinner, state.priority_config)
-        state.control.aktueller_einschaltpunkt = eps
-        state.control.aktueller_ausschaltpunkt = ausp
+        if gewinner.einschalten is True:
+            eps = _extract_einschaltpunkt(gewinner, state.priority_config)
+            ausp = _extract_ausschaltpunkt(gewinner, state.priority_config)
+            state.control.aktueller_einschaltpunkt = eps
+            state.control.aktueller_ausschaltpunkt = ausp
+        else:
+            # Regel sagt AUS: korrekte Setpoints aus der Regel extrahieren,
+            # damit handle_compressor_off() den Kompressor auch abschalten kann.
+            # Wenn wir hier max_temp_c setzen, wuerde der Kompressor nie ausschalten,
+            # weil z.B. t_unten=43.2C < max_temp_c=48C.
+            eps = _extract_einschaltpunkt(gewinner, state.priority_config)
+            ausp = _extract_ausschaltpunkt(gewinner, state.priority_config)
+            state.control.aktueller_einschaltpunkt = max(eps, ausp)  # hoch, damit kein Neueinschalten
+            state.control.aktueller_ausschaltpunkt = ausp            # korrekt, damit Abschaltung funktioniert
     else:
         # Keine Regel will einschalten: Standard = ausschalten
         state.control.aktueller_einschaltpunkt = state.priority_config.sicherheit.max_temp_c
@@ -525,3 +492,4 @@ def _is_nachtsperre_aktiv(cfg: WPSteuerungConfig, now: datetime) -> bool:
     if start <= ende:
         return start <= h < ende
     return h >= start or h < ende
+

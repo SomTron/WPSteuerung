@@ -50,11 +50,6 @@ class ControlState:
         self.komfort_aktiv: bool = False
         self._soll_einschalten: bool = False
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
-        # Sommer-Modus Status (wird von determine_mode_and_setpoints gesetzt)
-        self.sommer_modus_aktiv: bool = False
-        self.sommer_modus_offset_c: float = 0.0
-        self.sommer_modus_tage_ueber: int = 0
-        self.sommer_modus_benoetigte: int = 3
 
 class StatsState:
     def __init__(self, now):
@@ -92,6 +87,10 @@ class State:
         self.bademodus_aktiv: bool = False
         self.awaiting_urlaub_duration: bool = False
         self.awaiting_custom_duration: bool = False
+        
+        # Sommer-Modus: Temperaturoffset bei mehrtägig guter PV-Prognose
+        self.sommer_modus_aktiv: bool = False
+        self.sommer_modus_zaehler: int = 0
         
         # System/Internal
         self.gpio_lock = asyncio.Lock()

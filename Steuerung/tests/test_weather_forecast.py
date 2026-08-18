@@ -187,15 +187,25 @@ class TestMainCheckPeriodicTasks:
         """main.py: check_periodic_tasks() verarbeitet 7-Werte-Return korrekt."""
         import datetime
         import pytz
-        state = MagicMock()
+        from types import SimpleNamespace
+        state = SimpleNamespace()
         state.local_tz = pytz.timezone("Europe/Berlin")
         state.last_forecast_update = None
-        state.config = MagicMock()
+        state.config = None
+        state.sommer_modus_aktiv = False
+        state.sommer_modus_zaehler = 0
         state.solar = MagicMock()
         state.solar.forecast_today = None
         state.solar.forecast_tomorrow = None
         state.solar.forecast_day2 = None
-        session = MagicMock()
+        from json_config import SommerModusConfig
+        state.priority_config = SimpleNamespace(
+            sommer_modus=SommerModusConfig(
+                aktiv=True, mindest_prognose_wh=2000.0,
+                benoetigte_tage=3, temperatur_offset_c=-3.0,
+            )
+        )
+        session = AsyncMock()
 
         with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
             mock_forecast.return_value = (2.5, 3.0, 1.5, "06:15", "20:15", "06:16", "20:14")

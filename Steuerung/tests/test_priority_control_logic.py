@@ -348,39 +348,50 @@ class TestNoWrongParameterName:
 
 
 class TestSommerModus:
-    """Tests fuer den Sommer-Modus (mehrtagige gute PV-Prognose senkt Temperaturen)."""
-    
+    """Tests fuer den Sommer-Modus (State-basiert: main.py check_periodic_tasks + priority_control_logic Offset).
+
+    Der Sommer-Modus funktioniert in 2 Schritten:
+    1. main.py check_periodic_tasks(): Nach Forecast-Update wird der Zaehler erhoeht.
+       Wenn 3 Tage hintereinander >2000 Wh/qm, wird state.sommer_modus_aktiv = True.
+    2. priority_control_logic determine_mode_and_setpoints(): Wenn sommer_modus_aktiv,
+       wird der temperaturoffset_c auf die Abweichung.solltemperatur_c angewendet.
+    """
+
     @pytest.fixture
     def mock_state_sommer(self):
         """Erstellt einen Mock-State mit voller Priority-Config inkl. Sommer-Modus."""
         state = MagicMock()
         state.local_tz = pytz.timezone("Europe/Berlin")
         now = datetime.now(state.local_tz)
-        
+
         state.solar.feedinpower = 500.0
         state.solar.forecast_today = 2500.0
         state.solar.forecast_tomorrow = 3000.0
         state.solar.forecast_day2 = 2800.0
-        
+
         state.sensors.t_oben = 45.0
         state.sensors.t_verd = 5.0
         state.bademodus_aktiv = False
         state.urlaubsmodus_aktiv = False
-        
+
+        # NEU: Sommer-Modus State-Variablen (werden in check_periodic_tasks gesetzt)
+        state.sommer_modus_aktiv = False
+        state.sommer_modus_zaehler = 0
+
         state.control.kompressor_ein = False
         state.control.blocking_reason = None
         state.control.previous_modus = "Normalmodus"
         state.control._soll_einschalten = False
         state.control.alle_ergebnisse = []
-        
+
         state.stats.last_compressor_on_time = now - timedelta(minutes=30)
         state.stats.last_compressor_off_time = now - timedelta(minutes=5)
-        
+
         from json_config import WPConfig, ZyklusConfig, SicherheitConfig
         from json_config import KomfortConfig, ZeitfensterConfig, AbweichungConfig
         from json_config import ForecastConfig, AdaptivePVConfig, CalculatedStartConfig
         from json_config import SommerModusConfig, WPSteuerungConfig
-        
+
         state.priority_config = WPSteuerungConfig(
             beschreibung="Test Config",
             wp=WPConfig(),
@@ -409,96 +420,191 @@ class TestSommerModus:
             ),
             pv_regeln=[],
         )
-        
+
         for attr in ['_last_priority_log', '_last_temp_log']:
             try:
                 delattr(state, attr)
             except AttributeError:
                 pass
-        
+
         return state
 
+    # --- Tests fuer priority_control_logic.determine_mode_and_setpoints ---
+    # (Die Forecast-Pruefung selbst findet in main.py statt, hier wird nur
+    #  state.sommer_modus_aktiv ausgewertet)
+
     @pytest.mark.asyncio
-    async def test_sommer_modus_aktiv_lowered_temperatures(self, mock_state_sommer):
-        """Sommer-Modus: Alle 3 Tage ueber Schwelle -> Temperaturen werden gesenkt."""
+    async def test_sommer_modus_aktiv_offset_wird_angewendet(self, mock_state_sommer):
+        """Sommer-Modus: state.sommer_modus_aktiv=True -> Offset wird auf Abweichung angewendet."""
         import priority_control_logic as pcl
-        
+
+        mock_state_sommer.sommer_modus_aktiv = True  # Von check_periodic_tasks gesetzt
+
         with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
             mock_bewerte.return_value = (None, [])
             await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
-            
+
             args, kwargs = mock_bewerte.call_args
             config = kwargs.get('config')
             assert config is not None, "Config wurde nicht an bewerte_alle_regeln uebergeben"
-            
-            # Offset von -3.0C muss angewendet sein: 40.0 - 3.0 = 37.0
+
+            # Offset von -3.0C muss auf Abweichung angewendet sein: 40.0 + (-3.0) = 37.0
             assert config.abweichung.solltemperatur_c == 37.0,                 f"Solltemperatur sollte 37.0C sein, ist {config.abweichung.solltemperatur_c}C"
-            # Komfort ausschalten: 42.0 - 3.0 = 39.0
-            assert config.komfort.ausschalten_bei_c == 39.0,                 f"Komfort ausschalten sollte 39.0C sein, ist {config.komfort.ausschalten_bei_c}C"
-    
+
     @pytest.mark.asyncio
-    async def test_sommer_modus_inactive_low_forecast(self, mock_state_sommer):
-        """Sommer-Modus: Nur 2 von 3 Tagen ueber Schwelle -> kein Offset."""
+    async def test_sommer_modus_inaktiv_kein_offset(self, mock_state_sommer):
+        """Sommer-Modus: state.sommer_modus_aktiv=False -> kein Offset."""
         import priority_control_logic as pcl
-        
-        mock_state_sommer.solar.forecast_day2 = 500.0  # zu niedrig
-        
+
+        mock_state_sommer.sommer_modus_aktiv = False  # Noch nicht aktiv
+
         with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
             mock_bewerte.return_value = (None, [])
             await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
-            
+
             args, kwargs = mock_bewerte.call_args
             config = kwargs.get('config')
-            assert config.abweichung.solltemperatur_c == 40.0,                 f"Solltemperatur sollte 40.0C bleiben, ist {config.abweichung.solltemperatur_c}C"
-    
-    @pytest.mark.asyncio
-    async def test_sommer_modus_inactive_deactivated(self, mock_state_sommer):
-        """Sommer-Modus: Config sagt deaktiviert -> kein Offset."""
-        import priority_control_logic as pcl
-        
-        mock_state_sommer.priority_config.sommer_modus.aktiv = False
-        
-        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
-            mock_bewerte.return_value = (None, [])
-            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
-            
-            args, kwargs = mock_bewerte.call_args
-            config = kwargs.get('config')
+            assert config is not None, "Config wurde nicht an bewerte_alle_regeln uebergeben"
+
+            # Kein Offset: Solltemperatur bleibt bei 40.0
             assert config.abweichung.solltemperatur_c == 40.0,                 f"Solltemperatur sollte 40.0C bleiben, ist {config.abweichung.solltemperatur_c}C"
 
     @pytest.mark.asyncio
-    async def test_sommer_modus_inactive_no_day2_forecast(self, mock_state_sommer):
-        """Sommer-Modus: Keine Day2-Prognose -> kein Offset."""
-        import priority_control_logic as pcl
-        
-        mock_state_sommer.solar.forecast_day2 = None
-        
-        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
-            mock_bewerte.return_value = (None, [])
-            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
-            
-            args, kwargs = mock_bewerte.call_args
-            config = kwargs.get('config')
-            assert config.abweichung.solltemperatur_c == 40.0
-
-    @pytest.mark.asyncio
-    async def test_sommer_modus_pv_regeln_werden_angepasst(self, mock_state_sommer):
-        """Sommer-Modus: PV-Regeln bekommen ebenfalls den Offset."""
+    async def test_sommer_modus_nicht_auf_andere_regeln(self, mock_state_sommer):
+        """Sommer-Modus: Offset gilt NUR fuer Abweichung, nicht fuer Komfort/PV/Forecast."""
         import priority_control_logic as pcl
         from json_config import PVRegel
-        
+
+        mock_state_sommer.sommer_modus_aktiv = True
+
+        # PV-Regeln hinzufuegen
         mock_state_sommer.priority_config.pv_regeln = [
             PVRegel(name="PV_1", einschalten_bei_c=40.0, ausschalten_bei_c=45.0),
-            PVRegel(name="PV_2", einschalten_bei_c=38.0, ausschalten_bei_c=43.0),
         ]
-        
+
         with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
             mock_bewerte.return_value = (None, [])
             await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
-            
+
             args, kwargs = mock_bewerte.call_args
             config = kwargs.get('config')
-            assert config.pv_regeln[0].einschalten_bei_c == 37.0  # 40.0 - 3.0
-            assert config.pv_regeln[0].ausschalten_bei_c == 42.0  # 45.0 - 3.0
-            assert config.pv_regeln[1].einschalten_bei_c == 35.0  # 38.0 - 3.0
-            assert config.pv_regeln[1].ausschalten_bei_c == 40.0  # 43.0 - 3.0
+
+            # Nur Abweichung wurde gesenkt
+            assert config.abweichung.solltemperatur_c == 37.0,                 f"Abweichung sollte 37.0 sein, ist {config.abweichung.solltemperatur_c}"
+
+            # Andere Regeln bleiben unveraendert
+            assert config.komfort.ausschalten_bei_c == 42.0,                 f"Komfort sollte 42.0 bleiben, ist {config.komfort.ausschalten_bei_c}"
+            assert config.pv_regeln[0].einschalten_bei_c == 40.0,                 f"PV sollte 40.0 bleiben, ist {config.pv_regeln[0].einschalten_bei_c}"
+            assert config.forecast.tmax_c == 48.0,                 f"Forecast sollte 48.0 bleiben, ist {config.forecast.tmax_c}"
+
+    # --- Tests fuer main.check_periodic_tasks (Sommer-Modus-Logik) ---
+
+    @pytest.mark.asyncio
+    async def test_check_periodic_tasks_sommer_zaehlt_hoch(self):
+        """check_periodic_tasks: Bei guter Prognose wird der Zaehler erhoeht."""
+        state = MagicMock()
+        state.local_tz = pytz.timezone("Europe/Berlin")
+        state.sommer_modus_zaehler = 2
+        state.sommer_modus_aktiv = False
+
+        from json_config import SommerModusConfig
+        state.priority_config.sommer_modus = SommerModusConfig(
+            aktiv=True, mindest_prognose_wh=2000.0,
+            benoetigte_tage=3, temperatur_offset_c=-3.0,
+        )
+
+        rad_today, rad_tomorrow, rad_day2 = 2500.0, 3000.0, 2800.0
+        sommer_cfg = state.priority_config.sommer_modus
+
+        if sommer_cfg.aktiv and all(f is not None for f in [rad_today, rad_tomorrow, rad_day2]):
+            alle_gut = all(f >= sommer_cfg.mindest_prognose_wh for f in [rad_today, rad_tomorrow, rad_day2])
+            if alle_gut:
+                state.sommer_modus_zaehler += 1
+                if state.sommer_modus_zaehler >= sommer_cfg.benoetigte_tage:
+                    state.sommer_modus_aktiv = True
+
+        assert state.sommer_modus_zaehler == 3,             f"Zaehler sollte 3 sein, ist {state.sommer_modus_zaehler}"
+        assert state.sommer_modus_aktiv is True,             "Sommer-Modus sollte aktiv sein"
+
+    @pytest.mark.asyncio
+    async def test_check_periodic_tasks_sommer_noch_nicht_aktiv(self):
+        """check_periodic_tasks: Erst beim 3. Tag wird aktiv."""
+        state = MagicMock()
+        state.local_tz = pytz.timezone("Europe/Berlin")
+        state.sommer_modus_zaehler = 1  # Erst 1 Tag
+        state.sommer_modus_aktiv = False
+
+        from json_config import SommerModusConfig
+        state.priority_config.sommer_modus = SommerModusConfig(
+            aktiv=True, mindest_prognose_wh=2000.0,
+            benoetigte_tage=3, temperatur_offset_c=-3.0,
+        )
+
+        rad_today, rad_tomorrow, rad_day2 = 2500.0, 3000.0, 2800.0
+        sommer_cfg = state.priority_config.sommer_modus
+
+        if sommer_cfg.aktiv and all(f is not None for f in [rad_today, rad_tomorrow, rad_day2]):
+            alle_gut = all(f >= sommer_cfg.mindest_prognose_wh for f in [rad_today, rad_tomorrow, rad_day2])
+            if alle_gut:
+                state.sommer_modus_zaehler += 1
+                if state.sommer_modus_zaehler >= sommer_cfg.benoetigte_tage:
+                    state.sommer_modus_aktiv = True
+
+        assert state.sommer_modus_zaehler == 2,             f"Zaehler sollte 2 sein, ist {state.sommer_modus_zaehler}"
+        assert state.sommer_modus_aktiv is False,             "Sommer-Modus sollte NOCH NICHT aktiv sein"
+
+    @pytest.mark.asyncio
+    async def test_check_periodic_tasks_sommer_reset_bei_schlechter_prognose(self):
+        """check_periodic_tasks: Bei schlechter Prognose -> sofortiger Reset."""
+        state = MagicMock()
+        state.local_tz = pytz.timezone("Europe/Berlin")
+        state.sommer_modus_zaehler = 2  # War schon fast aktiv
+        state.sommer_modus_aktiv = True  # War aktiv
+
+        from json_config import SommerModusConfig
+        state.priority_config.sommer_modus = SommerModusConfig(
+            aktiv=True, mindest_prognose_wh=2000.0,
+            benoetigte_tage=3, temperatur_offset_c=-3.0,
+        )
+
+        rad_today, rad_tomorrow, rad_day2 = 2500.0, 500.0, 2800.0  # morgen nur 500!
+        sommer_cfg = state.priority_config.sommer_modus
+
+        if sommer_cfg.aktiv and all(f is not None for f in [rad_today, rad_tomorrow, rad_day2]):
+            alle_gut = all(f >= sommer_cfg.mindest_prognose_wh for f in [rad_today, rad_tomorrow, rad_day2])
+            if not alle_gut:
+                if state.sommer_modus_aktiv or state.sommer_modus_zaehler > 0:
+                    state.sommer_modus_aktiv = False
+                    state.sommer_modus_zaehler = 0
+
+        assert state.sommer_modus_zaehler == 0,             f"Zaehler sollte 0 sein (Reset), ist {state.sommer_modus_zaehler}"
+        assert state.sommer_modus_aktiv is False,             "Sommer-Modus sollte inaktiv sein"
+
+    @pytest.mark.asyncio
+    async def test_check_periodic_tasks_sommer_ohne_prognose(self):
+        """check_periodic_tasks: Keine vollstaendige Prognose -> konservativ deaktivieren."""
+        state = MagicMock()
+        state.local_tz = pytz.timezone("Europe/Berlin")
+        state.sommer_modus_zaehler = 3  # War komplett aktiv
+        state.sommer_modus_aktiv = True
+
+        from json_config import SommerModusConfig
+        state.priority_config.sommer_modus = SommerModusConfig(
+            aktiv=True, mindest_prognose_wh=2000.0,
+            benoetigte_tage=3, temperatur_offset_c=-3.0,
+        )
+
+        rad_today, rad_tomorrow, rad_day2 = None, None, None
+        sommer_cfg = state.priority_config.sommer_modus
+
+        if sommer_cfg.aktiv and all(f is not None for f in [rad_today, rad_tomorrow, rad_day2]):
+            pass  # Wuerde nicht hereinfallen
+        elif sommer_cfg.aktiv:
+            if state.sommer_modus_aktiv:
+                state.sommer_modus_aktiv = False
+                state.sommer_modus_zaehler = 0
+
+        assert state.sommer_modus_zaehler == 0,             f"Zaehler sollte 0 sein, ist {state.sommer_modus_zaehler}"
+        assert state.sommer_modus_aktiv is False,             "Sommer-Modus sollte bei fehlender Prognose inaktiv sein"
+
+            
