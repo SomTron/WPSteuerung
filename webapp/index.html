@@ -11,6 +11,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -575,6 +577,192 @@
                 grid-template-columns: 1fr;
             }
         }
+    
+        /* ===== Chart-Styles für Zoom/Horizontal/Fullscreen ===== */
+        .chart-toolbar {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .chart-toolbar .btn-icon {
+            width: 34px;
+            height: 34px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        .chart-toolbar .btn-icon:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: var(--text-primary);
+            transform: translateY(-1px);
+        }
+        .chart-toolbar .btn-icon.active {
+            background: rgba(0, 212, 255, 0.2);
+            color: var(--accent-primary);
+        }
+        .chart-wrapper {
+            position: relative;
+            width: 100%;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow: hidden;
+        }
+        .chart-wrapper canvas {
+            width: 100% !important;
+        }
+        .chart-wrapper.horizontal-mode {
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+        .chart-wrapper.horizontal-mode canvas {
+            min-width: 1200px !important;
+            height: 350px !important;
+        }
+        .chart-wrapper.fullscreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 9999;
+            background: var(--bg-primary);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-wrapper.fullscreen .chart-toolbar {
+            flex-shrink: 0;
+        }
+        .chart-wrapper.fullscreen .chart-inner {
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+        .chart-wrapper.fullscreen .chart-inner canvas {
+            max-height: 100% !important;
+            width: 100% !important;
+        }
+        .chart-wrapper.fullscreen.horizontal-mode {
+            padding-bottom: 16px;
+        }
+        .chart-wrapper.fullscreen.horizontal-mode canvas {
+            min-width: 2000px !important;
+            height: calc(100vh - 120px) !important;
+        }
+        .chart-info {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            padding: 4px 0;
+        }
+        .chart-info kbd {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            font-family: inherit;
+            font-size: 0.75rem;
+        }
+
+    
+        /* ===== Chart-Styles für Zoom/Horizontal/Fullscreen ===== */
+        .chart-toolbar {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .chart-toolbar .btn-icon {
+            width: 34px;
+            height: 34px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        .chart-toolbar .btn-icon:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: var(--text-primary);
+            transform: translateY(-1px);
+        }
+        .chart-toolbar .btn-icon.active {
+            background: rgba(0, 212, 255, 0.2);
+            color: var(--accent-primary);
+        }
+        .chart-wrapper {
+            position: relative;
+            width: 100%;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow: hidden;
+        }
+        .chart-wrapper canvas {
+            width: 100% !important;
+        }
+        .chart-wrapper.horizontal-mode {
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+        .chart-wrapper.horizontal-mode canvas {
+            min-width: 1200px !important;
+            height: 350px !important;
+        }
+        .chart-wrapper.fullscreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 9999;
+            background: var(--bg-primary);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-wrapper.fullscreen .chart-toolbar {
+            flex-shrink: 0;
+        }
+        .chart-wrapper.fullscreen .chart-inner {
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+        .chart-wrapper.fullscreen .chart-inner canvas {
+            max-height: 100% !important;
+            width: 100% !important;
+        }
+        .chart-wrapper.fullscreen.horizontal-mode {
+            padding-bottom: 16px;
+        }
+        .chart-wrapper.fullscreen.horizontal-mode canvas {
+            min-width: 2000px !important;
+            height: calc(100vh - 120px) !important;
+        }
+        .chart-info {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            padding: 4px 0;
+        }
+        .chart-info kbd {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            font-family: inherit;
+            font-size: 0.75rem;
+        }
+
     </style>
 </head>
 
@@ -798,6 +986,10 @@
                     return { min: Math.floor(min - pad), max: Math.ceil(max + pad) };
                 }
                 function createChart() {
+                    // Zoom-Plugin registrieren
+                    if (typeof Chart !== 'undefined' && Chart.register) {
+                        try { Chart.register(chartjsPluginZoom); } catch(e) {}
+                    }
                     const ctx = document.getElementById('tempChart');
                     if (!ctx) return;
                     if (chart) chart.destroy();
@@ -816,7 +1008,16 @@
                         options: {
                             responsive: true, maintainAspectRatio: false,
                             plugins: {
-                                legend: { display: true, position: 'top', labels: { color: '#a0a0c0', font: { size: 11 }, usePointStyle: true } },
+                                zoom: {
+                                            pan: { enabled: true, mode: 'x', threshold: 5 },
+                                            zoom: {
+                                                wheel: { enabled: true, speed: 0.05 },
+                                                pinch: { enabled: true },
+                                                drag: { enabled: true, backgroundColor: 'rgba(0,212,255,0.08)', borderColor: 'rgba(0,212,255,0.4)', borderWidth: 1 },
+                                                mode: 'x'
+                                            }
+                                        },
+                                        legend: { display: true, position: 'top', labels: { color: '#a0a0c0', font: { size: 11 }, usePointStyle: true } },
                                 tooltip: { mode: 'index', intersect: false, backgroundColor: 'rgba(22, 33, 62, 0.95)', titleColor: '#fff', bodyColor: '#a0a0c0', borderColor: 'rgba(0, 212, 255, 0.3)', borderWidth: 1 }
                             },
                             scales: {
@@ -1078,6 +1279,11 @@
                                 <div class="card-icon blue">📈</div>
                                 <div class="card-title">Temperaturverlauf</div>
                             </div>
+                            <div class="chart-toolbar" style="padding:4px 0">
+                                <button class="btn-icon" id="btn-zoom-reset" title="Zoom zurücksetzen" onclick="resetChartZoom()">⟲</button>
+                                <button class="btn-icon" id="btn-horizontal" title="Horizontal-Modus" onclick="toggleHorizontal()">↔</button>
+                                <button class="btn-icon" id="btn-fullscreen" title="Vollbild" onclick="toggleFullscreen()">⬖</button>
+                            </div>
                             <div class="time-range-group">
                                 <button class="time-btn${currentHistoryHours === 1 ? ' active' : ''}" data-hours="1" onclick="loadHistory(1)">1h</button>
                                 <button class="time-btn${currentHistoryHours === 6 ? ' active' : ''}" data-hours="6" onclick="loadHistory(6)">6h</button>
@@ -1088,7 +1294,14 @@
                                 <button class="time-btn${currentHistoryHours === 168 ? ' active' : ''}" data-hours="168" onclick="loadHistory(168)">7T</button>
                             </div>
                         </div>
-                        <div style="height: 300px;"><canvas id="tempChart"></canvas></div>
+                        <div class="chart-wrapper" id="chart-wrapper">
+                            <div class="chart-info">
+                                <kbd>Mausrad</kbd> zoomen &middot; <kbd>Ziehen</kbd> pan &middot; <kbd>⟲</kbd> reset
+                            </div>
+                            <div class="chart-inner">
+                                <div style="height: 300px;"><canvas id="tempChart"></canvas></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1234,7 +1447,87 @@
             }
         }
 
-                // Auto-refresh every 5 seconds
+                // ===== Zoom / Horizontal / Fullscreen Funktionen =====
+        function resetChartZoom() {
+            if (chart) {
+                chart.resetZoom();
+            }
+        }
+
+        function toggleHorizontal() {
+            const wrapper = document.getElementById('chart-wrapper');
+            const btn = document.getElementById('btn-horizontal');
+            wrapper.classList.toggle('horizontal-mode');
+            btn.classList.toggle('active');
+            if (chart) chart.resize();
+        }
+
+        function toggleFullscreen() {
+            const wrapper = document.getElementById('chart-wrapper');
+            const btn = document.getElementById('btn-fullscreen');
+            wrapper.classList.toggle('fullscreen');
+            btn.classList.toggle('active');
+            if (chart) chart.resize();
+            if (wrapper.classList.contains('fullscreen')) {
+                document.addEventListener('keydown', _fsEscapeHandler);
+            } else {
+                document.removeEventListener('keydown', _fsEscapeHandler);
+            }
+        }
+
+        function _fsEscapeHandler(e) {
+            if (e.key === 'Escape') {
+                const wrapper = document.getElementById('chart-wrapper');
+                if (wrapper.classList.contains('fullscreen')) {
+                    wrapper.classList.remove('fullscreen');
+                    document.getElementById('btn-fullscreen').classList.remove('active');
+                    if (chart) chart.resize();
+                    document.removeEventListener('keydown', _fsEscapeHandler);
+                }
+            }
+        }
+
+        // ===== Zoom / Horizontal / Fullscreen Funktionen =====
+        function resetChartZoom() {
+            if (chart) {
+                chart.resetZoom();
+            }
+        }
+
+        function toggleHorizontal() {
+            const wrapper = document.getElementById('chart-wrapper');
+            const btn = document.getElementById('btn-horizontal');
+            wrapper.classList.toggle('horizontal-mode');
+            btn.classList.toggle('active');
+            if (chart) chart.resize();
+        }
+
+        function toggleFullscreen() {
+            const wrapper = document.getElementById('chart-wrapper');
+            const btn = document.getElementById('btn-fullscreen');
+            wrapper.classList.toggle('fullscreen');
+            btn.classList.toggle('active');
+            if (chart) chart.resize();
+            if (wrapper.classList.contains('fullscreen')) {
+                document.addEventListener('keydown', _fsEscapeHandler);
+            } else {
+                document.removeEventListener('keydown', _fsEscapeHandler);
+            }
+        }
+
+        function _fsEscapeHandler(e) {
+            if (e.key === 'Escape') {
+                const wrapper = document.getElementById('chart-wrapper');
+                if (wrapper.classList.contains('fullscreen')) {
+                    wrapper.classList.remove('fullscreen');
+                    document.getElementById('btn-fullscreen').classList.remove('active');
+                    if (chart) chart.resize();
+                    document.removeEventListener('keydown', _fsEscapeHandler);
+                }
+            }
+        }
+
+        // Auto-refresh every 5 seconds
         setInterval(fetchStatus, 5000);
 
         // Initial load
