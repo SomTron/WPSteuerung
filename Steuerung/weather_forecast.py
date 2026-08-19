@@ -73,14 +73,19 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
                 rad_tomorrow = daily_totals.get(tomorrow_str)
                 day2_str = (now + timedelta(days=2)).strftime("%Y-%m-%d")
                 rad_day2 = daily_totals.get(day2_str)
-                rad_day2 = daily_totals.get((now + timedelta(days=2)).strftime("%Y-%m-%d"))
                 
                 sunrise_today = sun_data.get(today_str, {}).get("sunrise")
                 sunset_today = sun_data.get(today_str, {}).get("sunset")
                 sunrise_tomorrow = sun_data.get(tomorrow_str, {}).get("sunrise")
                 sunset_tomorrow = sun_data.get(tomorrow_str, {}).get("sunset")
                 
-                logging.info(f"Solar forecast updated: Today={rad_today:.2f} kWh/m² ({sunrise_today}-{sunset_today}), Tomorrow={rad_tomorrow:.2f} kWh/m², Day2={rad_day2:.2f} kWh/m²")
+                # Nur loggen wenn Daten vorhanden, sonst None safe behandeln
+                rad_today_str = f"{rad_today:.2f}" if rad_today is not None else "None"
+                rad_tomorrow_str = f"{rad_tomorrow:.2f}" if rad_tomorrow is not None else "None"
+                rad_day2_str = f"{rad_day2:.2f}" if rad_day2 is not None else "None"
+                sr_str = sunrise_today if sunrise_today is not None else "None"
+                ss_str = sunset_today if sunset_today is not None else "None"
+                logging.info(f"Solar forecast updated: Today={rad_today_str} kWh/m² ({sr_str}-{ss_str}), Tomorrow={rad_tomorrow_str} kWh/m², Day2={rad_day2_str} kWh/m²")
                 
                 # Log to dedicated CSV
                 await log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
@@ -108,7 +113,15 @@ async def log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, 
                 await f.write(header)
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            line = f"{timestamp},{rad_today:.2f},{rad_tomorrow:.2f},{rad_day2:.2f},{sunrise_today},{sunset_today},{sunrise_tomorrow},{sunset_tomorrow}\n"
+            # None-Werte sicher behandeln (z.B. bei Test mit Zukunfts-Daten)
+            rad_t_str = f"{rad_today:.2f}" if rad_today is not None else ""
+            rad_tom_str = f"{rad_tomorrow:.2f}" if rad_tomorrow is not None else ""
+            rad_d2_str = f"{rad_day2:.2f}" if rad_day2 is not None else ""
+            sr_t_str = sunrise_today if sunrise_today is not None else ""
+            ss_t_str = sunset_today if sunset_today is not None else ""
+            sr_tom_str = sunrise_tomorrow if sunrise_tomorrow is not None else ""
+            ss_tom_str = sunset_tomorrow if sunset_tomorrow is not None else ""
+            line = f"{timestamp},{rad_t_str},{rad_tom_str},{rad_d2_str},{sr_t_str},{ss_t_str},{sr_tom_str},{ss_tom_str}\n"
             await f.write(line)
             logging.debug(f"Logged solar forecast to {csv_file}")
     except Exception as e:
