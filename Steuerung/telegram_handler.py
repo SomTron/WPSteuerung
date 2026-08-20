@@ -188,9 +188,9 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
                 # Grund kurz fassen (max 65 Zeichen)
                 grund_kurz = e.grund[:65] if e.grund else ""
                 if grund_kurz:
-                    regel_lines.append(f"{aktiv_marker}{status_symbol} {e.name}: {grund_kurz}")
+                    regel_lines.append(f"{aktiv_marker}{status_symbol} {escape_markdown(e.name)}: {escape_markdown(grund_kurz)}")
                 else:
-                    regel_lines.append(f"{aktiv_marker}{status_symbol} {e.name}")
+                    regel_lines.append(f"{aktiv_marker}{status_symbol} {escape_markdown(e.name)}")
         else:
             regel_lines.append("Keine Regel-Daten verfügbar")
 
@@ -208,13 +208,15 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     
         # Add blocking reason if compressor is off and reason exists
         if not kompressor_status and state.control.blocking_reason:
-            status_lines.append(f"🚫 Blockiert: {state.control.blocking_reason}")
+
+            status_lines.append(f"🚫 Blockiert: {escape_markdown(state.control.blocking_reason)}")
     
         status_lines.extend([
             f"Laufzeit: {format_time(current_runtime)} (Heute: {format_time(total_runtime)})",
             "",
             "⚙️ *Regelung*",
-            f"Sensor: {active_sensor}",
+
+            f"Sensor: {escape_markdown(active_sensor)}",
             f"Ein: {t_soll_ein:.1f}°C | Aus: {t_soll_aus:.1f}°C",
             "",
             "📋 *Regel-Ergebnisse*",
@@ -230,12 +232,11 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
             f"PV: {solax_data.get('acpower', 0):.0f}W | SOC: {solax_data.get('soc', 0)}%",
             "",
             "ℹ️ *Infos*",
-            f"Modus: {mode_str}",
+            f"Modus: {escape_markdown(mode_str)}",
             f"VPN IP: `{vpn_ip}`",
             f"Update: {datetime.now().strftime('%H:%M:%S')}",
-            "",
             "🌤️ *Prognose*",
-            forecast_text
+            escape_markdown(forecast_text)
         ])
     
     message = "\n".join(status_lines)

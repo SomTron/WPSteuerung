@@ -22,7 +22,7 @@ from solax import get_solax_data
 import control_logic
 import priority_control_logic as pcl
 from telegram_handler import telegram_task
-from telegram_ui import send_welcome_message
+from telegram_ui import send_welcome_message, escape_markdown
 from telegram_api import start_healthcheck_task, send_telegram_message, create_robust_aiohttp_session
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
@@ -336,7 +336,7 @@ async def check_and_send_alerts(session, state):
                     emoji = "⏳"
                 
                 # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
-                msg = f"{emoji} *Kompressor blockiert:* {current_blocking}"
+                msg = f"{emoji} *Kompressor blockiert:* {escape_markdown(current_blocking)}"
                 logging.info(f"Sende Einmal-Alarm: {current_type} (Voll: {current_blocking})")
                 await control_logic.send_telegram_message(
                     session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN, parse_mode="Markdown"
