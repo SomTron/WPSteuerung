@@ -2,7 +2,7 @@ import asyncio
 import logging
 import hashlib
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, Dict
 from constants import DEFAULT_TIMEZONE
 from json_config import WPSteuerungConfigManager, WPSteuerungConfig
@@ -91,6 +91,7 @@ class State:
         # Sommer-Modus: Temperaturoffset bei mehrtägig guter PV-Prognose
         self.sommer_modus_aktiv: bool = False
         self.sommer_modus_zaehler: int = 0
+        self.sommer_letzter_bewertungstag: Optional[date] = None  # Kalendertag der letzten guten Bewertung (Serienschutz)
         
         # System/Internal
         self.gpio_lock = asyncio.Lock()

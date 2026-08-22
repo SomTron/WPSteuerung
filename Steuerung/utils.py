@@ -6,7 +6,7 @@ import shutil
 import os
 from typing import List
 
-# Erwarteter Header für heizungsdaten.csv (19 Spalten aus main.py)
+# Erwarteter Header für heizungsdaten.csv (20 Spalten aus main.py)
 EXPECTED_CSV_HEADER = [
     "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",
     "ACPower", "FeedinPower", "BatPower", "SOC", "PowerDC1", "PowerDC2", "ConsumeEnergy",

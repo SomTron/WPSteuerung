@@ -1,6 +1,6 @@
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional
 from utils import safe_timedelta
 from constants import TEMP_MIN_VALID, TEMP_MAX_VALID, REDUCTION_MIN, REDUCTION_MAX, SOLAR_WINDOW_HOURS
@@ -93,3 +93,67 @@ def get_validated_reduction(config, section: str, key: str, default: float = 0.0
         return reduction
     except Exception:
         return default
+
+
+# --- Sommer-Modus ---
+# Ereignis-Konstanten der Bewertung (fuer das Logging im Aufrufer)
+SOMMER_KEIN_EREIGNIS = "kein_ereignis"
+SOMMER_AKTIVIERT = "aktiviert"
+SOMMER_DEAKTIVIERT_PROGNOSE = "deaktiviert_prognose"
+SOMMER_DEAKTIVIERT_DATEN = "deaktiviert_daten"
+
+def evaluate_sommer_modus(
+    benoetigte_tage: int,
+    mindest_prognose_wh: float,
+    rad_today,
+    rad_tomorrow,
+    rad_day2,
+    heute: date,
+    aktueller_zaehler: int,
+    ist_aktiv: bool,
+    letzter_bewertungstag=None,
+):
+    """
+    Reine Bewertung des Sommer-Modus (ohne Seiteneffekte -> gut unit-testbar).
+
+    Semantik:
+      - Prognose 'gut' = heute, morgen UND uebermorgen jeweils >= mindest_prognose_wh.
+      - Es zaehlt maximal EINE Bewertung pro Kalendertag (mehrere Forecast-Updates
+        am selben Tag zaehlen NICHT mehrfach!).
+      - Eine schlechte oder unvollstaendige Prognose setzt die Serie zurueck und
+        deaktiviert den Modus sofort (konservativ).
+      - Eine Luecke von mehr als einem Tag ohne gueltige Bewertung (Ausfall,
+        Neustart) bricht die Serie ebenfalls.
+
+    Hintergrund: Ist sichergestellt, dass mehrtaegig genug PV-Strom kommt, ist
+    Vorheizen/Buffern unnoetig -> die Solltemperatur wird dann ueber
+    temperatur_offset_c gesenkt (Anwendung siehe priority_control_logic).
+
+    Rueckgabe: (neuer_zaehler, aktiv, letzter_bewertungstag, ereignis)
+    """
+    # Luecke in der Bewertungshistorie? Dann kann die Serie nicht fortgesetzt werden.
+    if letzter_bewertungstag is not None and (heute - letzter_bewertungstag).days > 1:
+        aktueller_zaehler = 0
+
+    daten_vollstaendig = all(v is not None for v in (rad_today, rad_tomorrow, rad_day2))
+    if not daten_vollstaendig:
+        ereignis = SOMMER_DEAKTIVIERT_DATEN if (ist_aktiv or aktueller_zaehler > 0) else SOMMER_KEIN_EREIGNIS
+        return 0, False, letzter_bewertungstag, ereignis
+
+    alle_gut = all(v >= mindest_prognose_wh for v in (rad_today, rad_tomorrow, rad_day2))
+
+    if not alle_gut:
+        ereignis = SOMMER_DEAKTIVIERT_PROGNOSE if (ist_aktiv or aktueller_zaehler > 0) else SOMMER_KEIN_EREIGNIS
+        return 0, False, letzter_bewertungstag, ereignis
+
+    # Gute Prognose: nur einmal pro Kalendertag hochzaehlen
+    if letzter_bewertungstag != heute:
+        aktueller_zaehler += 1
+
+    ereignis = SOMMER_KEIN_EREIGNIS
+    aktiv = ist_aktiv
+    if aktueller_zaehler >= benoetigte_tage and not ist_aktiv:
+        aktiv = True
+        ereignis = SOMMER_AKTIVIERT
+
+    return aktueller_zaehler, aktiv, heute, ereignis

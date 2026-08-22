@@ -35,3 +35,12 @@ def mock_aioresponse():
     """Fixture to mock aiohttp responses if needed."""
     with MagicMock() as mock:
         yield mock
+
+
+def pytest_configure(config):
+    """Registriere eigene Marker (verhindert PytestUnknownMarkWarning)."""
+    config.addinivalue_line(
+        "markers",
+        "integration: benoetigt echte Credentials/Netzwerk und hat Seiteneffekte "
+        "(z.B. sendet echte Telegram-Nachrichten). Mit -m 'not integration' ausschliessen."
+    )

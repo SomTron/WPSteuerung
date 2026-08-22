@@ -6,7 +6,51 @@ from datetime import datetime, timedelta
 import pytz
 from constants import DEFAULT_TIMEZONE
 
-async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
+# Erwarteter Header der Forecast-CSV (8 Spalten inkl. Day2 seit Sommer-Modus)
+EXPECTED_FORECAST_HEADER = (
+    "Zeitstempel,Today_kWh,Tomorrow_kWh,Day2_kWh,"
+    "Sunrise_Today,Sunset_Today,Sunrise_Tomorrow,Sunset_Tomorrow"
+)
+
+
+async def _ensure_forecast_csv_header(csv_file):
+    """Stellt sicher, dass die Forecast-CSV den aktuellen 8-Spalten-Header besitzt.
+
+    Alte Dateien mit 7 Spalten (ohne Day2_kWh) werden migriert: Der Header wird
+    ersetzt und bestehenden Datenzeilen wird ein leeres Day2-Feld eingefuegt,
+    damit Spalten und Header wieder zusammenpassen."""
+    erwartete_felder = len(EXPECTED_FORECAST_HEADER.split(","))
+
+    if not os.path.exists(csv_file):
+        async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
+            await f.write(EXPECTED_FORECAST_HEADER + "\n")
+        return
+
+    # Billiger Check: nur die erste Zeile lesen
+    async with aiofiles.open(csv_file, mode="r", encoding="utf-8") as f:
+        erste_zeile = (await f.readline()).strip()
+
+    if erste_zeile == EXPECTED_FORECAST_HEADER:
+        return  # Header aktuell -> nichts zu tun
+
+    # Migration: komplette Datei einlesen und mit korrektem Header neu schreiben
+    async with aiofiles.open(csv_file, mode="r", encoding="utf-8") as f:
+        inhalte = await f.read()
+    zeilen = [z for z in inhalte.splitlines() if z.strip()]
+    neue_zeilen = [EXPECTED_FORECAST_HEADER]
+    for zeile in zeilen[1:]:
+        felder = zeile.split(",")
+        if len(felder) == erwartete_felder - 1:
+            felder.insert(3, "")  # Altformat: Day2_kWh fehlte -> leeres Feld einfuegen
+        neue_zeilen.append(",".join(felder))
+    async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
+        await f.write("\n".join(neue_zeilen) + "\n")
+    logging.info(
+        "sonnen_prognose.csv: Header auf %d Spalten migriert (Day2_kWh ergaenzt)."
+        % erwartete_felder
+    )
+
+async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_path=None):
     """
     Fetches solar radiation forecast from Open-Meteo.
     Returns: (rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
@@ -88,7 +132,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
                 logging.info(f"Solar forecast updated: Today={rad_today_str} kWh/m² ({sr_str}-{ss_str}), Tomorrow={rad_tomorrow_str} kWh/m², Day2={rad_day2_str} kWh/m²")
                 
                 # Log to dedicated CSV
-                await log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
+                await log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=csv_path)
                 
                 return rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow
             else:
@@ -99,19 +143,22 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None):
         logging.error(f"Unexpected error in get_solar_forecast: {e}")
         return None, None, None, None, None, None, None
 
-async def log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow):
-    """Logs the forecast results to a separate CSV file."""
-    # Use path relative to this script's directory for consistency
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_file = os.path.join(script_dir, "sonnen_prognose.csv")
+async def log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=None):
+    """Logs the forecast results to a separate CSV file.
+
+    csv_path: Optionaler Pfad (fuer Tests); ohne Angabe wird die
+    Produktions-CSV im Skriptverzeichnis verwendet."""
+    if csv_path is None:
+        # Use path relative to this script's directory for consistency
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        csv_path = os.path.join(script_dir, "sonnen_prognose.csv")
+    csv_file = csv_path
     try:
-        header = "Zeitstempel,Today_kWh,Tomorrow_kWh,Day2_kWh,Sunrise_Today,Sunset_Today,Sunrise_Tomorrow,Sunset_Tomorrow\n"
-        file_exists = os.path.exists(csv_file)
-        
+        # Stellt sicher, dass Header und Datenformat zusammenpassen
+        # (migriert alte 7-Spalten-Dateien einmalig auf 8 Spalten)
+        await _ensure_forecast_csv_header(csv_file)
+
         async with aiofiles.open(csv_file, mode="a", encoding="utf-8") as f:
-            if not file_exists:
-                await f.write(header)
-            
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # None-Werte sicher behandeln (z.B. bei Test mit Zukunfts-Daten)
             rad_t_str = f"{rad_today:.2f}" if rad_today is not None else ""

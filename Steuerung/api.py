@@ -22,6 +22,46 @@ ALLOWED_COMMANDS = {"force_on", "force_off", "set_mode"}
 ALLOWED_MODES = {"bademodus", "urlaubsmodus"}
 ALLOWED_SECTIONS = {"Heizungssteuerung", "Telegram", "Hardware", "Sicherheitsgrenzen", "Solar"}
 
+def build_mode_payload(state, priority_info_override=None):
+    """Baut das 'mode'-Objekt des /status Endpoints.
+
+    Wichtig: Die Sommer-Modus-Felder liegen am State-Root (sommer_modus_aktiv,
+    sommer_modus_zaehler) bzw. in der Priority-Config (Offset, benoetigte
+    Tage) - NICHT unter state.control. (Vorher wurden sie dort gelesen,
+    weshalb das Webinterface den Sommer-Modus immer als 'Inaktiv' anzeigte.)"""
+    sommer_cfg = getattr(getattr(state, 'priority_config', None), 'sommer_modus', None)
+    control = getattr(state, 'control', None)
+
+    if priority_info_override is None:
+        # Nachtsperre direkt aus der Priority-Config berechnen
+        # (gleiche Logik wie im /status Endpoint)
+        nachtsperre = False
+        pc = getattr(state, 'priority_config', None)
+        if pc is not None and _is_nachtsperre_aktiv is not None:
+            try:
+                nachtsperre = bool(_is_nachtsperre_aktiv(pc, datetime.now(state.local_tz)))
+            except Exception as e:
+                logging.warning(f"Konnte Nachtsperren-Status nicht ermitteln: {e}")
+        priority_info_override = {"nachtsperre_aktiv": nachtsperre}
+    info = priority_info_override
+    return {
+        "current": (getattr(control, 'previous_modus', None) or ""),
+        "solar_active": bool(getattr(control, 'solar_ueberschuss_aktiv', False)),
+        "holiday_active": bool(getattr(state, 'urlaubsmodus_aktiv', False)),
+        "bath_active": bool(getattr(state, 'bademodus_aktiv', False)),
+        "nightsperre_active": (bool(info.get("nachtsperre_aktiv", False))
+                               if isinstance(info, dict) else False),
+        "active_rule": (getattr(control, 'active_rule_name', None) or ""),
+        "active_rule_sensor": (getattr(control, 'active_rule_sensor', None) or ""),
+        "blocking_reason": (getattr(control, 'blocking_reason', None) or ""),
+        "soll_einschalten": bool(getattr(control, '_soll_einschalten', False)),
+        "sommer_modus_aktiv": bool(getattr(state, 'sommer_modus_aktiv', False)),
+        "sommer_modus_offset_c": float(getattr(sommer_cfg, 'temperatur_offset_c', 0.0) or 0.0),
+        "sommer_modus_tage_ueber": int(getattr(state, 'sommer_modus_zaehler', 0) or 0),
+        "sommer_modus_benoetigte": int(getattr(sommer_cfg, 'benoetigte_tage', 3) or 3),
+    }
+
+
 # Data Models
 class ConfigUpdate(BaseModel):
     section: str = Field(..., min_length=1, max_length=50)
@@ -226,21 +266,7 @@ def get_status():
             "sicherheits_temp": shared_state.sicherheits_temp,
             "verdampfertemperatur": shared_state.verdampfertemperatur
         },
-        "mode": {
-            "current": shared_state.control.previous_modus or "",
-            "solar_active": shared_state.control.solar_ueberschuss_aktiv,
-            "holiday_active": shared_state.urlaubsmodus_aktiv,
-            "bath_active": shared_state.bademodus_aktiv,
-            "nightsperre_active": priority_info.get("nachtsperre_aktiv", False) if priority_info else False,
-            "active_rule": getattr(shared_state.control, 'active_rule_name', '') or '',
-            "active_rule_sensor": getattr(shared_state.control, 'active_rule_sensor', '') or '',
-            "blocking_reason": getattr(shared_state.control, 'blocking_reason', '') or '',
-            "soll_einschalten": getattr(shared_state.control, '_soll_einschalten', False),
-            "sommer_modus_aktiv": getattr(shared_state.control, 'sommer_modus_aktiv', False),
-            "sommer_modus_offset_c": getattr(shared_state.control, 'sommer_modus_offset_c', 0.0),
-            "sommer_modus_tage_ueber": getattr(shared_state.control, 'sommer_modus_tage_ueber', 0),
-            "sommer_modus_benoetigte": getattr(shared_state.control, 'sommer_modus_benoetigte', 3),
-        },
+        "mode": build_mode_payload(shared_state),
         "energy": {
             "battery_power": shared_state.solar.batpower,
             "soc": shared_state.solar.soc,

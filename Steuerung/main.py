@@ -3,7 +3,6 @@ import asyncio
 import logging
 import threading
 import signal
-import sys
 import uvicorn
 import aiohttp
 import aiofiles
@@ -27,10 +26,14 @@ from telegram_api import start_healthcheck_task, send_telegram_message, create_r
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app, init_api
-from utils import safe_timedelta, HEIZUNGSDATEN_CSV
+from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_and_fix_csv_header
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
-from logic_utils import is_nighttime, is_solar_window, check_log_throttle
+from logic_utils import (
+    is_nighttime, is_solar_window, check_log_throttle,
+    evaluate_sommer_modus,
+    SOMMER_AKTIVIERT, SOMMER_DEAKTIVIERT_PROGNOSE, SOMMER_DEAKTIVIERT_DATEN,
+)
 from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN
 
 # Global objects
@@ -40,10 +43,28 @@ sensor_manager = None
 hardware_manager = None
 stop_event = threading.Event()
 
+# Referenzen auf Hintergrund-Tasks halten (ohne Referenz können sie vom
+# Garbage Collector eingesammelt werden, während sie noch laufen!)
+background_tasks = []
+
+def _log_task_exception(task):
+    """Loggt unerwartete Fehler aus Hintergrund-Tasks (verhindert stillen Absturz)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logging.error(
+            f"Hintergrund-Task '{task.get_name()}' wurde mit Fehler beendet: {exc}",
+            exc_info=exc,
+        )
+
 def handle_exit(signum, frame):
+    # Wichtig: Hier bewusst KEIN sys.exit()!
+    # SystemExit würde den finally-Block in main_loop überspringen
+    # (GPIO-Cleanup und session.close() würden nie laufen).
+    # Wir setzen nur das Stop-Event; der Loop beendet sich kontrolliert selbst.
     logging.info(f"Signal {signum} empfangen. Beende Programm...")
     stop_event.set()
-    sys.exit(0)
 
 async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
     """
@@ -92,14 +113,12 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         return True
 
 async def handle_pressure_check(session, state):
-    """Liest den Druckschalter über HardwareManager."""
-    pressure_ok = hardware_manager.read_pressure_sensor()
-    
-    if not pressure_ok and state.control.last_pressure_state:
-         # Notify if changed to Error
-         pass # Logic handled in control_logic mostly
-         
-    return pressure_ok
+    """Liest den Druckschalter ueber den HardwareManager.
+
+    Reine Lese-Funktion: Die Erkennung von Zustandsaenderungen inkl. Logging
+    und Setzen von ausschluss_grund passiert in pcl.check_pressure_and_config --
+    dort wird auch state.control.last_pressure_state gepflegt."""
+    return hardware_manager.read_pressure_sensor()
 
 def run_api():
     """Startet den FastAPI-Server."""
@@ -155,17 +174,15 @@ async def setup_application():
     state.session = session
     
     
-    # 6. CSV Header Check (Once at startup)
+    # 7. CSV Header Check (einmalig beim Start)
     try:
-        from utils import check_and_fix_csv_header, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER
         csv_file = HEIZUNGSDATEN_CSV
         log_dir = os.path.dirname(csv_file)
         if log_dir and not os.path.exists(log_dir):
             os.makedirs(log_dir)
             
         if not os.path.exists(csv_file):
-            # Create new file synchronously at startup
-            import aiofiles # We are in async context but setup_application is async
+            # Neue Datei beim Start direkt anlegen
             async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
                 await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
             logging.info(f"Created new CSV file: {csv_file}")
@@ -177,8 +194,8 @@ async def setup_application():
     except Exception as e:
         logging.error(f"Startup CSV check failed: {e}")
 
-    # Start Telegram Task
-    asyncio.create_task(telegram_task(
+    # 8. Start Telegram Task
+    tg_task = asyncio.create_task(telegram_task(
         read_temperature_func=sensor_manager.read_temperature,
         sensor_ids=sensor_manager.sensor_ids,
         kompressor_status_func=lambda: state.control.kompressor_ein,
@@ -189,12 +206,17 @@ async def setup_application():
         state=state,
         get_temperature_history_func=get_boiler_temperature_history,
         get_runtime_bar_chart_func=get_runtime_bar_chart,
-                is_nighttime_func=lambda config: pcl._is_nachtsperre_aktiv(state.priority_config, datetime.now(state.local_tz)),
+        is_nighttime_func=lambda config: pcl._is_nachtsperre_aktiv(state.priority_config, datetime.now(state.local_tz)),
         is_solar_window_func=control_logic.is_solar_window
     ))
-    
+
     # Start Healthcheck Task
-    asyncio.create_task(start_healthcheck_task(session, state))
+    hc_task = asyncio.create_task(start_healthcheck_task(session, state))
+
+    # Referenzen halten und Crash-Fruehwarnung aktivieren
+    for task in (tg_task, hc_task):
+        task.add_done_callback(_log_task_exception)
+        background_tasks.append(task)
     
     return session
 
@@ -273,32 +295,39 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.sunset_tomorrow = ss_tomorrow
             state.last_forecast_update = now_local
 
-            # --- Sommer-Modus: Pruefe ob mehrtägig gute PV-Prognose ---
+            # --- Sommer-Modus: max. EINE Bewertung pro Kalendertag ---
+            # Aktivierung erst nach 'benoetigte_tage' AUFENANDERFOLGENDEN Kalendertagen
+            # mit durchgehend guter Prognose (heute+morgen+uebermorgen >= Schwelle).
+            # Idee: Kommt sicher PV-Ueberschuss, ist Vorheizen/Buffern unnoetig ->
+            # die Solltemperatur wird dann um temperatur_offset_c gesenkt (s. pcl).
             sommer_cfg = state.priority_config.sommer_modus
-            if sommer_cfg.aktiv and all(f is not None for f in [rad_today, rad_tomorrow, rad_day2]):
-                alle_gut = all(f >= sommer_cfg.mindest_prognose_wh for f in [rad_today, rad_tomorrow, rad_day2])
-                if alle_gut:
-                    state.sommer_modus_zaehler += 1
-                    if state.sommer_modus_zaehler >= sommer_cfg.benoetigte_tage:
-                        if not state.sommer_modus_aktiv:
-                            state.sommer_modus_aktiv = True
-                            logging.info(
-                                f"Sommer-Modus AKTIV: {state.sommer_modus_zaehler}. Tag guter "
-                                f"PV-Prognose (Offset {sommer_cfg.temperatur_offset_c:+.0f}C, "
-                                f"Schwelle >={sommer_cfg.mindest_prognose_wh:.0f} Wh/qm)"
-                            )
-                else:
-                    if state.sommer_modus_aktiv or state.sommer_modus_zaehler > 0:
-                        prev_active = state.sommer_modus_aktiv
-                        state.sommer_modus_aktiv = False
-                        state.sommer_modus_zaehler = 0
-                        if prev_active:
-                            logging.info("Sommer-Modus INAKTIV: PV-Prognose nicht mehr durchgehend gut")
-            elif sommer_cfg.aktiv:
-                if state.sommer_modus_aktiv:
-                    state.sommer_modus_aktiv = False
-                    state.sommer_modus_zaehler = 0
-                    logging.info("Sommer-Modus INAKTIV: Keine Prognosedaten verfuegbar")
+            if sommer_cfg.aktiv:
+                neuer_zaehler, ist_aktiv, bewertungstag, ereignis = evaluate_sommer_modus(
+                    benoetigte_tage=sommer_cfg.benoetigte_tage,
+                    mindest_prognose_wh=sommer_cfg.mindest_prognose_wh,
+                    rad_today=rad_today,
+                    rad_tomorrow=rad_tomorrow,
+                    rad_day2=rad_day2,
+                    heute=now_local.date(),
+                    aktueller_zaehler=getattr(state, 'sommer_modus_zaehler', 0),
+                    ist_aktiv=getattr(state, 'sommer_modus_aktiv', False),
+                    letzter_bewertungstag=getattr(state, 'sommer_letzter_bewertungstag', None),
+                )
+                state.sommer_modus_zaehler = neuer_zaehler
+                state.sommer_modus_aktiv = ist_aktiv
+                state.sommer_letzter_bewertungstag = bewertungstag
+
+                if ereignis == SOMMER_AKTIVIERT:
+                    logging.info(
+                        f"Sommer-Modus AKTIV nach {neuer_zaehler} guten Prognosetag(en): "
+                        f"Solltemperatur wird um {abs(sommer_cfg.temperatur_offset_c):.1f}C gesenkt "
+                        f"(Offset {sommer_cfg.temperatur_offset_c:+.1f}C, "
+                        f"Schwelle >={sommer_cfg.mindest_prognose_wh:.0f} Wh/qm)"
+                    )
+                elif ereignis == SOMMER_DEAKTIVIERT_PROGNOSE:
+                    logging.info("Sommer-Modus INAKTIV: PV-Prognose nicht mehr durchgehend gut")
+                elif ereignis == SOMMER_DEAKTIVIERT_DATEN:
+                    logging.info("Sommer-Modus INAKTIV: Keine vollstaendigen Prognosedaten verfuegbar")
 
     return last_vpn_check
 
@@ -396,6 +425,39 @@ async def run_logic_step(session, state, learning_engine=None):
             # 6. Sofort-Alarme pruefen
             await check_and_send_alerts(session, state)
 
+def build_heizungsdaten_zeile(state):
+    """Baut die CSV-Datenzeile fuer heizungsdaten.csv (19 Spalten).
+
+    Muss mit utils.EXPECTED_CSV_HEADER uebereinstimmen -- abgesichert
+    durch tests/test_csv_konsistenz.py."""
+    def fmt_csv(val):
+        return str(val) if val is not None else "N/A"
+
+    solax = state.solar.last_api_data or {}
+
+    # Power Source
+    power_source = "Netz"
+    if state.solar.feedinpower and state.solar.feedinpower > 0:
+        power_source = "Solar"
+    elif state.solar.batpower and state.solar.batpower > 0:
+        power_source = "Batterie"
+
+    return [
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        fmt_csv(state.sensors.t_oben), fmt_csv(state.sensors.t_unten), fmt_csv(state.sensors.t_mittig),
+        fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd),
+        "1" if state.control.kompressor_ein else "0",
+        fmt_csv(solax.get("acpower", 0)), fmt_csv(state.solar.feedinpower),
+        fmt_csv(state.solar.batpower), fmt_csv(state.solar.soc),
+        fmt_csv(solax.get("powerdc1", 0)), fmt_csv(solax.get("powerdc2", 0)),
+        fmt_csv(solax.get("consumeenergy", 0)),
+        fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
+        "1" if state.control.solar_ueberschuss_aktiv else "0",
+        "1" if getattr(state, "urlaubsmodus_aktiv", False) else "0",
+        power_source, fmt_csv(state.solar.forecast_tomorrow)
+    ]
+
+
 async def log_system_state(state):
     """Schreibt CSV-Log, aktualisiert LCD und loggt Temperaturen + Entscheidungen."""
     # 1. Temperatur- und Entscheidungs-Logging (gethrottelt alle 5 Min)
@@ -442,29 +504,7 @@ async def log_system_state(state):
                 await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
         # Optimization: Header check removed from loop (done at startup)
 
-        # Power Source
-        power_source = "Netz"
-        if state.solar.feedinpower and state.solar.feedinpower > 0: power_source = "Solar"
-        elif state.solar.batpower and state.solar.batpower > 0: power_source = "Batterie"
-
-        def fmt_csv(val): return str(val) if val is not None else "N/A"
-        solax = state.solar.last_api_data or {}
-        
-        csv_line = [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            fmt_csv(state.sensors.t_oben), fmt_csv(state.sensors.t_unten), fmt_csv(state.sensors.t_mittig),
-            fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd),
-            "1" if state.control.kompressor_ein else "0",
-            fmt_csv(solax.get("acpower", 0)), fmt_csv(state.solar.feedinpower),
-            fmt_csv(state.solar.batpower), fmt_csv(state.solar.soc),
-            fmt_csv(solax.get("powerdc1", 0)), fmt_csv(solax.get("powerdc2", 0)),
-            fmt_csv(solax.get("consumeenergy", 0)),
-            fmt_csv(state.control.aktueller_einschaltpunkt), fmt_csv(state.control.aktueller_ausschaltpunkt),
-                        "1" if state.control.solar_ueberschuss_aktiv else "0",
-            "1" if getattr(state, "urlaubsmodus_aktiv", False) else "0",
-            power_source, fmt_csv(state.solar.forecast_tomorrow)
-        ]
-        
+        csv_line = build_heizungsdaten_zeile(state)
         async with aiofiles.open(csv_file, mode="a", encoding="utf-8") as f:
             await f.write(",".join(csv_line) + "\n")
     except Exception as e:
@@ -486,23 +526,32 @@ async def main_loop():
     try:
         while not stop_event.is_set():
             now = datetime.now(state.local_tz)
-            
-            # Tageswechsel und Laufzeit
-            handle_day_transition(state, now)
-            if state.control.kompressor_ein and state.stats.last_compressor_on_time:
-                state.stats.current_runtime = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
-            else:
-                state.stats.current_runtime = timedelta()
-            
-            # Daten-Update & Periodische Tasks
-            await update_system_data(session, state)
-            last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
-            
-            # Logik & Logging
-            await run_logic_step(session, state, learning_engine=state.learning_engine)
-            await log_system_state(state)
-            
-            await asyncio.sleep(MAIN_LOOP_INTERVAL_SEC)
+
+            try:
+                # Tageswechsel und Laufzeit
+                handle_day_transition(state, now)
+                if state.control.kompressor_ein and state.stats.last_compressor_on_time:
+                    state.stats.current_runtime = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
+                else:
+                    state.stats.current_runtime = timedelta()
+
+                # Daten-Update & Periodische Tasks
+                await update_system_data(session, state)
+                last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
+
+                # Logik & Logging
+                await run_logic_step(session, state, learning_engine=state.learning_engine)
+                await log_system_state(state)
+            except Exception:
+                # Transienter Fehler (Sensor, API, ...) darf die Regelung nicht komplett beenden
+                logging.exception("Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort")
+
+            # In kurzen Abschnitten schlafen, damit ein Stop-Signal zuegig reagiert
+            remaining = MAIN_LOOP_INTERVAL_SEC
+            while remaining > 0 and not stop_event.is_set():
+                step = min(remaining, 0.5)
+                await asyncio.sleep(step)
+                remaining -= step
 
     except asyncio.CancelledError:
         pass
@@ -510,6 +559,11 @@ async def main_loop():
         logging.critical(f"Unbehandelter Fehler in Main Loop: {e}", exc_info=True)
     finally:
         logging.info("Shutting down...")
+        # Hintergrund-Tasks kontrolliert beenden, BEVOR die Session geschlossen wird
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         if hardware_manager: hardware_manager.cleanup()
         await session.close()
 
