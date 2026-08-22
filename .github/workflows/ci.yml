@@ -9,6 +9,9 @@ jobs:
   syntaxcheck-und-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      MPLBACKEND: Agg        # matplotlib ohne Display (Headless-Runner)
+      PYTHONFAULTHANDLER: 1
     steps:
       - name: Repository auschecken
         uses: actions/checkout@v4
@@ -23,12 +26,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          echo "--- installierte Versionen ---"
+          pip freeze
 
       - name: Syntaxcheck aller Steuerungsmodule (compileall)
         # archive/ und simulation/ sind historisch bzw. manuell und werden
         # bewusst nicht geprueft; Tests laufen unten ohnehin via pytest.
         run: python -m compileall -q Steuerung -x "(archive|simulation|tests)"
 
+      - name: Test-Sammlung pruefen (Diagnose)
+        run: |
+          python -m pytest Steuerung/tests -m "not integration" --collect-only -q
+          echo "collect-only OK"
+
       - name: Unit-Tests (ohne Live-API-Integrationstests)
         # integration-Marker = echte Telegram-Nachrichten/Credentials -> in CI skippen.
-        run: pytest Steuerung/tests -m "not integration" -q --tb=short
+        run: python -m pytest Steuerung/tests -m "not integration" -q --tb=long -ra
