@@ -233,20 +233,26 @@ def handle_day_transition(state, now):
         state.stats.last_day = current_date
     elif state.stats.last_day != current_date:
         logging.info(f"Tageswechsel erkannt ({state.stats.last_day} -> {current_date}). Setze Statistiken zurück.")
-        
+
+        # Endstand des alten Tages sichern (inkl. Anteil nach Mitternacht),
+        # BEVOR der Tageszaehler zurueckgesetzt wird.
+        alter_tag_gesamt = state.stats.total_runtime_today
+
         # Falls der Kompressor über Mitternacht läuft: Restzeit des alten Tages dazurechnen
         if state.control.kompressor_ein and state.stats.last_compressor_on_time:
             # Ende des alten Tages (23:59:59.999...)
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
             elapsed_old_day = safe_timedelta(midnight, state.stats.last_compressor_on_time, state.local_tz)
             if elapsed_old_day.total_seconds() > 0:
-                state.stats.total_runtime_today += elapsed_old_day
+                alter_tag_gesamt += elapsed_old_day
                 logging.info(f"Laufzeitanteil alter Tag: {elapsed_old_day}")
-            
+
             # Startzeit für neuen Tag auf Mitternacht setzen
             state.stats.last_compressor_on_time = midnight
 
-        # Hier könnte man die total_runtime_today in eine DB oder Datei wegschreiben
+        # Vortags-Wert fuer Statistik/Anzeige erhalten (statt verwerfen),
+        # Tageszaehler fuer den neuen Tag nullen.
+        state.stats.total_runtime_yesterday = alter_tag_gesamt
         state.stats.total_runtime_today = timedelta()
 
         # CSV-Monatsrotation pruefen (billig, einmal pro Tag)
@@ -270,21 +276,34 @@ async def update_system_data(session, state):
     state.sensors.t_boiler = temps.get("oben")
     
     # 2. PV-Daten aktualisieren
-    solax_result = await get_solax_data(session, state)
-    if state.solar.last_api_data:
+    # (get_solax_data aktualisiert bei Erfolg last_api_data/last_api_call selbst)
+    await get_solax_data(session, state)
+
+    # Stale-Schutz ZUERST pruefen: Bei API-Ausfaellen bleibt last_api_data als
+    # letzter guter Stand stehen und wuerde sonst stundenalt die PV-Regeln
+    # steuern (Kompressor laeuft dann auf Netzstrom im Glauben, es sei PV).
+    alter_min = None
+    try:
+        if state.solar.last_api_call:
+            alter_min = safe_timedelta(
+                datetime.now(state.local_tz), state.solar.last_api_call, state.local_tz
+            ).total_seconds() / 60
+    except (TypeError, ValueError):
+        alter_min = None  # ungueltige Zeitstempel -> Frische nicht bewertbar
+
+    if alter_min is not None and alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN:
+        if check_log_throttle(state, "_log_solar_stale", interval_minutes=5):
+            logging.warning(
+                f"Solar-Daten veraltet ({alter_min:.0f} min > "
+                f"{SOLAR_DATA_STALE_THRESHOLD_MIN} min) - PV-Werte auf 0 gesetzt"
+            )
+        state.solar.feedinpower = 0.0
+        state.solar.batpower = 0.0
+        state.solar.soc = 0.0
+    elif state.solar.last_api_data:
         state.solar.feedinpower = state.solar.last_api_data.get("feedinpower", 0)
         state.solar.batpower = state.solar.last_api_data.get("batPower", 0)
         state.solar.soc = state.solar.last_api_data.get("soc", 0)
-    elif solax_result is None:
-        # API fehlgeschlagen: Prüfe wie alt die letzten Daten sind
-        if state.solar.last_api_call:
-            now = datetime.now(state.local_tz)
-            age_min = (now - state.solar.last_api_call).total_seconds() / 60
-            if age_min > SOLAR_DATA_STALE_THRESHOLD_MIN:
-                logging.warning(f"Solar-Daten veraltet ({age_min:.0f} min), setze auf 0")
-                state.solar.feedinpower = 0
-                state.solar.batpower = 0
-                state.solar.soc = 0
 
 async def check_periodic_tasks(session, state, last_vpn_check):
     """Führt zeitgesteuerte Hintergrundaufgaben aus."""

@@ -56,6 +56,9 @@ class StatsState:
         self.current_runtime = timedelta()
         self.last_runtime = timedelta()
         self.total_runtime_today = timedelta()
+        # Endstand des Vortags (inkl. ueber-Mitternacht-Anteil), wird beim
+        # Tageswechsel gesichert statt verworfen (Bugfix Tageswechsel-Runtime).
+        self.total_runtime_yesterday = timedelta()
         self.last_day = now.date()
         self.start_time: Optional[datetime] = None
         self.last_compressor_on_time: Optional[datetime] = None

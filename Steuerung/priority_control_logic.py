@@ -22,6 +22,7 @@ from json_config import WPSteuerungConfig
 from priority_control import (
     RegelErgebnis,
     bewerte_alle_regeln,
+    calcstart_nachtsperre_konflikt,
     formatiere_ergebnisse,
 )
 
@@ -138,6 +139,33 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         gelernte_rate_unten = None
         gelernte_rate_gesamt = None
         gelernte_zielzeit = None
+
+    # Konfigurations-Guard: CalcStart-Zielzeit vs. Nachtsperre.
+    # Eine Zielzeit innerhalb/hinter der Sperre macht die Regel stumm -
+    # einmal pro Konfigurations-/Lernstand-Aenderung warnen, damit der
+    # Betreiber den Konflikt sieht statt sich ueber kaltes Wasser zu wundern.
+    try:
+        ziel_pruefung = (
+            gelernte_zielzeit
+            if gelernte_zielzeit is not None
+            else float(state.priority_config.calculated_start.target_uhr)
+        )
+        calc_tot, _, calc_hinweis = calcstart_nachtsperre_konflikt(
+            float(ziel_pruefung),
+            state.priority_config.sicherheit.nachtsperre_start,
+            state.priority_config.sicherheit.nachtsperre_ende,
+        )
+        signatur = (calc_tot, round(float(ziel_pruefung), 2))
+        if (calc_tot or calc_hinweis) and getattr(
+            state, '_calcstart_warn_signatur', None
+        ) != signatur:
+            state._calcstart_warn_signatur = signatur
+            if calc_tot:
+                logging.error(f"CalcStart-Konflikt: {calc_hinweis}")
+            else:
+                logging.warning(f"CalcStart-Hinweis: {calc_hinweis}")
+    except (TypeError, ValueError):
+        pass  # ungueltige Lernwerte: Regel-Engine faengt das selbst ab
 
     gewinner, alle_ergebnisse = bewerte_alle_regeln(
         config=effektive_config,

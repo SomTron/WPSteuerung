@@ -62,6 +62,50 @@ def _is_zeitfenster_active(now_hour: int, start: int, ende: int) -> bool:
         return now_hour >= start or now_hour < ende
 
 
+
+def calcstart_nachtsperre_konflikt(
+    ziel_uhr: float,
+    nachtsperre_start: int,
+    nachtsperre_ende: int,
+) -> Tuple[bool, Optional[int], str]:
+    """Prueft den Konflikt zwischen CalcStart-Zielzeit und Nachtsperre.
+
+    Die Regel kann nur feuern, wenn eine volle Stunde ausserhalb der Sperre
+    UND vor der Zielzeit liegt. Eine Zielzeit innerhalb/hinter der Sperre
+    macht die Regel sonst STUMM (sie feuert nie, ohne Warnung).
+
+    Returns:
+        (tot, letzte_feuerbare_stunde, hinweis)
+        tot=True: Regel kann NIE aktiv werden.
+        tot=False mit hinweis != "": Vorheizen wird von der Sperre abgeschnitten.
+    """
+    feuerbare_stunden = [
+        h for h in range(24)
+        if not _is_nachtsperre(h, nachtsperre_start, nachtsperre_ende)
+        and h < ziel_uhr
+    ]
+
+    if not feuerbare_stunden:
+        return True, None, (
+            f"CalcStart-Zielzeit {ziel_uhr:g}:00 liegt innerhalb/hinter der "
+            f"Nachtsperre ({nachtsperre_start}-{nachtsperre_ende} Uhr) - "
+            f"die Regel kann nie aktiv werden!"
+        )
+
+    letzte_stunde = max(feuerbare_stunden)
+    folge_stunde_gesperrt = (
+        letzte_stunde + 1 < 24
+        and _is_nachtsperre(letzte_stunde + 1, nachtsperre_start, nachtsperre_ende)
+    )
+    if folge_stunde_gesperrt and (letzte_stunde + 1) < ziel_uhr:
+        return False, letzte_stunde, (
+            f"CalcStart-Vorheizen wird um {letzte_stunde + 1}:00 Uhr von der "
+            f"Nachtsperre abgeschnitten (Zielzeit {ziel_uhr:g}:00 wird nicht "
+            f"voll erreicht)"
+        )
+
+    return False, letzte_stunde, ""
+
 def evaluate_pv_regel(
     regel: PVRegel,
     temp_dict: Dict[str, Optional[float]],
@@ -597,12 +641,18 @@ def evaluate_calculated_start(
     if not calc_cfg.aktiv:
         result.grund = "CalcStart-Regel inaktiv"
         return result
-    
+
     # Nachtsperre: Kein Einschalten waehrend der Sperrzeit
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     if nachtsperre:
         result.aktiv = False
-        result.grund = "Nachtsperre aktiv"
+        # Konflikt-Hinweis: Liegt die Zielzeit hinter/innerhalb der Sperre,
+        # kann die Regel NIE feuern - das soll im Grund lesbar sein.
+        ziel = learned_target_hour if learned_target_hour is not None else float(calc_cfg.target_uhr)
+        tot, _, hinweis = calcstart_nachtsperre_konflikt(
+            ziel, nachtsperre_start, nachtsperre_ende
+        )
+        result.grund = "Nachtsperre aktiv" + (f" | {hinweis}" if tot else "")
         return result
     
     temp_unten = _parse_sensor(temp_dict, "unten")
