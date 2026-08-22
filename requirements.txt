@@ -1,0 +1,20 @@
+# Abhaengigkeiten der Heizungssteuerung (WPSteuerung)
+# Installiert via: pip install -r requirements.txt
+# Hinweis: RPi.GPIO / smbus2 / RPLCD / w1thermsensor werden nur auf dem
+# Raspberry Pi benoetigt und in Tests/Entwicklung gemockt (siehe conftest.py).
+
+# --- Laufzeit ---
+aiofiles
+aiohttp
+fastapi
+pydantic>=2.0        # api.py nutzt field_validator/model_validator (Pydantic v2)
+pytz
+uvicorn
+
+# --- Analyse/Diagnose ---
+matplotlib           # telegram_charts.py (Chart-Versand)
+pandas               # telegram_charts.py (CSV-Auswertung)
+
+# --- Tests ---
+pytest
+pytest-asyncio
