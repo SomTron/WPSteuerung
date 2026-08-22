@@ -26,7 +26,7 @@ from telegram_api import start_healthcheck_task, send_telegram_message, create_r
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app, init_api
-from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_and_fix_csv_header
+from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_and_fix_csv_header, rotiere_csv_monatlich
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
 from logic_utils import (
@@ -174,7 +174,16 @@ async def setup_application():
     state.session = session
     
     
-    # 7. CSV Header Check (einmalig beim Start)
+    # 7. CSV: Monatsrotation pruefen (holt ggf. den Rueckstand nach Ausfall),
+    # dann Header-Check
+    try:
+        archiv = rotiere_csv_monatlich()
+        if archiv:
+            logging.info(f"CSV-Monatsrotation beim Start: {archiv}")
+    except Exception as e:
+        logging.error(f"CSV-Rotation beim Start fehlgeschlagen: {e}")
+
+    # 7b. CSV Header Check (einmalig beim Start)
     try:
         csv_file = HEIZUNGSDATEN_CSV
         log_dir = os.path.dirname(csv_file)
@@ -242,6 +251,14 @@ def handle_day_transition(state, now):
 
         # Hier könnte man die total_runtime_today in eine DB oder Datei wegschreiben
         state.stats.total_runtime_today = timedelta()
+
+        # CSV-Monatsrotation pruefen (billig, einmal pro Tag)
+        try:
+            archiv = rotiere_csv_monatlich(heute=now)
+            if archiv:
+                logging.info(f"CSV-Monatsrotation am Tageswechsel: {archiv}")
+        except Exception as e:
+            logging.error(f"CSV-Rotation am Tageswechsel fehlgeschlagen: {e}")
         state.stats.last_completed_cycle = None
         state.stats.last_day = current_date
 

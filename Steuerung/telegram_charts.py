@@ -8,7 +8,8 @@ import pytz
 from datetime import datetime, timedelta
 from aiohttp import FormData
 from telegram_api import send_telegram_message
-from utils import check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER, HEIZUNGSDATEN_CSV
+from utils import (check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER,
+                   HEIZUNGSDATEN_CSV, relevante_csv_dateien)
 from constants import DEFAULT_TIMEZONE
 
 async def get_boiler_temperature_history(session, hours, state, config):
@@ -28,28 +29,29 @@ async def get_boiler_temperature_history(session, hours, state, config):
         # Header regelmäßig prüfen und ggf. korrigieren
         check_and_fix_csv_header(file_path)
         try:
-            # Optimize: Read only last ~3MB to avoid reading huge files from SD card
-            # Average line length ~150-200 bytes. 15000 lines approx 3MB.
-            file_size = os.path.getsize(file_path)
+            # Optimize: nur letzte ~3MB je Datei lesen (schont SD-Karte)
+            # Durchschnittliche Zeilenlaenge ~150-200 Bytes, 15000 Zeilen ca. 3MB.
             read_size = 3 * 1024 * 1024  # 3MB
-            
-            with open(file_path, "r", encoding="utf-8") as f:
-                header_line = f.readline()
-                if file_size > read_size:
-                    f.seek(file_size - read_size)
-                    f.readline() # Discard partial line
-                
-                # Read remaining lines (effectively the tail)
-                last_lines = f.readlines()
-            
-            # Combine header and last lines
-            if not last_lines:
-                data_io = io.StringIO(header_line)
-            else:
-                data_io = io.StringIO(header_line + "".join(last_lines))
 
-            # Robust: Trennzeichen automatisch erkennen, Header prüfen, Fehlerhafte Zeilen überspringen
-            df = pd.read_csv(data_io, sep=None, engine="python", on_bad_lines='skip')
+            def _lese_csv_tail(pfad: str):
+                """Liest Kopf + Tail einer CSV-Datei als DataFrame."""
+                groesse = os.path.getsize(pfad)
+                with open(pfad, "r", encoding="utf-8") as f:
+                    kopf = f.readline()
+                    if groesse > read_size:
+                        f.seek(groesse - read_size)
+                        f.readline()  # Angeschnittene Zeile verwerfen
+                    rest = f.readlines()
+                inhalt = kopf + "".join(rest) if rest else kopf
+
+                # Robust: Trennzeichen automatisch erkennen, Fehlerzeilen ueberspringen
+                teil_df = pd.read_csv(io.StringIO(inhalt), sep=None, engine="python", on_bad_lines="skip")
+                return teil_df
+
+            # Aktuelle Datei + Archiv des Vormonats (brueckt Monatsgrenzen);
+            # bei nur einer vorhandenen Datei entfaellt das Concat.
+            teile = [_lese_csv_tail(p) for p in relevante_csv_dateien(file_path, jetzt=now)]
+            df = pd.concat(teile, ignore_index=True) if len(teile) > 1 else teile[0]
             # Prüfe, ob alle erwarteten Spalten vorhanden sind
             missing = [col for col in EXPECTED_CSV_HEADER if col not in df.columns]
             if missing:
@@ -235,7 +237,9 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         if not os.path.exists(file_path):
              await send_telegram_message(session, state.chat_id, "Laufzeit-Daten nicht verfügbar (CSV fehlt).", state.bot_token)
              return
-        df = pd.read_csv(file_path, parse_dates=["Zeitstempel"])
+        teile = [pd.read_csv(p) for p in relevante_csv_dateien(HEIZUNGSDATEN_CSV)]
+        df = pd.concat(teile, ignore_index=True)
+        df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
         df = df.tail(1000)
         df["Date"] = df["Zeitstempel"].dt.date
         df["Kompressor"] = df["Kompressor"].astype(str).map({"EIN": True, "AUS": False, "1": True, "0": False}).fillna(False)

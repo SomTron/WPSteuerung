@@ -164,3 +164,96 @@ def safe_float(value, default=0.0, field_name="unknown"):
     except (ValueError, TypeError) as e:
         logging.error(f"API: Cannot convert {field_name}='{value}': {e}, using {default}")
         return default
+
+
+# ── CSV-Monatsrotation ────────────────────────────────────────────────
+
+def _parse_zeitstempel_aus_csv_zeile(zeile: str):
+    """Erste Spalte einer Datenzeile als datetime parsen (oder None)."""
+    try:
+        return datetime.strptime(zeile.split(",")[0].strip(), "%Y-%m-%d %H:%M:%S")
+    except (ValueError, IndexError, AttributeError):
+        return None
+
+
+def _letzter_csv_zeitstempel(csv_path: str):
+    """Letzten parsebaren Zeitstempel lesen (nur ~4KB vom Dateiende)."""
+    groesse = os.path.getsize(csv_path)
+    with open(csv_path, "rb") as f:
+        f.seek(max(0, groesse - 4096))
+        tail = f.read().decode("utf-8", errors="replace")
+    zeilen = [z for z in tail.split("\n") if z.strip()]
+    if groesse > 4096 and len(zeilen) > 1:
+        zeilen = zeilen[1:]  # evtl. angeschnittene erste Zeile verwerfen
+    for zeile in reversed(zeilen):
+        ts = _parse_zeitstempel_aus_csv_zeile(zeile)
+        if ts:
+            return ts
+    return None
+
+
+def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None):
+    """Archiviert heizungsdaten.csv nach Monatswechsel (Schutz gegen Endwachstum).
+
+    Stammt der letzte Eintrag aus einem frueheren Monat als 'heute', wird die
+    Datei zu heizungsdaten_YYYY-MM.csv umbenannt (os.replace = atomar). Die
+    neue Datei legt der naechste Schreibvorgang in main.log_system_state
+    automatisch inklusive Header an.
+
+    Args:
+        csv_path: Pfad zur CSV (Default: HEIZUNGSDATEN_CSV).
+        heute: Referenzzeitpunkt, fuer Tests injizierbar (Default: jetzt).
+
+    Returns:
+        Archiv-Pfad bei Rotation, sonst None.
+    """
+    if csv_path is None:
+        csv_path = HEIZUNGSDATEN_CSV
+    if heute is None:
+        heute = datetime.now()
+    try:
+        if not os.path.exists(csv_path):
+            return None
+        letzter = _letzter_csv_zeitstempel(csv_path)
+        if letzter is None:
+            return None
+        if (letzter.year, letzter.month) == (heute.year, heute.month):
+            return None
+
+        verzeichnis = os.path.dirname(csv_path)
+        basis = os.path.splitext(os.path.basename(csv_path))[0]
+        archiv_pfad = os.path.join(verzeichnis, f"{basis}_{letzter.strftime('%Y-%m')}.csv")
+        if os.path.exists(archiv_pfad):
+            # Archiv existiert bereits -> eindeutigen Namen verwenden
+            archiv_pfad = os.path.join(
+                verzeichnis,
+                f"{basis}_{letzter.strftime('%Y-%m')}_{datetime.now().strftime('%H%M%S')}.csv",
+            )
+        os.replace(csv_path, archiv_pfad)
+        logging.info(f"CSV-Monatsrotation: {csv_path} -> {archiv_pfad}")
+        return archiv_pfad
+    except Exception as e:
+        logging.error(f"Fehler bei CSV-Monatsrotation ({csv_path}): {e}")
+        return None
+
+
+def relevante_csv_dateien(csv_path: str = None, jetzt: datetime = None) -> List[str]:
+    """Aktuelle CSV + Archiv des Vormonats (falls vorhanden), chronologisch.
+
+    Damit Charts auch kurz nach einem Monatswechsel die letzten Stunden des
+    Vormonats anzeigen koennen, ohne je die komplette Historie zu laden.
+    """
+    if csv_path is None:
+        csv_path = HEIZUNGSDATEN_CSV
+    if jetzt is None:
+        jetzt = datetime.now()
+    dateien: List[str] = []
+    vormonat = (jetzt.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    verzeichnis = os.path.dirname(csv_path)
+    basis = os.path.splitext(os.path.basename(csv_path))[0]
+    kandidat = os.path.join(verzeichnis, f"{basis}_{vormonat}.csv")
+    if os.path.exists(kandidat):
+        dateien.append(kandidat)
+    if os.path.exists(csv_path):
+        dateien.append(csv_path)
+    return dateien

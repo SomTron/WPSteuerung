@@ -9,6 +9,7 @@ Lernt aus dem Betrieb:
 import json
 import logging
 import os
+import shutil
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass, asdict
@@ -101,15 +102,40 @@ class LearningEngine:
                 )
         except Exception as e:
             logging.warning(f"Konnte Lern-Daten nicht laden: {e}")
+            self._sichere_korrupte_datei()
         return defaults
 
-    def _save(self):
-        """Lerndaten als JSON speichern."""
+    def _sichere_korrupte_datei(self):
+        """Bewahrt eine unlesbare Lerndatei auf, bevor Defaults sie ueberschreiben."""
         try:
-            with open(self.data_path, 'w', encoding='utf-8') as f:
+            if os.path.exists(self.data_path):
+                backup = f"{self.data_path}.korrupt-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                shutil.copy2(self.data_path, backup)
+                logging.warning(f"Korrupte Lern-Datei gesichert als {backup}")
+        except Exception as e:
+            logging.error(f"Konnte korrupte Lern-Datei nicht sichern: {e}")
+
+    def _save(self):
+        """Lerndaten atomar speichern: erst .tmp schreiben, dann os.replace().
+
+        Schuetzt vor Datenverlust bei Stromausfall/Absturz mitten im Schreiben
+        (SD-Karte des Pi): Die Zieldatei ist danach immer entweder die alte
+        oder die vollstaendig neue Version -- niemals ein halbes JSON.
+        """
+        tmp_path = self.data_path + ".tmp"
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(asdict(self.data), f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.data_path)
         except Exception as e:
             logging.error(f"Fehler beim Speichern der Lern-Daten: {e}")
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
 
     # ── Öffentliche API ────────────────────────────────────
 
