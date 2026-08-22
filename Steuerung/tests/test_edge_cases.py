@@ -201,18 +201,23 @@ class TestTimezoneEdgeCases:
     """Tests for timezone and DST handling."""
     
     def test_safe_timedelta_with_naive_datetime(self, mock_state):
-        """Test safe_timedelta handles naive datetimes correctly."""
+        """Test safe_timedelta handles naive datetimes correctly.
+
+        Deterministisch mit festen Zeitpunkten: Der Test mischt keine
+        System-naive Zeit mit aware Zeit mehr -- sonst faellt er auf
+        Rechnern mit abweichender Zeitzone (CI-Runner laufen auf UTC)
+         um Offset-Stunden durch. Januar-Datum = keine DST-Kante."""
         from utils import safe_timedelta
         
         tz = pytz.timezone("Europe/Berlin")
-        now = datetime.now(tz)
-        naive_past = datetime.now() - timedelta(hours=1)
+        now = tz.localize(datetime(2026, 1, 15, 12, 0, 0))
+        naive_past = datetime(2026, 1, 15, 11, 0, 0)  # gleiche Wanduhrzeit, naiv
         
         # Should not crash, should localize naive datetime
         delta = safe_timedelta(now, naive_past, tz)
         
-        # Should be approximately 1 hour
-        assert timedelta(minutes=50) < delta < timedelta(minutes=70)
+        # Genau 1 Stunde: localize(naive_past) liegt exakt 1h vor now
+        assert delta == timedelta(hours=1)
     
     def test_nighttime_calculation_across_midnight(self, mock_config):
         """Test is_nighttime works correctly across midnight."""
