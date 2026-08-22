@@ -355,7 +355,8 @@ async def check_and_send_alerts(session, state):
     # Beispiel: "Sensorfehler: T_Oben invalid" -> "Sensorfehler"
     import re
     def normalize(text):
-        if not text: return ""
+        if not text:
+            return ""
         # 1. Alles in Klammern entfernen (Zeiten, Werte)
         res = re.sub(r'\(.*?\)', '', text)
         # 2. Alles nach Doppelpunkt entfernen (Details)
@@ -578,7 +579,8 @@ async def main_loop():
             task.cancel()
         if background_tasks:
             await asyncio.gather(*background_tasks, return_exceptions=True)
-        if hardware_manager: hardware_manager.cleanup()
+        if hardware_manager:
+            hardware_manager.cleanup()
         await session.close()
 
 

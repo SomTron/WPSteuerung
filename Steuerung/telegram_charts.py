@@ -1,16 +1,21 @@
 import logging
 import os
 import io
-import pandas as pd
-import matplotlib.pyplot as plt
-plt.switch_backend('Agg')  # Headless mode for RPi
-import pytz
 from datetime import datetime, timedelta
+
+import pandas as pd
+import pytz
 from aiohttp import FormData
+
 from telegram_api import send_telegram_message
 from utils import (check_and_fix_csv_header, EXPECTED_CSV_HEADER,
                    HEIZUNGSDATEN_CSV, relevante_csv_dateien)
 from constants import DEFAULT_TIMEZONE
+
+# Headless-Backend fuer den RPi: MUSS vor dem pyplot-Import gesetzt werden
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 async def get_boiler_temperature_history(session, hours, state, config):
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""

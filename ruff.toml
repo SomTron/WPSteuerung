@@ -16,8 +16,6 @@ select = [
 ignore = [
     "E501", # Zeilenlaenge bewusst NICHT erzwungen (Altbestand, Log-Zeilen)
     "E741", # einstellige Variablennamen (l, I) in Formelnaehe erlaubt
-    "E701", # if x: return y - einzeilige Anweisungen (41x Altbestand, spaeter umbauen)
-    "E402", # Imports nicht am Dateianfang (10x: absichtliche Lazy-Imports nach Setup)
 ]
 
 [lint.per-file-ignores]

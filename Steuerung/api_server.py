@@ -9,6 +9,8 @@ from typing import Optional, Dict, Any
 import logging
 from datetime import datetime, timedelta
 import random
+from fastapi.staticfiles import StaticFiles
+import os
 
 # Data Models
 class ConfigUpdate(BaseModel):
@@ -36,8 +38,6 @@ app.add_middleware(
 )
 
 # Statische Dateien (PWA) servieren
-from fastapi.staticfiles import StaticFiles
-import os
 if os.path.exists("webapp"):
     app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
 else:

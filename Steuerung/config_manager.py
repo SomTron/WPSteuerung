@@ -82,16 +82,57 @@ class ConfigManager:
             for section in parser.sections():
                 config_dict[section] = dict(parser.items(section))
 
-            try:
-                self.config = AppConfig(**config_dict)
-                logging.debug(f"Konfiguration aus '{self.config_path}' erfolgreich geladen.")  # Changed to DEBUG to reduce log noise
-            except ValidationError as e:
-                logging.error(f"Validierungsfehler in Config: {e}")
-                # Fallback: Versuche, Sektionen einzeln zu laden oder behalte Defaults
-                # Hier behalten wir die Defaults der fehlgeschlagenen Validierung nicht bei, 
-                # sondern loggen nur. Verbesserte Logik könnte hier partielle Updates machen.
+            self.config = self._lade_app_config(config_dict)
+            logging.debug(f"Konfiguration aus '{self.config_path}' geladen.")
         except Exception as e:
             logging.error(f"Fehler beim Laden der Konfiguration: {e}")
+
+    def _lade_app_config(self, config_dict: dict) -> AppConfig:
+        """Laedt alle Sektionen einzeln statt Alles-oder-nichts.
+
+        Bisher verfaelschte EIN Tippfehler (z.B. API_PORT = keine_zahl) die
+        KOMPLETTE Datei - auch die 30 korrekten Werte wurden verworfen und
+        stillschweigend durch Defaults ersetzt. Jetzt bleibt jede Sektion
+        bzw. jeder einzelne Wert so weit wie moeglich erhalten.
+        """
+        sektionen = {}
+        for feld_name, modell_feld in AppConfig.model_fields.items():
+            modell_klasse = modell_feld.default_factory
+            werte = config_dict.get(feld_name, {})
+            sektionen[feld_name] = self._lade_sektion(feld_name, modell_klasse, werte)
+        return AppConfig(**sektionen)
+
+    def _lade_sektion(self, name: str, modell_klasse, werte: dict):
+        """Laedt eine Sektion; bei Validierungsfehlern nur die betroffenen Felder kappen."""
+        # Unbekannte Schluessel melden - das sind fast immer Tippfehler,
+        # die sonst stillschweigend wirkungslos bleiben wuerden.
+        unbekannt = [k for k in werte if k not in modell_klasse.model_fields]
+        if unbekannt:
+            logging.warning(
+                f"Unbekannte Schluessel in [{name}] (Tippfehler?): {', '.join(sorted(unbekannt))}"
+            )
+
+        try:
+            return modell_klasse(**werte)
+        except ValidationError:
+            gueltige_werte = {}
+            for schluessel, wert in werte.items():
+                if schluessel not in modell_klasse.model_fields:
+                    continue  # wurde oben schon als unbekannt gemeldet
+                try:
+                    modell_klasse(**{schluessel: wert})
+                    gueltige_werte[schluessel] = wert
+                except ValidationError:
+                    logging.error(
+                        f"Ungueltiger Wert in [{name}]: {schluessel} = '{wert}' "
+                        f"- verwende Defaultwert"
+                    )
+            gekappt = len(werte) - len(gueltige_werte) - len(unbekannt)
+            if gekappt > 0:
+                logging.warning(
+                    f"Sektion [{name}]: {gekappt} ungueltige(r) Wert(e) auf Default gesetzt"
+                )
+            return modell_klasse(**gueltige_werte)
 
     def get(self):
         return self.config

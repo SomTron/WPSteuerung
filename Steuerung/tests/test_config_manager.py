@@ -88,19 +88,45 @@ class TestValidierung:
             cm = ConfigManager(config_path=pfad)
         c = cm.get()
         assert c.Heizungssteuerung.API_PORT == 8000            # Default statt Crash
-        assert any("Validierungsfehler" in r.message for r in caplog.records)
+        assert any("Ung\u00fcltiger Wert" in r.message or "Ungueltiger Wert" in r.message for r in caplog.records)
 
-    def test_ein_fehlerhafter_wert_verfaelscht_nicht_andere_sektionen_dauerhaft(
-            self, tmp_path):
-        """Alles-oder-nichts: Ein Validierungsfehler laedt die GANZE Config nicht.
+    def test_fehler_in_einer_sektion_blockt_andere_sektionen_nicht(self, tmp_path):
+        """Partielles Loading: Nur das fehlerhafte Feld faellt auf Default.
 
-        Dokumentiert das aktuelle Verhalten: Es gibt noch kein partielles Update.
+        Vorher: EIN Tippfehler warf die KOMPLETTE Config weg (auch Telegram).
+        Jetzt: Gueltige Sektionen/Werte bleiben vollstaendig erhalten.
         """
         pfad = schreibe_ini(tmp_path / "config.ini",
                             "[Telegram]\nBOT_TOKEN = gueltig\n"
                             "[Heizungssteuerung]\nMIN_LAUFZEIT = nicht_zahl\n")
         c = ConfigManager(config_path=pfad).get()
-        assert c.Telegram.BOT_TOKEN == ""                       # Default (nicht geladen)
+        assert c.Telegram.BOT_TOKEN == "gueltig"                # andere Sektion laedt
+        assert c.Heizungssteuerung.MIN_LAUFZEIT == 15           # nur dieses Feld -> Default
+
+    def test_feldweiser_fallback_innerhalb_einer_sektion(self, tmp_path):
+        """Ein kaputter Wert kapt nur sich selbst, Geschwisterwerte laden weiter."""
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Heizungssteuerung]\n"
+                            "MIN_LAUFZEIT = keine_zahl\n"
+                            "SICHERHEITS_TEMP = 58.5\n"
+                            "MIN_PAUSE = 35\n")
+        c = ConfigManager(config_path=pfad).get().Heizungssteuerung
+        assert c.MIN_LAUFZEIT == 15                             # Default (fehlerhaft)
+        assert c.SICHERHEITS_TEMP == 58.5                       # geladen
+        assert c.MIN_PAUSE == 35                                # geladen
+
+    def test_unbekannte_schluessel_werden_gewarnt(self, tmp_path, caplog):
+        """Tippfehler wie MIN_LAUFZET sind sonst still wirkungslos - jetzt Warnung."""
+        import logging
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Heizungssteuerung]\n"
+                            "MIN_LAUFZET = 99\n"          # Tippfehler bewusst
+                            "MIN_LAUFZEIT = 22\n")
+        with caplog.at_level(logging.WARNING):
+            cm = ConfigManager(config_path=pfad)
+        assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 22    # korrekter Key wirkt
+        assert any("MIN_LAUFZET" in r.message and "Tippfehler" in r.message
+                   for r in caplog.records)
 
 
 # ── Robustheit ────────────────────────────────────────────────────────

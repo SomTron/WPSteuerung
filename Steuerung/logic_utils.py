@@ -7,10 +7,14 @@ from constants import TEMP_MIN_VALID, TEMP_MAX_VALID, REDUCTION_MIN, REDUCTION_M
 
 def is_valid_temperature(temp: Optional[float], min_temp: float = TEMP_MIN_VALID, max_temp: float = TEMP_MAX_VALID) -> bool:
     """Prüft, ob ein Temperaturwert gültig ist."""
-    if temp is None: return False
-    if not isinstance(temp, (int, float)): return False
-    if math.isnan(temp) or math.isinf(temp): return False
-    if temp < min_temp or temp > max_temp: return False
+    if temp is None:
+        return False
+    if not isinstance(temp, (int, float)):
+        return False
+    if math.isnan(temp) or math.isinf(temp):
+        return False
+    if temp < min_temp or temp > max_temp:
+        return False
     return True
 
 def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0) -> bool:

@@ -3,12 +3,6 @@ import asyncio  # noqa: F401 - Re-Export fuer Tests
 from datetime import datetime, timedelta
 from typing import Callable
 from utils import safe_timedelta
-from constants import CONFIG_CHECK_INTERVAL_SEC, BADEMODUS_HYSTERESIS, FROSTSCHUTZ_AUSSCHALTPUNKT_BOOST
-
-# Solar forecast integration: threshold for "much more solar tomorrow"
-SOLAR_FORECAST_BOOST_THRESHOLD: float = 1.2  # If tomorrow > 1.2x today, consider boosting
-
-# New Modules
 from logic_utils import (
     is_valid_temperature,  # noqa: F401 - Re-Export fuer Tests
     is_nighttime, 
@@ -22,6 +16,11 @@ from safety_logic import (
     handle_critical_compressor_error,
     verify_compressor_running  # noqa: F401 - Re-Export fuer Tests
 )
+
+from constants import CONFIG_CHECK_INTERVAL_SEC, BADEMODUS_HYSTERESIS, FROSTSCHUTZ_AUSSCHALTPUNKT_BOOST
+
+# Solar forecast integration: threshold for "much more solar tomorrow"
+SOLAR_FORECAST_BOOST_THRESHOLD: float = 1.2  # If tomorrow > 1.2x today, consider boosting
 
 # Export for tests that still patch control_logic
 try:
@@ -42,7 +41,8 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
     if not pressure_ok:
         state.control.ausschluss_grund = "Druckschalterfehler"
         state.control.blocking_reason = "Druckschalter-Fehler"
-        if state.control.kompressor_ein: await set_kompressor_status_func(state, False, force=True)
+        if state.control.kompressor_ein:
+            await set_kompressor_status_func(state, False, force=True)
         return False
     if not only_pressure:
         if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=CONFIG_CHECK_INTERVAL_SEC):

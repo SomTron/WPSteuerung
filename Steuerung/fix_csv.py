@@ -44,7 +44,8 @@ def fix_csv():
         writer.writerow(HEADER)
         
         for i, row in enumerate(reader):
-            if not row: continue
+            if not row:
+                continue
             
             # Skip old header lines found in middle of file
             if row[0] == "Zeitstempel":

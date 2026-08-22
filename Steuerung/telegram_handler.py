@@ -62,10 +62,14 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
             state.awaiting_urlaub_duration = False
             return
 
-        if duration_text == "🌴 1 tag": duration_days = 1
-        elif duration_text == "🌴 3 tage": duration_days = 3
-        elif duration_text == "🌴 7 tage": duration_days = 7
-        elif duration_text == "🌴 14 tage": duration_days = 14
+        if duration_text == "🌴 1 tag":
+            duration_days = 1
+        elif duration_text == "🌴 3 tage":
+            duration_days = 3
+        elif duration_text == "🌴 7 tage":
+            duration_days = 7
+        elif duration_text == "🌴 14 tage":
+            duration_days = 14
         elif duration_text == "🌴 benutzerdefiniert":
             keyboard = get_keyboard(state)
             await send_telegram_message(session, chat_id, "📅 Bitte sende die Anzahl der Tage (z.B. '5' für 5 Tage):", bot_token, reply_markup=keyboard)
@@ -101,7 +105,8 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
     """Behandelt benutzerdefinierte Dauer-Eingabe."""
     try:
         # Check against lowercased button texts to prevent re-triggering logic if user clicks buttons unexpectedly
-        if message_text in ["🌴 benutzerdefiniert", "❌ abbrechen", "🌴 1 tag", "🌴 3 tage", "🌴 7 tage", "🌴 14 tage"]: return
+        if message_text in ["🌴 benutzerdefiniert", "❌ abbrechen", "🌴 1 tag", "🌴 3 tage", "🌴 7 tage", "🌴 14 tage"]:
+            return
         duration_days = int(message_text.strip())
         local_tz = pytz.timezone(DEFAULT_TIMEZONE)
         now = datetime.now(local_tz)
@@ -136,13 +141,20 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     
     # Mode mapping for icons
     mode_name = state.control.previous_modus or "Normal"
-    if "Bademodus" in mode_name: mode_str = "🛁 " + mode_name
-    elif "Urlaub" in mode_name: mode_str = "🌴 " + mode_name
-    elif "Solar" in mode_name: mode_str = "☀️ " + mode_name
-    elif "Frostschutz" in mode_name: mode_str = "❄️ " + mode_name
-    elif "Übergang" in mode_name: mode_str = "🌓 " + mode_name
-    elif "Nacht" in mode_name: mode_str = "🌙 " + mode_name
-    else: mode_str = mode_name
+    if "Bademodus" in mode_name:
+        mode_str = "🛁 " + mode_name
+    elif "Urlaub" in mode_name:
+        mode_str = "🌴 " + mode_name
+    elif "Solar" in mode_name:
+        mode_str = "☀️ " + mode_name
+    elif "Frostschutz" in mode_name:
+        mode_str = "❄️ " + mode_name
+    elif "Übergang" in mode_name:
+        mode_str = "🌓 " + mode_name
+    elif "Nacht" in mode_name:
+        mode_str = "🌙 " + mode_name
+    else:
+        mode_str = mode_name
 
     # Additional Details calculation
     t_soll_ein = state.control.aktueller_einschaltpunkt
@@ -237,7 +249,8 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
 
 async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
-    if not updates: return last_update_id
+    if not updates:
+        return last_update_id
 
     # Rate-Limiting: Prüfe ob letzte Nachricht zu schnell aufeinander folgt
     now = datetime.now(state.local_tz)
@@ -250,13 +263,17 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
     for update in updates:
         message = update.get('message', {})
         text = message.get('text', "").strip().lower()
-        if not text: continue
+        if not text:
+            continue
         state.last_telegram_command_time = now
         
         try:
-            if state.awaiting_custom_duration: await handle_custom_duration(session, chat_id, bot_token, config, state, text)
-            elif state.awaiting_urlaub_duration: await set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, text)
-            elif "temperaturen" in text: await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state)
+            if state.awaiting_custom_duration:
+                await handle_custom_duration(session, chat_id, bot_token, config, state, text)
+            elif state.awaiting_urlaub_duration:
+                await set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, text)
+            elif "temperaturen" in text:
+                await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state)
             elif "status" in text:
                 await send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func)
             elif "urlaub" in text:
@@ -269,11 +286,16 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                     await deaktivere_bademodus(session, chat_id, bot_token, state)
                 else:
                     await aktivere_bademodus(session, chat_id, bot_token, state)
-            elif "verlauf 6h" in text: await get_boiler_temperature_history(session, 6, state, config)
-            elif "verlauf 24h" in text: await get_boiler_temperature_history(session, 24, state, config)
-            elif "laufzeiten" in text: await get_runtime_bar_chart(session, days=7, state=state)
-            elif "hilfe" in text: await send_help_message(session, chat_id, bot_token, state)
-            else: await send_unknown_command_message(session, chat_id, bot_token, state)
+            elif "verlauf 6h" in text:
+                await get_boiler_temperature_history(session, 6, state, config)
+            elif "verlauf 24h" in text:
+                await get_boiler_temperature_history(session, 24, state, config)
+            elif "laufzeiten" in text:
+                await get_runtime_bar_chart(session, days=7, state=state)
+            elif "hilfe" in text:
+                await send_help_message(session, chat_id, bot_token, state)
+            else:
+                await send_unknown_command_message(session, chat_id, bot_token, state)
         except Exception as e:
             logging.error(f"Fehler bei der Verarbeitung von '{text}': {e}", exc_info=True)
             await send_telegram_message(session, chat_id, f"❌ Fehler bei der Verarbeitung: {str(e)}", bot_token)

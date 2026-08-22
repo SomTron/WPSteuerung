@@ -69,9 +69,11 @@ def check_and_fix_csv_header(file_path: str, expected_header: List[str] = None) 
                 
                 # Stream the rest
                 for line in f_in:
-                    if not line.strip(): continue
+                    if not line.strip():
+                        continue
                     # Safety: If another header line appears in middle (concatenated files?), skip it
-                    if line.startswith(expected_header[0]): continue
+                    if line.startswith(expected_header[0]):
+                        continue
                     f_out.write(line)
             
             # Atomic replace
