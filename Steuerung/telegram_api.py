@@ -2,7 +2,6 @@ import aiohttp
 
 import asyncio
 import logging
-import socket
 from aiohttp.resolver import AsyncResolver
 
 def create_robust_aiohttp_session():

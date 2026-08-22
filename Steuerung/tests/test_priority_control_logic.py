@@ -12,7 +12,6 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from logic_utils import check_log_throttle
-from utils import safe_timedelta
 
 
 @pytest.fixture

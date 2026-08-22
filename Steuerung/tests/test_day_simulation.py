@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 from datetime import datetime, time, timedelta
 import pytz
 import sys
@@ -213,7 +213,7 @@ async def run_simulation_scenario(scenario_name, steps, config):
                         error_msg = f"BUG: Kompressor AUS trotz kritischer Kälte ({t_mittig} <= {night_setpoint})"
                         print(error_msg)
                         raise AssertionError(error_msg)
-                    validation_suffix = f" [KORREKT: AN wegen Kälte]"
+                    validation_suffix = " [KORREKT: AN wegen Kälte]"
                 elif mock_state.control.kompressor_ein:
                     # Should be off unless was already running and min_run not met
                     # Simplified for this specific test case

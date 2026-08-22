@@ -163,7 +163,6 @@ def control_system(cmd: ControlCommand):
 @app.get("/history")
 def get_history(hours: int = 24):
     """Get historical data from CSV (mock data for development)"""
-    import pandas as pd
     from datetime import datetime, timedelta
     
     # Generate mock historical data
@@ -191,9 +190,9 @@ if __name__ == "__main__":
     print("=" * 60)
     print("WPSteuerung API Server - Development Mode")
     print("=" * 60)
-    print(f"Starting API server on http://0.0.0.0:5000")
-    print(f"Swagger UI: http://localhost:5000/docs")
-    print(f"ReDoc: http://localhost:5000/redoc")
+    print("Starting API server on http://0.0.0.0:5000")
+    print("Swagger UI: http://localhost:5000/docs")
+    print("ReDoc: http://localhost:5000/redoc")
     print("=" * 60)
     
     uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info")

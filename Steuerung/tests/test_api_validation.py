@@ -1,4 +1,3 @@
-import pytest
 from utils import safe_float
 
 def test_safe_float_valid_numbers():

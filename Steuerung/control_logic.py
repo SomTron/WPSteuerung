@@ -1,7 +1,7 @@
 import logging
-import asyncio
+import asyncio  # noqa: F401 - Re-Export fuer Tests
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Callable
 from utils import safe_timedelta
 from constants import CONFIG_CHECK_INTERVAL_SEC, BADEMODUS_HYSTERESIS, FROSTSCHUTZ_AUSSCHALTPUNKT_BOOST
 
@@ -10,22 +10,22 @@ SOLAR_FORECAST_BOOST_THRESHOLD: float = 1.2  # If tomorrow > 1.2x today, conside
 
 # New Modules
 from logic_utils import (
-    is_valid_temperature, 
+    is_valid_temperature,  # noqa: F401 - Re-Export fuer Tests
     is_nighttime, 
-    is_solar_window, 
+    is_solar_window,  # noqa: F401 - Re-Export fuer Tests
     ist_uebergangsmodus_aktiv, 
     get_validated_reduction,
     check_log_throttle
 )
 from safety_logic import (
-    check_sensors_and_safety, 
-    handle_critical_compressor_error, 
-    verify_compressor_running
+    check_sensors_and_safety,  # noqa: F401 - Re-Export fuer Tests
+    handle_critical_compressor_error,
+    verify_compressor_running  # noqa: F401 - Re-Export fuer Tests
 )
 
 # Export for tests that still patch control_logic
 try:
-    from telegram_api import send_telegram_message
+    from telegram_api import send_telegram_message  # noqa: F401 - Verfuegbarkeits-Probe
 except ImportError:
     pass
 
@@ -53,7 +53,6 @@ async def check_pressure_and_config(session, state, handle_pressure_check_func: 
 async def determine_mode_and_setpoints(state, t_unten, t_mittig):
     """Bestimmt den Betriebsmodus und setzt Sollwerte."""
     is_night = is_nighttime(state.config)
-    within_solar = is_solar_window(state.config, state)
     
     nacht_reduction = get_validated_reduction(state.config, "Heizungssteuerung", "NACHTABSENKUNG", 0.0) if is_night else 0.0
     urlaubs_reduction = get_validated_reduction(state.config, "Urlaubsmodus", "URLAUBSABSENKUNG", 0.0) if state.urlaubsmodus_aktiv else 0.0

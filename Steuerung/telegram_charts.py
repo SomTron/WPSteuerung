@@ -8,7 +8,7 @@ import pytz
 from datetime import datetime, timedelta
 from aiohttp import FormData
 from telegram_api import send_telegram_message
-from utils import (check_and_fix_csv_header, backup_csv, EXPECTED_CSV_HEADER,
+from utils import (check_and_fix_csv_header, EXPECTED_CSV_HEADER,
                    HEIZUNGSDATEN_CSV, relevante_csv_dateien)
 from constants import DEFAULT_TIMEZONE
 

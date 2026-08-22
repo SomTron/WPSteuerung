@@ -2,7 +2,6 @@ import pytest
 from state import State
 from unittest.mock import MagicMock
 from datetime import datetime
-import pytz
 
 class MockConfigManager:
     def __init__(self, config):

@@ -4,11 +4,9 @@ import logging
 import threading
 import signal
 import uvicorn
-import aiohttp
 import aiofiles
 import os
 from datetime import datetime, timedelta
-import pytz
 
 # Modules
 from config_manager import ConfigManager
@@ -22,7 +20,7 @@ import control_logic
 import priority_control_logic as pcl
 from telegram_handler import telegram_task
 from telegram_ui import send_welcome_message, escape_markdown
-from telegram_api import start_healthcheck_task, send_telegram_message, create_robust_aiohttp_session
+from telegram_api import start_healthcheck_task, create_robust_aiohttp_session
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app, init_api
@@ -30,7 +28,7 @@ from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
 from logic_utils import (
-    is_nighttime, is_solar_window, check_log_throttle,
+    check_log_throttle,
     evaluate_sommer_modus,
     SOMMER_AKTIVIERT, SOMMER_DEAKTIVIERT_PROGNOSE, SOMMER_DEAKTIVIERT_DATEN,
 )
@@ -136,7 +134,6 @@ async def setup_application():
     
     # 1. Config laden
     config_manager.load_config()
-    config = config_manager.get()
     
     # 2. State init
     state = State(config_manager)
@@ -149,7 +146,7 @@ async def setup_application():
 
     # 4. Hardware & Sensors init
     try:
-        import RPi.GPIO
+        import RPi.GPIO  # noqa: F401 - Pi-Erkennung
         hardware_manager = HardwareManager()
         logging.info("Using real hardware (Raspberry Pi detected)")
     except ImportError:

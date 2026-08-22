@@ -36,7 +36,7 @@ async def check_vpn_status(state):
                 state.vpn_ip = None
         else:
             if state.vpn_ip is not None:
-                logging.warning(f"VPN Status: wg0 Interface nicht gefunden oder Fehler")
+                logging.warning("VPN Status: wg0 Interface nicht gefunden oder Fehler")
             state.vpn_ip = None
             
     except Exception as e:

@@ -7,8 +7,8 @@ deren Bedingungen erfüllt sind, gewinnt.
 """
 
 import logging
-from datetime import datetime, time
-from typing import Optional, Dict, Any, Tuple, List
+from datetime import datetime
+from typing import Optional, Dict, Tuple, List
 from dataclasses import dataclass
 
 from json_config import (

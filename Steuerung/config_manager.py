@@ -1,6 +1,5 @@
 import configparser
 import logging
-from typing import Optional
 from pydantic import BaseModel, Field, ValidationError
 
 class HeizungssteuerungConfig(BaseModel):
@@ -71,7 +70,10 @@ class ConfigManager:
         parser = configparser.ConfigParser()
         parser.optionxform = str  # Behalte Groß-/Kleinschreibung bei (wichtig für Pydantic Models)
         try:
-            read_files = parser.read(self.config_path)
+            # "utf-8-sig": toleriert UTF-8 MIT Byte Order Mark (aeltere Windows-Editoren);
+            # ohne BOM-Behandlung wuerde der Name der ersten Sektion unsichtbar
+            # verfaelscht und die ganze Sektion stillschweigend ignoriert.
+            read_files = parser.read(self.config_path, encoding="utf-8-sig")
             if not read_files:
                 logging.warning(f"Konfigurationsdatei '{self.config_path}' nicht gefunden. Verwende Standardwerte.")
                 return

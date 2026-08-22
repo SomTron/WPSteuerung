@@ -1,24 +1,17 @@
-import aiohttp
 import asyncio
 import logging
 import pytz
-import os
-import io
-import pandas as pd
 from datetime import datetime, timedelta
-from utils import safe_timedelta
 from constants import DEFAULT_TIMEZONE, TELEGRAM_RATE_LIMIT_SECONDS
 
 # New Modules
 from telegram_api import (
     create_robust_aiohttp_session, 
     send_telegram_message, 
-    get_telegram_updates,
-    start_healthcheck_task
+    get_telegram_updates
 )
 from telegram_ui import (
     get_keyboard, 
-    send_welcome_message, 
     escape_markdown, 
     format_time, 
     fmt_temp, 
@@ -140,7 +133,6 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     feedinpower = solax_data.get("feedinpower", 0)
     bat_power = solax_data.get("batPower", 0)
 
-    nacht_reduction = int(config.Heizungssteuerung.NACHTABSENKUNG) if is_nighttime_func and is_nighttime_func(config) and not state.bademodus_aktiv else 0
     
     # Mode mapping for icons
     mode_name = state.control.previous_modus or "Normal"
@@ -295,7 +287,8 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
         while True:
             try:
                 if not state.bot_token or not state.chat_id:
-                    await asyncio.sleep(60); continue
+                    await asyncio.sleep(60)
+                    continue
                 updates = await get_telegram_updates(session, state.bot_token, last_update_id)
                 if updates is not None:
                     t_boiler_oben = await read_temperature_func("oben")

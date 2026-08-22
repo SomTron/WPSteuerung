@@ -1,7 +1,6 @@
 import csv
 import shutil
 import os
-import sys
 
 # Define correct header (20 columns)
 HEADER = [
@@ -66,7 +65,7 @@ def fix_csv():
                     print(f"Verwerfe Zeile {i+1}: {len(row)} Spalten (Erwartet: 20). Inhalt Start: {row[:3]}")
 
     print("-" * 30)
-    print(f"Fertig!")
+    print("Fertig!")
     print(f"Gute Zeilen übernommen: {good_lines}")
     print(f"Alte Zeilen repariert (Prognose=0.0): {fixed_lines}")
     print(f"Defekte Zeilen verworfen: {bad_lines}")

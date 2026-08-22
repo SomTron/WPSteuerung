@@ -1,0 +1,25 @@
+# Ruff-Konfiguration: Fehlerklassen mit echtem Bug-Potenzial statt Stil-Terror.
+# Bewusst konservativ gestartet, damit der Bestand nicht massenhaft umgebaut
+# werden muss; kann schrittweise verschärft werden.
+line-length = 120
+target-version = "py39"
+extend-exclude = ["archive", "simulation"]
+
+[lint]
+select = [
+    "E4",  # Import-Struktur-Fehler
+    "E7",  # vergleiche mit True/False/None, bare except-Varianten, etc.
+    "E9",  # echte Syntax-/Laufzeitfehler (SyntaxError, NameError-Risiken)
+    "F",   # Pyflakes: undefinierte Namen, unbenutzte Imports/Variablen, f-string-Probleme
+    "W605", # invalid escape sequence (biss sich gern mit Windows-Pfaden)
+]
+ignore = [
+    "E501", # Zeilenlaenge bewusst NICHT erzwungen (Altbestand, Log-Zeilen)
+    "E741", # einstellige Variablennamen (l, I) in Formelnaehe erlaubt
+    "E701", # if x: return y - einzeilige Anweisungen (41x Altbestand, spaeter umbauen)
+    "E402", # Imports nicht am Dateianfang (10x: absichtliche Lazy-Imports nach Setup)
+]
+
+[lint.per-file-ignores]
+# In Tests duerfen Zwischenergebnisse unbenutzt bleiben (Lesbarkeit der Szenarien).
+"Steuerung/tests/*" = ["F841"]

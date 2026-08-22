@@ -1,7 +1,5 @@
 import pytest
-import asyncio
 from unittest.mock import MagicMock, AsyncMock
-from datetime import datetime, timedelta
 import pytz
 from safety_logic import check_sensors_and_safety
 

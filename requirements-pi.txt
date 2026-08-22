@@ -1,0 +1,14 @@
+# Hardware-Abhaengigkeiten ausschliesslich fuer den Raspberry Pi.
+# Enthaelt via "-r" zunaechst ALLE portablen Abhaengigkeiten aus requirements.txt.
+#
+#   sudo pip install -r requirements-pi.txt
+#
+# Hinweise:
+# - RPi.GPIO / RPLCD werden in hardware.py importiert und in der Entwicklung
+#   ueber conftest.py gemockt.
+# - smbus2 ist das I2C-Backend von RPLCD (CharLCD).
+-r requirements.txt
+
+RPi.GPIO
+RPLCD
+smbus2

@@ -13,7 +13,6 @@ import pytest
 
 from utils import (
     EXPECTED_CSV_HEADER,
-    HEIZUNGSDATEN_CSV,
     relevante_csv_dateien,
     rotiere_csv_monatlich,
 )

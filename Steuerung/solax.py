@@ -3,7 +3,6 @@ import asyncio
 import aiohttp
 from datetime import datetime, timedelta
 import pytz
-import pandas as pd
 from constants import DEFAULT_TIMEZONE
 
 API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
@@ -72,7 +71,6 @@ async def fetch_solax_data(session, state):
     """
     Holt die aktuellen Solax-Daten und gibt sie mit Fallback-Werten zurück.
     """
-    now = datetime.now(pytz.timezone(DEFAULT_TIMEZONE))
     
     fallback_data = {
         "acpower": 0,
@@ -88,14 +86,6 @@ async def fetch_solax_data(session, state):
     try:
         solax_data = await get_solax_data(session, state) or fallback_data.copy()
 
-        # Upload-Zeit prüfen
-        if "utcDateTime" in solax_data:
-            try:
-                # utcDateTime format check needed? usually standard ISO or similar
-                upload_time = pd.to_datetime(solax_data["utcDateTime"]).tz_convert(DEFAULT_TIMEZONE)
-                # delay = (now - upload_time).total_seconds()
-            except Exception:
-                pass
 
         return {
             "solax_data": solax_data,

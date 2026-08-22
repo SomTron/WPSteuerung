@@ -2,6 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/SomTron/WPSteuerung/actions/workflows/ci.yml/badge.svg)](https://github.com/SomTron/WPSteuerung/actions/workflows/ci.yml)
 
 Eine umfassende Open-Source-Lösung zur Steuerung und Optimierung von Wärmepumpen/Heizungsanlagen auf Basis eines Raspberry Pi. Das System integriert Echtzeit-Sensorik, Solar-Überschuss-Optimierung (SolaxCloud) und eine komfortable Fernsteuerung via Telegram.
 
@@ -52,7 +53,7 @@ cd WPSteuerung
 # In WPSteuerung/
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r Steuerung/requirements.txt
+pip install -r requirements-pi.txt
 ```
 
 ### 3. Konfiguration

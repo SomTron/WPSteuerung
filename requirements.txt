@@ -1,7 +1,10 @@
 # Abhaengigkeiten der Heizungssteuerung (WPSteuerung)
 # Installiert via: pip install -r requirements.txt
-# Hinweis: RPi.GPIO / smbus2 / RPLCD / w1thermsensor werden nur auf dem
-# Raspberry Pi benoetigt und in Tests/Entwicklung gemockt (siehe conftest.py).
+#
+# Raspberry-Pi-spezifische Hardware-Pakete (RPi.GPIO, RPLCD, smbus2)
+# liegen separat in requirements-pi.txt, da sie ausserhalb des Pi nicht
+# installierbar sind und in Tests/Entwicklung gemockt werden (conftest.py).
+# Deployment auf dem Pi:  pip install -r requirements-pi.txt
 
 # --- Laufzeit ---
 aiofiles
@@ -13,8 +16,9 @@ uvicorn
 
 # --- Analyse/Diagnose ---
 matplotlib           # telegram_charts.py (Chart-Versand)
-pandas               # telegram_charts.py (CSV-Auswertung)
+pandas               # telegram_charts.py (CSV-Auswertung); zieht numpy/dateutil mit
 
-# --- Tests ---
+# --- Tests / Werkzeuge ---
 pytest
 pytest-asyncio
+ruff                 # Linter, auch Bestandteil der CI

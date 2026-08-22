@@ -2,12 +2,10 @@ import pandas as pd
 import logging
 import os
 import sys
-from datetime import datetime
-import pytz
 
 # Add current dir to path to import local utils
 sys.path.append(os.getcwd())
-from utils import check_and_fix_csv_header, EXPECTED_CSV_HEADER
+from utils import check_and_fix_csv_header
 
 # Configure logging to see what check_and_fix_csv_header does
 logging.basicConfig(level=logging.INFO)

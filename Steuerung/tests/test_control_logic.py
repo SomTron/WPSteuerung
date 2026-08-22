@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 import pytz
 import sys
 import os
@@ -9,7 +9,6 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from control_logic import determine_mode_and_setpoints, check_pressure_and_config
-import configparser
 
 @pytest.fixture
 def mock_state():

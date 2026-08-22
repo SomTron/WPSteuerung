@@ -37,3 +37,6 @@ Steuerung/sonnen_prognose.csv
 .antigravity/
 *.pyc
 __pycache__/
+
+# Lokale CI-Testumgebung (versehentlich erzeugt)
+.ci_venv/

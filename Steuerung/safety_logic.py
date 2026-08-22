@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, Callable
+from typing import Callable
 from telegram_api import send_telegram_message
 from logic_utils import is_valid_temperature, check_log_throttle
 from utils import safe_timedelta

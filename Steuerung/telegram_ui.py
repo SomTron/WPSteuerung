@@ -1,5 +1,4 @@
-import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from telegram_api import send_telegram_message
 
 def get_keyboard(state):

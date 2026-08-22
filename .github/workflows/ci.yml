@@ -33,6 +33,13 @@ jobs:
           echo "--- installierte Versionen ---"
           pip freeze
 
+      - name: Linter (Ruff)
+        # Regelwerk siehe ruff.toml: Fehlerklassen mit echtem Bug-Potenzial.
+        # Laeuft VOR den Tests, damit Import-/Namensfehler schnell auffallen.
+        run: |
+          python -m ruff check Steuerung
+          echo "ruff OK"
+
       - name: Syntaxcheck aller Steuerungsmodule (compileall)
         # archive/ und simulation/ sind historisch bzw. manuell und werden
         # bewusst nicht geprueft; Tests laufen unten ohnehin via pytest.

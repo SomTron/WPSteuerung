@@ -1,4 +1,4 @@
-﻿"""
+"""
 Prioritaetenbasierte Steuerungslogik (Pareto-optimiert).
 
 Ersetzt die modusbasierte Logik durch eine Regelengine mit Prioritaeten.
@@ -7,21 +7,16 @@ Die Regel hoechster Prioritaet bestimmt das Schaltverhalten.
 """
 
 import logging
-import asyncio
 from datetime import datetime, timedelta
-from typing import Callable, Optional, List
+from typing import Callable
 
 from utils import safe_timedelta
 from constants import (
     CONFIG_CHECK_INTERVAL_SEC,
-    COMPRESSOR_VERIFICATION_ERROR_THRESHOLD,
-    TEMP_VERD_MIN_VALID, TEMP_VERD_MAX_VALID,
 )
-from logic_utils import is_valid_temperature, check_log_throttle
+from logic_utils import check_log_throttle
 from safety_logic import (
-    check_sensors_and_safety,
     handle_critical_compressor_error,
-    verify_compressor_running,
 )
 from json_config import WPSteuerungConfig
 from priority_control import (
@@ -31,7 +26,7 @@ from priority_control import (
 )
 
 try:
-    from telegram_api import send_telegram_message
+    from telegram_api import send_telegram_message  # noqa: F401 - Verfuegbarkeits-Probe
 except ImportError:
     pass
 

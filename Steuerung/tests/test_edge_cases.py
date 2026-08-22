@@ -1,11 +1,9 @@
 import pytest
-import asyncio
 from datetime import datetime, timedelta, time
 import pytz
 from unittest.mock import Mock, patch, MagicMock
 
 import control_logic
-import logic_utils
 from hardware_mock import MockHardwareManager
 
 
