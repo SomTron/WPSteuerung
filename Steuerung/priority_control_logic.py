@@ -318,9 +318,14 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
 
 async def handle_compressor_off(
     state, session, regelfuehler, ausschaltpunkt, min_laufzeit,
-    t_oben, set_kompressor_status_func: Callable
+    t_oben, set_kompressor_status_func: Callable, regel_name=None
 ):
-    """Prueft Abschaltbedingungen und schaltet aus."""
+    """Prueft Abschaltbedingungen und schaltet aus.
+
+    regel_name: Name der Gewinner-Regel, die explizit AUS entschieden hat.
+    None heisst: gar keine Regel aktiv (z.B. wegen Nachtsperre). Dient der
+    sauberen Trennung in Log und Blocking-Reason - frueher lief beides unter
+    "Keine Regel aktiv" und verschleierte die eigentliche Entscheidung."""
     if not state.control.kompressor_ein:
         return False
 
@@ -339,22 +344,31 @@ async def handle_compressor_off(
     # noch unter dem ausschaltpunkt liegt.
     should_on = getattr(state.control, '_soll_einschalten', False)
     if not should_on:
+        # Zwei Faelle, die hier sauber getrennt werden: Eine Regel hat explizit
+        # AUS entschieden (regel_name gesetzt) ODER gar keine Regel ist aktiv
+        # (regel_name None, z.B. Nachtsperre). Verhalten identisch, Text ehrlich.
+        if regel_name is not None:
+            kontext = f"Regel '{regel_name}' sagt AUS"
+        else:
+            kontext = "Keine Regel aktiv"
+
         # Pruefe ob wir schon laenger als die Mindestlaufzeit laufen
         elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
         if elapsed >= min_laufzeit:
             if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
                 state.control.blocking_reason = None
-                logging.info(
-                    f"Keine Regel aktiv: Kompressor AUS. "
-                    f"Laufzeit: {elapsed}"
-                )
+                logging.info(f"{kontext}: Kompressor AUS. Laufzeit: {elapsed}")
                 return True
         else:
             remaining_min = int((min_laufzeit - elapsed).total_seconds() // 60)
-            state.control.blocking_reason = f"Keine Regel aktiv, warte auf Mindestlaufzeit (noch {remaining_min}m)"
-            if check_log_throttle(state, "log_min_laufzeit_keine_regel", interval_minutes=5):
+            state.control.blocking_reason = (
+                f"{kontext}, warte auf Mindestlaufzeit (noch {remaining_min}m)"
+            )
+            throttle_key = ("log_min_laufzeit_regel_aus" if regel_name is not None
+                            else "log_min_laufzeit_keine_regel")
+            if check_log_throttle(state, throttle_key, interval_minutes=5):
                 logging.info(
-                    f"Keine Regel aktiv, aber Mindestlaufzeit noch nicht erreicht. "
+                    f"{kontext}, aber Mindestlaufzeit noch nicht erreicht. "
                     f"Laufzeit: {elapsed}"
                 )
         return False

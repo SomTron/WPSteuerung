@@ -437,7 +437,12 @@ async def run_logic_step(session, state, learning_engine=None):
             # 5. Schaltentscheidung
             should_on = result.get("soll_einschalten", False)
             state.control._soll_einschalten = should_on
-            
+
+            # Gewinner-Regel fuer eindeutige AUS-Logs durchreichen
+            # (unterscheidet "Regel X sagt AUS" von "keine Regel aktiv")
+            gewinner = result.get("gewinner_ergebnis")
+            gewinner_name = gewinner.name if gewinner is not None else None
+
             regelfuehler = result["regelfuehler"]
             ausschaltpunkt = state.control.aktueller_ausschaltpunkt
             einschaltpunkt = state.control.aktueller_einschaltpunkt
@@ -446,7 +451,8 @@ async def run_logic_step(session, state, learning_engine=None):
                 # Kompressor laeuft: Ausschalten pruefen
                 await pcl.handle_compressor_off(
                     state, session, regelfuehler, ausschaltpunkt,
-                    state.min_laufzeit, state.sensors.t_oben, set_kompressor_status
+                    state.min_laufzeit, state.sensors.t_oben, set_kompressor_status,
+                    regel_name=gewinner_name
                 )
             else:
                 # Kompressor aus: Einschalten pruefen
