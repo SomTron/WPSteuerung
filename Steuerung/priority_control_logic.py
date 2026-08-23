@@ -111,9 +111,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # jeden Tag auf 44Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
     # Der Offset (default -3Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
     if hasattr(state, 'sommer_modus_aktiv') and state.sommer_modus_aktiv:
-        offset = effektive_config.sommer_modus.temperatur_offset_c
-        effektive_config.abweichung.solltemperatur_c += offset
-        logging.debug(f"Sommer-Modus aktiv: Solltemperatur {offset:+.1f}C auf {effektive_config.abweichung.solltemperatur_c}C")
+        wende_sommer_offset_an(effektive_config)
+        logging.debug(
+            f"Sommer-Modus aktiv: Abweichungs-Soll {effektive_config.abweichung.solltemperatur_c:.1f}C, "
+            f"PV-Ausschaltpunkte "
+            f"{', '.join(f'{r.name}:{r.ausschalten_bei_c:.0f}C' for r in effektive_config.pv_regeln)}"
+        )
 
     # Forecast-Daten aus State holen
     # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
@@ -186,6 +189,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         now=datetime.now(state.local_tz),
         forecast_wh_qm=forecast_wh_qm,
         forecast_today_wh_qm=forecast_today_wh,
+        soc=getattr(state.solar, 'soc', None),
+        battery_power=getattr(state.solar, 'batpower', None),
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
         learned_target_hour=gelernte_zielzeit,
@@ -281,6 +286,32 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     return res
 
 
+def wende_sommer_offset_an(config) -> None:
+    """Wendet die Sommermodus-Absenkungen auf eine (Kopie-)Config an.
+
+    Hintergrund (Nutzeranforderung): Bei mehrtaetig gutem PV-Wetter soll der
+    Boiler-Buffer bewusst NICHT voll aufgebaut werden - die maximale
+    Temperatur wird minimiert, da morgen wieder genug PV-Strom kommt.
+
+    - abweichung.solltemperatur_c += temperatur_offset_c (bisheriges Verhalten)
+    - NEU: PV-Regeln + AdaptivePV: ausschalten_bei_c += pv_ausschalt_offset_c
+      (PV-Shaping laeuft bei Dauer-Sonne z.B. nur bis 46 statt 48C),
+      geklemmt, damit die Einschalthysterese erhalten bleibt.
+    """
+    offset = config.sommer_modus.temperatur_offset_c
+    config.abweichung.solltemperatur_c += offset
+
+    pv_offset = config.sommer_modus.pv_ausschalt_offset_c
+    for pv in config.pv_regeln:
+        neuer_aus = pv.ausschalten_bei_c + pv_offset
+        # Klemme: Ausschaltpunkt bleibt mind. 2K ueber dem Einschaltpunkt
+        pv.ausschalten_bei_c = max(neuer_aus, pv.einschalten_bei_c + 2.0)
+
+    apv = config.adaptive_pv
+    # Absoluter Boden 42C, damit die Regel nicht wirkungslos/kippelig wird
+    apv.tmax_c = max(apv.tmax_c + pv_offset, 42.0)
+
+
 def _extract_einschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) -> float:
     """Extrahiert den Einschaltpunkt aus dem Regel-Ergebnis fuer Statusanzeige."""
     name = ergebnis.name
@@ -302,7 +333,13 @@ def _extract_einschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
         return config.adaptive_pv.base_threshold_watt
     elif name == "CalcStart":
         return config.calculated_start.solltemperatur_c
-    
+    elif name.startswith("MinTemp-"):
+        for eintrag in config.mindest_temp.eintraege:
+            if name == f"MinTemp-{eintrag.name}":
+                return eintrag.min_temp_c
+    elif name == "Batterie":
+        return config.batterie.einschalten_bei_c
+
     return config.sicherheit.max_temp_c
 
 
@@ -326,7 +363,13 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
         return config.adaptive_pv.tmax_c
     elif name == "CalcStart":
         return config.calculated_start.tmax_c
-    
+    elif name.startswith("MinTemp-"):
+        for eintrag in config.mindest_temp.eintraege:
+            if name == f"MinTemp-{eintrag.name}":
+                return eintrag.min_temp_c + eintrag.hysterese_k
+    elif name == "Batterie":
+        return config.batterie.ausschalten_bei_c
+
     return config.sicherheit.max_temp_c
 
 

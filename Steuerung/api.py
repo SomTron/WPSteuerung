@@ -209,6 +209,23 @@ def get_status():
             "aktiv": pc.wochenende.aktiv,
             "fruehestens_uhr": pc.wochenende.fruehestens_uhr,
         })
+        # MindestTemp-Garantien
+        for _mt in pc.mindest_temp.eintraege:
+            priority_info["regeln"].append({
+                "name": f"MinTemp-{_mt.name}", "typ": "mindesttemp",
+                "prio": pc.mindest_temp.prioritaet,
+                "sensor": _mt.temperaturfuehler,
+                "min_c": _mt.min_temp_c,
+                "start": _mt.start_uhr,
+                "ende": _mt.ende_uhr,
+            })
+        # Batterie-Regel
+        priority_info["regeln"].append({
+            "name": "Batterie", "typ": "batterie", "prio": pc.batterie.prioritaet,
+            "aktiv": pc.batterie.aktiv,
+            "min_soc": pc.batterie.min_soc_prozent,
+            "max_netzbezug_w": pc.batterie.max_netzbezug_watt,
+        })
         # Forecast-Regel (Prognose)
         priority_info["regeln"].append({
             "name": "Forecast", "typ": "forecast", "prio": pc.forecast.prioritaet,

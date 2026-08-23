@@ -102,9 +102,41 @@
     "aktiv": true,
     "mindest_prognose_wh": 2000,
     "benoetigte_tage": 3,
-    "temperatur_offset_c": -3.0
+    "temperatur_offset_c": -3.0,
+    "pv_ausschalt_offset_c": -2.0
   },
   "bademodus": {
     "solltemperatur_erhoehung_c": 3.0
+  },
+  "mindest_temp": {
+    "aktiv": true,
+    "prioritaet": 65,
+    "eintraege": [
+      {
+        "name": "Mittag-Oben",
+        "temperaturfuehler": "oben",
+        "min_temp_c": 40.0,
+        "start_uhr": 11,
+        "ende_uhr": 16,
+        "hysterese_k": 2.0
+      },
+      {
+        "name": "Abend-Mitte",
+        "temperaturfuehler": "mitte",
+        "min_temp_c": 40.0,
+        "start_uhr": 17,
+        "ende_uhr": 22,
+        "hysterese_k": 2.0
+      }
+    ]
+  },
+  "batterie": {
+    "aktiv": true,
+    "prioritaet": 75,
+    "temperaturfuehler": "unten",
+    "einschalten_bei_c": 42.0,
+    "ausschalten_bei_c": 47.0,
+    "min_soc_prozent": 90.0,
+    "max_netzbezug_watt": -50.0
   }
 }

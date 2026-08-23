@@ -61,6 +61,49 @@ class KomfortConfig(BaseModel):
     min_pv_fuer_komfort_watt: float = Field(default=50.0, description="Minimale PV für Komfort-Heizen (W)")
 
 
+class MindestTempEintrag(BaseModel):
+    """Eine Mindest-Temperatur-Garantie fuer einen Fuehler in einem Zeitfenster."""
+    name: str = Field(default="Eintrag", description="Anzeigename (z.B. 'Mittag-Oben')")
+    temperaturfuehler: str = Field(default="oben", description="'oben', 'mitte' oder 'unten'")
+    min_temp_c: float = Field(default=40.0, description="Mindesttemperatur (°C)")
+    start_uhr: int = Field(default=11, description="Fenster-Start (Stunde, 0-23)")
+    ende_uhr: int = Field(default=16, description="Fenster-Ende (Stunde, exklusiv)")
+    hysterese_k: float = Field(default=2.0, description="Ausschalten erst bei min_temp_c + K")
+
+
+class MindestTempConfig(BaseModel):
+    """Mindest-Temperatur-Garantien: Der Boiler darf zu definierten Zeiten
+    nicht zu kalt sein (Komfort-Vorrang vor Sparziele), auch waehrend der
+    Nachtsperre - innerhalb der konfigurierten Fenster."""
+    aktiv: bool = Field(default=True, description="Regel aktiv")
+    prioritaet: int = Field(default=65, description="Priorität (ueber Komfort, unter PV)")
+    eintraege: List[MindestTempEintrag] = Field(
+        default_factory=lambda: [
+            MindestTempEintrag(name="Mittag-Oben", temperaturfuehler="oben",
+                               min_temp_c=40.0, start_uhr=11, ende_uhr=16),
+            MindestTempEintrag(name="Abend-Mitte", temperaturfuehler="mitte",
+                               min_temp_c=40.0, start_uhr=17, ende_uhr=22),
+        ],
+        description="Garantierte Mindesttemperaturen",
+    )
+
+
+class BatterieConfig(BaseModel):
+    """Batterie-Regel: Heizen mit Hausbatterie-Strom, solange die Batterie
+    genug geladen ist und das Haus keinen Strom aus dem Netz bezieht.
+    Priorisierung: PV-Direkt > Batterie > Netz."""
+    aktiv: bool = Field(default=True, description="Regel aktiv")
+    prioritaet: int = Field(default=75, description="Priorität (unter den PV-Regeln)")
+    temperaturfuehler: str = Field(default="unten", description="Regelfühler")
+    einschalten_bei_c: float = Field(default=42.0, description="Einschalten bei (°C)")
+    ausschalten_bei_c: float = Field(default=47.0, description="Ausschalten bei (°C)")
+    min_soc_prozent: float = Field(default=90.0, description="Batterie mind. so voll (%)")
+    max_netzbezug_watt: float = Field(
+        default=-50.0,
+        description="Heizen nur wenn Einspeisung >= Wert (W); <0 = kleiner Netzkauftoleranz",
+    )
+
+
 class ZeitfensterConfig(BaseModel):
     """Zeitfenster-Regel: Heizt zu bestimmten Uhrzeiten."""
     aktiv: bool = Field(default=True, description="Regel aktiv")
@@ -141,6 +184,10 @@ class SommerModusConfig(BaseModel):
     mindest_prognose_wh: float = Field(default=2000.0, description="Mindest-Prognose pro Tag (Wh/qm)")
     benoetigte_tage: int = Field(default=3, description="Wieviele Tage hintereinander gut sein muessen")
     temperatur_offset_c: float = Field(default=-3.0, description="Temperatur-Offset (°C)")
+    pv_ausschalt_offset_c: float = Field(
+        default=-2.0,
+        description="Zusaetzlicher Offset auf die PV-Ausschaltpunkte (Buffer nicht voll aufladen)",
+    )
 
 
 class WPSteuerungConfig(BaseModel):
@@ -159,6 +206,8 @@ class WPSteuerungConfig(BaseModel):
     calculated_start: CalculatedStartConfig = Field(default_factory=CalculatedStartConfig)
     sommer_modus: SommerModusConfig = Field(default_factory=SommerModusConfig)
     bademodus: BademodusConfig = Field(default_factory=BademodusConfig)
+    mindest_temp: MindestTempConfig = Field(default_factory=MindestTempConfig)
+    batterie: BatterieConfig = Field(default_factory=BatterieConfig)
 
 
 class WPSteuerungConfigManager:

@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from json_config import (
     WPSteuerungConfig, PVRegel, KomfortConfig,
     ZeitfensterConfig, AbweichungConfig, WochenendeConfig,
-    ForecastConfig, AdaptivePVConfig, CalculatedStartConfig
+    ForecastConfig, AdaptivePVConfig, CalculatedStartConfig,
+    MindestTempConfig, BatterieConfig
 )
 
 
@@ -192,6 +193,189 @@ def evaluate_pv_regel(
     # 5. Keine Bedingung erfuellt
     result.einschalten = None
     result.grund = f"Keine Bedingung erfuellt (PV={pv_leistung:.0f}W, {sensor_name}={temp:.1f}C)"
+    return result
+
+
+def evaluate_mindesttemp(
+    mindest_cfg: MindestTempConfig,
+    temp_dict: Dict[str, Optional[float]],
+    now_hour: int,
+    nachtsperre_start: int,
+    nachtsperre_ende: int,
+) -> List[RegelErgebnis]:
+    """Mindest-Temperatur-Garantien pro Fuehler und Zeitfenster.
+
+    Zweck: Der Boiler darf zu definierten Zeiten nicht zu kalt sein
+    (z.B. oben mittags >= 40C, mitte am Abend >= 40C zum Duschen).
+    Innerhalb des Fensters gilt die Garantie AUCH waehrend der Nachtsperre -
+    genau dafuer ist sie da. Ausserhalb der Fenster entscheidet wie ueblich
+    das Spar-Prioritaetensystem.
+    """
+    ergebnisse = []
+    nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
+
+    for eintrag in mindest_cfg.eintraege:
+        name = f"MinTemp-{eintrag.name}"
+        result = RegelErgebnis(
+            name=name,
+            prioritaet=mindest_cfg.prioritaet,
+            aktiv=False,
+        )
+
+        if not mindest_cfg.aktiv:
+            result.grund = "MindestTemp-Regel inaktiv"
+            ergebnisse.append(result)
+            continue
+
+        if not _is_zeitfenster_active(now_hour, eintrag.start_uhr, eintrag.ende_uhr):
+            result.grund = f"{eintrag.name}: auserhalb Fenster {eintrag.start_uhr}-{eintrag.ende_uhr} Uhr"
+            ergebnisse.append(result)
+            continue
+
+        temp = _parse_sensor(temp_dict, eintrag.temperaturfuehler)
+        if temp is None:
+            result.grund = f"{eintrag.name}: Sensor '{eintrag.temperaturfuehler}' nicht verfuegbar"
+            ergebnisse.append(result)
+            continue
+
+        result.aktiv = True
+        aus_schwelle = eintrag.min_temp_c + eintrag.hysterese_k
+
+        # WICHTIG: Diese Regel ist rein ADDITIV - sie kann nur EINSCHALTEN
+        # (Garantieverletzung), aber niemals blockieren. Ein explizites AUS
+        # wuerde mit ihrer hohen Prioritaet Heizwuensche anderer Regeln
+        # (PV/Abweichung/CalcStart) ungewollt abschneiden. Ist die Garantie
+        # erfuellt, tritt die Regel therefore stumm zurueck (einschalten=None).
+        # Die Ausschaltung nach einem Garantie-Einschalten uebernimmt der
+        # normale Setpoint (min_temp_c + hysterese_k via _extract_ausschaltpunkt).
+
+        # EINSCHALTEN: unter der Mindesttemperatur (garantiert auch in Nachtsperre)
+        if temp < eintrag.min_temp_c:
+            result.einschalten = True
+            hinweis = " [Nachtsperre ueberschrieben]" if nachtsperre else ""
+            result.grund = (
+                f"MindestTemp: {eintrag.temperaturfuehler} {temp:.1f}C < "
+                f"{eintrag.min_temp_c}C -> EIN{hinweis}"
+            )
+            ergebnisse.append(result)
+            continue
+
+        # Hysterese-Zone bzw. Garantie erfuellt -> keine Aktion
+        if temp >= aus_schwelle:
+            grund_text = (
+                f"MindestTemp: {eintrag.temperaturfuehler} {temp:.1f}C >= "
+                f"{aus_schwelle:.1f}C ({eintrag.min_temp_c}C+{eintrag.hysterese_k}K) "
+                f"-> Garantie erfuellt"
+            )
+        else:
+            grund_text = (
+                f"MindestTemp: {eintrag.temperaturfuehler} {temp:.1f}C in Hysterese "
+                f"({eintrag.min_temp_c}-{aus_schwelle:.1f}C)"
+            )
+        result.einschalten = None
+        result.grund = grund_text
+        ergebnisse.append(result)
+
+    return ergebnisse
+
+
+def evaluate_batterie(
+    batt_cfg: BatterieConfig,
+    temp_dict: Dict[str, Optional[float]],
+    feedin_watt: float,
+    soc: Optional[float],
+    kompressor_ein: bool,
+    now_hour: int,
+    nachtsperre_start: int,
+    nachtsperre_ende: int,
+) -> RegelErgebnis:
+    """Batterie-Regel: Heizen mit Hausbatterie statt Netzstrom.
+
+    Priorisierung PV-Direkt > Batterie > Netz:
+    - Die PV-Regeln feuern bei echter Netzeinspeisung (feedinpower > Schwelle).
+    - Diese Regel erlaubt zusaetzlich Heizen, WENN die Batterie genug geladen
+      ist UND das Haus nicht aus dem Netz bezieht (feedinpower >= Toleranz).
+      Dann deckt die Entladung den WP-Verbrauch, ohne Netzkauf zu verursachen.
+    - Respektiert die Nachtsperre (nachts so wenig wie moeglich laufen).
+    """
+    result = RegelErgebnis(
+        name="Batterie",
+        prioritaet=batt_cfg.prioritaet,
+        aktiv=batt_cfg.aktiv,
+    )
+
+    if not batt_cfg.aktiv:
+        result.grund = "Batterie-Regel inaktiv"
+        return result
+
+    if soc is None:
+        result.aktiv = False
+        result.grund = "SOC nicht verfuegbar"
+        return result
+
+    nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
+    if nachtsperre:
+        result.aktiv = False
+        result.grund = "Nachtsperre aktiv (kein Batterie-Heizen)"
+        return result
+
+    temp = _parse_sensor(temp_dict, batt_cfg.temperaturfuehler)
+    if temp is None:
+        result.aktiv = False
+        result.grund = f"Sensor '{batt_cfg.temperaturfuehler}' nicht verfuegbar"
+        return result
+
+    # 1. AUSSCHALTEN: Ziel erreicht (immer zuerst)
+    if temp >= batt_cfg.ausschalten_bei_c:
+        result.einschalten = False
+        result.grund = (
+            f"Batterie: {batt_cfg.temperaturfuehler} {temp:.1f}C >= "
+            f"{batt_cfg.ausschalten_bei_c}C -> AUS"
+        )
+        return result
+
+    strom_ok = (
+        soc >= batt_cfg.min_soc_prozent
+        and feedin_watt >= batt_cfg.max_netzbezug_watt
+    )
+
+    # 2. WEITERLAUFEN: laeuft schon, Batterie traegt es weiter
+    if kompressor_ein and strom_ok and temp > batt_cfg.einschalten_bei_c:
+        result.einschalten = True
+        result.grund = (
+            f"Batterie-Weiterlauf: SOC {soc:.0f}% >= {batt_cfg.min_soc_prozent:.0f}%, "
+            f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
+            f"{batt_cfg.temperaturfuehler} {temp:.1f}C bis {batt_cfg.ausschalten_bei_c}C"
+        )
+        return result
+
+    # 3. EINSCHALTEN: genug Batterie, kein Netzbezug, Boiler kalt genug
+    if strom_ok and temp <= batt_cfg.einschalten_bei_c:
+        result.einschalten = True
+        result.grund = (
+            f"Batterie: SOC {soc:.0f}% >= {batt_cfg.min_soc_prozent:.0f}%, "
+            f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
+            f"{batt_cfg.temperaturfuehler} {temp:.1f}C <= {batt_cfg.einschalten_bei_c}C -> EIN"
+        )
+        return result
+
+    # 4. Bedingungen nicht erfuellt - Grund benennen
+    if soc < batt_cfg.min_soc_prozent:
+        result.grund = (
+            f"Batterie: SOC {soc:.0f}% < {batt_cfg.min_soc_prozent:.0f}% "
+            f"(Batterie-Schonung) -> keine Aktion"
+        )
+    elif feedin_watt < batt_cfg.max_netzbezug_watt:
+        result.grund = (
+            f"Batterie: Netzbezug {feedin_watt:.0f}W < "
+            f"{batt_cfg.max_netzbezug_watt:.0f}W (kein Netzstrom!) -> keine Aktion"
+        )
+    else:
+        result.grund = (
+            f"Batterie: {batt_cfg.temperaturfuehler} {temp:.1f}C in Hysterese "
+            f"({batt_cfg.einschalten_bei_c}-{batt_cfg.ausschalten_bei_c}C), "
+            f"SOC {soc:.0f}% -> keine Aktion"
+        )
     return result
 
 
@@ -807,6 +991,19 @@ def bewerte_alle_regeln(
     )
     ergebnisse.append(ergebnis)
     
+    # 2b. Mindest-Temperatur-Garantien (jeder Eintrag ein Ergebnis)
+    for min_ergebnis in evaluate_mindesttemp(
+        config.mindest_temp, temp_dict, now_hour, nachtsperre_start, nachtsperre_ende
+    ):
+        ergebnisse.append(min_ergebnis)
+
+    # 2c. Batterie-Regel (PV-Direkt > Batterie > Netz)
+    ergebnis = evaluate_batterie(
+        config.batterie, temp_dict, pv_leistung, soc, kompressor_ein,
+        now_hour, nachtsperre_start, nachtsperre_ende,
+    )
+    ergebnisse.append(ergebnis)
+
     # 3. Zeitfenster-Regel
     ergebnis = evaluate_zeitfenster(
         config.zeitfenster, temp_dict, pv_leistung, now_hour
