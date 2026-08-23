@@ -196,12 +196,16 @@ class LearningEngine:
 
     def get_info(self) -> Dict:
         """Übersicht der gelernten Werte für API/UI."""
+        fenster = self.get_learned_evening_window()
         return {
             "heat_rates": self.data.heat_rates,
             "learned_target_hour": self.get_learned_target_hour(),
             "target_hour_samples": self.data.target_hour_samples,
             "total_cycles": len(self.data.cycles),
             "total_usage_events": len(self.data.usage_events),
+            # Gelerntes Abend-Zapffenster [frueheste_h, spaeteste_h] oder None
+            # (Grundlage fuer die dynamischen MindestTemp-Fenster)
+            "learned_evening_window": list(fenster) if fenster else None,
         }
 
     # ── Zyklus-Update ──────────────────────────────────────

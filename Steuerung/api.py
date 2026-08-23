@@ -308,6 +308,7 @@ def get_status():
             "target_hour_samples": 0,
             "total_cycles": 0,
             "total_usage_events": 0,
+            "learned_evening_window": None,
         },
                 "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund or "",
