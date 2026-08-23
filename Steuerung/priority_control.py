@@ -15,7 +15,7 @@ from json_config import (
     WPSteuerungConfig, PVRegel, KomfortConfig,
     ZeitfensterConfig, AbweichungConfig, WochenendeConfig,
     ForecastConfig, AdaptivePVConfig, CalculatedStartConfig,
-    MindestTempConfig, BatterieConfig
+    MindestTempConfig, BatterieConfig, EinspeisungConfig
 )
 
 
@@ -202,6 +202,7 @@ def evaluate_mindesttemp(
     now_hour: int,
     nachtsperre_start: int,
     nachtsperre_ende: int,
+    learned_evening_window: Optional[Tuple[float, float]] = None,
 ) -> List[RegelErgebnis]:
     """Mindest-Temperatur-Garantien pro Fuehler und Zeitfenster.
 
@@ -227,8 +228,27 @@ def evaluate_mindesttemp(
             ergebnisse.append(result)
             continue
 
-        if not _is_zeitfenster_active(now_hour, eintrag.start_uhr, eintrag.ende_uhr):
-            result.grund = f"{eintrag.name}: auserhalb Fenster {eintrag.start_uhr}-{eintrag.ende_uhr} Uhr"
+        # Zeitfenster: statisch aus Config oder dynamisch gelernt?
+        start_uhr = eintrag.start_uhr
+        ende_uhr = eintrag.ende_uhr
+        fenster_hinweis = ""
+        if eintrag.fenster_aus_lernen and learned_evening_window is not None:
+            l_start, l_ende = learned_evening_window
+            # Gelerntes Fenster mit Sicherheitsgrenzen klemmen:
+            # max. 2h frueher Start, max. 1h spaeteres Ende als konfiguriert.
+            import math
+            start_uhr = max(eintrag.start_uhr - 2, int(math.floor(l_start)))
+            ende_uhr = min(eintrag.ende_uhr + 1, int(math.ceil(l_ende)))
+            ende_uhr = max(ende_uhr, start_uhr + 1)
+            fenster_hinweis = (
+                f" [gelernt {l_start:.1f}-{l_ende:.1f}h -> {start_uhr}-{ende_uhr} Uhr]"
+            )
+
+        if not _is_zeitfenster_active(now_hour, start_uhr, ende_uhr):
+            result.grund = (
+                f"{eintrag.name}: auserhalb Fenster {start_uhr}-{ende_uhr} Uhr"
+                f"{fenster_hinweis}"
+            )
             ergebnisse.append(result)
             continue
 
@@ -255,7 +275,7 @@ def evaluate_mindesttemp(
             hinweis = " [Nachtsperre ueberschrieben]" if nachtsperre else ""
             result.grund = (
                 f"MindestTemp: {eintrag.temperaturfuehler} {temp:.1f}C < "
-                f"{eintrag.min_temp_c}C -> EIN{hinweis}"
+                f"{eintrag.min_temp_c}C -> EIN{hinweis}{fenster_hinweis}"
             )
             ergebnisse.append(result)
             continue
@@ -376,6 +396,85 @@ def evaluate_batterie(
             f"({batt_cfg.einschalten_bei_c}-{batt_cfg.ausschalten_bei_c}C), "
             f"SOC {soc:.0f}% -> keine Aktion"
         )
+    return result
+
+
+def evaluate_einspeisung(
+    einsp_cfg: EinspeisungConfig,
+    temp_dict: Dict[str, Optional[float]],
+    feedin_watt: float,
+    kompressor_ein: bool,
+    now_hour: int,
+    nachtsperre_start: int,
+    nachtsperre_ende: int,
+) -> RegelErgebnis:
+    """Einspeise-Begrenzungs-Regel (PV-Shaping am Netzlimit).
+
+    Zweck (Betriebsvorgabe): Es darf nicht mehr als ~7500W eingespeist
+    werden. Liegt die Einspeisung an dieser Grenze, ist der Strom fuer die
+    WP praktisch gratis bzw. wuerde sonst gedrosselt - idealer Heizzeitraum.
+
+    Logik:
+    - EIN sobald feedinpower >= einspeisegrenze_watt und Fuehler < ausschalten_bei_c
+    - WEITERLAUFEN solange feedinpower >= weiterlauf_ab_watt (Abschlag, da die
+      WP selbst ~600W zieht und die Einspeisung beim Start einbricht)
+    - AUS wenn Fuehler >= ausschalten_bei_c
+    """
+    result = RegelErgebnis(
+        name="Einspeisung",
+        prioritaet=einsp_cfg.prioritaet,
+        aktiv=einsp_cfg.aktiv,
+    )
+
+    if not einsp_cfg.aktiv:
+        result.grund = "Einspeisung-Regel inaktiv"
+        return result
+
+    nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
+    if nachtsperre:
+        result.aktiv = False
+        result.grund = "Nachtsperre aktiv"
+        return result
+
+    temp = _parse_sensor(temp_dict, einsp_cfg.temperaturfuehler)
+    if temp is None:
+        result.aktiv = False
+        result.grund = f"Sensor '{einsp_cfg.temperaturfuehler}' nicht verfuegbar"
+        return result
+
+    # 1. AUSSCHALTEN: Ziel erreicht (immer zuerst)
+    if temp >= einsp_cfg.ausschalten_bei_c:
+        result.einschalten = False
+        result.grund = (
+            f"Einspeisung: {einsp_cfg.temperaturfuehler} {temp:.1f}C >= "
+            f"{einsp_cfg.ausschalten_bei_c}C -> AUS (Einspeisung {feedin_watt:.0f}W)"
+        )
+        return result
+
+    # 2. WEITERLAUFEN: laeuft schon, Ueberschuss traegt weiter
+    if kompressor_ein and feedin_watt >= einsp_cfg.weiterlauf_ab_watt and temp > 0:
+        result.einschalten = True
+        result.grund = (
+            f"PV-Shaping Weiterlauf: Einspeisung {feedin_watt:.0f}W >= "
+            f"{einsp_cfg.weiterlauf_ab_watt:.0f}W (Grenze {einsp_cfg.einspeisegrenze_watt:.0f}W), "
+            f"{einsp_cfg.temperaturfuehler} {temp:.1f}C bis "
+            f"{einsp_cfg.ausschalten_bei_c}C"
+        )
+        return result
+
+    # 3. EINSCHALTEN: Einspeisung am/am ueber dem Netzlimit
+    if feedin_watt >= einsp_cfg.einspeisegrenze_watt:
+        result.einschalten = True
+        result.grund = (
+            f"PV-Shaping: Einspeisung {feedin_watt:.0f}W >= Grenze "
+            f"{einsp_cfg.einspeisegrenze_watt:.0f}W -> EIN "
+            f"({einsp_cfg.temperaturfuehler} {temp:.1f}C)"
+        )
+        return result
+
+    result.grund = (
+        f"Einspeisung {feedin_watt:.0f}W < {einsp_cfg.einspeisegrenze_watt:.0f}W -> keine Aktion"
+    )
     return result
 
 
@@ -953,6 +1052,7 @@ def bewerte_alle_regeln(
     forecast_today_wh_qm: Optional[float] = None,
     soc: Optional[float] = None,
     battery_power: Optional[float] = None,
+    learned_evening_window: Optional[Tuple[float, float]] = None,
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
@@ -976,7 +1076,14 @@ def bewerte_alle_regeln(
     ergebnis = evaluate_wochenende(config.wochenende, now)
     ergebnisse.append(ergebnis)
     
-    # 1. PV-Regeln bewerten
+    # 1. Einspeise-Begrenzung (PV-Shaping am Netzlimit, hoechste Heizen-Prioritaet)
+    ergebnis = evaluate_einspeisung(
+        config.einspeisung, temp_dict, pv_leistung, kompressor_ein,
+        now_hour, nachtsperre_start, nachtsperre_ende
+    )
+    ergebnisse.append(ergebnis)
+
+    # 1a. PV-Regeln bewerten
     for pv_regel in config.pv_regeln:
         ergebnis = evaluate_pv_regel(
             pv_regel, temp_dict, pv_leistung, kompressor_ein,
@@ -993,7 +1100,8 @@ def bewerte_alle_regeln(
     
     # 2b. Mindest-Temperatur-Garantien (jeder Eintrag ein Ergebnis)
     for min_ergebnis in evaluate_mindesttemp(
-        config.mindest_temp, temp_dict, now_hour, nachtsperre_start, nachtsperre_ende
+        config.mindest_temp, temp_dict, now_hour, nachtsperre_start, nachtsperre_ende,
+        learned_evening_window=learned_evening_window,
     ):
         ergebnisse.append(min_ergebnis)
 

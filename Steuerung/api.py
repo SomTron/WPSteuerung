@@ -226,6 +226,13 @@ def get_status():
             "min_soc": pc.batterie.min_soc_prozent,
             "max_netzbezug_w": pc.batterie.max_netzbezug_watt,
         })
+        # Einspeise-Begrenzung (PV-Shaping am Netzlimit)
+        priority_info["regeln"].append({
+            "name": "Einspeisung", "typ": "einspeisung", "prio": pc.einspeisung.prioritaet,
+            "grenze_w": pc.einspeisung.einspeisegrenze_watt,
+            "weiterlauf_w": pc.einspeisung.weiterlauf_ab_watt,
+            "aus_c": pc.einspeisung.ausschalten_bei_c,
+        })
         # Forecast-Regel (Prognose)
         priority_info["regeln"].append({
             "name": "Forecast", "typ": "forecast", "prio": pc.forecast.prioritaet,

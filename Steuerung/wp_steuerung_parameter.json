@@ -126,7 +126,8 @@
         "min_temp_c": 40.0,
         "start_uhr": 17,
         "ende_uhr": 22,
-        "hysterese_k": 2.0
+        "hysterese_k": 2.0,
+        "fenster_aus_lernen": true
       }
     ]
   },
@@ -138,5 +139,13 @@
     "ausschalten_bei_c": 47.0,
     "min_soc_prozent": 90.0,
     "max_netzbezug_watt": -50.0
+  },
+  "einspeisung": {
+    "aktiv": true,
+    "prioritaet": 83,
+    "einspeisegrenze_watt": 7500.0,
+    "weiterlauf_ab_watt": 6500.0,
+    "temperaturfuehler": "unten",
+    "ausschalten_bei_c": 48.0
   }
 }

@@ -69,6 +69,11 @@ class MindestTempEintrag(BaseModel):
     start_uhr: int = Field(default=11, description="Fenster-Start (Stunde, 0-23)")
     ende_uhr: int = Field(default=16, description="Fenster-Ende (Stunde, exklusiv)")
     hysterese_k: float = Field(default=2.0, description="Ausschalten erst bei min_temp_c + K")
+    fenster_aus_lernen: bool = Field(
+        default=False,
+        description=("Zeitfenster dynamisch aus dem gelernten Abend-Zapfverhalten "
+                     "anpassen (max. 2h frueher Start, max. 1h spaeteres Ende)"),
+    )
 
 
 class MindestTempConfig(BaseModel):
@@ -102,6 +107,25 @@ class BatterieConfig(BaseModel):
         default=-50.0,
         description="Heizen nur wenn Einspeisung >= Wert (W); <0 = kleiner Netzkauftoleranz",
     )
+
+
+class EinspeisungConfig(BaseModel):
+    """Einspeise-Begrenzungs-Regel (PV-Shaping): Nutzt Ueberschuss, der sonst
+    (gegen das Netzlimit von z.B. 7500W) eingespeist wuerde.
+
+    Einschalten sobald die Einspeisung die Grenze erreicht; der Kompressor
+    laeuft dann weiter (mit Abschlag, da er selbst ~600W zieht), solange die
+    Einspeisung ueber weiterlauf_ab_watt bleibt."""
+    aktiv: bool = Field(default=True, description="Regel aktiv")
+    prioritaet: int = Field(default=83, description="Prioritaet (ueber CalcStart/Batterie)")
+    einspeisegrenze_watt: float = Field(
+        default=7500.0, description="Einspeisen ab so viel Watt -> Heizung an (Netzlimit)",
+    )
+    weiterlauf_ab_watt: float = Field(
+        default=6500.0, description="Weiterlaufen solange Einspeisung >= Wert (WP zieht ~600W)",
+    )
+    temperaturfuehler: str = Field(default="unten", description="Regelfühler")
+    ausschalten_bei_c: float = Field(default=48.0, description="Ausschalten bei (°C)")
 
 
 class ZeitfensterConfig(BaseModel):
@@ -208,6 +232,7 @@ class WPSteuerungConfig(BaseModel):
     bademodus: BademodusConfig = Field(default_factory=BademodusConfig)
     mindest_temp: MindestTempConfig = Field(default_factory=MindestTempConfig)
     batterie: BatterieConfig = Field(default_factory=BatterieConfig)
+    einspeisung: EinspeisungConfig = Field(default_factory=EinspeisungConfig)
 
 
 class WPSteuerungConfigManager:

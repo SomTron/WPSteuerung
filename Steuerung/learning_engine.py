@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from dataclasses import dataclass, asdict
 
@@ -156,6 +156,43 @@ class LearningEngine:
         if self.data.target_hour_samples < 3:
             return 17.0
         return self.data.learned_target_hour
+
+    def get_learned_evening_window(
+        self,
+        vorlauf_h: float = 1.5,
+        nachlauf_h: float = 0.75,
+        now: Optional[datetime] = None,
+        tage: int = 14,
+        min_samples: int = 4,
+    ) -> Optional[tuple]:
+        """Gelerntes Abend-Zapffenster aus den letzten `tage` Tagen.
+
+        Aus ALLEN erkannten Zapfungen (16-24 Uhr) wird frueheste und spaeteste
+        Zapfzeit bestimmt und mit Vor-/Nachlauf gepuffert. Die MindestTemp-Regel
+        kann ihr Zeitfenster daraus dynamisch ableiten ("Zeiten anpassen"),
+        statt starr auf die konfigurierten Stunden zu warten.
+
+        Returns:
+            (frueheste_uhrzeit_h, spaeteste_uhrzeit_h) oder None, wenn weniger
+            als min_samples Zapfungen im Betrachtungszeitraum liegen.
+        """
+        if now is None:
+            now = datetime.now()
+        grenze = now - timedelta(days=tage)
+        stunden = []
+        for e in self.data.usage_events:
+            try:
+                ts = datetime.fromisoformat(e["timestamp"])
+            except (KeyError, ValueError):
+                continue
+            if ts < grenze or not (16 <= ts.hour < 24):
+                continue
+            stunden.append(ts.hour + ts.minute / 60.0)
+        if len(stunden) < min_samples:
+            return None
+        frueheste = max(min(stunden) - vorlauf_h, 16.0)
+        spaeteste = min(max(stunden) + nachlauf_h, 23.75)
+        return round(frueheste, 2), round(spaeteste, 2)
 
     def get_info(self) -> Dict:
         """Übersicht der gelernten Werte für API/UI."""

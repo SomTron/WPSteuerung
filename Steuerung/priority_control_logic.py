@@ -149,10 +149,14 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             datetime.now(state.local_tz).month, 'gesamt'
         )
         gelernte_zielzeit = learning_engine.get_learned_target_hour()
+        # Defensiv: aeltere Lern-Engines/Fakes kennen die Methode evtl. nicht
+        _get_fenster = getattr(learning_engine, 'get_learned_evening_window', None)
+        gelerntes_abendfenster = _get_fenster() if callable(_get_fenster) else None
     else:
         gelernte_rate_unten = None
         gelernte_rate_gesamt = None
         gelernte_zielzeit = None
+        gelerntes_abendfenster = None
 
     # Konfigurations-Guard: CalcStart-Zielzeit vs. Nachtsperre.
     # Eine Zielzeit innerhalb/hinter der Sperre macht die Regel stumm -
@@ -191,6 +195,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         forecast_today_wh_qm=forecast_today_wh,
         soc=getattr(state.solar, 'soc', None),
         battery_power=getattr(state.solar, 'batpower', None),
+        learned_evening_window=gelerntes_abendfenster,
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
         learned_target_hour=gelernte_zielzeit,
@@ -339,6 +344,8 @@ def _extract_einschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
                 return eintrag.min_temp_c
     elif name == "Batterie":
         return config.batterie.einschalten_bei_c
+    elif name == "Einspeisung":
+        return config.einspeisung.ausschalten_bei_c - 6.0  # Anzeige-Wert
 
     return config.sicherheit.max_temp_c
 
@@ -369,6 +376,8 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
                 return eintrag.min_temp_c + eintrag.hysterese_k
     elif name == "Batterie":
         return config.batterie.ausschalten_bei_c
+    elif name == "Einspeisung":
+        return config.einspeisung.ausschalten_bei_c
 
     return config.sicherheit.max_temp_c
 
