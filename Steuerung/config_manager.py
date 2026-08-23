@@ -49,6 +49,32 @@ class WetterprognoseConfig(BaseModel):
     LONGITUDE: float = Field(default=13.6361)
     TILT: int = Field(default=30)
 
+# Bekannte Schluessel aus aelteren Versionen des Projekts - bewusst ohne
+# Funktion im aktuellen Code. Sie erzeugen nur noch eine INFO mit Hinweis,
+# WO der Wert heute konfiguriert wird, statt einer beunruhigenden Warnung.
+LEGACY_HINWEISE = {
+    "Heizungssteuerung": {
+        "MIN_LAUFZEIT_S": "heute MIN_LAUFZEIT (Minuten)",
+        "MIN_AUSZEIT_S": "heute MIN_PAUSE (Minuten)",
+        "HYSTERESE_MIN": "Hysterese kommt aus der Regellogik",
+        "LOOP_INTERVAL": "heute constants.py: MAIN_LOOP_INTERVAL_SEC",
+        "ENABLE_LCD": "LCD-Unterstuetzung entfernt",
+        "BADEMODUS_HYSTERESE": "Bademodus ueber wp_steuerung_parameter.json [abweichung]",
+        "FALLBACK_T_MITTIG": "Sensor-Fallback nicht Bestandteil der aktuellen Logik",
+        "PEAK_SHAVING_TARGET_SOC": "Peak-Shaving nicht Bestandteil; Batterie-Regel siehe JSON [batterie]",
+        "WP_POWER_EXPECTED": "heute wp_steuerung_parameter.json: wp.leistung_watt",
+    },
+    "Solarueberschuss": {
+        "BATTERY_CAPACITY_KWH": "wird nicht ausgewertet",
+        "MIN_SOC": "heute wp_steuerung_parameter.json: batterie.min_soc_prozent",
+    },
+    "Wetterprognose": {
+        "PANEL_EFFICIENCY": "Prognose liefert Solax - Anlagenparameter werden nicht genutzt",
+        "PANEL_GROUPS": "Prognose liefert Solax - Anlagenparameter werden nicht genutzt",
+    },
+}
+
+
 class AppConfig(BaseModel):
     Heizungssteuerung: HeizungssteuerungConfig = Field(default_factory=HeizungssteuerungConfig)
     Healthcheck: HealthcheckConfig = Field(default_factory=HealthcheckConfig)
@@ -103,36 +129,69 @@ class ConfigManager:
         return AppConfig(**sektionen)
 
     def _lade_sektion(self, name: str, modell_klasse, werte: dict):
-        """Laedt eine Sektion; bei Validierungsfehlern nur die betroffenen Felder kappen."""
-        # Unbekannte Schluessel melden - das sind fast immer Tippfehler,
-        # die sonst stillschweigend wirkungslos bleiben wuerden.
-        unbekannt = [k for k in werte if k not in modell_klasse.model_fields]
+        """Laedt eine Sektion; bei Validierungsfehlern nur die betroffenen Felder kappen.
+
+        Behandlungspfad fuer jeden INI-Schluessel:
+        1. Exakter Treffer im Modell          -> laden
+        2. Nur Gross-/Kleinschreibung weicht ab
+           (z.B. 'URLAUBSABsenkung')          -> laden, INFO loggen
+        3. Bekannter Legacy-Schluessel        -> ignorieren, INFO mit Hinweis
+        4. Sonst                              -> WARNING (echter Tippfehler?)
+        """
+        felder = modell_klasse.model_fields
+        upper_map = {}
+        for feld_name in felder:
+            upper_map.setdefault(feld_name.upper(), []).append(feld_name)
+
+        gueltig = {}
+        unbekannt = []
+        for schluessel, wert in werte.items():
+            if schluessel in felder:
+                gueltig[schluessel] = wert
+                continue
+            treffer = upper_map.get(schluessel.upper())
+            if treffer and len(treffer) == 1 and treffer[0] not in gueltig:
+                logging.info(
+                    f"[{name}] '{schluessel}' als '{treffer[0]}' uebernommen "
+                    f"(Gross-/Kleinschreibung angepasst)"
+                )
+                gueltig[treffer[0]] = wert
+            elif not (treffer and len(treffer) == 1):
+                unbekannt.append(schluessel)
+
         if unbekannt:
-            logging.warning(
-                f"Unbekannte Schluessel in [{name}] (Tippfehler?): {', '.join(sorted(unbekannt))}"
-            )
+            legacy = LEGACY_HINWEISE.get(name, {})
+            echte_tippfehler = []
+            for k in sorted(unbekannt):
+                if k in legacy:
+                    logging.info(f"[{name}] Legacy-Schluessel '{k}' ignoriert ({legacy[k]})")
+                else:
+                    echte_tippfehler.append(k)
+            if echte_tippfehler:
+                logging.warning(
+                    f"Unbekannte Schluessel in [{name}] (Tippfehler?): "
+                    f"{', '.join(echte_tippfehler)}"
+                )
 
         try:
-            return modell_klasse(**werte)
+            return modell_klasse(**gueltig)
         except ValidationError:
-            gueltige_werte = {}
-            for schluessel, wert in werte.items():
-                if schluessel not in modell_klasse.model_fields:
-                    continue  # wurde oben schon als unbekannt gemeldet
+            gefiltert = {}
+            for schluessel, wert in gueltig.items():
                 try:
                     modell_klasse(**{schluessel: wert})
-                    gueltige_werte[schluessel] = wert
+                    gefiltert[schluessel] = wert
                 except ValidationError:
                     logging.error(
                         f"Ungueltiger Wert in [{name}]: {schluessel} = '{wert}' "
                         f"- verwende Defaultwert"
                     )
-            gekappt = len(werte) - len(gueltige_werte) - len(unbekannt)
+            gekappt = len(gueltig) - len(gefiltert)
             if gekappt > 0:
                 logging.warning(
                     f"Sektion [{name}]: {gekappt} ungueltige(r) Wert(e) auf Default gesetzt"
                 )
-            return modell_klasse(**gueltige_werte)
+            return modell_klasse(**gefiltert)
 
     def get(self):
         return self.config

@@ -55,12 +55,20 @@ class TestParsing:
         # Nicht gesetzte Felder bleiben auf Default
         assert c.Heizungssteuerung.API_PORT == 8000
 
-    def test_gross_kleinschreibung_der_schluessel_wird_bewahrt(self, tmp_path):
-        """optionxform=str: 'min_laufzeit' matcht NICHT das Feld MIN_LAUFZEIT."""
+    def test_gross_kleinschreibung_wird_toleriert(self, tmp_path, caplog):
+        """Nur die Schreibweise abweichende Keys werden trotzdem geladen.
+
+        Realer Fall (2026-08): 'URLAUBSABsenkung' in der config.ini wurde
+        vorher still verworfen und die Urlaubsabsenkung wirkte nicht.
+        """
+        import logging
         pfad = schreibe_ini(tmp_path / "config.ini",
                             "[Heizungssteuerung]\nmin_laufzeit = 99\n")
-        cm = ConfigManager(config_path=pfad)
-        assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 15   # Default bleibt aktiv
+        with caplog.at_level(logging.INFO):
+            cm = ConfigManager(config_path=pfad)
+        assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 99   # uebernommen
+        assert any("min_laufzeit" in r.message and "uebernommen" in r.message
+                   for r in caplog.records)
 
     def test_unbekannte_sektionen_und_schluessel_werden_ignoriert(self, tmp_path):
         pfad = schreibe_ini(tmp_path / "config.ini",
@@ -74,6 +82,35 @@ class TestParsing:
     def test_get_liefert_dasselbe_objekt(self, tmp_path):
         cm = ConfigManager(config_path=str(tmp_path / "fehlt.ini"))
         assert cm.get() is cm.config
+
+
+class TestLegacyUndToleranz:
+    def test_legacy_key_nur_info_kein_warning(self, tmp_path, caplog):
+        """Bekannte Altlasten (z.B. WP_POWER_EXPECTED) -> INFO mit Hinweis."""
+        import logging
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Heizungssteuerung]\nWP_POWER_EXPECTED = 600\n")
+        with caplog.at_level(logging.INFO):
+            cm = ConfigManager(config_path=pfad)
+        warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert not any("Unbekannte Schluessel" in w for w in warnings)
+        infos = [r.message for r in caplog.records]
+        assert any("WP_POWER_EXPECTED" in i and "ignoriert" in i for i in infos)
+
+    def test_echter_tippfehler_bleibt_warning(self, tmp_path, caplog):
+        import logging
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Heizungssteuerung]\nMIN_LAUFZETT = 5\n")
+        with caplog.at_level(logging.WARNING):
+            cm = ConfigManager(config_path=pfad)
+        assert any("MIN_LAUFZETT" in r.message and "Unbekannte" in r.message
+                   for r in caplog.records)
+
+    def test_urlaubsmodus_falsche_schreibweise_wirkt(self, tmp_path):
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Urlaubsmodus]\nURLAUBSABsenkung = 4.0\n")
+        cm = ConfigManager(config_path=pfad)
+        assert cm.get().Urlaubsmodus.URLAUBSABSENKUNG == 4.0
 
 
 # ── Validierung ───────────────────────────────────────────────────────
