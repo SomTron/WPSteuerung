@@ -1,3 +1,5 @@
+# ARCHIV (Design-Fix #4): Tag-Simulation der archivierten modusbasierten Logik.
+# Wird von pytest nicht mehr gesammelt (pytest.ini: testpaths=tests).
 import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, time, timedelta

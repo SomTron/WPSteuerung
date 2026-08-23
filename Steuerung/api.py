@@ -205,7 +205,7 @@ def get_status():
         })
         # Wochenende
         priority_info["regeln"].append({
-            "name": "Wochenende", "typ": "wochenende", "prio": 100,
+            "name": "Wochenende", "typ": "wochenende", "prio": pc.wochenende.prioritaet,
             "aktiv": pc.wochenende.aktiv,
             "fruehestens_uhr": pc.wochenende.fruehestens_uhr,
         })

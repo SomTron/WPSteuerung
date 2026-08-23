@@ -38,6 +38,7 @@ class WochenendeConfig(BaseModel):
     """Wochenende-Einstellungen."""
     aktiv: bool = Field(default=True, description="Wochenendmodus aktiv")
     fruehestens_uhr: int = Field(default=9, description="Frühester Einschaltzeitpunkt am Wochenende")
+    prioritaet: int = Field(default=100, description="Prioritaet der Sperre (blockierend, hoechste)")
 
 
 class PVRegel(BaseModel):
@@ -108,6 +109,8 @@ class AdaptivePVConfig(BaseModel):
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
     t_aggressiv_kalt_c: float = Field(default=35.0, description="Schwelle x0.5 wenn Temp unter Wert (Grad C)")
     t_normal_kalt_c: float = Field(default=38.0, description="Schwelle x0.7 wenn Temp unter Wert (Grad C)")
+    fc_schwelle_gut_wh: float = Field(default=4000.0, description="Prognose >= Wert (Wh/qm): Schwelle x1.5 (konservativer)")
+    fc_schwelle_schlecht_wh: float = Field(default=1000.0, description="Prognose <= Wert (Wh/qm): Schwelle x0.5 (PV jetzt nutzen)")
 
 
 class CalculatedStartConfig(BaseModel):
@@ -119,6 +122,11 @@ class CalculatedStartConfig(BaseModel):
     heizrate_unten_c_h: float = Field(default=3.0, description="Geschaetzte Heizrate unten (Grad C/h)")
     heizrate_gesamt_c_h: float = Field(default=2.0, description="Geschaetzte Heizrate gesamt (Grad C/h)")
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
+
+
+class BademodusConfig(BaseModel):
+    """Bademodus: Erhoeht die Zieltemperatur fuer heisses Brauchwasser."""
+    solltemperatur_erhoehung_c: float = Field(default=3.0, description="Zieltemperatur-Erhoehung im Bademodus (K)")
 
 
 class SommerModusConfig(BaseModel):
@@ -150,6 +158,7 @@ class WPSteuerungConfig(BaseModel):
     adaptive_pv: AdaptivePVConfig = Field(default_factory=AdaptivePVConfig)
     calculated_start: CalculatedStartConfig = Field(default_factory=CalculatedStartConfig)
     sommer_modus: SommerModusConfig = Field(default_factory=SommerModusConfig)
+    bademodus: BademodusConfig = Field(default_factory=BademodusConfig)
 
 
 class WPSteuerungConfigManager:

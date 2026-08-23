@@ -37,6 +37,17 @@ def set_last_compressor_off_time(state, time_val):
     state.stats.last_compressor_off_time = time_val
 
 
+def setze_neustartsperre(state, minuten: int = 10) -> None:
+    """Setzt eine explizite Neustartsperre fuer den Kompressor.
+
+    Ersetzt den alten Trick, last_compressor_off_time in die Zukunft zu
+    setzen: Die Sperre ist jetzt ein eigenes Feld mit klar lesbarem
+    Blocking-Reason, statt eine Mindestpausen-Rechnung zu verfaelschen."""
+    state.control.restart_lockout_until = (
+        datetime.now(state.local_tz) + timedelta(minutes=minuten)
+    )
+
+
 async def check_pressure_and_config(
     session, state, handle_pressure_check_func: Callable,
     set_kompressor_status_func: Callable, only_pressure: bool = False
@@ -84,8 +95,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     effektive_config = copy.deepcopy(state.priority_config)
     
     if state.bademodus_aktiv:
-        # Bademodus: Solltemperatur +3Â°C (fuer warmes Wasser)
-        erhoehung = 3.0
+        # Bademodus: Zieltemperatur-Erhoehung aus der Config (fuer warmes Wasser)
+        erhoehung = effektive_config.bademodus.solltemperatur_erhoehung_c
         effektive_config.abweichung.solltemperatur_c += erhoehung
         logging.debug(f"Bademodus aktiv: Solltemperatur +{erhoehung}C auf {effektive_config.abweichung.solltemperatur_c}C")
     
@@ -199,10 +210,13 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         elif "oben" in gewinner.grund.lower():
             state.control.active_rule_sensor = "Oben"
         
-        # Ein/Ausschaltpunkte aus Regel ermitteln
+        # Ein/Ausschaltpunkte aus Regel ermitteln.
+        # WICHTIG: effektive_config (mit Bademodus-/Urlaubs-Offsets) verwenden,
+        # nicht state.priority_config - sonst melden die Setpoints einen
+        # anderen Sollwert, als die Regeln tatsaechlich ausgewertet haben.
         if gewinner.einschalten is True:
-            eps = _extract_einschaltpunkt(gewinner, state.priority_config)
-            ausp = _extract_ausschaltpunkt(gewinner, state.priority_config)
+            eps = _extract_einschaltpunkt(gewinner, effektive_config)
+            ausp = _extract_ausschaltpunkt(gewinner, effektive_config)
             state.control.aktueller_einschaltpunkt = eps
             state.control.aktueller_ausschaltpunkt = ausp
         else:
@@ -210,8 +224,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             # damit handle_compressor_off() den Kompressor auch abschalten kann.
             # Wenn wir hier max_temp_c setzen, wuerde der Kompressor nie ausschalten,
             # weil z.B. t_unten=43.2C < max_temp_c=48C.
-            eps = _extract_einschaltpunkt(gewinner, state.priority_config)
-            ausp = _extract_ausschaltpunkt(gewinner, state.priority_config)
+            eps = _extract_einschaltpunkt(gewinner, effektive_config)
+            ausp = _extract_ausschaltpunkt(gewinner, effektive_config)
             state.control.aktueller_einschaltpunkt = max(eps, ausp)  # hoch, damit kein Neueinschalten
             state.control.aktueller_ausschaltpunkt = ausp            # korrekt, damit Abschaltung funktioniert
     else:
@@ -403,7 +417,17 @@ async def handle_compressor_on(
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = datetime.now(state.local_tz)
-    
+
+    # Explizite Neustartsperre (z.B. nach Verifizierungsfehler): blockiert
+    # VOR der Mindestpausen-Pruefung, damit der Grund eindeutig im Log steht.
+    lockout_until = getattr(state.control, 'restart_lockout_until', None)
+    if lockout_until is not None and now < lockout_until:
+        rest = lockout_until - now
+        mins = int(rest.total_seconds() // 60)
+        secs = int(rest.total_seconds() % 60)
+        state.control.blocking_reason = f"Neustartsperre (noch {mins}m {secs}s)"
+        return False
+
     # Die Prioritaeten-Engine hat bereits entschieden
     # Wir muessen nur noch Mindestlaufzeit/-pause und Basis-Sicherheit pruefen
     
@@ -438,6 +462,7 @@ async def handle_compressor_on(
             
             if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
                 state.control.blocking_reason = None
+                state.control.restart_lockout_until = None  # Sperre erledigt
                 logging.info(
                     f"Eingeschaltet um {now}. "
                     f"Grund: Regel-Einschalt (Regelfuehler={regelfuehler}, Ziel={einschaltpunkt})"

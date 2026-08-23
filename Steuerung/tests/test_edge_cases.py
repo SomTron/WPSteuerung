@@ -1,9 +1,8 @@
 import pytest
 from datetime import datetime, timedelta, time
 import pytz
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock
 
-import control_logic
 from hardware_mock import MockHardwareManager
 
 
@@ -140,61 +139,6 @@ class TestMidnightTransition:
         assert mock_hardware.get_compressor_state() is True
 
 
-class TestSolarModeSwitch:
-    """Tests for solar surplus mode transitions."""
-    
-    @pytest.mark.asyncio
-    async def test_normal_to_solar_transition(self, mock_state, mock_config):
-        """Test transition from Normal to Solar mode."""
-        # Setup: Normal mode, temperature OK
-        mock_state.control.solar_ueberschuss_aktiv = False
-        mock_state.control.kompressor_ein = True
-        
-        t_oben = 44.0
-        t_mittig = 43.5
-        
-        # Trigger solar surplus
-        mock_state.solar.batpower = 700.0  # Above threshold
-        mock_state.solar.soc = 96.0
-        mock_state.solar.feedinpower = 700.0
-        
-        result = await control_logic.determine_mode_and_setpoints(mock_state, t_mittig, t_mittig)
-        
-        # Should switch to solar mode
-        assert result["solar_ueberschuss_aktiv"] is True
-        assert result["modus"] == "Solarueberschuss"
-    
-    @pytest.mark.asyncio
-    async def test_solar_to_normal_transition_above_threshold(self, mock_state, mock_config, mock_hardware):
-        """Test that compressor turns off when leaving solar mode if temp is high."""
-        # Setup: Solar mode active, temp above normal threshold
-        mock_state.control.solar_ueberschuss_aktiv = True
-        mock_state.control.kompressor_ein = True
-        mock_state.stats.last_compressor_on_time = datetime.now(mock_state.local_tz) - timedelta(minutes=20)
-        
-        t_oben = 46.0  # Above normal threshold (45)
-        t_mittig = 45.5
-        
-        # Mock session for telegram
-        mock_session = Mock()
-        
-        async def mock_set_kompressor(state, status, **kwargs):
-            state.control.kompressor_ein = status
-            mock_hardware.set_compressor_state(status)
-            return True
-        
-        # Simulate mode switch
-        mock_state.control.solar_ueberschuss_aktiv = False  # Solar surplus ended
-        
-        result = await control_logic.handle_mode_switch(
-            mock_state, mock_session, t_oben, t_mittig, mock_set_kompressor
-        )
-        
-        # Should have turned off
-        assert result is True
-        assert mock_state.control.kompressor_ein is False
-
-
 class TestTimezoneEdgeCases:
     """Tests for timezone and DST handling."""
     
@@ -216,28 +160,6 @@ class TestTimezoneEdgeCases:
         
         # Genau 1 Stunde: localize(naive_past) liegt exakt 1h vor now
         assert delta == timedelta(hours=1)
-    
-    def test_nighttime_calculation_across_midnight(self, mock_config):
-        """Test is_nighttime works correctly across midnight."""
-        # Night from 19:30 to 08:00
-        
-        # Test at 23:00 (should be night)
-        with patch('logic_utils.datetime') as mock_dt:
-            mock_dt.now.return_value.time.return_value = time(23, 0)
-            mock_dt.strptime.side_effect = datetime.strptime
-            assert control_logic.is_nighttime(mock_config) is True
-        
-        # Test at 02:00 (should be night)
-        with patch('logic_utils.datetime') as mock_dt:
-            mock_dt.now.return_value.time.return_value = time(2, 0)
-            mock_dt.strptime.side_effect = datetime.strptime
-            assert control_logic.is_nighttime(mock_config) is True
-        
-        # Test at 12:00 (should not be night)
-        with patch('logic_utils.datetime') as mock_dt:
-            mock_dt.now.return_value.time.return_value = time(12, 0)
-            mock_dt.strptime.side_effect = datetime.strptime
-            assert control_logic.is_nighttime(mock_config) is False
 
 
 class TestRuntimeCalculation:

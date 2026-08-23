@@ -26,24 +26,6 @@ def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0
         return True
     return False
 
-def is_nighttime(config):
-    """Prüft, ob es Nachtzeit ist, mit korrekter Behandlung von Mitternacht."""
-    try:
-        start_str = config.Heizungssteuerung.NACHTABSENKUNG_START
-        end_str = config.Heizungssteuerung.NACHTABSENKUNG_END
-        
-        now = datetime.now().time()
-        start = datetime.strptime(start_str, "%H:%M").time()
-        end = datetime.strptime(end_str, "%H:%M").time()
-        
-        if start <= end:
-            return start <= now <= end
-        else:  # Nacht geht über Mitternacht
-            return start <= now or now <= end
-    except Exception as e:
-        logging.error(f"Fehler bei is_nighttime: {e}")
-        return False
-
 def is_solar_window(config, state):
     """Prüft, ob die aktuelle Uhrzeit im Solarfenster nach der Nachtabsenkung liegt."""
     now = datetime.now(state.local_tz)

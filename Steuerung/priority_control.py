@@ -208,7 +208,7 @@ def evaluate_wochenende(
     if not wochenende.aktiv:
         return RegelErgebnis(
             name="Wochenende",
-            prioritaet=100,  # Hoechste Prioritaet, da blockierend
+            prioritaet=wochenende.prioritaet,  # blockierend
             aktiv=False,
             grund="Wochenende-Regel inaktiv"
         )
@@ -216,7 +216,7 @@ def evaluate_wochenende(
     if not _is_weekend(now):
         return RegelErgebnis(
             name="Wochenende",
-            prioritaet=100,
+            prioritaet=wochenende.prioritaet,
             aktiv=False,
             grund="Kein Wochenende"
         )
@@ -225,7 +225,7 @@ def evaluate_wochenende(
     if now.hour < wochenende.fruehestens_uhr:
         return RegelErgebnis(
             name="Wochenende",
-            prioritaet=100,  # Hoechste Prioritaet: blockiert alles andere
+            prioritaet=wochenende.prioritaet,  # blockiert alles andere
             aktiv=True,
             einschalten=False,
             grund=f"Wochenende: Vor {wochenende.fruehestens_uhr} Uhr ({now.hour}:xx) -> AUS"
@@ -233,7 +233,7 @@ def evaluate_wochenende(
     
     return RegelErgebnis(
         name="Wochenende",
-        prioritaet=100,
+        prioritaet=wochenende.prioritaet,
         aktiv=True,
         einschalten=None,  # Keine Aktion, andere Regeln dufen entscheiden
         grund=f"Wochenende: Ab {wochenende.fruehestens_uhr} Uhr erlaubt ({now.hour}:xx)"
@@ -597,10 +597,10 @@ def evaluate_adaptive_pv(
     
     # Prognose-Anpassung
     if forecast_wh_qm is not None:
-        if forecast_wh_qm >= 4000:
-            schwelle *= 1.5  # Morgen sehr sonnig: höhere Schwelle = konservativer
-        elif forecast_wh_qm <= 1000:
-            schwelle *= 0.5  # Morgen bewölkt: niedrige Schwelle = PV jetzt nutzen
+        if forecast_wh_qm >= adaptive_cfg.fc_schwelle_gut_wh:
+            schwelle *= 1.5  # Sehr sonnig: höhere Schwelle = konservativer
+        elif forecast_wh_qm <= adaptive_cfg.fc_schwelle_schlecht_wh:
+            schwelle *= 0.5  # Bewölkt: niedrige Schwelle = PV jetzt nutzen
     
     if pv_leistung >= schwelle:
         result.einschalten = True

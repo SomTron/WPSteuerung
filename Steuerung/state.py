@@ -50,6 +50,9 @@ class ControlState:
         self.komfort_aktiv: bool = False
         self._soll_einschalten: bool = False
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
+        # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).
+        # Ersetzt den alten Hack, last_compressor_off_time in die Zukunft zu setzen.
+        self.restart_lockout_until: Optional[datetime] = None
 
 class StatsState:
     def __init__(self, now):

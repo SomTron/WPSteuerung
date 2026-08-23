@@ -1,3 +1,6 @@
+# ARCHIV (Design-Fix #4): Testet die archivierte modusbasierte Logik.
+# Wird von pytest nicht mehr gesammelt (pytest.ini: testpaths=tests).
+# Referenz: archive/legacy_control_logic.py
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime, timedelta

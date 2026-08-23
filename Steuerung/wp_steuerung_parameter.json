@@ -18,7 +18,8 @@
   },
   "wochenende": {
     "aktiv": true,
-    "fruehestens_uhr": 9
+    "fruehestens_uhr": 9,
+    "prioritaet": 100
   },
   "pv_regeln": [
     {
@@ -84,7 +85,9 @@
     "temperaturfuehler": "unten",
     "tmax_c": 48,
     "t_aggressiv_kalt_c": 35,
-    "t_normal_kalt_c": 38
+    "t_normal_kalt_c": 38,
+    "fc_schwelle_gut_wh": 4000,
+    "fc_schwelle_schlecht_wh": 1000
   },
   "calculated_start": {
     "prioritaet": 82,
@@ -100,5 +103,8 @@
     "mindest_prognose_wh": 2000,
     "benoetigte_tage": 3,
     "temperatur_offset_c": -3.0
+  },
+  "bademodus": {
+    "solltemperatur_erhoehung_c": 3.0
   }
 }

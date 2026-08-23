@@ -425,7 +425,8 @@ async def run_logic_step(session, state, learning_engine=None):
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
             await set_kompressor_status(state, False, force=True)
             state.control.ausschluss_grund = "Kompressor laeuft nicht (Verifizierung fehlgeschlagen)"
-            state.stats.last_compressor_off_time = datetime.now(state.local_tz) + timedelta(minutes=10)
+            # Explizite Neustartsperre statt Zukunftszeitstempel in last_compressor_off_time
+            pcl.setze_neustartsperre(state, minuten=10)
 
     # 3. Sensoren & Safety (Sicherheits-Check)
     if await pcl.check_safety_limits(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
