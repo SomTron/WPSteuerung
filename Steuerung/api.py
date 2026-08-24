@@ -152,7 +152,6 @@ def init_api(state, funcs):
     shared_state = state
     control_funcs = funcs
 
-@app.get("/status")
 def _solar_stale_status() -> bool:
     """True, wenn Solax-Daten aelter als der Stale-Schwellwert sind."""
     try:
@@ -165,6 +164,7 @@ def _solar_stale_status() -> bool:
         return False
 
 
+@app.get("/status")
 def get_status():
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")

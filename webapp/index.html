@@ -1062,17 +1062,7 @@
                         options: {
                             responsive: true, maintainAspectRatio: false,
                             plugins: {
-                                tooltip: {
-                                    callbacks: {
-                                        label: function(ctx) {
-                                            if (ctx.dataset.label === 'Aktive Regel' && ctx.dataset.tooltipContent) {
-                                                return 'Regel: ' + ctx.dataset.tooltipContent[ctx.dataIndex];
-                                            }
-                                            return ctx.dataset.label + ': ' + ctx.parsed.y;
-                                        }
-                                    }
-                                },
-                                zoom: {
+                                 zoom: {
                                             pan: { enabled: true, mode: 'x', threshold: 5 },
                                             zoom: {
                                                 wheel: { enabled: true, speed: 0.05 },
@@ -1082,7 +1072,16 @@
                                             }
                                         },
                                         legend: { display: true, position: 'top', labels: { color: '#a0a0c0', font: { size: 11 }, usePointStyle: true } },
-                                tooltip: { mode: 'index', intersect: false, backgroundColor: 'rgba(22, 33, 62, 0.95)', titleColor: '#fff', bodyColor: '#a0a0c0', borderColor: 'rgba(0, 212, 255, 0.3)', borderWidth: 1 }
+                                tooltip: { mode: 'index', intersect: false, backgroundColor: 'rgba(22, 33, 62, 0.95)', titleColor: '#fff', bodyColor: '#a0a0c0', borderColor: 'rgba(0, 212, 255, 0.3)', borderWidth: 1,
+                                    callbacks: {
+                                        label: function(ctx) {
+                                            if (ctx.dataset.label === 'Aktive Regel' && ctx.dataset.tooltipContent) {
+                                                return 'Regel: ' + ctx.dataset.tooltipContent[ctx.dataIndex];
+                                            }
+                                            return ctx.dataset.label + ': ' + ctx.parsed.y;
+                                        }
+                                    }
+                                }
                             },
                             scales: {
                                 y: { min: getBoilerRange().min, max: getBoilerRange().max, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', callback: v => v + ' °C' }, title: { display: true, text: 'Boiler (°C)', color: '#a0a0c0' } },
