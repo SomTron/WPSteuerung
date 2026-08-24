@@ -436,6 +436,23 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
     return config.sicherheit.max_temp_c
 
 
+def _boiler_max_info(state):
+    """Infos zum harten Boiler-Maximum: (temp, limit, wiederein, fuehler).
+
+    temp kann None sein (Fuehler fehlt) -> die Pruefungen entfallen dann.
+    """
+    cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+    if cfg is None:
+        return None, None, None, "unten"
+    fuehler = getattr(cfg, "boiler_max_fuehler", None) or "unten"
+    temp = getattr(getattr(state, "sensors", None), f"t_{fuehler}", None)
+    if temp is None or not isinstance(temp, (int, float)):
+        return None, None, None, fuehler
+    limit = float(getattr(cfg, "max_temp_c", 48.0))
+    wiederein = limit - float(getattr(cfg, "boiler_max_hysterese_k", 2.0))
+    return temp, limit, wiederein, fuehler
+
+
 async def handle_compressor_off(
     state, session, regelfuehler, ausschaltpunkt, min_laufzeit,
     t_oben, set_kompressor_status_func: Callable, regel_name=None
@@ -456,6 +473,25 @@ async def handle_compressor_off(
             logging.warning(f"SICHERHEIT AUS: Ueberhitzung ({t_oben:.1f}C)")
             return True
         await handle_critical_compressor_error(session, state, "bei Ueberhitzung")
+        return False
+
+    # Hartes Boiler-Maximum am Bezugsfuehler (Standard: unten).
+    # Bricht die Mindestlaufzeit - Schutz geht vor Taktschutz. Ohne diesen
+    # Bruch heizt der Kompressor nach Erreichen des Limits weiter und treibt
+    # v.a. die obere Schicht unnoetig weiter hoch.
+    t_max, limit, wiederein, fuehler = _boiler_max_info(state)
+    if t_max is not None and t_max >= limit:
+        if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+            state.control.boiler_max_blockiert = wiederein
+            state.control.blocking_reason = (
+                f"Boiler-Maximum ({fuehler} {t_max:.1f}C >= {limit:.1f}C)"
+            )
+            logging.warning(
+                f"BOILERMAX AUS: {fuehler} {t_max:.1f}C >= {limit:.1f}C - "
+                f"Mindestlaufzeit gebrochen, Freigabe erst <= {wiederein:.1f}C"
+            )
+            return True
+        await handle_critical_compressor_error(session, state, "bei Boiler-Maximum")
         return False
 
     # --- NEU: Keine Regel aktiv -> Kompressor ausschalten ---
@@ -523,6 +559,21 @@ async def handle_compressor_on(
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = datetime.now(state.local_tz)
+
+    # Boiler-Maximum-Kuehlphase: Nur nach einem tatsaechlichen Limit-Abschalten
+    # aktiv (Flag boiler_max_blockiert). Der normale EIN-Bereich unterhalb des
+    # Limits bleibt unangetastet - bewusst KEINE pauschale Hysterese, damit
+    # z.B. PV-Heizen bei unten 47 C weiter moeglich bleibt.
+    schwelle = getattr(state.control, "boiler_max_blockiert", None)
+    if schwelle is not None:
+        t_max, _limit, _wiederein, fuehler = _boiler_max_info(state)
+        if t_max is not None and t_max > schwelle:
+            state.control.blocking_reason = (
+                f"Boiler-Maximum-Kuehlphase ({fuehler} {t_max:.1f}C, "
+                f"Einschalten erst <= {schwelle:.1f}C)"
+            )
+            return False
+        state.control.boiler_max_blockiert = None  # abgekuehlt -> freigegeben
 
     # Explizite Neustartsperre (z.B. nach Verifizierungsfehler): blockiert
     # VOR der Mindestpausen-Pruefung, damit der Grund eindeutig im Log steht.
@@ -610,10 +661,12 @@ async def check_safety_limits(session, state, t_oben, t_unten, t_mittig, t_verd,
     """
     Erweiterte Sicherheitspruefungen basierend auf der JSON-Config.
     Prueft nur Ueberhitzung.
-    
-    Hinweis: max_temp_c (48C) ist kein Abschaltpunkt mehr, da der Boiler
-    kurzzeitig darueber gehen kann (z.B. 49C) ohne Probleme.
-    Nur ueberhitzung_c (58C) fuehrt zur sofortigen Abschaltung.
+
+    Das harte Boiler-Maximum (max_temp_c am Bezugsfuehler boiler_max_fuehler,
+    Standard unten) wird separat in handle_compressor_off/-on erzwungen und
+    bricht dort die Mindestlaufzeit. Hier bleibt es bei der Warnung fuer
+    t_oben: Die obere Schichtung darf das Limit naturgemaeß uebersteigen,
+    solange der Bezugsfuehler darunter liegt.
     """
     cfg = state.priority_config.sicherheit
     

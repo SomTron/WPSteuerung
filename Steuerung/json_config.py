@@ -33,6 +33,26 @@ class SicherheitConfig(BaseModel):
     ueberhitzung_c: float = Field(default=58.0, description="Überhitzungsschutz (°C)")
     notfall_c: float = Field(default=36.0, description="Notfall-Einschalttemperatur (°C)")
 
+    boiler_max_fuehler: str = Field(default="unten", description="Bezugsfuehler fuer das Boiler-Maximum (unten/mittig/oben)")
+    boiler_max_hysterese_k: float = Field(default=2.0, description="Nach einem Maximum-Abschalten erst wieder einschalten, wenn der Bezugsfuehler <= max_temp_c - Hysterese ist")
+
+    @model_validator(mode="after")
+    def _pruefe_sicherheit(self):
+        if self.boiler_max_fuehler not in ("unten", "mittig", "oben"):
+            raise ValueError(
+                f"boiler_max_fuehler muss 'unten', 'mittig' oder 'oben' sein, "
+                f"nicht '{self.boiler_max_fuehler}'"
+            )
+        if self.boiler_max_hysterese_k < 0:
+            raise ValueError("boiler_max_hysterese_k darf nicht negativ sein")
+        if not (20.0 <= self.max_temp_c <= 70.0):
+            raise ValueError(f"max_temp_c={self.max_temp_c} ausserhalb des plausiblen Bereichs (20-70 C)")
+        if self.max_temp_c > self.ueberhitzung_c:
+            raise ValueError(
+                f"max_temp_c ({self.max_temp_c}) darf den Ueberhitzungsschutz "
+                f"({self.ueberhitzung_c}) nicht uebersteigen"
+            )
+        return self
 
 class WochenendeConfig(BaseModel):
     """Wochenende-Einstellungen."""
