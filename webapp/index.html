@@ -1217,7 +1217,7 @@
                         else if (r.typ === 'forecast') detail = 'Vorheiz ' + r.vorheiz_c + 'C | max ' + r.max_c + 'C | schlecht<=' + r.schlecht_wmq + ' | gut>=' + r.gut_wmq + ' Wh/qm';
                         else if (r.typ === 'adaptivepv') detail = 'Basis ' + r.basis_w + 'W | Sensor: ' + r.sensor + ' | max ' + r.max_c + 'C';
                         else if (r.typ === 'calcstart') detail = 'Soll ' + r.soll_c + 'C um ' + r.ziel_uhr + ':00 | max ' + r.max_c + 'C';
-                        else if (r.typ === 'mindesttemp') detail = 'Sensor: ' + r.sensor + ' | >= ' + r.min_c + ' C | ' + r.start + '-' + r.ende + ' Uhr';
+                        else if (r.typ === 'mindesttemp') detail = 'Sensor: ' + r.sensor + ' | >= ' + r.min_c + ' C | ' + r.start + '-' + r.ende + ' Uhr' + (r.nachtsperre_ueberschreiben === false ? ' | respektiert Nachtsperre (kein Nacht-Heizen)' : '');
                         else if (r.typ === 'batterie') detail = 'SOC >= ' + r.min_soc + '% | Netzbezug-Grenze ' + r.max_netzbezug_w + ' W';
                         else if (r.typ === 'einspeisung') detail = 'Einspeisung >= ' + r.grenze_w + ' W | Weiterlauf ab ' + r.weiterlauf_w + ' W | Aus bei ' + r.aus_c + ' C';
 

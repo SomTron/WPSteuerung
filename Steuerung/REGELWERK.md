@@ -16,7 +16,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 | **Strom-Priorität: PV direkt > Batterie > Netz** | PV-Regeln + AdaptivePV reagieren auf echte Netzeinspeisung; Batterie-Regel nutzt nur SOC-Überschuss ohne Netzkauf; sonst läuft nichts |
 | **Boiler als PV-Buffer** | Bei Überschuss heizen bis 48 °C; bei schlechter Prognose morgen → heute vorheizen; bei guter Prognose → heute sparen |
 | **Dauer-Sonne → Buffer nicht voll laden** | Sommermodus senkt nach 3 guten Tagen den Abweichungs-Soll (−3 K) und die PV-Abschaltpunkte (−2 K → 46 °C statt 48 °C) |
-| **Komfort-Garantien** | Oben mittags ≥ 40 °C, Mitte am Abend ≥ 40 °C (Duschen) – auch gegen die Nachtsperre |
+| **Komfort-Garantien** | Oben mittags ≥ 40 °C; Mitte am Abend ≥ 42 °C zum Duschen – Vorheizen bis zum Nachtsperren-Beginn (19 Uhr), danach kein Nacht-Heizen mehr |
 
 ---
 
@@ -106,18 +106,25 @@ ausschalten_bei_c, temperaturfuehler}`
 ### 3.5 Mindest-Temperatur-Garantien (MinTemp-*) — Prio 65
 
 > Vorgabe: Die obere Temperatur soll mittags nicht unter 40 °C fallen; die mittlere
-> Temperatur soll am Abend (Duschen) nicht unter 40 °C fallen.
+> Temperatur soll zum Abend-Duschen (~19 Uhr) mindestens 42 °C betragen – aber
+> nach dem Duschen wird nachts nicht mehr geheizt.
 
 Pro Eintrag (`mindest_temp.eintraege[]`) gilt:
 
 | Eintrag | Fühler | Garantie | Fenster (default) |
 |---|---|---|---|
 | Mittag-Oben | oben | ≥ 40 °C | 11–16 Uhr |
-| Abend-Mitte | mittig | ≥ 40 °C | 17–22 Uhr *(lernend)* |
+| Abend-Mitte | mittig | ≥ 42 °C | 17–22 Uhr *(lernend, effektiv bis Nachtsperren-Beginn)* |
 
 - **EIN**, wenn der Fühler unter der Mindesttemperatur liegt – **auch während der
-  Nachtsperre**. Das ist der Sinn der Regel: Sie garantiert Komfort zu den Zeiten,
-  in denen er gebraucht wird.
+  Nachtsperre**, solange `"nachtsperre_ueberschreiben": true` ist. Das ist der
+  Sinn der Regel: Sie garantiert Komfort zu den Zeiten, in denen er gebraucht wird.
+- **`"nachtsperre_ueberschreiben": false`** (beim Einsatz für `Abend-Mitte` aktiv):
+  Die Regel bleibt innerhalb der Nachtsperre stumm. Ihre Garantie gilt also nur
+  **bis zum Sperren-Beginn** (19 Uhr): Vor dem Duschen wird rechtzeitig auf 42 °C
+  vorgeheizt, kühlt der Boiler nach dem Duschen ab, wird nicht mehr nachgeheizt –
+  nachts gäbe es dafür ohnehin kein PV und die Nachtsperre bleibt unangetastet.
+  Letzte Komfort-Linie bleibt weiterhin der Komfort-Notfall (3.6).
 - Zwischen `min_temp_c` und `min_temp_c + hysterese_k` (Hysterese 2 K) tritt die
   Regel stumm zurück.
 - **Rein additiv:** Die Regel kann nur *einschalten*, niemals blockieren. Ist die
@@ -129,7 +136,8 @@ Pro Eintrag (`mindest_temp.eintraege[]`) gilt:
   Start und 1 h späteres Ende gegenüber der Konfiguration.
 
 Konfiguration: `mindest_temp.{aktiv, prioritaet, eintraege[].{name, temperaturfuehler,
-min_temp_c, start_uhr, ende_uhr, hysterese_k, fenster_aus_lernen}}`
+min_temp_c, start_uhr, ende_uhr, hysterese_k, fenster_aus_lernen,
+nachtsperre_ueberschreiben}}`
 
 ### 3.6 Komfort — Prio 60
 
@@ -180,7 +188,11 @@ Grundregel: unterer Fühler vs. Solltemperatur (40 °C).
 Blockiert alle *Einschaltpunkte*. Bewusste Ausnahmen (Garantien):
 
 1. Komfort-Notfall (oben ≤ 36 °C) — Prio 60
-2. Mindest-Temp-Garantien innerhalb ihrer Fenster (z. B. Abend-Mitte bis 22 Uhr) — Prio 65
+2. Mindest-Temp-Garantien innerhalb ihrer Fenster **mit
+   `"nachtsperre_ueberschreiben": true`** — Prio 65 (Default)
+   - Ausnahme: Einträge mit `false` (z. B. Abend-Mitte) feuern nicht in der
+     Sperre – ihre Garantie endet mit dem Sperren-Beginn, damit nach dem
+     Abend-Duschen kein Nacht-Heizen ohne PV mehr passiert.
 
 Laufende Heizzyklen werden nicht hart unterbrochen; die Abschaltlogik arbeitet
 weiter mit dem Ausschaltpunkt der Gewinner-Regel.
@@ -269,7 +281,7 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
   "abweichung":   { "solltemperatur_c": 40, "schichtung_min_oben_c": 42 },
   "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500 },
   "batterie":     { "min_soc_prozent": 90, "max_netzbezug_watt": -50 },
-  "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen */ ] },
+  "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen+nachtsperre_ueberschreiben */ ] },
   "sommer_modus": { "temperatur_offset_c": -3.0, "pv_ausschalt_offset_c": -2.0 }
 }
 ```
@@ -281,6 +293,8 @@ Die Logik ist durch Unit-/Integrationstests abgedeckt (`tests/`), u. a.:
 - `test_einspeisung.py` – Netzlimit-Regel: EIN/Weiterlauf/AUS/Nachtsperre/Priorität
 - `test_batterie.py` – SOC-/Netzbezug-Gates, Schonung, Vorrang der PV-Regeln
 - `test_mindesttemp.py` – Garantien inkl. Nachtsperren-Bypass und Additivität
+- `test_mindesttemp_nachtsperre_bypass.py` – `nachtsperre_ueberschreiben=false`:
+  Abend-Garantie (42 °C) endet mit dem Sperren-Beginn, kein Nacht-Heizen
 - `test_zapf_fenster.py` – Lernfenster: Berechnung, Klemmung, Durchreichung
 - `test_sommer_pv_cap.py` – Sommer-Absenkung der PV-Ziele ohne Garantie-Verletzung
 - `test_calcstart_nachtsperre.py` – Konflikt-Erkennung Zielzeit ↔ Nachtsperre

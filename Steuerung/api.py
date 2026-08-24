@@ -3,11 +3,13 @@ try:
 except ImportError:
     SOLAR_DATA_STALE_THRESHOLD_MIN = 15
 
+import logging
+
 try:
     import boiler_modell
     import pv_profil as _pv_profil_modul
-except ImportError:
-    # Module gehoeren zum Repo - Fallback nur zur Robustheit
+except ImportError as _e:
+    logging.warning(f"Neue Module nicht ladbar: {_e}")
     boiler_modell = None
     _pv_profil_modul = None
 
@@ -247,6 +249,7 @@ def get_status():
                 "min_c": _mt.min_temp_c,
                 "start": _mt.start_uhr,
                 "ende": _mt.ende_uhr,
+                "nachtsperre_ueberschreiben": _mt.nachtsperre_ueberschreiben,
             })
         # Batterie-Regel
         priority_info["regeln"].append({
@@ -357,7 +360,8 @@ def get_status():
 
     komfort_info: dict = {}
     try:
-        le = getattr(shared_state, "_learning_engine_ref", None)
+
+        le = getattr(shared_state, "learning_engine", None)
         if le is not None:
             komfort_info = {
                 "verletzungen_7d": le.get_komfort_verletzung_rate(tage=7),

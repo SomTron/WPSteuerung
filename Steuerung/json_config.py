@@ -107,6 +107,14 @@ class MindestTempEintrag(BaseModel):
         description=("Zeitfenster dynamisch aus dem gelernten Abend-Zapfverhalten "
                      "anpassen (max. 2h frueher Start, max. 1h spaeteres Ende)"),
     )
+    nachtsperre_ueberschreiben: bool = Field(
+        default=True,
+        description=("True: Garantie feuert auch innerhalb der Nachtsperre "
+                     "(alter Komfort-Vorrang). False: Regel bleibt waehrend der "
+                     "Nachtsperre stumm - die Garantie gilt nur BIS zum Sperren-"
+                     "Beginn, danach wird nicht mehr nachgeheizt (kein Netzstrom "
+                     "in der Nacht, z.B. nach dem Abend-Duschen)."),
+    )
 
 
     @model_validator(mode="after")

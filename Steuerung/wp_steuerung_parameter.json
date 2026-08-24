@@ -120,14 +120,15 @@
         "ende_uhr": 16,
         "hysterese_k": 2.0
       },
-      {
+            {
         "name": "Abend-Mitte",
         "temperaturfuehler": "mitte",
-        "min_temp_c": 40.0,
+        "min_temp_c": 42.0,
         "start_uhr": 17,
         "ende_uhr": 22,
         "hysterese_k": 2.0,
-        "fenster_aus_lernen": true
+        "fenster_aus_lernen": true,
+        "nachtsperre_ueberschreiben": false
       }
     ]
   },

@@ -210,8 +210,10 @@ def evaluate_mindesttemp(
     Zweck: Der Boiler darf zu definierten Zeiten nicht zu kalt sein
     (z.B. oben mittags >= 40C, mitte am Abend >= 40C zum Duschen).
     Innerhalb des Fensters gilt die Garantie AUCH waehrend der Nachtsperre -
-    genau dafuer ist sie da. Ausserhalb der Fenster entscheidet wie ueblich
-    das Spar-Prioritaetensystem.
+    genau dafuer ist sie da. Ausnahme: Eintraege mit
+    nachtsperre_ueberschreiben=False feuern NICHT in der Nachtsperre; ihre
+    Garantie endet mit dem Sperren-Beginn (kein Nacht-Heizen ohne PV).
+    Ausserhalb der Fenster entscheidet wie ueblich das Spar-Prioritaetensystem.
     """
     ergebnisse = []
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
@@ -254,6 +256,20 @@ def evaluate_mindesttemp(
             result.grund = (
                 f"{eintrag.name}: auserhalb Fenster {start_uhr}-{ende_uhr} Uhr"
                 f"{fenster_hinweis}"
+            )
+            ergebnisse.append(result)
+            continue
+
+        # Nachtsperre respektieren? Garantien duerfen die Sperre normalerweise
+        # ueberschreiben - genau dafuer sind sie da. Eintraege mit
+        # nachtsperre_ueberschreiben=False bleiben innerhalb der Sperre aber
+        # stumm: Die Garantie gilt nur BIS zum Sperren-Beginn (z.B. abends
+        # warm genug zum Duschen), danach wird nachts nicht mehr nachgeheizt
+        # (nachts gibt es kein PV -> sonst Netzstrom).
+        if nachtsperre and not eintrag.nachtsperre_ueberschreiben:
+            result.grund = (
+                f"{eintrag.name}: Nachtsperre aktiv ({nachtsperre_start}-{nachtsperre_ende} Uhr) "
+                f"- Garantie ueberschreibt nicht{fenster_hinweis}"
             )
             ergebnisse.append(result)
             continue
