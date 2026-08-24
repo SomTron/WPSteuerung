@@ -178,6 +178,56 @@ class TestTaktschutz:
         assert isinstance(state.control._wechsel_historie, deque)
         assert len(state.control._wechsel_historie) == 1
 
+    # ── Bugfix: Zaehler stieg mit jedem Loop-Durchlauf (~13 s) ──
+
+    def test_track_wechsel_gleicher_gewinner_zaehlt_nicht(self):
+        """Gleicher Gewinner in Folge ist KEIN Wechsel.
+
+        Vorher wurde jeder Loop angehaengt -> 8 Durchlaufe reichten fuer
+        den Taktschutz, der feuerte dann dauerhaft ohne echten Grund
+        (Log: +1 Wechsel alle ~13 s).
+        """
+        state = SimpleNamespace(local_tz=None, control=SimpleNamespace())
+        for _ in range(100):
+            pcl._track_wechsel(state, "Abweichung")
+        assert len(state.control._wechsel_historie) == 1
+
+    def test_track_wechsel_100_loops_stabil_kein_taktschutz(self):
+        """Integration: 100 Durchlaeufe mit stabiler Regel -> keine Zusatzpause."""
+        state = SimpleNamespace(
+            local_tz=None,
+            control=SimpleNamespace(),
+            priority_config=SimpleNamespace(
+                taktschutz=SimpleNamespace(
+                    aktiv=True, max_wechsel_pro_stunde=8,
+                    dauer_minuten=120, zusatz_pause_minuten=15,
+                )
+            ),
+        )
+        for _ in range(100):
+            pcl._track_wechsel(state, "Abweichung")
+        assert pcl._taktschutz_blockiert(state, state.priority_config) == 0.0
+
+    def test_track_wechsel_alternierende_regeln_zaehlen_jeden_wechsel(self):
+        """A->B->A->B: Jeder echte Wechsel wird erfasst."""
+        state = SimpleNamespace(local_tz=None, control=SimpleNamespace())
+        for name in ("A", "B", "A", "B"):
+            pcl._track_wechsel(state, name)
+        hist = state.control._wechsel_historie
+        assert [n for _, n in hist] == ["A", "B", "A", "B"]
+
+    def test_track_wechsel_raeumt_alt_eintraege_ohne_wechsel_ab(self):
+        """Auch ohne neuen Wechsel werden >1h alte Eintraege entfernt."""
+        now = datetime.now()
+        hist = deque([(now - timedelta(minutes=90), "Alt")])
+        state = SimpleNamespace(
+            local_tz=None, control=SimpleNamespace(_wechsel_historie=hist)
+        )
+        pcl._track_wechsel(state, "Alt")
+        # Alter Eintrag weg, frischer Baseline-Eintrag da
+        assert len(hist) == 1
+        assert hist[0][0] >= now - timedelta(minutes=5)
+
 
 class TestMorgenfensterBonus:
     """Punkt B: Bonus-Vorlauf verschiebt das gelernte Morgenfenster frueher."""

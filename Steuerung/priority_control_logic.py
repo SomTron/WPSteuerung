@@ -456,7 +456,11 @@ def _gelerntes_morgenfenster_mit_bonus(state, learning_engine):
     return fenster
 
 def _track_wechsel(state, gewinner_name):
-    """Trackt Entscheidungswechsel (Punkt D) im letzten 60min-Fenster."""
+    """Trackt echte Entscheidungswechsel (Punkt D) im letzten 60min-Fenster.
+
+    Nur tatsaechliche Wechsel des Gewinners werden erfasst, nicht jede
+    Bewertung (siehe Kommentar unten).
+    """
     now = datetime.now(state.local_tz)
     hist = getattr(state.control, "_wechsel_historie", None)
     if not isinstance(hist, deque):
@@ -465,11 +469,17 @@ def _track_wechsel(state, gewinner_name):
             state.control._wechsel_historie = hist
         except Exception:
             pass
-    hist.append((now, gewinner_name))
-    # Aelter als 60 min entfernen
+    # Alte Eintraege immer entfernen - auch ohne neuen Wechsel
     grenze = now - timedelta(hours=1)
     while hist and hist[0][0] < grenze:
         hist.popleft()
+    # Nur echte Wechsel erfassen: erster Eintrag oder anderer Gewinner als
+    # zuvor. Der Loop laeuft alle ~13 s - ohne diesen Vergleich waechst der
+    # Zaehler mit jedem Durchlauf und der Taktschutz feuert dauerhaft,
+    # obwohl der Kompressor gar nicht getaktet hat.
+    if hist and hist[-1][1] == gewinner_name:
+        return
+    hist.append((now, gewinner_name))
 
 def _taktschutz_blockiert(state, cfg) -> float:
     """Prueft Taktschutz (Punkt D): zu viele Wechsel/h -> zusaetzliche Pause.

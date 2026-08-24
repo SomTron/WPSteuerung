@@ -217,6 +217,18 @@ Die Mindestgarantien (3.5) bleiben unberührt – Komfort geht vor.
 Werden als Solltemperatur-Offsets auf die effektive Config angewendet, bevor die
 Regeln laufen; alle Setpoints in der Statusanzeige zeigen die effektiven Werte.
 
+### 4.4 Taktschutz
+
+Zählt **echte Regelwechsel** im letzten 60-min-Fenster (`_wechsel_historie`).
+Ab `max_wechsel_pro_stunde` (8) wird die Mindestpause auf
+`zusatz_pause_minuten` (15 min) verlängert; das harte Boiler-Maximum und die
+Sicherheitsabschaltung gehen weiterhin vor.
+
+Wichtig: Gezählt werden nur tatsächliche Wechsel des Gewinners (z. B.
+`Abweichung` → `PV_unten`) – **nicht** jeder Loop-Durchlauf (~13 s). Ein
+stabiler Gewinner über Stunden produziert also genau einen Eintrag; erst
+wirkliches Takten des Kompressors aktiviert die Zusatzpause.
+
 ---
 
 ## 5. Selbstlernen (`learning_engine.py`, Persistenz: `learning_data.json`)
