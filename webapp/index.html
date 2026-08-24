@@ -763,7 +763,8 @@
             font-size: 0.75rem;
         }
 
-    </style>
+    .progress-bar { position: relative; }
+</style>
 </head>
 
 <body>
@@ -1306,6 +1307,72 @@
                 el('kpi-woche-kosten').textContent = (woche.kosten_netz_eur ?? 0).toFixed(2) + ' EUR';
             }
 
+            // --- Boiler-Vorrat (Punkt A) ---
+            const boiler = statusData.boiler || {};
+            if (el('boiler-liter')) {
+                el('boiler-liter').textContent = Math.round(boiler.liter_warm ?? 0);
+                el('boiler-anteil').textContent = boiler.anteil_prozent != null
+                    ? boiler.anteil_prozent.toFixed(1) + ' % von ' + Math.round(boiler.volumen_l ?? 150) + ' L' : 'N/A';
+                el('boiler-bar').style.width = Math.min(boiler.anteil_prozent ?? 0, 100) + '%';
+            }
+
+            // --- Taktschutz (Punkt D) ---
+            const takt = statusData.taktschutz || {};
+            if (el('takt-wechsel')) {
+                el('takt-wechsel').textContent = takt.wechsel_pro_stunde ?? 0;
+                el('takt-grenze').textContent = takt.max_wechsel ?? 8;
+                const aktiv = (takt.wechsel_pro_stunde ?? 0) >= (takt.max_wechsel ?? 8);
+                el('takt-status').textContent = !takt.aktiv_cfg ? 'Aus'
+                    : aktiv ? '⚠ Ruhephase' : 'OK';
+                el('takt-status').style.color = aktiv ? '#ff9800' : '';
+            }
+
+            // --- Komfort-Verletzungen (Punkt B) ---
+            const komfort = statusData.komfort || {};
+            if (el('learn-komfort')) {
+                const v7 = komfort.verletzungen_7d ?? 0;
+                el('learn-komfort').textContent = v7 + '/7T'
+                    + (komfort.bonus_vorlauf_h > 0 ? ' (+0.5h Vorlauf)' : '');
+                el('learn-komfort').style.color = v7 > 2 ? '#ff6b6b' : '';
+            }
+
+            // --- PV-Profil (Punkt E) ---
+            const pvp = statusData.pv_profil || {};
+            if (el('pv-peak') && pvp.stunden) {
+                el('pv-peak').textContent = (pvp.peak_watt ?? 0).toFixed(0) + ' W';
+                const stunden = pvp.stunden;
+                el('pv-mittag').textContent = stunden['12'] != null ? stunden['12'].toFixed(0) + ' W' : 'N/A';
+                el('pv-abend').textContent = stunden['17'] != null ? stunden['17'].toFixed(0) + ' W' : 'N/A';
+                zeichnePvProfil(stunden);
+            }
+
+            // PV-Profil-Minichart
+            function zeichnePvProfil(stunden) {
+                const canvas = document.getElementById('pv-profil-chart');
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const w = canvas.width, h = canvas.height;
+                let maxV = 0;
+                for (const k in stunden) { if (stunden[k] > maxV) maxV = stunden[k]; }
+                if (maxV <= 0) return;
+                const bw = w / 24;
+                for (let i = 0; i < 24; i++) {
+                    const v = stunden[String(i)] ?? 0;
+                    const bh = (v / maxV) * (h - 14);
+                    const grad = ctx.createLinearGradient(0, h, 0, h - bh);
+                    grad.addColorStop(0, '#ff9800');
+                    grad.addColorStop(1, '#ffc107');
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(i * bw + 1, h - 10 - bh, bw - 2, bh);
+                    if (i % 6 === 0) {
+                        ctx.fillStyle = '#888';
+                        ctx.font = '9px sans-serif';
+                        ctx.fillText(i, i * bw + 2, h - 1);
+                    }
+                }
+            }
+
             // Letzte Entscheidungen
             const entEl = document.getElementById('entscheidungen-liste');
             if (entEl && statusData.entscheidungen) {
@@ -1608,6 +1675,47 @@
                         <div class="info-row"><span class="info-label">Heizrate Sommer</span><span class="info-value" id="learn-rate-summer">N/A</span></div>
                         <div class="info-row"><span class="info-label">Lern-Basis</span><span class="info-value" id="learn-counts">-</span></div>
                         <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">CalcStart richtet die Vorheizung an der gelernten Zapf-Zeit aus; MinTemp-Fenster folgen dem gelernten Abend-Fenster.</div>
+                        <div class="info-row"><span class="info-label">Komfort-Verletzungen (7T)</span><span class="info-value" id="learn-komfort">N/A</span></div>
+                    </div>
+
+                    <!-- Boiler-Fuellstand (Punkt A) -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon orange">🛁</div>
+                            <div class="card-title">Boiler-Vorrat</div>
+                        </div>
+                        <div class="temp-display">
+                            <span class="temp-value" id="boiler-liter">0</span>
+                            <span class="temp-unit">L</span>
+                        </div>
+                        <div class="temp-label">Warmwasser &gt; 40&deg;C</div>
+                        <div class="info-row"><span class="info-label">Fuellstand</span><span class="info-value" id="boiler-anteil">N/A</span></div>
+                        <div class="progress-bar" style="height:10px;background:#333;border-radius:5px;overflow:hidden;margin-top:8px">
+                            <div id="boiler-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#ff9800,#ffc107);transition:width .5s"></div>
+                        </div>
+                    </div>
+
+                    <!-- Taktschutz + Komfort (Punkte B/D) -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon purple">🛡️</div>
+                            <div class="card-title">Taktschutz</div>
+                        </div>
+                        <div class="info-row"><span class="info-label">Wechsel / Stunde</span><span class="info-value" id="takt-wechsel">0</span></div>
+                        <div class="info-row"><span class="info-label">Grenzwert</span><span class="info-value" id="takt-grenze">8</span></div>
+                        <div class="info-row"><span class="info-label">Status</span><span class="info-value" id="takt-status">OK</span></div>
+                    </div>
+
+                    <!-- PV-Profil (Punkt E) -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon green">☀️</div>
+                            <div class="card-title">PV-Profil (gelernt)</div>
+                        </div>
+                        <div class="info-row"><span class="info-label">Peak-Leistung (&empty;)</span><span class="info-value" id="pv-peak">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Mittags-Erwartung</span><span class="info-value" id="pv-mittag">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Abend-Erwartung (17h)</span><span class="info-value" id="pv-abend">N/A</span></div>
+                        <canvas id="pv-profil-chart" height="90" style="margin-top:8px"></canvas>
                     </div>
 
                     <!-- System Info -->

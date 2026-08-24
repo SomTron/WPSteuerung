@@ -159,6 +159,28 @@ class BatterieConfig(BaseModel):
         description="Heizen nur wenn Einspeisung >= Wert (W); <0 = kleiner Netzkauftoleranz",
     )
 
+    # Dynamische Reserve (Punkt C): Bei gutem Morgen-Forecast darf die
+    # Batterie tiefer entladen werden als min_soc_prozent.
+    entlastung_max_prozent: float = Field(
+        default=15.0,
+        description="Maximale Absenkung der SOC-Reserve bei Top-Forecast (%-Punkte)",
+    )
+    min_soc_absolut: float = Field(
+        default=10.0,
+        description="Harte Untergrenze der dynamischen SOC-Reserve (%)",
+    )
+
+    # Dynamische Reserve (Punkt C): Bei gutem Morgen-Forecast darf die
+    # Batterie tiefer entladen werden als min_soc_prozent.
+    entlastung_max_prozent: float = Field(
+        default=15.0,
+        description="Maximale Absenkung der SOC-Reserve bei Top-Forecast (%-Punkte)",
+    )
+    min_soc_absolut: float = Field(
+        default=10.0,
+        description="Harte Untergrenze der dynamischen SOC-Reserve (%)",
+    )
+
 
     @model_validator(mode="after")
     def _plausibel(self):
@@ -324,6 +346,62 @@ class SommerModusConfig(BaseModel):
     )
 
 
+class KomfortVerletzungConfig(BaseModel):
+    """Automatische Komfort-Erkennung (Punkt B): Faellt der oberste Fuehler
+    unter grenz_c (ausserhalb der Nachtsperre), zaehlt das als Komfort-
+    Verletzung und laesst das Lernen sanft nachziehen."""
+    aktiv: bool = Field(default=True, description="Wachter aktiv")
+    grenz_c: float = Field(default=40.0, description="Darunter gilt Warmwasser als zu kalt (C)")
+    max_pro_tag: int = Field(default=3, description="Max. gezaehlte Verletzungen pro Tag")
+
+    @model_validator(mode="after")
+    def _pruefe(self):
+        if not (20.0 <= self.grenz_c <= 55.0):
+            raise ValueError(f"komfort_verletzung.grenz_c={self.grenz_c} ausserhalb 20-55 C")
+        if self.max_pro_tag < 1:
+            raise ValueError("max_pro_tag muss >= 1 sein")
+        return self
+
+
+class TaktschutzConfig(BaseModel):
+    """Adaptiver Taktschutz (Punkt D): Schaltet der Regelwechsel zu oft hin
+    und her, wird die Mindestpause zwischen zwei Starts verlaengert."""
+    aktiv: bool = Field(default=True, description="Taktschutz aktiv")
+    max_wechsel_pro_stunde: int = Field(default=8, description="Ab so vielen Entscheidungswechseln/h greift die Ruhephase")
+    dauer_minuten: int = Field(default=120, description="Dauer der Ruhephase ab Ausloesung (Minuten)")
+    zusatz_pause_minuten: int = Field(default=15, description="Zusaetzliche Mindestpause waehrend der Ruhephase")
+
+    @model_validator(mode="after")
+    def _pruefe(self):
+        if self.max_wechsel_pro_stunde < 2:
+            raise ValueError("max_wechsel_pro_stunde muss >= 2 sein")
+        if self.dauer_minuten < 5:
+            raise ValueError("dauer_minuten muss >= 5 sein")
+        if self.zusatz_pause_minuten < 0:
+            raise ValueError("zusatz_pause_minuten darf nicht negativ sein")
+        return self
+
+
+class BoilerModellConfig(BaseModel):
+    """Boiler-Fuellstandsmodell (Punkt A): Schaetzt aus den drei Fuehlern,
+    wie viel nutzbares Warmwasser noch im Speicher ist."""
+    volumen_l: float = Field(default=150.0, description="Boiler-Gesamtvolumen (Liter)")
+    nutztemp_c: float = Field(default=40.0, description="Temperatur, ab der Wasser als 'warm' zaehlt (C)")
+    kaltwasser_c: float = Field(default=10.0, description="Frischwasser-/Kaltwassertemperatur (C)")
+
+    @model_validator(mode="after")
+    def _pruefe(self):
+        if not (20.0 <= self.volumen_l <= 1000.0):
+            raise ValueError(f"boiler_modell.volumen_l={self.volumen_l} ausserhalb 20-1000 l")
+        if not (30.0 <= self.nutztemp_c <= 60.0):
+            raise ValueError(f"nutztemp_c={self.nutztemp_c} ausserhalb 30-60 C")
+        if not (0.0 <= self.kaltwasser_c <= 25.0):
+            raise ValueError(f"kaltwasser_c={self.kaltwasser_c} ausserhalb 0-25 C")
+        if self.kaltwasser_c >= self.nutztemp_c:
+            raise ValueError("kaltwasser_c muss unter nutztemp_c liegen")
+        return self
+
+
 class KpiConfig(BaseModel):
     """Konfiguration fuer die Energiebilanz-Anzeige (Webapp-Karte 'Ernte')."""
     strompreis_eur_kwh: float = Field(default=0.35, description="Netzstrompreis (EUR/kWh)")
@@ -352,6 +430,10 @@ class WPSteuerungConfig(BaseModel):
 
 
     kpi: KpiConfig = Field(default_factory=KpiConfig)
+    komfort_verletzung: KomfortVerletzungConfig = Field(default_factory=KomfortVerletzungConfig)
+    taktschutz: TaktschutzConfig = Field(default_factory=TaktschutzConfig)
+    boiler_modell: BoilerModellConfig = Field(default_factory=BoilerModellConfig)
+
 
 class WPSteuerungConfigManager:
     """Lädt und verwaltet die JSON-Konfiguration."""

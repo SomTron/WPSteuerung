@@ -164,7 +164,7 @@ class TestPersistenz:
         zweiter = LearningEngine(data_path=engine.data_path)
         assert zweiter.get_info()["total_cycles"] == 1
         assert zweiter.data.heat_rates["winter"] == engine.data.heat_rates["winter"]
-        assert zweiter.data.version == 3
+        assert zweiter.data.version == 4
 
     def test_speichern_ist_atomar_alte_datei_ueberlebt_fehler(self, engine, pfad):
         """Wenn os.replace fehlschlaegt, bleibt die VORHERIGE Datei unbeschaedigt."""

@@ -12,7 +12,7 @@ import os
 import shutil
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 
 
 LEARNING_DATA_FILE = "learning_data.json"
@@ -58,7 +58,8 @@ class LearningData:
     learned_morning_target_hour: float = 7.0
     morning_target_hour_samples: int = 0
 
-    version: int = 3
+    version: int = 4
+    komfort_verletzungen: List[str] = field(default_factory=list)
 
 
 def _get_season(month: int) -> str:
@@ -82,6 +83,7 @@ class LearningEngine:
         self._cycle_start_temps: Optional[Dict[str, float]] = None
         self._last_temps: Optional[Dict[str, Optional[float]]] = None
         self._last_temp_time: Optional[datetime] = None
+        self._komfort_grenz_c: float = 40.0
 
     def _load(self) -> LearningData:
         """Lerndaten aus JSON laden oder Defaults erstellen."""
@@ -90,7 +92,7 @@ class LearningEngine:
             heat_rates={"winter": {"avg": 3.0, "count": 0},
                        "transition": {"avg": 3.0, "count": 0},
                        "summer": {"avg": 3.0, "count": 0}},
-            learned_target_hour=17.0, target_hour_samples=0, version=3
+            learned_target_hour=17.0, target_hour_samples=0, version=4
         )
         try:
             if os.path.exists(self.data_path):
@@ -104,7 +106,8 @@ class LearningEngine:
                     target_hour_samples=raw.get("target_hour_samples", 0),
                     learned_morning_target_hour=raw.get("learned_morning_target_hour", 7.0),
                     morning_target_hour_samples=raw.get("morning_target_hour_samples", 0),
-                    version=3,
+                    version=4,
+                    komfort_verletzungen=raw.get("komfort_verletzungen", []),
                 )
         except Exception as e:
             logging.warning(f"Konnte Lern-Daten nicht laden: {e}")
@@ -238,6 +241,38 @@ class LearningEngine:
             spaeteste = min(max(stunden) + nachlauf_h, 23.75)
             return round(frueheste, 2), round(spaeteste, 2)
 
+    def _detect_komfort_verletzung(self, now, t_oben, nachtsperre_aktiv, grenz_c=40.0, max_pro_tag=3):
+        """Prueft ob t_oben unter die Komfort-Grenze gefallen ist und
+        zaehlt die Verletzung (ausserhalb Nachtsperre, max. max_pro_tag)."""
+        if t_oben is None or t_oben >= grenz_c or nachtsperre_aktiv:
+            return
+        heute = now.strftime("%Y-%m-%d")
+        heute_count = sum(1 for v in self.data.komfort_verletzungen if v.startswith(heute))
+        if heute_count >= max_pro_tag:
+            return
+        ts = now.isoformat(timespec="seconds")
+        self.data.komfort_verletzungen.append(ts)
+        # Auf letzte ~200 Eintraege begrenzen
+        if len(self.data.komfort_verletzungen) > 200:
+            self.data.komfort_verletzungen = self.data.komfort_verletzungen[-200:]
+        self._save()
+        logging.warning(f"KOMFORT-VERLETZUNG: t_oben {t_oben:.1f}C < {grenz_c}C um {ts}")
+
+    def get_komfort_verletzung_rate(self, tage=7) -> int:
+        """Gibt Anzahl Komfort-Verletzungen der letzten tage zurueck."""
+        if not self.data.komfort_verletzungen:
+            return 0
+        grenze = (datetime.now() - timedelta(days=tage)).isoformat()
+        return sum(1 for v in self.data.komfort_verletzungen if v >= grenze)
+
+    def get_komfort_bonus_vorlauf(self, schwellwert=2, tage=7) -> float:
+        """Gibt zusaetzlichen Vorlauf fuer das Morgenfenster (0 oder 0.5 h),
+        wenn in den letzten tage mehr als schwellwert Verletzungen auftraten."""
+        rate = self.get_komfort_verletzung_rate(tage=tage)
+        if rate > schwellwert:
+            return 0.5
+        return 0.0
+
     def get_info(self) -> Dict:
         """Übersicht der gelernten Werte für API/UI."""
         fenster = self.get_learned_evening_window()
@@ -253,6 +288,8 @@ class LearningEngine:
             "learned_morning_target_hour": self.get_learned_morning_target_hour(),
             "morning_target_hour_samples": self.data.morning_target_hour_samples,
             "learned_morning_window": list(m_fenster) if (m_fenster := self.get_learned_morning_window()) else None,
+            "komfort_verletzungen_7d": self.get_komfort_verletzung_rate(tage=7),
+            "komfort_verletzungen_1d": self.get_komfort_verletzung_rate(tage=1),
         }
 
     # ── Zyklus-Update ──────────────────────────────────────
@@ -284,6 +321,16 @@ class LearningEngine:
             self._detect_usage(now, temp_dict)
 
         self._last_compressor_state = compressor_is_on
+        # Komfort-Verletzung erkennen (Punkt B)
+        t_oben_aktuell = temp_dict.get("oben")
+        if not compressor_is_on and t_oben_aktuell is not None:
+            h = now.hour
+            nachtsperre = (19 <= h or h < 8)
+            self._detect_komfort_verletzung(
+                now, t_oben_aktuell, nachtsperre_aktiv=nachtsperre,
+                grenz_c=self._komfort_grenz_c,
+            )
+
         self._last_temps = temp_dict
         self._last_temp_time = now
 

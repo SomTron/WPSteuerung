@@ -39,6 +39,8 @@ try:
 except ImportError:
     pass
 
+from collections import deque
+
 
 def set_last_compressor_off_time(state, time_val):
     """Setzt den Zeitpunkt des letzten Kompressor-Ausschaltens."""
@@ -231,7 +233,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         soc=getattr(state.solar, 'soc', None),
         battery_power=getattr(state.solar, 'batpower', None),
         learned_evening_window=gelerntes_abendfenster,
-        learned_morning_window=_gelerntes_morgenfenster(learning_engine),
+        learned_morning_window=_gelerntes_morgenfenster_mit_bonus(state, learning_engine),
         solar_stale=_solar_daten_veraltet(state),
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
@@ -324,6 +326,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     if state.control.previous_modus != res["modus"]:
         logging.info(f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})")
         state.control.previous_modus = res["modus"]
+
+    # Taktschutz (Punkt D): Wechsel tracken
+    _track_wechsel(state, res["modus"])
 
     # Entscheidungs-Historie (JSONL) fuer Webapp/KPIs - darf nie blockieren
     if entscheidungs_log is not None:
@@ -435,6 +440,57 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
 
     return config.sicherheit.max_temp_c
 
+
+
+def _gelerntes_morgenfenster_mit_bonus(state, learning_engine):
+    """Morgenfenster + Komfort-Bonus (Punkt B): Bei Verletzungen 0.5h Vorlauf."""
+    fenster = _gelerntes_morgenfenster(learning_engine)
+    if fenster is None:
+        return None
+    bonus = 0.0
+    if learning_engine is not None:
+        bonus = getattr(learning_engine, "get_komfort_bonus_vorlauf", lambda: 0.0)()
+    if bonus > 0:
+        fruehe, spaete = fenster
+        fenster = (max(fruehe - bonus, 4.5), spaete)
+    return fenster
+
+def _track_wechsel(state, gewinner_name):
+    """Trackt Entscheidungswechsel (Punkt D) im letzten 60min-Fenster."""
+    now = datetime.now(state.local_tz)
+    hist = getattr(state.control, "_wechsel_historie", None)
+    if not isinstance(hist, deque):
+        hist = deque()
+        try:
+            state.control._wechsel_historie = hist
+        except Exception:
+            pass
+    hist.append((now, gewinner_name))
+    # Aelter als 60 min entfernen
+    grenze = now - timedelta(hours=1)
+    while hist and hist[0][0] < grenze:
+        hist.popleft()
+
+def _taktschutz_blockiert(state, cfg) -> float:
+    """Prueft Taktschutz (Punkt D): zu viele Wechsel/h -> zusaetzliche Pause.
+    Returns: zusaetzliche Pause in Sekunden (0 = keine Blockade)."""
+    ts_cfg = getattr(cfg, "taktschutz", None)
+    if ts_cfg is None or not getattr(ts_cfg, "aktiv", False):
+        return 0.0
+    hist = getattr(state.control, "_wechsel_historie", deque())
+    if len(hist) < ts_cfg.max_wechsel_pro_stunde:
+        return 0.0
+    # Sind die Wechsel innerhalb der letzten Stunde?
+    now = datetime.now(state.local_tz)
+    grenze = now - timedelta(hours=1)
+    aktuelle = sum(1 for ts, _ in hist if ts >= grenze)
+    if aktuelle >= ts_cfg.max_wechsel_pro_stunde:
+        logging.warning(
+            f"Taktschutz aktiv: {aktuelle} Wechsel/h >= {cfg.taktschutz.max_wechsel_pro_stunde}, "
+            f"zusaetzliche Pause {ts_cfg.zusatz_pause_minuten} min"
+        )
+        return ts_cfg.zusatz_pause_minuten * 60.0
+    return 0.0
 
 def _boiler_max_info(state):
     """Infos zum harten Boiler-Maximum: (temp, limit, wiederein, fuehler).
@@ -574,6 +630,16 @@ async def handle_compressor_on(
             )
             return False
         state.control.boiler_max_blockiert = None  # abgekuehlt -> freigegeben
+    # Taktschutz (Punkt D): Bei zu vielen Wechseln zusaetzliche Pause
+    _ts_cfg = getattr(state, "priority_config", None)
+    takt_pause = _taktschutz_blockiert(state, _ts_cfg)
+    if takt_pause > 0 and min_pause.total_seconds() < takt_pause:
+        min_pause_orig = min_pause
+        min_pause = timedelta(seconds=takt_pause)
+        logging.info(
+            f"Taktschutz verlaengert Pause von {min_pause_orig.total_seconds()/60:.0f} "
+            f"auf {takt_pause/60:.0f} min"
+        )
 
     # Explizite Neustartsperre (z.B. nach Verifizierungsfehler): blockiert
     # VOR der Mindestpausen-Pruefung, damit der Grund eindeutig im Log steht.

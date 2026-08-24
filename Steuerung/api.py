@@ -2,6 +2,15 @@ try:
     from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
 except ImportError:
     SOLAR_DATA_STALE_THRESHOLD_MIN = 15
+
+try:
+    import boiler_modell
+    import pv_profil as _pv_profil_modul
+except ImportError:
+    # Module gehoeren zum Repo - Fallback nur zur Robustheit
+    boiler_modell = None
+    _pv_profil_modul = None
+
 try:
     import entscheidungs_log
 except ImportError:
@@ -315,6 +324,62 @@ def get_status():
     except Exception as e:
         logging.warning(f"Entscheidungen/KPIs nicht verfuegbar: {e}")
 
+    # Boiler-Fuellstand + Taktschutz + Komfort (Punkte A/B/D)
+    boiler_info: dict = {}
+    try:
+        if boiler_modell is not None:
+            cfg_bm = getattr(shared_state.priority_config, "boiler_modell", None)
+            liter, anteil = boiler_modell.schaetze_warmwasser(
+                {"unten": shared_state.sensors.t_unten,
+                 "mittig": shared_state.sensors.t_mittig,
+                 "oben": shared_state.sensors.t_oben},
+                volumen_l=getattr(cfg_bm, "volumen_l", 150.0),
+                nutztemp_c=getattr(cfg_bm, "nutztemp_c", 40.0),
+                kaltwasser_c=getattr(cfg_bm, "kaltwasser_c", 10.0),
+            )
+            boiler_info = {"liter_warm": liter, "anteil_prozent": anteil,
+                           "volumen_l": getattr(cfg_bm, "volumen_l", 150.0)}
+    except Exception as e:
+        logging.debug(f"Boiler-Modell nicht verfuegbar: {e}")
+
+    taktschutz_info: dict = {}
+    try:
+        cfg_ts = getattr(shared_state.priority_config, "taktschutz", None)
+        hist = getattr(shared_state.control, "_wechsel_historie", None)
+        wechsel_h = len(hist) if hist else 0
+        taktschutz_info = {
+            "wechsel_pro_stunde": wechsel_h,
+            "max_wechsel": getattr(cfg_ts, "max_wechsel_pro_stunde", 8),
+            "aktiv_cfg": getattr(cfg_ts, "aktiv", True),
+        }
+    except Exception as e:
+        logging.debug(f"Taktschutz-Status nicht verfuegbar: {e}")
+
+    komfort_info: dict = {}
+    try:
+        le = getattr(shared_state, "_learning_engine_ref", None)
+        if le is not None:
+            komfort_info = {
+                "verletzungen_7d": le.get_komfort_verletzung_rate(tage=7),
+                "verletzungen_1d": le.get_komfort_verletzung_rate(tage=1),
+                "grenz_c": getattr(le, "_komfort_grenz_c", 40.0),
+                "bonus_vorlauf_h": le.get_komfort_bonus_vorlauf(),
+            }
+    except Exception as e:
+        logging.debug(f"Komfort-Info nicht verfuegbar: {e}")
+
+    pv_profil_info: dict = {}
+    try:
+        if _pv_profil_modul is not None:
+            profil = _pv_profil_modul.berechne_profil()
+            peak = _pv_profil_modul.get_peak_leistung(profil)
+            pv_profil_info = {
+                "stunden": {str(k): v for k, v in sorted(profil.items())},
+                "peak_watt": peak,
+            }
+    except Exception as e:
+        logging.debug(f"PV-Profil nicht verfuegbar: {e}")
+
     return {
         "temperatures": {
             "oben": shared_state.sensors.t_oben,
@@ -367,6 +432,10 @@ def get_status():
         # Entscheidungs-Historie (letzte 30) + Energiebilanz-KPIs
         "entscheidungen": entscheidungen_info,
         "kpi": kpi_info,
+        "boiler": boiler_info,
+        "taktschutz": taktschutz_info,
+        "komfort": komfort_info,
+        "pv_profil": pv_profil_info,
     }
 
 

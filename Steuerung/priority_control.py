@@ -314,44 +314,31 @@ def evaluate_batterie(
     now_hour: int,
     nachtsperre_start: int,
     nachtsperre_ende: int,
+    forecast_wh_qm: Optional[float] = None,
 ) -> RegelErgebnis:
-    """Batterie-Regel: Heizen mit Hausbatterie statt Netzstrom.
-
-    Priorisierung PV-Direkt > Batterie > Netz:
-    - Die PV-Regeln feuern bei echter Netzeinspeisung (feedinpower > Schwelle).
-    - Diese Regel erlaubt zusaetzlich Heizen, WENN die Batterie genug geladen
-      ist UND das Haus nicht aus dem Netz bezieht (feedinpower >= Toleranz).
-      Dann deckt die Entladung den WP-Verbrauch, ohne Netzkauf zu verursachen.
-    - Respektiert die Nachtsperre (nachts so wenig wie moeglich laufen).
-    """
+    "Batterie-Regel: Heizen mit Hausbatterie statt Netzstrom."
     result = RegelErgebnis(
         name="Batterie",
         prioritaet=batt_cfg.prioritaet,
         aktiv=batt_cfg.aktiv,
     )
-
     if not batt_cfg.aktiv:
         result.grund = "Batterie-Regel inaktiv"
         return result
-
     if soc is None:
         result.aktiv = False
         result.grund = "SOC nicht verfuegbar"
         return result
-
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     if nachtsperre:
         result.aktiv = False
         result.grund = "Nachtsperre aktiv (kein Batterie-Heizen)"
         return result
-
     temp = _parse_sensor(temp_dict, batt_cfg.temperaturfuehler)
     if temp is None:
         result.aktiv = False
-        result.grund = f"Sensor '{batt_cfg.temperaturfuehler}' nicht verfuegbar"
+        result.grund = "Sensor nicht verfuegbar"
         return result
-
-    # 1. AUSSCHALTEN: Ziel erreicht (immer zuerst)
     if temp >= batt_cfg.ausschalten_bei_c:
         result.einschalten = False
         result.grund = (
@@ -359,49 +346,37 @@ def evaluate_batterie(
             f"{batt_cfg.ausschalten_bei_c}C -> AUS"
         )
         return result
-
-    strom_ok = (
-        soc >= batt_cfg.min_soc_prozent
-        and feedin_watt >= batt_cfg.max_netzbezug_watt
-    )
-
-    # 2. WEITERLAUFEN: laeuft schon, Batterie traegt es weiter
+    # Dynamische Batteriereserve (Punkt C)
+    eff_min_soc = batt_cfg.min_soc_prozent
+    if forecast_wh_qm is not None and forecast_wh_qm >= 2000.0:
+        entlastung = min(
+            getattr(batt_cfg, "entlastung_max_prozent", 15.0),
+            eff_min_soc - getattr(batt_cfg, "min_soc_absolut", 10.0)
+        )
+        eff_min_soc -= max(entlastung, 0.0)
+    strom_ok = (soc >= eff_min_soc and feedin_watt >= batt_cfg.max_netzbezug_watt)
     if kompressor_ein and strom_ok and temp > batt_cfg.einschalten_bei_c:
         result.einschalten = True
         result.grund = (
-            f"Batterie-Weiterlauf: SOC {soc:.0f}% >= {batt_cfg.min_soc_prozent:.0f}%, "
+            f"Batterie-Weiterlauf: SOC {soc:.0f}% >= {eff_min_soc:.0f}%, "
             f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
-            f"{batt_cfg.temperaturfuehler} {temp:.1f}C bis {batt_cfg.ausschalten_bei_c}C"
+            f"{batt_cfg.temperaturfuehler} {temp:.1f}C"
         )
         return result
-
-    # 3. EINSCHALTEN: genug Batterie, kein Netzbezug, Boiler kalt genug
     if strom_ok and temp <= batt_cfg.einschalten_bei_c:
         result.einschalten = True
         result.grund = (
-            f"Batterie: SOC {soc:.0f}% >= {batt_cfg.min_soc_prozent:.0f}%, "
+            f"Batterie: SOC {soc:.0f}% >= {eff_min_soc:.0f}%, "
             f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
-            f"{batt_cfg.temperaturfuehler} {temp:.1f}C <= {batt_cfg.einschalten_bei_c}C -> EIN"
+            f"{batt_cfg.temperaturfuehler} {temp:.1f}C -> EIN"
         )
         return result
-
-    # 4. Bedingungen nicht erfuellt - Grund benennen
-    if soc < batt_cfg.min_soc_prozent:
-        result.grund = (
-            f"Batterie: SOC {soc:.0f}% < {batt_cfg.min_soc_prozent:.0f}% "
-            f"(Batterie-Schonung) -> keine Aktion"
-        )
+    if soc < eff_min_soc:
+        result.grund = f"Batterie: SOC {soc:.0f}% < {eff_min_soc:.0f}% (Schonung)"
     elif feedin_watt < batt_cfg.max_netzbezug_watt:
-        result.grund = (
-            f"Batterie: Netzbezug {feedin_watt:.0f}W < "
-            f"{batt_cfg.max_netzbezug_watt:.0f}W (kein Netzstrom!) -> keine Aktion"
-        )
+        result.grund = f"Batterie: Netzbezug {feedin_watt:.0f}W < {batt_cfg.max_netzbezug_watt:.0f}W (kein Netzstrom!)"
     else:
-        result.grund = (
-            f"Batterie: {batt_cfg.temperaturfuehler} {temp:.1f}C in Hysterese "
-            f"({batt_cfg.einschalten_bei_c}-{batt_cfg.ausschalten_bei_c}C), "
-            f"SOC {soc:.0f}% -> keine Aktion"
-        )
+        result.grund = f"Batterie: {temp:.1f}C in Hysterese ({batt_cfg.einschalten_bei_c}-{batt_cfg.ausschalten_bei_c}C)"
     return result
 
 
@@ -1114,13 +1089,13 @@ def bewerte_alle_regeln(
     ):
         ergebnisse.append(min_ergebnis)
 
-    # 2c. Batterie-Regel (PV-Direkt > Batterie > Netz)
+    # 2c. Batterie-Regel (PV-Direkt > Batterie > Netz, mit dynamischer Reserve)
     ergebnis = evaluate_batterie(
         config.batterie, temp_dict, pv_leistung, soc, kompressor_ein,
         now_hour, nachtsperre_start, nachtsperre_ende,
+        forecast_wh_qm=forecast_wh_qm,
     )
     ergebnisse.append(ergebnis)
-
     # 3. Zeitfenster-Regel
     ergebnis = evaluate_zeitfenster(
         config.zeitfenster, temp_dict, pv_leistung, now_hour
