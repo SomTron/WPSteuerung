@@ -10,6 +10,12 @@ Daraus leitet sich ab:
 - die Entscheidungs-Historie fuer API/Webapp ("Warum lief die WP um 3 Uhr?")
 - Tages-/Wochen-KPIs: WP-Energie und Anteil PV/Batterie vs. Netz
 
+Schreibstrategie (gegen Spam bei identischen Zyklen):
+- geschrieben wird nur bei AENDERUNG der Entscheidung (gewinner /
+  soll_einschalten / kompressor_laeuft) oder als Herzschlag alle
+  HEARTBEAT_SEKUNDEN, solange die WP laeuft (fuer exakte Energiebilanz).
+- Im Webapp erscheinen dadurch echte Umschaltzeitpunkte statt Wiederholungen.
+
 Klassifikation der Stromquelle (vereinfacht, dokumentiert):
 - feedin >= NETZKAUF_GRENZE_W  -> "pv_batterie" (kein nennenswerter Netzkauf)
 - feedin <  NETZKAUF_GRENZE_W  -> "netz"
@@ -24,6 +30,55 @@ LOG_DATEI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entscheidu
 MAX_BYTES = 2_000_000          # Rotation bei ~2 MB -> .old
 MAX_EINTRAEGE_LESEN = 5000
 NETZKAUF_GRENZE_W = -50.0      # darunter gilt: Haus kauft Netzstrom
+HEARTBEAT_SEKUNDEN = 75.0      # Zwangsschreibintervall laufender WP (< dt-Cap 120 s)
+
+# Cache der zuletzt geschriebenen Zeile (pfad-gebunden, damit Tests mit
+# umgeleitetem LOG_DATEI nicht gegenseitig stoeren).
+_cache_pfad: Optional[str] = None
+_cache_zeile: Optional[Dict] = None
+
+
+def _letzte_logzeile() -> Optional[Dict]:
+    """Letzte geschriebene Logzeile oder None (liest nur das Dateiende)."""
+    global _cache_zeile
+    if _cache_pfad == LOG_DATEI and _cache_zeile is not None:
+        return _cache_zeile
+    try:
+        if not os.path.exists(LOG_DATEI):
+            return None
+        with open(LOG_DATEI, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            groesse = f.tell()
+            block = min(groesse, 8192)
+            f.seek(groesse - block)
+            daten = f.read().decode("utf-8", errors="replace")
+        zeilen = [z for z in daten.strip().splitlines() if z.strip()]
+        if not zeilen:
+            return None
+        return json.loads(zeilen[-1])
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _soll_schreiben(vorher: Optional[Dict], eintrag: Dict) -> bool:
+    """True bei Entscheidungsaenderung oder Herzschlag laufender WP."""
+    if vorher is None:
+        return True
+    identisch = (
+        vorher.get("gewinner") == eintrag.get("gewinner")
+        and vorher.get("soll_einschalten") == eintrag.get("soll_einschalten")
+        and vorher.get("kompressor_laeuft") == eintrag.get("kompressor_laeuft")
+    )
+    if not identisch:
+        return True
+    if not eintrag.get("kompressor_laeuft"):
+        return False  # Stillstand: identische Zyklen nicht weiterschreiben
+    try:
+        dt = (datetime.fromisoformat(eintrag["ts"])
+              - datetime.fromisoformat(vorher["ts"])).total_seconds()
+        return dt >= HEARTBEAT_SEKUNDEN
+    except (KeyError, ValueError):
+        return True  # im Zweifel lieber schreiben als Zustand verlieren
 
 
 def schreibe_eintrag(
@@ -36,8 +91,11 @@ def schreibe_eintrag(
     soc: Optional[float] = None,
     t_unten: Optional[float] = None,
     t_oben: Optional[float] = None,
-) -> None:
-    """Haengt einen Zyklus-Eintrag an das JSONL-Log (rotierend)."""
+) -> bool:
+    """Haengt einen Zyklus-Eintrag ans JSONL-Log (nur bei Aenderung/Herzschlag).
+
+    Rueckgabe: True, wenn geschrieben wurde; False bei unterdruecktem Duplikat.
+    """
     eintrag = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "gewinner": gewinner_name or "",
@@ -51,17 +109,26 @@ def schreibe_eintrag(
         "t_oben": round(float(t_oben), 2) if t_oben is not None else None,
     }
     try:
+        global _cache_pfad, _cache_zeile
+        vorher = _letzte_logzeile()
+        if not _soll_schreiben(vorher, eintrag):
+            return False
         if os.path.exists(LOG_DATEI) and os.path.getsize(LOG_DATEI) > MAX_BYTES:
             alt = LOG_DATEI + ".old"
             if os.path.exists(alt):
                 os.remove(alt)
             os.replace(LOG_DATEI, alt)
+            _cache_zeile = None
             logging.info("Entscheidungslog rotiert auf .old")
         with open(LOG_DATEI, "a", encoding="utf-8") as f:
             f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
+        _cache_pfad = LOG_DATEI
+        _cache_zeile = eintrag
+        return True
     except OSError as e:
         # Logging darf den Regelbetrieb niemals stoeren
         logging.debug(f"Entscheidungslog nicht schreibbar: {e}")
+        return False
 
 
 def _lies_zeilen() -> List[Dict]:
@@ -103,27 +170,33 @@ def _aggregiere(eintraege: List[Dict], wp_leistung_watt: float,
                 strompreis_eur_kwh: float) -> Dict:
     """Aggregiert Laufzeit/Energie/Quellenanteile ueber Logzeilen.
 
-    Zeitspanne je Zeile = Abstand zur Vorgaengerzeile (max. 120 s angesetzt),
-    gewichtet mit dem Kompressor-Zustand dieser Zeile.
+    Zeitspanne je Intervall = Abstand zur Vorgaengerzeile (max. 120 s
+    angesetzt). Zugerechnet wird der Zustand der VORGAENGERZEILE, da dieser
+    waehrend des gesamten Intervalls galt - wichtig bei aenderungsbasiertem
+    Schreiben, damit der WP-Start keine Phantom-Minuten aus der Stillstandsluecke
+    erzeugt.
     """
     laufzeit_s = {"pv_batterie": 0.0, "netz": 0.0}
     vorher_ts: Optional[datetime] = None
+    vorher_laeuft = False
+    vorher_feedin: Optional[float] = None
     for e in eintraege:
         try:
             ts = datetime.fromisoformat(e["ts"])
         except (KeyError, ValueError):
             vorher_ts = None
+            vorher_laeuft = False
             continue
         dt_s = 0.0
         if vorher_ts is not None:
             dt_s = min(max((ts - vorher_ts).total_seconds(), 0.0), 120.0)
+        if vorher_ts is not None and vorher_laeuft:
+            quelle = ("netz" if vorher_feedin is not None
+                      and vorher_feedin < NETZKAUF_GRENZE_W else "pv_batterie")
+            laufzeit_s[quelle] += dt_s
         vorher_ts = ts
-        if not e.get("kompressor_laeuft"):
-            continue
-        feedin = e.get("feedin_w")
-        quelle = ("netz" if feedin is not None and feedin < NETZKAUF_GRENZE_W
-                  else "pv_batterie")
-        laufzeit_s[quelle] += dt_s
+        vorher_laeuft = bool(e.get("kompressor_laeuft"))
+        vorher_feedin = e.get("feedin_w")
 
     gesamt_min = sum(laufzeit_s.values()) / 60.0
     energie_kwh = {q: s / 3600.0 * wp_leistung_watt / 1000.0 for q, s in laufzeit_s.items()}

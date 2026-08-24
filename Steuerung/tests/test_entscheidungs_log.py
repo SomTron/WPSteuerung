@@ -139,7 +139,9 @@ def test_kpis_aggregieren(tmp_path):
         # feedin >= -50 -> pv_batterie, feedin < -50 -> netz
         for i in range(6):
             ts = (now - timedelta(seconds=60 * (5 - i))).isoformat(timespec="seconds")
-            feedin = 100.0 if i < 4 else -200.0  # 4 PV, 2 Netz
+            # Zurechnung an Vorgaengerzeile: Intervall -> L(k) nutzt
+            # feedin von L(k-1): L0..L2 = PV (3 Intervalle), L3,L4 = Netz.
+            feedin = 100.0 if i < 3 else -200.0  # L5-Feedin unbenutzt
             with open(log_datei, "a", encoding="utf-8") as f:
                 f.write(json.dumps({
                     "ts": ts,
@@ -201,3 +203,94 @@ def test_schreibe_ohne_os_error(tmp_path, caplog):
             el.schreibe_eintrag("Test", "Grund", True, False)
             # Kein Fehler, nur debug-Log
             assert len(caplog.records) == 0 or caplog.records[0].levelname == "DEBUG"
+
+def test_identische_zyklen_werden_nur_einmal_geschrieben(tmp_path):
+    """Dedupe: identische Entscheidung -> kein zweiter Eintrag."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        e1 = el.schreibe_eintrag("PV_1", "Grund A", True, True,
+                                 feedin_watt=500.0, batpower_watt=-300.0,
+                                 soc=80.0, t_unten=40.0, t_oben=44.0)
+        e2 = el.schreibe_eintrag("PV_1", "Grund A", True, True,
+                                 feedin_watt=510.0, batpower_watt=-310.0,
+                                 soc=80.1, t_unten=40.1, t_oben=44.2)
+        assert e1 is True
+        assert e2 is False, "identischer Zyklus darf nicht geschrieben werden"
+        with open(log_datei, encoding="utf-8") as f:
+            zeilen = f.readlines()
+        assert len(zeilen) == 1
+
+        # Aenderung der Entscheidung -> wird geschrieben
+        e3 = el.schreibe_eintrag("MinTemp-Mitte", "Garantie", False, False)
+        assert e3 is True
+        with open(log_datei, encoding="utf-8") as f:
+            zeilen = f.readlines()
+        assert len(zeilen) == 2
+
+
+def test_herzschlag_bei_laufender_wp(tmp_path):
+    """Herzschlag: laufende WP schreibt identische Zyklen nach Intervall."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        with patch.object(el, "HEARTBEAT_SEKUNDEN", -1.0):
+            # Negatives Intervall => jeder Zyklus zaehlt als Herzschlag
+            a = el.schreibe_eintrag("PV_1", "g", True, True)
+            b = el.schreibe_eintrag("PV_1", "g", True, True)
+            assert a is True and b is True
+            with open(log_datei, encoding="utf-8") as f:
+                assert len(f.readlines()) == 2
+
+            # Aber: Stillstand bleibt immer dedupliziert
+            c = el.schreibe_eintrag("Keine", "", False, False)
+            d = el.schreibe_eintrag("Keine", "", False, False)
+            assert c is True and d is False
+            with open(log_datei, encoding="utf-8") as f:
+                assert len(f.readlines()) == 3
+
+
+def test_keine_phantom_minuten_beim_wp_start(tmp_path):
+    """Regression: Stillstandsluecke vor dem Start zaehlt nicht als Laufzeit.
+
+    Vorher: OFF-Zeile, dann 1 h Stille, dann ON-Zeile. Das 120-s-gecappte
+    Intervall gehoert zum Stillstand und darf nicht als Laufzeit zaehlen.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        now = datetime.now()
+        alt_ts = (now - timedelta(hours=1)).isoformat(timespec="seconds")
+        with open(log_datei, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "ts": alt_ts, "gewinner": "Ruhe", "grund": "",
+                "soll_einschalten": False, "kompressor_laeuft": False,
+                "feedin_w": 0.0, "batpower_w": 0.0, "soc": 50.0,
+                "t_unten": 40.0, "t_oben": 42.0,
+            }) + "\n")
+
+        # WP startet -> aenderungsbasiert geschriebene ON-Zeile
+        assert el.schreibe_eintrag("PV_1", "Genug Sonne", True, True,
+                                   feedin_watt=900.0) is True
+
+        result = el.kpis(wp_leistung_watt=600.0, strompreis_eur_kwh=0.35)
+        heute = result["heute"]
+        assert heute["laufzeit_min"] == pytest.approx(0.0, abs=0.05), \
+            f"Phantom-Laufzeit aus Stillstandsluecke: {heute}"
+
+        # Herzschlag 75 s spaeter -> genau diese 75 s zahlen
+        on_ts = None
+        with open(log_datei, encoding="utf-8") as f:
+            letzte = json.loads(f.readlines()[-1])
+        on_dt = datetime.fromisoformat(letzte["ts"]) + timedelta(seconds=75)
+        with open(log_datei, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "ts": on_dt.isoformat(timespec="seconds"),
+                "gewinner": "PV_1", "grund": "Genug Sonne",
+                "soll_einschalten": True, "kompressor_laeuft": True,
+                "feedin_w": 900.0, "batpower_w": -300.0, "soc": 80.0,
+                "t_unten": 40.5, "t_oben": 44.0,
+            }) + "\n")
+
+        result = el.kpis(wp_leistung_watt=600.0, strompreis_eur_kwh=0.35)
+        heute = result["heute"]
+        assert heute["laufzeit_min"] == pytest.approx(1.25, abs=0.11), \
+            f"Herzschlag-Intervall falsch: {heute}"
+        assert heute["netz_kwh"] == pytest.approx(0.0, abs=0.001)
