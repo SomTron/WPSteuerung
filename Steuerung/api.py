@@ -1,3 +1,11 @@
+try:
+    from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
+except ImportError:
+    SOLAR_DATA_STALE_THRESHOLD_MIN = 15
+try:
+    import entscheidungs_log
+except ImportError:
+    entscheidungs_log = None
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
@@ -145,6 +153,18 @@ def init_api(state, funcs):
     control_funcs = funcs
 
 @app.get("/status")
+def _solar_stale_status() -> bool:
+    """True, wenn Solax-Daten aelter als der Stale-Schwellwert sind."""
+    try:
+        last_api_call = getattr(shared_state.solar, 'last_api_call', None)
+        if last_api_call is None:
+            return True
+        jetzt = datetime.now(getattr(last_api_call, 'tzinfo', None))
+        return (jetzt - last_api_call).total_seconds() / 60.0 > SOLAR_DATA_STALE_THRESHOLD_MIN
+    except Exception:
+        return False
+
+
 def get_status():
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
@@ -271,6 +291,30 @@ def get_status():
                 "grund": e.grund,
             })
 
+    # Entscheidungs-Historie + KPIs (Fehler hier duerfen /status nie killen)
+    entscheidungen_info: list = []
+    kpi_info: dict = {}
+    try:
+        if entscheidungs_log is not None:
+            entscheidungen_info = [
+                {
+                    "ts": e.get("ts"), "gewinner": e.get("gewinner") or "",
+                    "grund": e.get("grund") or "",
+                    "soll_einschalten": bool(e.get("soll_einschalten")),
+                    "laeuft": bool(e.get("kompressor_laeuft")),
+                }
+                for e in entscheidungs_log.historie(stunden=12, limit=30)
+            ]
+            wp_leistung_watt = float(getattr(pc, "wp", None) is not None and pc.wp.leistung_watt or 600.0)
+            strompreis = float(
+                getattr(getattr(shared_state, 'priority_config', None), 'kpi', None)
+                and getattr(shared_state.priority_config.kpi, 'strompreis_eur_kwh', 0.35)
+                or 0.35
+            )
+            kpi_info = entscheidungs_log.kpis(wp_leistung_watt, strompreis)
+    except Exception as e:
+        logging.warning(f"Entscheidungen/KPIs nicht verfuegbar: {e}")
+
     return {
         "temperatures": {
             "oben": shared_state.sensors.t_oben,
@@ -298,6 +342,7 @@ def get_status():
             "ac_power": getattr(shared_state.solar, 'acpower', None),
             "forecast_today": getattr(shared_state.solar, 'forecast_today', None),
             "forecast_tomorrow": getattr(shared_state.solar, 'forecast_tomorrow', None),
+            "solar_stale": _solar_stale_status(),
             "forecast_day2": getattr(shared_state.solar, 'forecast_day2', None),
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
@@ -309,6 +354,9 @@ def get_status():
             "total_cycles": 0,
             "total_usage_events": 0,
             "learned_evening_window": None,
+            "learned_morning_target_hour": 7.0,
+            "morning_target_hour_samples": 0,
+            "learned_morning_window": None,
         },
                 "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund or "",
@@ -316,7 +364,28 @@ def get_status():
         },
         "priority": priority_info,
         "regel_ergebnisse": regel_ergebnisse,
+        # Entscheidungs-Historie (letzte 30) + Energiebilanz-KPIs
+        "entscheidungen": entscheidungen_info,
+        "kpi": kpi_info,
     }
+
+
+@app.get("/history/regeln")
+def get_history_regeln(hours: int = Query(default=24, ge=1, le=336), limit: int = Query(default=200, ge=1, le=1000)):
+    """Zeitverlauf der gewinnenden Regel fuer das Chart-Overlay."""
+    try:
+        eintraege = entscheidungs_log.historie(stunden=hours, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Regel-Historie nicht lesbar: {e}")
+    return {
+        "data": [
+            {"timestamp": e.get("ts"), "regel": e.get("gewinner") or "Keine",
+             "laeuft": bool(e.get("kompressor_laeuft"))}
+            for e in eintraege
+        ],
+        "count": len(eintraege),
+    }
+
 
 @app.post("/config")
 def update_config(config: ConfigUpdate):

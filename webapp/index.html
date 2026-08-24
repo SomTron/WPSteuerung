@@ -855,8 +855,30 @@
                     mittig: [],
                     unten: [],
                     verdampfer: [],
-                    sollwerte: []
+                    sollwerte: [],
+                    regelIdx: [],
+                    regelFarben: [],
+                    regelTooltip: []
                 };
+
+                // Regel-Historie parallel laden (fuer Overlay)
+                let regelnDaten = [];
+                try {
+                    const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000`);
+                    if (respR.ok) {
+                        const jd = await respR.json();
+                        regelnDaten = jd.data || [];
+                    }
+                } catch (e) { console.warn('Regel-Historie nicht verfuegbar:', e); }
+
+                const namenZuIdx = new Map();
+                const idxZuFarbe = [];
+                function regelFarbe(name) {
+                    if (name === 'Keine' || !name) return 'rgba(128,128,128,0.15)';
+                    let h = 0;
+                    for (let i = 0; i < name.length; i++) { h = (h * 31 + name.charCodeAt(i)) % 360; }
+                    return 'hsla(' + h + ',70%,55%,0.35)';
+                }
 
                 historyData.data.forEach(point => {
                     const timestamp = new Date(point.timestamp);
@@ -873,6 +895,27 @@
                     // Sollwerte direkt aus CSV (Einschaltpunkt-Spalte)
                     temperatureHistory.sollwerte.push(point.einschaltpunkt);
                 });
+
+                // Regelverlauf auf die Temperatur-Timestamps abbilden:
+                // je Punkt die zuletzt bekannte gewinnende Regel.
+                let zeigerR = 0;
+                let letzteRegel = 'Keine';
+                const parseTs = (s) => new Date(s).getTime();
+                historyData.data.forEach(point => {
+                    const tsPunkt = parseTs(point.timestamp);
+                    while (zeigerR < regelnDaten.length &&
+                           parseTs(regelnDaten[zeigerR].timestamp) <= tsPunkt) {
+                        letzteRegel = regelnDaten[zeigerR].regel;
+                        zeigerR++;
+                    }
+                    if (!namenZuIdx.has(letzteRegel)) {
+                        namenZuIdx.set(letzteRegel, namenZuIdx.size);
+                    }
+                    temperatureHistory.regelIdx.push(namenZuIdx.get(letzteRegel));
+                    temperatureHistory.regelFarben.push(regelFarbe(letzteRegel));
+                    temperatureHistory.regelTooltip.push(letzteRegel);
+                });
+                window._regelnLegende = Array.from(namenZuIdx.keys());
 
                 // Chart mit den geladenen Daten neu erstellen
                 createChart();
@@ -1002,12 +1045,33 @@
                                 { label: 'Mitte', data: temperatureHistory.mittig, borderColor: '#51cf66', borderWidth: 2, pointRadius: 0, tension: 0.3 },
                                 { label: 'Unten', data: temperatureHistory.unten, borderColor: '#ffa94d', borderWidth: 2, pointRadius: 0, tension: 0.3 },
                                 { label: 'Verdampfer', data: temperatureHistory.verdampfer, borderColor: '#ff6b6b', borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y1' },
-                                { label: 'Einschaltpunkt', data: temperatureHistory.sollwerte, borderColor: '#b197fc', borderWidth: 2, borderDash: [8, 4], pointRadius: 0, tension: 0, fill: false, spanGaps: true }
+                                { label: 'Einschaltpunkt', data: temperatureHistory.sollwerte, borderColor: '#b197fc', borderWidth: 2, borderDash: [8, 4], pointRadius: 0, tension: 0, fill: false, spanGaps: true },
+                                ...(temperatureHistory.regelIdx && temperatureHistory.regelIdx.length ? [{
+                                    label: 'Aktive Regel',
+                                    data: temperatureHistory.regelIdx,
+                                    yAxisID: 'yR',
+                                    stepped: true,
+                                    pointRadius: 0,
+                                    borderWidth: 0,
+                                    fill: true,
+                                    backgroundColor: temperatureHistory.regelFarben,
+                                    tooltipContent: temperatureHistory.regelTooltip
+                                }] : [])
                             ]
                         },
                         options: {
                             responsive: true, maintainAspectRatio: false,
                             plugins: {
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(ctx) {
+                                            if (ctx.dataset.label === 'Aktive Regel' && ctx.dataset.tooltipContent) {
+                                                return 'Regel: ' + ctx.dataset.tooltipContent[ctx.dataIndex];
+                                            }
+                                            return ctx.dataset.label + ': ' + ctx.parsed.y;
+                                        }
+                                    }
+                                },
                                 zoom: {
                                             pan: { enabled: true, mode: 'x', threshold: 5 },
                                             zoom: {
@@ -1023,7 +1087,8 @@
                             scales: {
                                 y: { min: getBoilerRange().min, max: getBoilerRange().max, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', callback: v => v + ' °C' }, title: { display: true, text: 'Boiler (°C)', color: '#a0a0c0' } },
                                 y1: { position: 'right', min: getVerdampferRange().min, max: getVerdampferRange().max, grid: { display: false }, ticks: { color: '#ff6b6b', callback: v => v + ' °C' }, title: { display: true, text: 'Verdampfer (°C)', color: '#ff6b6b' } },
-                                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', maxRotation: 45, minRotation: 45, maxTicksLimit: 20 } }
+                                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0a0c0', maxRotation: 45, minRotation: 45, maxTicksLimit: 20 } },
+                                yR: { display: false, min: 0, beginAtZero: true }
                             },
                             interaction: { mode: 'nearest', axis: 'x', intersect: false }
                         }
@@ -1219,6 +1284,49 @@
                 });
                 document.getElementById('learn-counts').textContent =
                     (lrn.total_cycles ?? 0) + ' Heizzyklen / ' + (lrn.total_usage_events ?? 0) + ' Zapfungen';
+            }
+
+            // Solar-Stale-Warnung
+            const staleRow = document.getElementById('energy-stale-row');
+            if (staleRow) staleRow.style.display = energy.solar_stale ? '' : 'none';
+
+            // Energiebilanz (KPIs)
+            const kpi = statusData.kpi || {};
+            const heute = kpi.heute || {};
+            const woche = kpi.sieben_tage || {};
+            const el = (id) => document.getElementById(id);
+            if (el('kpi-heute-kwh')) {
+                el('kpi-heute-kwh').textContent = (heute.energie_kwh ?? 0).toFixed(1);
+                el('kpi-heute-pv').textContent = heute.anteil_pv_batterie_prozent != null
+                    ? heute.anteil_pv_batterie_prozent + ' %' : 'N/A';
+                el('kpi-heute-netz').textContent = (heute.netz_kwh ?? 0).toFixed(2) + ' kWh';
+                el('kpi-heute-kosten').textContent = (heute.kosten_netz_eur ?? 0).toFixed(2) + ' EUR';
+                el('kpi-heute-laufzeit').textContent = Math.round(heute.laufzeit_min ?? 0) + ' min';
+                el('kpi-woche-pv').textContent = woche.anteil_pv_batterie_prozent != null
+                    ? woche.anteil_pv_batterie_prozent + ' % (' + (woche.energie_kwh ?? 0).toFixed(1) + ' kWh)' : 'N/A';
+                el('kpi-woche-kosten').textContent = (woche.kosten_netz_eur ?? 0).toFixed(2) + ' EUR';
+            }
+
+            // Letzte Entscheidungen
+            const entEl = document.getElementById('entscheidungen-liste');
+            if (entEl && statusData.entscheidungen) {
+                const liste = statusData.entscheidungen;
+                if (!liste.length) {
+                    entEl.innerHTML = '<div style="color:var(--text-secondary)">Noch keine Eintraege</div>';
+                } else {
+                    entEl.innerHTML = liste.map(function(e) {
+                        const zeit = (e.ts || '').split('T')[1] || e.ts;
+                        const farbe = e.laeuft ? '#51cf66' : 'var(--text-secondary)';
+                        return '<div style="margin-bottom:5px;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:4px">' +
+                            '<b style="color:' + farbe + '">' + zeit.slice(0, 5) + '</b> ' +
+                            '<b>' + (e.gewinner || 'Keine') + '</b> ' +
+                            '<span class="' + (e.soll_einschalten ? 'decision-ein' : 'decision-aus') + '">' +
+                            (e.soll_einschalten ? 'EIN' : 'AUS') + '</span>' +
+                            '<div style="font-size:0.72rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
+                            (e.grund || '') + '</div></div>';
+                    }).join('');
+                    entEl.scrollTop = entEl.scrollHeight;
+                }
             }
 
             // Modi
@@ -1452,9 +1560,40 @@
                         <div class="info-row"><span class="info-label">Batterie-Leistung</span><span class="info-value"><span id="energy-battery">${energy.battery_power ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label">Einspeisung</span><span class="info-value"><span id="energy-feedin">${energy.feed_in ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label">AC-Leistung</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? 'N/A'}</span> W</span></div>
+                        <div class="info-row" id="energy-stale-row" style="display:none;color:#ff6b6b"><span class="info-label">⚠ Solar-Daten</span><span class="info-value">veraltet -> PV-Regeln pausiert</span></div>
                         <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : 'N/A'}</span></div>
                         <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : 'N/A'}</span></div>
                         <div class="info-row"><span class="info-label">Prognose Uebermorgen</span><span class="info-value" id="energy-forecast-day2">${energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : 'N/A'}</span></div>
+                    </div>
+
+                    <!-- Letzte Entscheidungen -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon yellow">📜</div>
+                            <div class="card-title">Letzte Entscheidungen</div>
+                        </div>
+                        <div id="entscheidungen-liste" style="font-size:0.78rem;max-height:260px;overflow-y:auto">
+                            <div style="color:var(--text-secondary)">Noch keine Eintraege</div>
+                        </div>
+                    </div>
+
+                    <!-- Energiebilanz -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon green">🌱</div>
+                            <div class="card-title">Ernte (Energiebilanz)</div>
+                        </div>
+                        <div class="temp-display">
+                            <span class="temp-value" id="kpi-heute-kwh">0.0</span>
+                            <span class="temp-unit">kWh</span>
+                        </div>
+                        <div class="temp-label">WP-Energie heute</div>
+                        <div class="info-row"><span class="info-label">Anteil PV/Batterie</span><span class="info-value" id="kpi-heute-pv">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Netzanteil heute</span><span class="info-value" id="kpi-heute-netz">0.00 kWh</span></div>
+                        <div class="info-row"><span class="info-label">Netzkosten heute</span><span class="info-value" id="kpi-heute-kosten">0.00 EUR</span></div>
+                        <div class="info-row"><span class="info-label">Laufzeit heute</span><span class="info-value" id="kpi-heute-laufzeit">0 min</span></div>
+                        <div class="info-row"><span class="info-label">7 Tage: PV/Batterie-Anteil</span><span class="info-value" id="kpi-woche-pv">N/A</span></div>
+                        <div class="info-row"><span class="info-label">7 Tage: Netzkosten</span><span class="info-value" id="kpi-woche-kosten">0.00 EUR</span></div>
                     </div>
 
                     <!-- Selbstlernen -->

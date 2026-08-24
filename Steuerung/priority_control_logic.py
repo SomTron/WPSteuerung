@@ -14,6 +14,14 @@ from utils import safe_timedelta
 from constants import (
     CONFIG_CHECK_INTERVAL_SEC,
 )
+try:
+    from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
+except ImportError:
+    SOLAR_DATA_STALE_THRESHOLD_MIN = 15
+try:
+    import entscheidungs_log
+except ImportError:
+    entscheidungs_log = None
 from logic_utils import check_log_throttle
 from safety_logic import (
     handle_critical_compressor_error,
@@ -69,6 +77,33 @@ async def check_pressure_and_config(
             state.update_config()
             state._last_config_check = datetime.now(state.local_tz)
     return True
+
+
+def _solar_daten_veraltet(state) -> bool:
+    """True, wenn die Solax-Daten aelter als der Stale-Schwellwert sind.
+
+    Die PV-abhaengigen Regeln werden dann pausiert (siehe priority_control);
+    main.py setzt zusaetzlich die Werte selbst auf 0."""
+    last_api_call = getattr(state.solar, "last_api_call", None)
+    if last_api_call is None:
+        return True  # nie geliefert -> nicht bewertbar -> konservativ pausieren
+    try:
+        jetzt = datetime.now(getattr(last_api_call, "tzinfo", None))
+        alter_min = (jetzt - last_api_call).total_seconds() / 60.0
+    except (TypeError, ValueError):
+        return False
+    return alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN
+
+
+def _gelerntes_morgenfenster(learning_engine):
+    """Gelerntes Morgen-Zapffenster defensiv abfragen (alte Fakes fehlt es)."""
+    if not learning_engine or not hasattr(learning_engine, "get_learned_morning_window"):
+        return None
+    try:
+        return learning_engine.get_learned_morning_window()
+    except Exception as e:  # pragma: no cover - Lernen darf nie blockieren
+        logging.debug(f"Morgenfenster nicht ermittelbar: {e}")
+        return None
 
 
 async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
@@ -196,6 +231,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         soc=getattr(state.solar, 'soc', None),
         battery_power=getattr(state.solar, 'batpower', None),
         learned_evening_window=gelerntes_abendfenster,
+        learned_morning_window=_gelerntes_morgenfenster(learning_engine),
+        solar_stale=_solar_daten_veraltet(state),
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
         learned_target_hour=gelernte_zielzeit,
@@ -287,7 +324,24 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     if state.control.previous_modus != res["modus"]:
         logging.info(f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})")
         state.control.previous_modus = res["modus"]
-    
+
+    # Entscheidungs-Historie (JSONL) fuer Webapp/KPIs - darf nie blockieren
+    if entscheidungs_log is not None:
+        try:
+            entscheidungs_log.schreibe_eintrag(
+                gewinner_name=gewinner.name if gewinner else None,
+                gewinner_grund=gewinner.grund if gewinner else "",
+                soll_einschalten=bool(should_on),
+                kompressor_laeuft=bool(state.control.kompressor_ein),
+                feedin_watt=pv_leistung,
+                batpower_watt=getattr(state.solar, 'batpower', None),
+                soc=getattr(state.solar, 'soc', None),
+                t_unten=t_unten,
+                t_oben=getattr(state.sensors, 't_oben', None),
+            )
+        except Exception as e:  # pragma: no cover
+            logging.debug(f"Entscheidungslog-Fehler: {e}")
+
     return res
 
 

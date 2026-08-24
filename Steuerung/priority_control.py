@@ -203,6 +203,7 @@ def evaluate_mindesttemp(
     nachtsperre_start: int,
     nachtsperre_ende: int,
     learned_evening_window: Optional[Tuple[float, float]] = None,
+    learned_morning_window: Optional[Tuple[float, float]] = None,
 ) -> List[RegelErgebnis]:
     """Mindest-Temperatur-Garantien pro Fuehler und Zeitfenster.
 
@@ -232,8 +233,13 @@ def evaluate_mindesttemp(
         start_uhr = eintrag.start_uhr
         ende_uhr = eintrag.ende_uhr
         fenster_hinweis = ""
-        if eintrag.fenster_aus_lernen and learned_evening_window is not None:
-            l_start, l_ende = learned_evening_window
+        lern_fenster = (
+            learned_morning_window
+            if (eintrag.start_uhr < 12 and learned_morning_window is not None)
+            else learned_evening_window
+        )
+        if eintrag.fenster_aus_lernen and lern_fenster is not None:
+            l_start, l_ende = lern_fenster
             # Gelerntes Fenster mit Sicherheitsgrenzen klemmen:
             # max. 2h frueher Start, max. 1h spaeteres Ende als konfiguriert.
             import math
@@ -1053,6 +1059,8 @@ def bewerte_alle_regeln(
     soc: Optional[float] = None,
     battery_power: Optional[float] = None,
     learned_evening_window: Optional[Tuple[float, float]] = None,
+    learned_morning_window: Optional[Tuple[float, float]] = None,
+    solar_stale: bool = False,
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
@@ -1102,6 +1110,7 @@ def bewerte_alle_regeln(
     for min_ergebnis in evaluate_mindesttemp(
         config.mindest_temp, temp_dict, now_hour, nachtsperre_start, nachtsperre_ende,
         learned_evening_window=learned_evening_window,
+        learned_morning_window=learned_morning_window,
     ):
         ergebnisse.append(min_ergebnis)
 
@@ -1157,6 +1166,22 @@ def bewerte_alle_regeln(
         # Keine Regel will etwas tun
         return None, ergebnisse
     
+    # Solar-Daten veraltet: PV-/Batterie-/Prognose-Regeln duerfen nicht
+    # auf eingefrorenen Werten entscheiden. Garantien (MinTemp, Komfort)
+    # und Abweichung (Netzstrom) bleiben bewusst aktiv.
+    if solar_stale:
+        _stale_namen = {"Einspeisung", "Batterie", "AdaptivePV", "Zeitfenster", "Forecast"}
+        for e in ergebnisse:
+            if (e.name in _stale_namen or e.name.startswith("PV_")) and (
+                e.aktiv or e.einschalten is not None
+            ):
+                e.aktiv = False
+                e.einschalten = None
+                e.grund = "Solar-Daten veraltet -> Regel pausiert"
+        logging.warning(
+            "Solar-Daten veraltet: PV/Batterie/Einspeisung/Forecast/Zeitfenster pausiert"
+        )
+
     # Nach Prioritaet sortieren (hoeher zuerst)
     aktive_regeln.sort(key=lambda e: e.prioritaet, reverse=True)
     gewinner = aktive_regeln[0]

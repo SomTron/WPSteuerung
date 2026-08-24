@@ -100,20 +100,22 @@ class TestZapfung:
                 # Unterhalb der Schwelle gilt weiterhin der Default ...
                 assert engine.get_learned_target_hour() == 17.0
                 # ... auch wenn intern schon gelernt wurde
-                assert engine.data.learned_target_hour == pytest.approx(18.08, abs=0.05)
+                # Erste Zapfung: hour_f wird exakt uebernommen (Drop um 18:05)
+                assert engine.data.learned_target_hour == pytest.approx(18.083, abs=0.01)
 
         # Alle 3 Zapfungen landen in der Historie ...
         assert len(engine.data.usage_events) == 3
         # ... aber nur die ERSTEN 2 pro Abend fliessen in die Zielzeit ein
         # (Design im Code: "Nur erste Zapfung(en) heute Abend beruecksichtigen")
         assert engine.data.target_hour_samples == 2
-        # Mittelwert aus den ersten beiden Ereignissen (~18:05 und ~18:15 Uhr);
-        # da weiterhin < 3 Samples: API liefert weiterhin den Default 17.0.
-        assert engine.data.learned_target_hour == pytest.approx(18.165, abs=0.02)
+        # EWMA (alpha=0.15) aus den ersten beiden Ereignissen (~18:05/~18:15):
+        # z1=18.083 exakt, z2 = 18.083*0.85 + 18.25*0.15 = 18.108.
+        # Da weiterhin < 3 Samples: API liefert weiterhin den Default 17.0.
+        assert engine.data.learned_target_hour == pytest.approx(18.11, abs=0.005)
         assert engine.get_learned_target_hour() == 17.0
 
     def test_zapfung_ausserhalb_des_zeitfensters_wird_ignoriert(self, engine):
-        t = datetime(2026, 1, 15, 14, 0)   # vor 16:00
+        t = datetime(2026, 1, 15, 4, 30)   # vor 05:00 (neues Fenster 05-23)
         engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
         engine.update(t + timedelta(minutes=10),
                       {"unten": 43.0, "mittig": 44.0, "oben": 44.0}, False)
@@ -122,6 +124,25 @@ class TestZapfung:
         engine.update(t2 + timedelta(minutes=10),
                       {"unten": 43.0, "mittig": 44.0, "oben": 44.0}, False)
         assert engine.get_info()["total_usage_events"] == 0
+
+    def test_morgens_zapfung_zaehlt_zur_morgen_zielzeit(self, engine):
+        """Zapfungen vor 12 Uhr lernen die MORGEN-Zielzeit, nicht die Abend-Zeit."""
+        for i in range(4):
+            t = datetime(2026, 1, 9 + i, 7, 0)
+            engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
+            engine.update(t + timedelta(minutes=5),
+                          {"unten": 43.0, "mittig": 44.0, "oben": 44.0}, False)
+        info = engine.get_info()
+        assert info["morning_target_hour_samples"] == 4
+        assert engine.get_learned_morning_target_hour() == pytest.approx(7.0, abs=0.1)
+        # Abend-Zielzeit unbeeinflusst
+        assert engine.data.target_hour_samples == 0
+        assert engine.get_learned_target_hour() == 17.0
+        # Gelerntes Morgenfenster vorhanden (ab 4 Samples in 14 Tagen)
+        fenster = engine.get_learned_morning_window(now=datetime(2026, 1, 20, 12, 0))
+        assert fenster is not None
+        assert fenster[0] <= 6.2   # Zapfungen ~07:05 minus 1h Vorlauf
+        assert fenster[1] >= 7.5   # plus 45min Nachlauf
 
     def test_kleiner_abfall_ist_keine_zapfung(self, engine):
         t = datetime(2026, 1, 15, 18, 0)
@@ -143,7 +164,7 @@ class TestPersistenz:
         zweiter = LearningEngine(data_path=engine.data_path)
         assert zweiter.get_info()["total_cycles"] == 1
         assert zweiter.data.heat_rates["winter"] == engine.data.heat_rates["winter"]
-        assert zweiter.data.version == 2
+        assert zweiter.data.version == 3
 
     def test_speichern_ist_atomar_alte_datei_ueberlebt_fehler(self, engine, pfad):
         """Wenn os.replace fehlschlaegt, bleibt die VORHERIGE Datei unbeschaedigt."""

@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WPConfig(BaseModel):
@@ -52,6 +52,19 @@ class PVRegel(BaseModel):
     weiterlaufen_ab_pv_watt: float = Field(default=50.0, description="Weiterlaufen ab PV-Leistung (W)")
 
 
+    @model_validator(mode="after")
+    def _plausibel(self):
+        """Einschaltpunkt muss unter dem Ausschaltpunkt liegen."""
+        if self.einschalten_bei_c >= self.ausschalten_bei_c:
+            raise ValueError(
+                f"pv_regel '{self.name}': einschalten_bei_c ({self.einschalten_bei_c}) "
+                f"muss kleiner als ausschalten_bei_c ({self.ausschalten_bei_c}) sein"
+            )
+        if self.pv_schwelle_watt < 0:
+            raise ValueError("pv_schwelle_watt darf nicht negativ sein")
+        return self
+
+
 class KomfortConfig(BaseModel):
     """Komfort-Regel: Hält Mindesttemperatur."""
     prioritaet: int = Field(default=60, description="Priorität")
@@ -76,6 +89,21 @@ class MindestTempEintrag(BaseModel):
     )
 
 
+    @model_validator(mode="after")
+    def _plausibel(self):
+        """Fenster und Temperaturgrenzen muess Sinn ergeben."""
+        if self.ende_uhr <= self.start_uhr:
+            raise ValueError(
+                f"mindest_temp '{self.name}': ende_uhr ({self.ende_uhr}) muss "
+                f"groesser als start_uhr ({self.start_uhr}) sein"
+            )
+        if not (20.0 <= self.min_temp_c <= 55.0):
+            raise ValueError(f"mindest_temp '{self.name}': min_temp_c ausserhalb 20-55 C")
+        if self.hysterese_k < 0.5:
+            raise ValueError(f"mindest_temp '{self.name}': hysterese_k < 0.5 sinnlos")
+        return self
+
+
 class MindestTempConfig(BaseModel):
     """Mindest-Temperatur-Garantien: Der Boiler darf zu definierten Zeiten
     nicht zu kalt sein (Komfort-Vorrang vor Sparziele), auch waehrend der
@@ -84,6 +112,9 @@ class MindestTempConfig(BaseModel):
     prioritaet: int = Field(default=65, description="Priorität (ueber Komfort, unter PV)")
     eintraege: List[MindestTempEintrag] = Field(
         default_factory=lambda: [
+            MindestTempEintrag(name="Frueh-Mitte", temperaturfuehler="mitte",
+                               min_temp_c=38.0, start_uhr=6, ende_uhr=8,
+                               fenster_aus_lernen=True),
             MindestTempEintrag(name="Mittag-Oben", temperaturfuehler="oben",
                                min_temp_c=40.0, start_uhr=11, ende_uhr=16),
             MindestTempEintrag(name="Abend-Mitte", temperaturfuehler="mitte",
@@ -109,6 +140,16 @@ class BatterieConfig(BaseModel):
     )
 
 
+    @model_validator(mode="after")
+    def _plausibel(self):
+        """SOC-Grenzen und Temperatur-Hysterese pruefen."""
+        if self.einschalten_bei_c >= self.ausschalten_bei_c:
+            raise ValueError("batterie: einschalten_bei_c < ausschalten_bei_c erforderlich")
+        if not (0.0 <= self.min_soc_prozent <= 100.0):
+            raise ValueError("batterie: min_soc_prozent ausserhalb 0-100")
+        return self
+
+
 class EinspeisungConfig(BaseModel):
     """Einspeise-Begrenzungs-Regel (PV-Shaping): Nutzt Ueberschuss, der sonst
     (gegen das Netzlimit von z.B. 7500W) eingespeist wuerde.
@@ -126,6 +167,19 @@ class EinspeisungConfig(BaseModel):
     )
     temperaturfuehler: str = Field(default="unten", description="Regelfühler")
     ausschalten_bei_c: float = Field(default=48.0, description="Ausschalten bei (°C)")
+
+
+    @model_validator(mode="after")
+    def _plausibel(self):
+        """Weiterlauf-Abschlag muss unter der Einschalt-Grenze liegen."""
+        if self.weiterlauf_ab_watt > self.einspeisegrenze_watt:
+            raise ValueError(
+                "einspeisung: weiterlauf_ab_watt > einspeisegrenze_watt "
+                "(Weiterlauf wuerde nie greifen)"
+            )
+        if not (30.0 <= self.ausschalten_bei_c <= 50.0):
+            raise ValueError("einspeisung: ausschalten_bei_c ausserhalb 30-50 C")
+        return self
 
 
 class ZeitfensterConfig(BaseModel):
@@ -152,6 +206,19 @@ class AbweichungConfig(BaseModel):
 
 
 
+    @model_validator(mode="after")
+    def _plausibel(self):
+        """AUS-Schwelle muss unter der EIN-Schwelle liegen (Hysterese)."""
+        if self.ausschalten_bei_abweichung_k >= self.einschalten_bei_abweichung_k:
+            raise ValueError(
+                "abweichung: ausschalten_bei_abweichung_k muss kleiner als "
+                "einschalten_bei_abweichung_k sein"
+            )
+        if not (20.0 <= self.solltemperatur_c <= 55.0):
+            raise ValueError("abweichung: solltemperatur_c ausserhalb 20-55 C")
+        return self
+
+
 class ForecastConfig(BaseModel):
     """Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter."""
     prioritaet: int = Field(default=57, description="Prioritaet")
@@ -165,6 +232,17 @@ class ForecastConfig(BaseModel):
     vorheiz_ende_uhr: int = Field(default=19, description="Vorheiz-Fenster Ende-Stunde")
     sparen_start_uhr: int = Field(default=11, description="Spar-Fenster Start-Stunde")
     sparen_ende_uhr: int = Field(default=15, description="Spar-Fenster Ende-Stunde")
+
+
+    @model_validator(mode="after")
+    def _plausibel(self):
+        """Schlecht-Schwelle muss unter der Gut-Schwelle liegen."""
+        if self.fc_schwelle_niedrig_wh >= self.fc_schwelle_hoch_wh:
+            raise ValueError(
+                f"forecast: fc_schwelle_niedrig_wh ({self.fc_schwelle_niedrig_wh}) "
+                f"muss kleiner als fc_schwelle_hoch_wh ({self.fc_schwelle_hoch_wh}) sein"
+            )
+        return self
 
 
 class AdaptivePVConfig(BaseModel):
@@ -191,6 +269,18 @@ class CalculatedStartConfig(BaseModel):
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
 
 
+    @model_validator(mode="after")
+    def _plausibel(self):
+        """Zielzeit im gueltigen Bereich, Ziel unter Sicherheitslimit."""
+        if not (0 <= self.target_uhr <= 23):
+            raise ValueError("calculated_start: target_uhr ausserhalb 0-23")
+        if not (20.0 <= self.solltemperatur_c <= 55.0):
+            raise ValueError("calculated_start: solltemperatur_c ausserhalb 20-55 C")
+        if self.tmax_c <= self.solltemperatur_c:
+            raise ValueError("calculated_start: tmax_c muss ueber solltemperatur_c liegen")
+        return self
+
+
 class BademodusConfig(BaseModel):
     """Bademodus: Erhoeht die Zieltemperatur fuer heisses Brauchwasser."""
     solltemperatur_erhoehung_c: float = Field(default=3.0, description="Zieltemperatur-Erhoehung im Bademodus (K)")
@@ -214,6 +304,12 @@ class SommerModusConfig(BaseModel):
     )
 
 
+class KpiConfig(BaseModel):
+    """Konfiguration fuer die Energiebilanz-Anzeige (Webapp-Karte 'Ernte')."""
+    strompreis_eur_kwh: float = Field(default=0.35, description="Netzstrompreis (EUR/kWh)")
+    wp_leistung_watt_fallback: float = Field(default=600.0, description="Fallback-WP-Leistung")
+
+
 class WPSteuerungConfig(BaseModel):
     """Gesamtkonfiguration der Pareto-optimierten WP-Steuerung."""
     beschreibung: str = Field(default="WP Steuerung")
@@ -234,6 +330,8 @@ class WPSteuerungConfig(BaseModel):
     batterie: BatterieConfig = Field(default_factory=BatterieConfig)
     einspeisung: EinspeisungConfig = Field(default_factory=EinspeisungConfig)
 
+
+    kpi: KpiConfig = Field(default_factory=KpiConfig)
 
 class WPSteuerungConfigManager:
     """Lädt und verwaltet die JSON-Konfiguration."""

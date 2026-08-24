@@ -40,3 +40,10 @@ __pycache__/
 
 # Lokale CI-Testumgebung (versehentlich erzeugt)
 .ci_venv/
+
+# Entscheidungs-Log (Laufzeit, rotierend, nie committen)
+Steuerung/entscheidungs_log.jsonl
+Steuerung/entscheidungs_log.jsonl.old
+
+# Lokale Backups fremder Aenderungen
+_fremde_aenderungen_backup/

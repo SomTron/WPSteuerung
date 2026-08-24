@@ -53,8 +53,12 @@ class LearningData:
     usage_events: List[Dict]
     learned_target_hour: float
     target_hour_samples: int
-    
-    version: int = 2
+
+    # Gelernte MORGENliche Zapf-Zeit (Duschen frueh morgens)
+    learned_morning_target_hour: float = 7.0
+    morning_target_hour_samples: int = 0
+
+    version: int = 3
 
 
 def _get_season(month: int) -> str:
@@ -86,7 +90,7 @@ class LearningEngine:
             heat_rates={"winter": {"avg": 3.0, "count": 0},
                        "transition": {"avg": 3.0, "count": 0},
                        "summer": {"avg": 3.0, "count": 0}},
-            learned_target_hour=17.0, target_hour_samples=0, version=2
+            learned_target_hour=17.0, target_hour_samples=0, version=3
         )
         try:
             if os.path.exists(self.data_path):
@@ -98,7 +102,9 @@ class LearningEngine:
                     usage_events=raw.get("usage_events", []),
                     learned_target_hour=raw.get("learned_target_hour", 17.0),
                     target_hour_samples=raw.get("target_hour_samples", 0),
-                    version=2,
+                    learned_morning_target_hour=raw.get("learned_morning_target_hour", 7.0),
+                    morning_target_hour_samples=raw.get("morning_target_hour_samples", 0),
+                    version=3,
                 )
         except Exception as e:
             logging.warning(f"Konnte Lern-Daten nicht laden: {e}")
@@ -152,29 +158,30 @@ class LearningEngine:
         return round(hr["avg"] * factor, 2)
 
     def get_learned_target_hour(self) -> float:
-        """Gelernte optimale Zielzeit (Default 17:00 bei <3 Samples)."""
+        """Gelernte optimale ABEND-Zielzeit (Default 17:00 bei <3 Samples)."""
         if self.data.target_hour_samples < 3:
             return 17.0
         return self.data.learned_target_hour
 
-    def get_learned_evening_window(
+    def get_learned_morning_target_hour(self) -> float:
+        """Gelernte MORGEN-Zielzeit (Default 07:00 bei <3 Samples)."""
+        if self.data.morning_target_hour_samples < 3:
+            return 7.0
+        return self.data.learned_morning_target_hour
+
+    def get_learned_morning_window(
         self,
-        vorlauf_h: float = 1.5,
+        vorlauf_h: float = 1.0,
         nachlauf_h: float = 0.75,
         now: Optional[datetime] = None,
         tage: int = 14,
         min_samples: int = 4,
     ) -> Optional[tuple]:
-        """Gelerntes Abend-Zapffenster aus den letzten `tage` Tagen.
+        """Gelerntes MORGEN-Zapffenster (05-12 Uhr) analog zum Abendfenster.
 
-        Aus ALLEN erkannten Zapfungen (16-24 Uhr) wird frueheste und spaeteste
-        Zapfzeit bestimmt und mit Vor-/Nachlauf gepuffert. Die MindestTemp-Regel
-        kann ihr Zeitfenster daraus dynamisch ableiten ("Zeiten anpassen"),
-        statt starr auf die konfigurierten Stunden zu warten.
-
-        Returns:
-            (frueheste_uhrzeit_h, spaeteste_uhrzeit_h) oder None, wenn weniger
-            als min_samples Zapfungen im Betrachtungszeitraum liegen.
+        Grundlage fuer die dynamische Frueh-Garantie der MindestTemp-Regel.
+        Returns: (frueheste_h, spaeteste_h) inkl. Puffer, oder None bei
+        weniger als min_samples Zapfungen im Zeitraum.
         """
         if now is None:
             now = datetime.now()
@@ -185,14 +192,51 @@ class LearningEngine:
                 ts = datetime.fromisoformat(e["timestamp"])
             except (KeyError, ValueError):
                 continue
-            if ts < grenze or not (16 <= ts.hour < 24):
+            if ts < grenze or not (5 <= ts.hour < 12):
                 continue
             stunden.append(ts.hour + ts.minute / 60.0)
         if len(stunden) < min_samples:
             return None
-        frueheste = max(min(stunden) - vorlauf_h, 16.0)
-        spaeteste = min(max(stunden) + nachlauf_h, 23.75)
+        frueheste = max(min(stunden) - vorlauf_h, 4.5)
+        spaeteste = min(max(stunden) + nachlauf_h, 11.5)
         return round(frueheste, 2), round(spaeteste, 2)
+
+    def get_learned_evening_window(
+            self,
+            vorlauf_h: float = 1.5,
+            nachlauf_h: float = 0.75,
+            now: Optional[datetime] = None,
+            tage: int = 14,
+            min_samples: int = 4,
+        ) -> Optional[tuple]:
+            """Gelerntes Abend-Zapffenster aus den letzten `tage` Tagen.
+
+            Aus ALLEN erkannten Zapfungen (16-24 Uhr) wird frueheste und spaeteste
+            Zapfzeit bestimmt und mit Vor-/Nachlauf gepuffert. Die MindestTemp-Regel
+            kann ihr Zeitfenster daraus dynamisch ableiten ("Zeiten anpassen"),
+            statt starr auf die konfigurierten Stunden zu warten.
+
+            Returns:
+                (frueheste_uhrzeit_h, spaeteste_uhrzeit_h) oder None, wenn weniger
+                als min_samples Zapfungen im Betrachtungszeitraum liegen.
+            """
+            if now is None:
+                now = datetime.now()
+            grenze = now - timedelta(days=tage)
+            stunden = []
+            for e in self.data.usage_events:
+                try:
+                    ts = datetime.fromisoformat(e["timestamp"])
+                except (KeyError, ValueError):
+                    continue
+                if ts < grenze or not (16 <= ts.hour < 24):
+                    continue
+                stunden.append(ts.hour + ts.minute / 60.0)
+            if len(stunden) < min_samples:
+                return None
+            frueheste = max(min(stunden) - vorlauf_h, 16.0)
+            spaeteste = min(max(stunden) + nachlauf_h, 23.75)
+            return round(frueheste, 2), round(spaeteste, 2)
 
     def get_info(self) -> Dict:
         """Übersicht der gelernten Werte für API/UI."""
@@ -206,6 +250,9 @@ class LearningEngine:
             # Gelerntes Abend-Zapffenster [frueheste_h, spaeteste_h] oder None
             # (Grundlage fuer die dynamischen MindestTemp-Fenster)
             "learned_evening_window": list(fenster) if fenster else None,
+            "learned_morning_target_hour": self.get_learned_morning_target_hour(),
+            "morning_target_hour_samples": self.data.morning_target_hour_samples,
+            "learned_morning_window": list(m_fenster) if (m_fenster := self.get_learned_morning_window()) else None,
         }
 
     # ── Zyklus-Update ──────────────────────────────────────
@@ -284,13 +331,15 @@ class LearningEngine:
         if len(self.data.cycles) > 50:
             self.data.cycles = self.data.cycles[-50:]
 
-        # Saisonale Heizrate (gleitender Mittelwert)
+        # Saisonale Heizrate: exponentiell geglaetteter Mittelwert (EWMA,
+        # alpha=0.10) statt kumulativer Mittelwert - reagiert auf
+        # Jahreszeit/Sensoraenderungen, statt fuer immer am alten Wert zu kleben.
         hr = self.data.heat_rates.get(season, {"avg": 3.0, "count": 0})
         count = hr["count"] + 1
         if count <= 1:
             new_avg = rate_unten
         else:
-            new_avg = hr["avg"] + (rate_unten - hr["avg"]) / count
+            new_avg = hr["avg"] * (1.0 - 0.10) + rate_unten * 0.10
         self.data.heat_rates[season] = {
             "avg": round(new_avg, 3),
             "count": count,
@@ -311,9 +360,10 @@ class LearningEngine:
     def _detect_usage(self, now: datetime, temp_dict: Dict[str, Optional[float]]):
         """
         Erkennt Warmwasser-Zapfung durch Temperaturabfall.
-        Kriterien: Kompressor AUS, Abfall >1.5°C, 16:00-23:00 Uhr.
+        Kriterien: Kompressor AUS, Abfall >1.5°C, 05:00-23:00 Uhr.
+        Vor 12 Uhr zaehlt die Zapfung zur MORGEN-Zielzeit, danach zur ABEND-Zielzeit.
         """
-        if now.hour < 16 or now.hour >= 23:
+        if not (5 <= now.hour < 23):
             return
 
         temp_oben = temp_dict.get("oben")
@@ -334,23 +384,33 @@ class LearningEngine:
             if len(self.data.usage_events) > 100:
                 self.data.usage_events = self.data.usage_events[-100:]
 
-            # Nur erste Zapfung(en) heute Abend berücksichtigen
+            # Nur erste Zapfung(en) pro Tageshaelfte beruecksichtigen
+            ist_morgen = now.hour < 12
             today_str = now.strftime("%Y-%m-%d")
             today_events = [
                 e for e in self.data.usage_events
                 if e["timestamp"].startswith(today_str)
+                and (datetime.fromisoformat(e["timestamp"]).hour < 12) == ist_morgen
             ]
             if len(today_events) <= 2:
                 hour_f = now.hour + now.minute / 60.0
-                count = self.data.target_hour_samples + 1
-                if count <= 1:
-                    new_target = hour_f
+                # EWMA (alpha=0.15): reagiert auf Veraenderungen des
+                # Duschverhaltens schneller als ein kumulativer Mittelwert
+                if ist_morgen:
+                    count = self.data.morning_target_hour_samples + 1
+                    alt = self.data.learned_morning_target_hour
+                    new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
+                    self.data.learned_morning_target_hour = round(new_target, 2)
+                    self.data.morning_target_hour_samples = count
                 else:
-                    new_target = self.data.learned_target_hour + (hour_f - self.data.learned_target_hour) / count
-                self.data.learned_target_hour = round(new_target, 2)
-                self.data.target_hour_samples = count
+                    count = self.data.target_hour_samples + 1
+                    alt = self.data.learned_target_hour
+                    new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
+                    self.data.learned_target_hour = round(new_target, 2)
+                    self.data.target_hour_samples = count
                 self._save()
                 logging.info(
                     f"Learning: Zapfung {now.strftime('%H:%M')} "
-                    f"(drop {drop:.1f}C) -> Zielzeit {new_target:.1f}h (n={count})"
+                    f"(drop {drop:.1f}C) -> {'Morgen-' if ist_morgen else 'Abend-'}"
+                    f"Zielzeit {new_target:.1f}h (n={count})"
                 )
