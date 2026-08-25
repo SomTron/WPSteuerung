@@ -1282,8 +1282,84 @@
                         (hr.avg != null ? Number(hr.avg).toFixed(2) + ' °C/h' : 'N/A') +
                         ' (n=' + (hr.count ?? 0) + ')';
                 });
-                document.getElementById('learn-counts').textContent =
+                                document.getElementById('learn-counts').textContent =
                     (lrn.total_cycles ?? 0) + ' Heizzyklen / ' + (lrn.total_usage_events ?? 0) + ' Zapfungen';
+            }
+
+            // Morgen-Zielzeit
+            const moEl = document.getElementById('learn-morgen');
+            if (moEl) {
+                const mSamples = lrn.morning_target_hour_samples ?? 0;
+                if (mSamples > 0 && lrn.learned_morning_target_hour != null) {
+                    const mh = Math.floor(lrn.learned_morning_target_hour);
+                    const mm2 = Math.round((lrn.learned_morning_target_hour - mh) * 60);
+                    moEl.textContent = String(mh).padStart(2, '0') + ':' + String(mm2).padStart(2, '0')
+                        + ' (' + mSamples + ' Zapfungen)';
+                }
+            }
+
+            // Forecast-Kalibrierung (Baustein B)
+            const fcEl = document.getElementById('learn-fc-ratio');
+            if (fcEl) {
+                const nFc = lrn.forecast_ratio_samples ?? 0;
+                const rFc = Number(lrn.forecast_ratio ?? 1.0);
+                if (nFc >= 3 && Math.abs(rFc - 1.0) > 0.005) {
+                    fcEl.textContent = 'x' + rFc.toFixed(2).replace('.', ',') + ' (' + nFc + ' Tage)';
+                    fcEl.style.color = rFc < 0.9 ? '#ffa726' : (rFc > 1.1 ? '#66bb6a' : '');
+                } else if (nFc > 0) {
+                    fcEl.textContent = 'sammelt Daten (' + nFc + '/3 Tage)';
+                }
+                // n==0 -> N/A lassen
+            }
+
+            // Quellen-Split (Baustein A)
+            const qEl = document.getElementById('learn-quellen');
+            if (qEl) {
+                const rt = ((lrn.quellen || {}).runtime_sec) || {};
+                const total = Object.values(rt).reduce((a, b) => a + (Number(b) || 0), 0);
+                if (total > 0) {
+                    const pct = k => Math.round((Number(rt[k]) || 0) / total * 100);
+                    qEl.textContent = 'PV ' + pct('pv') + '% \u00b7 Batt ' + pct('batterie') + '%'
+                        + ' \u00b7 Gemischt ' + pct('gemischt') + '% \u00b7 Netz ' + pct('netz') + '%';
+                    qEl.style.color = (pct('netz') >= 20 || pct('gemischt') >= 30) ? '#ff6b6b' : '';
+                } else {
+                    qEl.textContent = 'noch keine Zyklen';
+                }
+            }
+
+            // Zu-frueh-Events
+            const zfEl = document.getElementById('learn-zufrueh');
+            if (zfEl) {
+                const z14 = (lrn.quellen || {}).zu_frueh_14d;
+                if (z14 != null) {
+                    zfEl.textContent = z14 + 'x in 14 Tagen';
+                    zfEl.style.color = z14 > 3 ? '#ff6b6b' : '';
+                }
+            }
+
+            // PV-Ueberschuss-Profil (Balkendiagramm)
+            const spWrap = document.getElementById('surplus-bars');
+            if (spWrap) {
+                const prof = statusData.learning && statusData.learning.surplus_profil || {};
+                const stunden = Object.keys(prof).map(Number).sort((a, b) => a - b);
+                if (!stunden.length) {
+                    spWrap.innerHTML = '<div style="font-size:0.75rem;color:var(--text-secondary)">Noch nicht gelernt - sammelt stuendliche Netzeinspeisung (braucht einige Tage Betrieb).</div>';
+                } else {
+                    const maxW = Math.max(500, ...stunden.map(h => Number(prof[h]) || 0));
+                    let barsHtml = '';
+                    for (const h of stunden) {
+                        const w = Number(prof[h]) || 0;
+                        const hPct = Math.max(4, Math.round(w / maxW * 100));
+                        const tief = w < 250;
+                        const farbe = tief ? '#ff6b6b' : '#4caf50';
+                        barsHtml += '<div style="flex:1;min-width:18px;display:flex;flex-direction:column;align-items:center;gap:2px">'
+                            + '<div style="width:100%;height:64px;display:flex;align-items:flex-end">'
+                            + '<div title="' + h + ' Uhr: ca. ' + Math.round(w) + ' W" style="width:100%;height:' + hPct + '%;background:' + farbe + ';border-radius:2px 2px 0 0;opacity:0.85"></div></div>'
+                            + '<div style="font-size:0.6rem;color:' + farbe + '">' + String(h).padStart(2, '0') + '</div>'
+                            + '</div>';
+                    }
+                    spWrap.innerHTML = '<div style="display:flex;gap:3px;align-items:flex-end">' + barsHtml + '</div>';
+                }
             }
 
             // Solar-Stale-Warnung
@@ -1676,6 +1752,20 @@
                         <div class="info-row"><span class="info-label">Lern-Basis</span><span class="info-value" id="learn-counts">-</span></div>
                         <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">CalcStart richtet die Vorheizung an der gelernten Zapf-Zeit aus; MinTemp-Fenster folgen dem gelernten Abend-Fenster.</div>
                         <div class="info-row"><span class="info-label">Komfort-Verletzungen (7T)</span><span class="info-value" id="learn-komfort">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Morgen-Zapf-Zeit (gelernt)</span><span class="info-value" id="learn-morgen">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Forecast-Kalibrierung</span><span class="info-value" id="learn-fc-ratio">N/A</span></div>
+                        <div class="info-row"><span class="info-label">WW-Quellen (Laufzeit)</span><span class="info-value" id="learn-quellen" style="font-size:0.75rem">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Zu fr&uuml;h geheizt (14T)</span><span class="info-value" id="learn-zufrueh">N/A</span></div>
+                    </div>
+
+                    <!-- PV-Ueberschuss-Profil (gelernt) -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon green">&#128202;</div>
+                            <div class="card-title">&Uuml;berschuss-Profil (gelernt)</div>
+                        </div>
+                        <div id="surplus-bars" style="margin:6px 0"></div>
+                        <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">Netzeinspeisung je Stunde (bei ausgeschalteter WP = Haushaltsmuster). Rote Balken sind Tiefstunden (&lt;250 W, z.&nbsp;B. Kochen) - sie verfr&uuml;hen den CalcStart-Sp&auml;test-Start.</div>
                     </div>
 
                     <!-- Boiler-Fuellstand (Punkt A) -->

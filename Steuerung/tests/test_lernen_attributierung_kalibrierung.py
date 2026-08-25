@@ -160,6 +160,24 @@ class TestSurplusProfil:
         assert profil[12] < 250.0          # Kochtief gelernt
         assert profil[8] > 400.0           # Morgenueberschuss intakt
 
+    def test_get_info_liefert_profil_fuer_ui(self, engine):
+        info = engine.get_info()
+        assert info["surplus_profil"] is None      # noch unbrauchbar
+        assert info["forecast_ratio"] == 1.0
+        assert info["quellen"]["zu_frueh_14d"] == 0
+        # Nach dem Lernen steht das Profil {stunde: watt} im Payload:
+        for i in range(6):
+            _schritt(engine, datetime(2026, 8, 26, 12, i), False, feedin=120.0)
+        for i in range(6):
+            _schritt(engine, datetime(2026, 8, 26, 13, i), False, feedin=600.0)
+        for i in range(6):
+            _schritt(engine, datetime(2026, 8, 26, 14, i), False, feedin=500.0)
+        for i in range(6):
+            _schritt(engine, datetime(2026, 8, 26, 15, i), False, feedin=450.0)
+        info = engine.get_info()
+        assert set(info["surplus_profil"].keys()) == {"12", "13", "14", "15"}
+        assert info["surplus_profil"]["12"] < 250
+
     def test_profil_bleibt_none_bei_zu_wenig_stunden(self, engine):
         for i in range(8):
             _schritt(engine, datetime(2026, 8, 26, 12, i), False, feedin=100.0)

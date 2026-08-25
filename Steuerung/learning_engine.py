@@ -367,6 +367,13 @@ class LearningEngine:
             "quellen": self.get_quellen_statistik(),
             "surplus_stunden": sorted(self.get_surplus_profile().keys())
                 if self.get_surplus_profile() else [],
+            # Volles Profil {stunde: watt} fuer das Balkendiagramm im UI
+            # (None solange unbrauchbar, <4 brauchbare Stunden)
+            "surplus_profil": (
+                {str(h): round(w, 0)
+                 for h, w in self.get_surplus_profile().items()}
+                if self.get_surplus_profile() else None
+            ),
         }
 
     # ── Zyklus-Update ──────────────────────────────────────

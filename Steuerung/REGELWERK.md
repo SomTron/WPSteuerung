@@ -322,8 +322,10 @@ mittleren SOC waehrend der Laufzeit und wird klassifiziert:
 Daraus entsteht der Laufzeit-Split ("Wie viel deiner Warmwasser-Waerme kam
 wirklich aus PV?") plus die **Zu-frueh-Erkennung**: Endet ein Nicht-PV-Zyklus
 und kommen binnen 45 min doch >800 W Einspeisung, wird das als verfruehter
-Start gezaehlt (`zu_frueh_events`). Sichtbar ueber `/api/learning/info`
-(`quellen`, `forecast_ratio`, `surplus_stunden`).
+start gezaehlt (`zu_frueh_events`). Sichtbar ueber `/api/learning/info`
+bzw. `/status` (`quellen`, `forecast_ratio`, `surplus_stunden`,
+`surplus_profil`) und als Karten "Selbstlernen" / "Ueberschuss-Profil"
+im Dashboard (webapp/index.html).
 
 ### 5.5 Forecast-Kalibrierung (Haus-spezifischer Langfehler)
 
