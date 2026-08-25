@@ -99,11 +99,15 @@ def test_mindesttemp_blockiert_keine_anderen_regeln():
     """
     from datetime import datetime as dt
     config = baue_config()
+    # Komfort-EIN nicht wecken: Der Test prueft die Additivitaet von MinTemp
+    # gegenueber Abweichung, nicht die Komfort-Prioritaet. Mit PV 200W wuerde
+    # sonst Komfort-EIN (Prio 60, gleiche PV-Schwelle) gewinnen.
+    config.komfort.min_pv_fuer_komfort_watt = 999999.0
     # oben=41.5 unterhalb der Schichtungsgrenze (42), sonst blockiert die
     # Abweichungs-Regel den Heizwunsch zu Recht
     temp = {"oben": 41.5, "mittig": 42.0, "unten": 36.5}
     gewinner, alle = pc.bewerte_alle_regeln(
-        config=config, temp_dict=temp, pv_leistung=0.0, kompressor_ein=False,
+        config=config, temp_dict=temp, pv_leistung=200.0, kompressor_ein=False,
         now=dt(2026, 1, 15, 18, 0),
         forecast_wh_qm=None,
     )

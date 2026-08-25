@@ -658,6 +658,8 @@ def evaluate_abweichung(
     now_hour: int,
     nachtsperre_start: int,
     nachtsperre_ende: int,
+    feedin_watt: float = 0.0,
+    soc: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: Haelt Temperatur nahe am Sollwert.
@@ -715,7 +717,30 @@ def evaluate_abweichung(
                     f"(Schichtung) -> kein Einschalten"
                 )
                 return result
-        
+
+        # Quellen-Gate mit Tiefenschutz: Im Normalfall auf PV/Batterie warten
+        # statt mit Netzstrom zu heizen. Erst wenn der Fuehler unter
+        # (Soll - netz_notfall_offset_k) faellt, erlaubt der Tiefschutz Netz.
+        if getattr(abw, "quelle_warten", True):
+            tief_grenze = abw.solltemperatur_c - max(
+                getattr(abw, "netz_notfall_offset_k", 8.0), 0.0
+            )
+            if temp > tief_grenze and not _energiequelle_ok(
+                feedin_watt, soc,
+                getattr(abw, "pv_einspeisung_min_watt", 50.0),
+                getattr(abw, "soc_min_prozent", 90.0),
+                getattr(abw, "max_netzbezug_watt", -50.0),
+            ):
+                result.einschalten = None
+                result.grund = (
+                    f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} "
+                    f"{temp:.1f}C = +{abweichung:.1f}K >= "
+                    f"+{abw.einschalten_bei_abweichung_k}K, aber keine Quelle "
+                    f"(PV {feedin_watt:.0f}W) -> wartet auf PV/Batterie "
+                    f"(Netz erst unter {tief_grenze:.1f}C)"
+                )
+                return result
+
         result.einschalten = True
         result.grund = (
             f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
@@ -733,6 +758,40 @@ def evaluate_abweichung(
 
 
 
+def _energiequelle_ok(
+    feedin_watt: float,
+    soc: Optional[float],
+    pv_min_watt: float,
+    soc_min_prozent: float,
+    max_netzkauf_watt: float,
+) -> bool:
+    """PV-Direkt oder volle Hausbatterie ohne nennenswerten Netzkauf."""
+    if feedin_watt >= pv_min_watt:
+        return True
+    return (
+        soc is not None
+        and soc >= soc_min_prozent
+        and feedin_watt >= max_netzkauf_watt
+    )
+
+
+def _energiequelle_mit_grund(
+    feedin_watt: float,
+    soc: Optional[float],
+    pv_min_watt: float,
+    soc_min_prozent: float,
+    max_netzkauf_watt: float,
+) -> tuple:
+    """Wie _energiequelle_ok, aber mit lesbarem Grund (fuer Regel-Logs)."""
+    if feedin_watt >= pv_min_watt:
+        return True, f"PV {feedin_watt:.0f}W >= {pv_min_watt:.0f}W"
+    if soc is None:
+        return False, "SOC keine Daten"
+    if soc >= soc_min_prozent and feedin_watt >= max_netzkauf_watt:
+        return True, f"Batterie SOC {soc:.0f}% >= {soc_min_prozent:.0f}%"
+    return False, f"SOC {soc:.0f}% < {soc_min_prozent:.0f}%"
+
+
 def _forecast_quelle_ok(
     forecast_cfg: ForecastConfig,
     feedin_watt: float,
@@ -745,18 +804,12 @@ def _forecast_quelle_ok(
     """
     if getattr(forecast_cfg, "vorheiz_netz_erlaubt", False):
         return True, "Netz erlaubt (Konfig)"
-    pv_schwelle = getattr(forecast_cfg, "pv_einspeisung_min_watt", 50.0)
-    if feedin_watt >= pv_schwelle:
-        return True, f"PV {feedin_watt:.0f}W >= {pv_schwelle:.0f}W"
-    soc_grenze = getattr(forecast_cfg, "soc_min_prozent", 90.0)
-    if (
-        soc is not None
-        and soc >= soc_grenze
-        and feedin_watt >= getattr(forecast_cfg, "vorheiz_max_netzbezug_watt", -50.0)
-    ):
-        return True, f"Batterie SOC {soc:.0f}% >= {soc_grenze:.0f}%"
-    soc_txt = "keine Daten" if soc is None else f"{soc:.0f}% < {soc_grenze:.0f}%"
-    return False, f"SOC {soc_txt}"
+    return _energiequelle_mit_grund(
+        feedin_watt, soc,
+        getattr(forecast_cfg, "pv_einspeisung_min_watt", 50.0),
+        getattr(forecast_cfg, "soc_min_prozent", 90.0),
+        getattr(forecast_cfg, "vorheiz_max_netzbezug_watt", -50.0),
+    )
 
 
 def evaluate_forecast(
@@ -955,6 +1008,8 @@ def evaluate_calculated_start(
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
+    feedin_watt: float = 0.0,
+    soc: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -1061,7 +1116,14 @@ def evaluate_calculated_start(
         pv_label = "keine Prognose"
     
     effektiver_puffer = buffer_hours * pv_faktor
-    
+
+    quelle_ok, quelle_grund = _energiequelle_mit_grund(
+        feedin_watt, soc,
+        getattr(calc_cfg, "pv_einspeisung_min_watt", 50.0),
+        getattr(calc_cfg, "soc_min_prozent", 90.0),
+        getattr(calc_cfg, "max_netzbezug_watt", -50.0),
+    )
+
     if buffer_hours < 0:
         # Bereits ueber Zielzeit oder zu spaet -> sofort heizen!
         result.einschalten = True
@@ -1070,17 +1132,38 @@ def evaluate_calculated_start(
             f"-> EIN (Notfall)"
         )
         return result
-    
-    if effektiver_puffer < 0.5:
-        # Weniger als 30min effektiven Puffer -> heizen
+
+    if quelle_ok and effektiver_puffer < 0.5:
+        # Weniger als 30min effektiven Puffer + guenstige Quelle -> heizen
         result.einschalten = True
         result.grund = (
             f"CalcStart: Nur {effektiver_puffer:.1f}h Puffer (PV={pv_label}, "
-            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> EIN"
+            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> EIN "
+            f"[{quelle_grund}]"
         )
         return result
-    
-    # Genug Puffer + gute PV-Prognose -> warten
+
+    if buffer_hours <= getattr(calc_cfg, "spaetstart_puffer_h", 0.5):
+        # Errechneter SPAETEST-START: Zielzeit minus berechnete Heizzeit minus
+        # Sicherheitspuffer. Ab hier droht die Zapf-Garantie - heizen notfalls
+        # auch ohne PV/Batterie (dann eben mit Netz).
+        result.einschalten = True
+        result.grund = (
+            f"CalcStart: SPAETEST-START ({buffer_hours:.1f}h Restpuffer, "
+            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> EIN "
+            f"(Zapf-Garantie; Quelle: {quelle_grund})"
+        )
+        return result
+
+    # Genug Puffer -> warten; ohne Quelle explizit benennen, worauf gewartet wird
+    if not quelle_ok:
+        result.einschalten = None
+        result.grund = (
+            f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht, warte auf "
+            f"PV/Batterie ({quelle_grund}; brauche {hours_needed:.1f}h bis "
+            f"{ziel_uhr:.0f}:00)"
+        )
+        return result
     result.einschalten = None
     result.grund = (
         f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht (PV={pv_label}, "
@@ -1171,7 +1254,8 @@ def bewerte_alle_regeln(
     # 4. Abweichungs-Regel
     ergebnis = evaluate_abweichung(
         config.abweichung, temp_dict, kompressor_ein,
-        now_hour, nachtsperre_start, nachtsperre_ende
+        now_hour, nachtsperre_start, nachtsperre_ende,
+        feedin_watt=pv_leistung, soc=soc
     )
     ergebnisse.append(ergebnis)
     
@@ -1198,6 +1282,8 @@ def bewerte_alle_regeln(
         learned_heating_rate_unten=learned_heating_rate_unten,
         learned_heating_rate_gesamt=learned_heating_rate_gesamt,
         learned_target_hour=learned_target_hour,
+        feedin_watt=pv_leistung,
+        soc=soc,
     )
     ergebnisse.append(ergebnis)
     

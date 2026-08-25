@@ -264,6 +264,25 @@ class AbweichungConfig(BaseModel):
 
 
 
+    quelle_warten: bool = Field(
+        default=True,
+        description="True = Einschalten nur mit PV/Batterie (ausser Tiefenschutz)",
+    )
+    pv_einspeisung_min_watt: float = Field(
+        default=50.0, description="Als Quelle zaehlt echte Netzeinspeisung ab (W)",
+    )
+    soc_min_prozent: float = Field(
+        default=90.0, description="...oder Hausbatterie mindestens so voll (%)",
+    )
+    max_netzbezug_watt: float = Field(
+        default=-50.0,
+        description="Batterie-Quelle nur solange Einspeisung >= Wert (kein Netzkauf)",
+    )
+    netz_notfall_offset_k: float = Field(
+        default=8.0,
+        description="Tiefenschutz: Netz erlaubt wenn Fuehler <= Soll - Offset (K)",
+    )
+
     @model_validator(mode="after")
     def _plausibel(self):
         """AUS-Schwelle muss unter der EIN-Schwelle liegen (Hysterese)."""
@@ -346,6 +365,25 @@ class CalculatedStartConfig(BaseModel):
     heizrate_unten_c_h: float = Field(default=3.0, description="Geschaetzte Heizrate unten (Grad C/h)")
     heizrate_gesamt_c_h: float = Field(default=2.0, description="Geschaetzte Heizrate gesamt (Grad C/h)")
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
+
+    # Energie-Quellen-Gate: Frueh startet CalcStart nur mit PV/Batterie.
+    # Ohne Quelle wartet die Regel bis zum ERRECHNETEN Spaetest-Start
+    # (Zielzeit minus berechnete Heizzeit minus spaetstart_puffer_h) - erst
+    # dann darf auch Netzstrom die Zapf-Garantie retten.
+    pv_einspeisung_min_watt: float = Field(
+        default=50.0, description="Fruehstart ab dieser echten Netzeinspeisung (W)",
+    )
+    soc_min_prozent: float = Field(
+        default=90.0, description="...oder Hausbatterie mindestens so voll (%)",
+    )
+    max_netzbezug_watt: float = Field(
+        default=-50.0,
+        description="Batterie-Quelle nur solange Einspeisung >= Wert (kein Netzkauf)",
+    )
+    spaetstart_puffer_h: float = Field(
+        default=0.5,
+        description="Sicherheitszuschlag (h) auf die berechnete Heizzeit fuer den Spaetest-Start ohne Quelle",
+    )
 
 
     @model_validator(mode="after")

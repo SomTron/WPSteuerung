@@ -75,6 +75,18 @@ gelernten Zapf-Zeit genug warmes Wasser bereitsteht:
 - Saisonaler Puffer schützt vor Kaltwasserschauern im Winter
 - Konfigurierbarer Konflikt mit der Nachtsperre wird erkannt und geloggt
 
+**Energie-Quellen-Gate mit errechnetem Spätest-Start:** Die Regel war quellenblind
+und startete bei Bewölkung notfalls schon Stunden vorher mit Netzstrom. Jetzt:
+
+- **Frühstart nur mit Quelle**: der knappe effektive Puffer (< 0,5 h) löst nur
+  aus, wenn echte PV-Einspeisung (≥ `pv_einspeisung_min_watt`, 50 W) oder volle
+  Batterie ohne Netzkauf (SOC ≥ `soc_min_prozent`) vorliegt
+- **Ohne Quelle wartet die Regel** bis zum ERRECHNETEN Spätest-Start:
+  `Zielzeit − berechnete Heizzeit − spaetstart_puffer_h` (0,5 h). Ab dort hat
+  die Zapf-Garantie Vorrang – geheizt wird notfalls auch mit Netz, aber nur im
+  letzten halben Stunde statt stundenlang vorher
+- Der „ZU SPÄT"-Notfall (Puffer negativ) bleibt unverändert als letzte Rettung
+
 ### 3.3 PV-Regeln — Prio 81/80
 
 Klassisches PV-Shaping über die **echte Netzeinspeisung** (`feedinpower`):
@@ -195,6 +207,16 @@ Grundregel: unterer Fühler vs. Solltemperatur (40 °C).
 - **Schichtungsschutz:** Wenn oben schon ≥ 42 °C ist, aber unten kalt, wird NICHT
   eingeschaltet (vermeidet sinnlose Netzstrom-Läufe bei geschichtetem Boiler)
 - Bademodus erhöht den Soll (+3 K), Urlaubsmodus senkt ihn (−5 K)
+
+**Quellen-Gate mit Tiefenschutz** (`quelle_warten`, default true): Die Regel war
+tagsueber quellenblind und heizte bei Durchkuehlung mit Netzstrom. Jetzt:
+
+- Normalfall: EIN nur mit echter PV-Einspeisung (>= 50 W) oder voller Batterie
+  ohne Netzkauf - sonst wartet die Regel (stumm, kein AUS)
+- **Tiefenschutz**: Faellt der Fuehler unter
+  `solltemperatur_c - netz_notfall_offset_k` (default 8 K), wird Netzstrom
+  erlaubt - der Boiler kuehlt nie ganz durch, nur weil keine Sonne scheint
+- Mit `quelle_warten: false` stellt man das alte quellenblinde Verhalten her
 
 ---
 

@@ -108,7 +108,9 @@ def _baue_state(bademodus, erhoehung):
         urlaubsmodus_aktiv=False,
         sensors=SimpleNamespace(t_oben=40.0, t_unten=41.0, t_mittig=42.0, t_verd=30.0),
         solar=SimpleNamespace(
-            feedinpower=0, batpower=0, soc=0, forecast_today=None, forecast_tomorrow=None,
+            # PV als Quelle fuer das Abweichungs-Gate, aber SOC niedrig, damit
+            # die Batterie-Regel (Prio 75) nicht dazwischen gewinnt
+            feedinpower=100, batpower=0, soc=0, forecast_today=None, forecast_tomorrow=None,
         ),
         control=SimpleNamespace(
             kompressor_ein=False,

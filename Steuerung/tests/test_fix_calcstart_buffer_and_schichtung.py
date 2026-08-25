@@ -90,16 +90,22 @@ def test_calcstart_bewoelkt_puffer_kleiner_als_sonnig():
     # Sonnig: 0.75 * 2.0 = 1.5h >= 0.5 -> wartet
     # Bewölkt: 0.75 * 0.5 = 0.375h < 0.5 -> EIN!
     r_sonnig = evaluate_calculated_start(cfg, temps, 14, 15, forecast_wh_qm=3200)
-    r_bewoelkt = evaluate_calculated_start(cfg, temps, 14, 15, forecast_wh_qm=400)
+    r_bewoelkt = evaluate_calculated_start(
+        cfg, temps, 14, 15, forecast_wh_qm=400, feedin_watt=200.0
+    )
     assert r_sonnig.einschalten is None, f"Sonning 14:15 sollte warten: {r_sonnig.grund}"
     assert r_bewoelkt.einschalten is True, f"Bewölkt 14:15 sollte EIN: {r_bewoelkt.grund}"
 
     # 14:45 -> time_left=2.25h, braucht 2h -> buffer=0.25h
-    # Sonnig: 0.25 * 2.0 = 0.5h -> genau an Grenze (>=0.5) -> noch warten
+    # Neu: Der errechnete Spatest-Start (buffer <= 0.5h) gilt OHNE
+    # Quellen-Anforderung - die Zapf-Garantie dominiert die Wartezeit.
     # Bewölkt: 0.25 * 0.5 = 0.125h < 0.5 -> EIN
     r_sonnig_2 = evaluate_calculated_start(cfg, temps, 14, 45, forecast_wh_qm=3200)
-    r_bewoelkt_2 = evaluate_calculated_start(cfg, temps, 14, 45, forecast_wh_qm=400)
-    assert r_sonnig_2.einschalten is None, f"Sonning 14:45 sollte warten: {r_sonnig_2.grund}"
+    r_bewoelkt_2 = evaluate_calculated_start(
+        cfg, temps, 14, 45, forecast_wh_qm=400, feedin_watt=200.0
+    )
+    assert r_sonnig_2.einschalten is True, f"Sonnig 14:45 Zapf-Garantie: {r_sonnig_2.grund}"
+    assert "SPAETEST" in r_sonnig_2.grund
     assert r_bewoelkt_2.einschalten is True, f"Bewölkt 14:45 sollte EIN: {r_bewoelkt_2.grund}"
 
     # 16:00 -> time_left=1.0h, braucht 2h -> buffer=-1.0h -> ZU SPAET (beide EIN)
@@ -162,7 +168,8 @@ def test_abweichung_schichtung_erlaubt_wenn_oben_kalt():
     r = evaluate_abweichung(
         abw, _temp(unten=36.0, mitte=38.0, oben=38.0),
         kompressor_ein=False, now_hour=14,
-        nachtsperre_start=19, nachtsperre_ende=8
+        nachtsperre_start=19, nachtsperre_ende=8,
+        feedin_watt=200.0,
     )
     assert r.einschalten is True, f"Sollte einschalten: {r.grund}"
 
@@ -180,7 +187,8 @@ def test_abweichung_schichtung_deaktivierbar():
     r = evaluate_abweichung(
         abw, _temp(unten=36.0, mitte=40.0, oben=46.0),
         kompressor_ein=False, now_hour=14,
-        nachtsperre_start=19, nachtsperre_ende=8
+        nachtsperre_start=19, nachtsperre_ende=8,
+        feedin_watt=200.0,
     )
     assert r.einschalten is True, f"Sollte einschalten (Check deaktiviert): {r.grund}"
 
@@ -198,7 +206,8 @@ def test_abweichung_schichtung_nur_bei_nicht_oben_fuehler():
     r = evaluate_abweichung(
         abw, _temp(unten=36.0, mitte=40.0, oben=36.0),
         kompressor_ein=False, now_hour=14,
-        nachtsperre_start=19, nachtsperre_ende=8
+        nachtsperre_start=19, nachtsperre_ende=8,
+        feedin_watt=200.0,
     )
     assert r.einschalten is True, f"Fuehler=oben sollte normal schalten: {r.grund}"
 
@@ -216,7 +225,8 @@ def test_abweichung_schichtung_oben_sensor_fehlt():
     temps = {"unten": 36.0, "mitte": 40.0, "oben": None}
     r = evaluate_abweichung(
         abw, temps, kompressor_ein=False, now_hour=14,
-        nachtsperre_start=19, nachtsperre_ende=8
+        nachtsperre_start=19, nachtsperre_ende=8,
+        feedin_watt=200.0,
     )
     assert r.einschalten is True, f"Ohne oben-Sensor sollte normal schalten: {r.grund}"
 
@@ -253,7 +263,7 @@ def test_abweichung_schichtung_in_gesamtbewertung():
 
     # Gegentest: oben kalt -> Abweichung darf einschalten
     gewinner2, ergebnisse2 = bewerte_alle_regeln(
-        config, _temp(unten=36.0, mitte=38.0, oben=38.0), pv_leistung=0.0,
+        config, _temp(unten=36.0, mitte=38.0, oben=38.0), pv_leistung=200.0,
         kompressor_ein=False, now=datetime(2025, 6, 15, 14, 0),
         forecast_wh_qm=None,
     )
