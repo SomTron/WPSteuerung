@@ -310,6 +310,42 @@ dynamisch an: Duscht der Haushalt z. B. regelmäßig schon ab 18 Uhr, beginnt di
 Garantie entsprechend früher – geklemmt auf max. 2 h früher / 1 h später als die
 statische Konfiguration.
 
+
+### 5.4 Quellen-Attribution je Heizzyklus
+
+Jeder Zyklus (>5 min) speichert jetzt die mittlere Netzeinspeisung und den
+mittleren SOC waehrend der Laufzeit und wird klassifiziert:
+
+- `pv` (Mittel >= 400 W), `batterie` (SOC >= 90 % ohne Netzkauf),
+  `netz` (Netzkauf im Mittel), sonst `gemischt`
+
+Daraus entsteht der Laufzeit-Split ("Wie viel deiner Warmwasser-Waerme kam
+wirklich aus PV?") plus die **Zu-frueh-Erkennung**: Endet ein Nicht-PV-Zyklus
+und kommen binnen 45 min doch >800 W Einspeisung, wird das als verfruehter
+Start gezaehlt (`zu_frueh_events`). Sichtbar ueber `/api/learning/info`
+(`quellen`, `forecast_ratio`, `surplus_stunden`).
+
+### 5.5 Forecast-Kalibrierung (Haus-spezifischer Langfehler)
+
+Taeglich ab 20 Uhr wird das Verhaeltnis *tatsaechlicher Tages-Netzeinschuss
+(Wh, integriert) / Tagesprognose (Wh/m2)* als EWMA (alpha=0.3) gelernt und auf
+0.3-2.0 geklemmt. Ab 3 Tageswerten multipliziert dieser Faktor die HEUTE-
+Prognose in CalcStart UND AdaptivePV - ein Haus mit dauerhaft zu optimistischem
+Solcast lernt das in ~3 Tagen und wartet realistischer. Tage ohne brauchbare
+Prognose (<1000 Wh/m2) oder mit Datenluecken (<50 Wh Surplus) werden
+uebersprungen.
+
+### 5.6 Surplus-Stundenprofil (Verbrauchsbewusstsein / Mittagstief)
+
+Die Engine sampelt stuendlich die Netzeinspeisung - aber nur bei
+AUSgeschaltetem Kompressor, also das reine Haushaltsmuster (Kochen um 12 Uhr,
+Waschen am Abend). Ab 5 Samples je Stunde und 4 brauchbaren Stunden steht das
+Profil zur Verfuegung. CalcStart zaehlt gelernte Tiefstunden (<250 W) zwischen
+jetzt und Zielzeit nur zu 75% als Heizzeit: Der Spaetest-Start verfrueht sich,
+die WP erreicht Soll VOR dem Mittagstief, pausiert waehrenddessen natuerlich
+(Komfort-AUS) und bedient die Zapfzeit trotzdem. Im Log als
+`| Mittagstief 12-13 Uhr`.
+
 ---
 
 ## 6. Datenfluss (Kurzüberblick)

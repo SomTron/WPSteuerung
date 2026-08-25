@@ -31,6 +31,10 @@ class HeatingCycle:
     rate_unten_c_h: float
     rate_gesamt_c_h: float
     season: str  # winter / transition / summer
+    # Energie-Quellen-Attribution (optional, alte Datensaetze ohne diese Felder)
+    avg_feedin_watt: Optional[float] = None
+    avg_soc: Optional[float] = None
+    quelle: str = ""  # pv / batterie / gemischt / netz
 
 
 @dataclass
@@ -61,6 +65,23 @@ class LearningData:
     version: int = 4
     komfort_verletzungen: List[str] = field(default_factory=list)
 
+    # ── Baustein A: Quellen-Attribution ──
+    runtime_by_quelle_sec: Dict[str, float] = field(default_factory=lambda: {
+        "pv": 0.0, "batterie": 0.0, "gemischt": 0.0, "netz": 0.0,
+    })
+    # Zyklen mit Nicht-PV-Quelle, nach denen binnen 45 min doch >800W kamen:
+    zu_frueh_events: List[str] = field(default_factory=list)
+
+    # ── Baustein B: Forecast-Kalibrierung ──
+    # EWMA von (taeglicher Netzeinschuss Wh / Prognose Wh/m2), geklemmt 0.3-2.0
+    forecast_ratio: float = 1.0
+    forecast_ratio_samples: int = 0
+
+    # ── Verbrauchsbewusstsein: Stundensurplus-Profil ──
+    # {"8": {"avg": 350.0, "n": 12}, ...}: gemitelte Netzeinspeisung je Stunde,
+    # nur gesampelt bei AUSgeschaltetem Kompressor (= Haushaltsmuster pur).
+    surplus_by_hour: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
 
 def _get_season(month: int) -> str:
     """Bestimmt die Jahreszeit."""
@@ -84,6 +105,15 @@ class LearningEngine:
         self._last_temps: Optional[Dict[str, Optional[float]]] = None
         self._last_temp_time: Optional[datetime] = None
         self._komfort_grenz_c: float = 40.0
+        # Solar-Tracking (Attribution/Kalibrierung/Surplus-Profil)
+        self._cycle_feedin_ws: float = 0.0   # Zeitintegral Einspeisung [Ws]
+        self._cycle_soc_sum_ws: float = 0.0
+        self._cycle_secs: float = 0.0
+        self._pending_zu_frueh: List[str] = []   # nur im RAM
+        self._day_surplus_wh: float = 0.0
+        self._surplus_tag: str = ""
+        self._kalibriert_datum: str = ""
+        self._last_update_time: Optional[datetime] = None
 
     def _load(self) -> LearningData:
         """Lerndaten aus JSON laden oder Defaults erstellen."""
@@ -108,6 +138,13 @@ class LearningEngine:
                     morning_target_hour_samples=raw.get("morning_target_hour_samples", 0),
                     version=4,
                     komfort_verletzungen=raw.get("komfort_verletzungen", []),
+                    runtime_by_quelle_sec=raw.get("runtime_by_quelle_sec", {
+                        "pv": 0.0, "batterie": 0.0, "gemischt": 0.0, "netz": 0.0,
+                    }),
+                    zu_frueh_events=raw.get("zu_frueh_events", []),
+                    forecast_ratio=raw.get("forecast_ratio", 1.0),
+                    forecast_ratio_samples=raw.get("forecast_ratio_samples", 0),
+                    surplus_by_hour=raw.get("surplus_by_hour", {}),
                 )
         except Exception as e:
             logging.warning(f"Konnte Lern-Daten nicht laden: {e}")
@@ -273,6 +310,40 @@ class LearningEngine:
             return 0.5
         return 0.0
 
+    def get_forecast_ratio(self) -> float:
+        """Kalibrierte Prognose (tatsaechlicher Netzeinschuss/Prognose).
+
+        Neutral 1.0 bis mindestens 3 Tageswerte vorliegen."""
+        if self.data.forecast_ratio_samples < 3:
+            return 1.0
+        return self.data.forecast_ratio
+
+    def get_surplus_profile(self):
+        """Stundensurplus-Profil {stunde: watt} oder None (noch unbrauchbar).
+
+        Eine Stunde gilt als brauchbar ab n>=5 Samples; das Profil als
+        Ganzes ab 4 brauchbaren Stunden (Tageslicht-Luecken erlaubt)."""
+        nutzbar = {}
+        for key, e in self.data.surplus_by_hour.items():
+            try:
+                stunde = int(key)
+            except (TypeError, ValueError):
+                continue
+            if e.get("n", 0) >= 5:
+                nutzbar[stunde] = float(e["avg"])
+        return nutzbar if len(nutzbar) >= 4 else None
+
+    def get_quellen_statistik(self) -> Dict:
+        """Laufzeit-Split je Quelle + Zaehlung der Zu-frueh-Events."""
+        z14 = sum(
+            1 for v in self.data.zu_frueh_events
+            if v >= (datetime.now() - timedelta(days=14)).isoformat())
+        return {
+            "runtime_sec": dict(self.data.runtime_by_quelle_sec),
+            "zu_frueh_events_gesamt": len(self.data.zu_frueh_events),
+            "zu_frueh_14d": z14,
+        }
+
     def get_info(self) -> Dict:
         """Übersicht der gelernten Werte für API/UI."""
         fenster = self.get_learned_evening_window()
@@ -290,6 +361,12 @@ class LearningEngine:
             "learned_morning_window": list(m_fenster) if (m_fenster := self.get_learned_morning_window()) else None,
             "komfort_verletzungen_7d": self.get_komfort_verletzung_rate(tage=7),
             "komfort_verletzungen_1d": self.get_komfort_verletzung_rate(tage=1),
+            # Baustein A+B + Surplus-Profil
+            "forecast_ratio": self.get_forecast_ratio(),
+            "forecast_ratio_samples": self.data.forecast_ratio_samples,
+            "quellen": self.get_quellen_statistik(),
+            "surplus_stunden": sorted(self.get_surplus_profile().keys())
+                if self.get_surplus_profile() else [],
         }
 
     # ── Zyklus-Update ──────────────────────────────────────
@@ -299,11 +376,75 @@ class LearningEngine:
         now: datetime,
         temp_dict: Dict[str, Optional[float]],
         compressor_is_on: bool,
+        feedin_watt: Optional[float] = None,
+        soc: Optional[float] = None,
+        forecast_today_wh_qm: Optional[float] = None,
     ):
         """
         Wird jeden Regelzyklus aufgerufen.
-        Erkennt Heizzyklus-Start/Ende und Warmwasser-Zapfung.
+        Erkennt Heizzykus-Start/Ende und Warmwasser-Zapfung sowie
+        Quellen-Attribution, Forecast-Kalibrierung und Surplus-Profil.
         """
+        # ── Solar-Tracking ──
+        dt_secs = 0.0
+        if self._last_update_time is not None:
+            dt_secs = (now - self._last_update_time).total_seconds()
+            if dt_secs < 0 or dt_secs > 3600:  # Zeitprung/Neustart
+                dt_secs = 0.0
+        self._last_update_time = now
+
+        # Tages-Surplus integrieren (positive Netzeinspeisung = echter
+        # Ueberschuss) und abends gegen die Prognose kalibrieren (B).
+        heute = now.strftime("%Y-%m-%d")
+        if self._surplus_tag != heute:
+            self._surplus_tag = heute
+            self._day_surplus_wh = 0.0
+        if feedin_watt is not None and dt_secs > 0:
+            self._day_surplus_wh += max(feedin_watt, 0.0) * dt_secs / 3600.0
+        self._kalibriere_forecast(now, heute, forecast_today_wh_qm)
+
+        # Stundensurplus-Profil: Nur bei AUSgeschaltetem Kompressor sampeln,
+        # sonst verfaelscht die WP-Leistung das Haushaltsmuster. Persistenz
+        # opportunistisch ueber die _save()-Aufrufe der anderen Events.
+        if feedin_watt is not None and not compressor_is_on:
+            key = str(now.hour)
+            alt_e = self.data.surplus_by_hour.get(
+                key, {"avg": float(feedin_watt), "n": 0})
+            self.data.surplus_by_hour[key] = {
+                "avg": round(alt_e["avg"] * (1.0 - 0.08)
+                             + float(feedin_watt) * 0.08, 1),
+                "n": alt_e["n"] + 1}
+
+        # Zyklus-Akkumulation fuer die Quellen-Attribution
+        if compressor_is_on and dt_secs > 0:
+            self._cycle_secs += dt_secs
+            if feedin_watt is not None:
+                self._cycle_feedin_ws += feedin_watt * dt_secs
+            if soc is not None:
+                self._cycle_soc_sum_ws += soc * dt_secs
+
+        # "Zu frueh"-Erkennung: Kamen nach einem Nicht-PV-Zyklus binnen
+        # 45 min doch noch >800 W Einspeisung, war der Start verfrueht.
+        if self._pending_zu_frueh:
+            noch_offen = []
+            for ende_iso in self._pending_zu_frueh:
+                try:
+                    ende = datetime.fromisoformat(ende_iso)
+                except ValueError:
+                    continue
+                if (now - ende).total_seconds() < 45 * 60:
+                    noch_offen.append(ende_iso)
+                    continue
+                if feedin_watt is not None and feedin_watt >= 800:
+                    self.data.zu_frueh_events.append(
+                        now.isoformat(timespec="seconds"))
+                    del self.data.zu_frueh_events[:-100]
+                    logging.warning(
+                        f"Learning: ZU FRUEH geheizt - 45 min nach "
+                        f"Nicht-PV-Zyklus ({ende_iso}) kommen "
+                        f"{feedin_watt:.0f}W Einspeisung")
+            self._pending_zu_frueh = noch_offen
+
         # Heizzyklus erkennen
         if compressor_is_on and not self._last_compressor_state:
             self._cycle_start_time = now
@@ -312,6 +453,9 @@ class LearningEngine:
                 "mittig": temp_dict.get("mittig"),
                 "oben": temp_dict.get("oben"),
             }
+            self._cycle_feedin_ws = 0.0
+            self._cycle_soc_sum_ws = 0.0
+            self._cycle_secs = 0.0
 
         elif not compressor_is_on and self._last_compressor_state and self._cycle_start_time is not None:
             self._finalize_cycle(now, temp_dict)
@@ -335,6 +479,40 @@ class LearningEngine:
         self._last_temp_time = now
 
     # ── Heizzyklus auswerten ───────────────────────────────
+
+    def _kalibriere_forecast(self, now: datetime, heute: str,
+                             forecast_today_wh_qm: Optional[float]):
+        """Taegliche Kalibrierung (ab 20 Uhr, einmal pro Tag).
+
+        Verhaeltnis tatsaechlicher Netzeinschuss (Wh, integriert) zur
+        Tagesprognose (Wh/m2) als EWMA (alpha=0.3), geklemmt auf 0.3-2.0.
+        Lernt den HAUSspezifischen Langfehler des Forecast-Dienstes inkl.
+        typischem Eigenverbrauchsniveau.
+        """
+        if self._kalibriert_datum == heute or now.hour < 20:
+            return
+        self._kalibriert_datum = heute
+        if forecast_today_wh_qm is None or forecast_today_wh_qm < 1000:
+            logging.info("Learning: Kalibrierung uebersprungen "
+                         "(keine brauchbare Tagesprognose)")
+            return
+        if self._day_surplus_wh <= 50:
+            logging.info("Learning: Kalibrierung uebersprungen "
+                         "(zu wenig Surplus-Daten heute)")
+            return
+        ratio = max(0.3, min(
+            2.0, self._day_surplus_wh / float(forecast_today_wh_qm)))
+        n = self.data.forecast_ratio_samples + 1
+        self.data.forecast_ratio = (
+            round(ratio, 3) if n <= 1
+            else round(self.data.forecast_ratio * 0.7 + ratio * 0.3, 3))
+        self.data.forecast_ratio_samples = n
+        self._save()
+        logging.info(
+            f"Learning: Forecast-Kalibrierung {heute}: Surplus "
+            f"{self._day_surplus_wh:.0f}Wh / Prognose "
+            f"{forecast_today_wh_qm:.0f}Wh/qm -> Faktor "
+            f"{self.data.forecast_ratio:.2f} (n={n})")
 
     def _finalize_cycle(self, now: datetime, temp_dict: Dict[str, Optional[float]]):
         """Wertet einen abgeschlossenen Heizzyklus aus."""
@@ -361,6 +539,22 @@ class LearningEngine:
         rate_gesamt = delta_mitte / (duration_min / 60.0)
         season = _get_season(end.month)
 
+        # Quellen-Attribution: Mittelwerte aus den Zyklus-Akkumulatoren
+        avg_feedin = (self._cycle_feedin_ws / self._cycle_secs
+                      if self._cycle_secs > 0 else None)
+        avg_soc = (self._cycle_soc_sum_ws / self._cycle_secs
+                   if self._cycle_secs > 0 else None)
+        quelle = "gemischt"
+        if avg_feedin is not None:
+            if avg_feedin >= 400.0:
+                quelle = "pv"
+            elif avg_soc is not None and avg_soc >= 90.0 and avg_feedin >= -50.0:
+                quelle = "batterie"
+            elif avg_feedin < -50.0:
+                quelle = "netz"
+        elif avg_soc is not None and avg_soc >= 90.0:
+            quelle = "batterie"
+
         cycle = HeatingCycle(
             start_time=start.isoformat(),
             end_time=end.isoformat(),
@@ -372,9 +566,22 @@ class LearningEngine:
             rate_unten_c_h=round(rate_unten, 2),
             rate_gesamt_c_h=round(rate_gesamt, 2),
             season=season,
+            avg_feedin_watt=round(avg_feedin, 0) if avg_feedin is not None else None,
+            avg_soc=round(avg_soc, 1) if avg_soc is not None else None,
+            quelle=quelle,
         )
 
         self.data.cycles.append(asdict(cycle))
+
+        # Laufzeit je Quelle + Zu-frueh-Pruefung vormerken (Nicht-PV only)
+        self.data.runtime_by_quelle_sec[quelle] = round(
+            self.data.runtime_by_quelle_sec.get(quelle, 0.0)
+            + self._cycle_secs, 1)
+        if quelle != "pv":
+            self._pending_zu_frueh.append(end.isoformat())
+        self._cycle_feedin_ws = 0.0
+        self._cycle_soc_sum_ws = 0.0
+        self._cycle_secs = 0.0
         if len(self.data.cycles) > 50:
             self.data.cycles = self.data.cycles[-50:]
 

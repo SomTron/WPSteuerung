@@ -792,6 +792,36 @@ def _energiequelle_mit_grund(
     return False, f"SOC {soc:.0f}% < {soc_min_prozent:.0f}%"
 
 
+def _mittagstief_stunden(
+    current_time: float,
+    ziel_uhr: float,
+    surplus_profile: Dict[str, float],
+    schwelle_w: float = 250.0,
+) -> tuple:
+    """Gelernte Surplus-schwache Stunden zwischen jetzt und Zielzeit.
+
+    Das Profil kommt aus der LearningEngine (Netzeinspeisung je Stunde,
+    nur bei ausgeschaltetem WP gesampelt = Haushaltsmuster pur). Stunden
+    mit typisch < schwelle_w (Kochen etc.) zaehlen nur teilweise als
+    Heizzeit -> CalcStart beginnt frueher und kann im Tief pausieren.
+    Returns: (anzahl_tiefstunden, lesbares_label)
+    """
+    stunden = []
+    h = int(current_time) + 1
+    while h < ziel_uhr and (h - current_time) <= 10.0:
+        wert = surplus_profile.get(str(h % 24))
+        if wert is not None and wert < schwelle_w:
+            stunden.append(h % 24)
+        h += 1
+    if not stunden:
+        return 0.0, ""
+    if stunden[-1] - stunden[0] == len(stunden) - 1:
+        label = f"{stunden[0]}-{stunden[-1] + 1} Uhr"
+    else:
+        label = f"{len(stunden)} Std."
+    return float(len(stunden)), label
+
+
 def _forecast_quelle_ok(
     forecast_cfg: ForecastConfig,
     feedin_watt: float,
@@ -919,6 +949,7 @@ def evaluate_adaptive_pv(
     now_hour: int = 12,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
+    fc_ratio: float = 1.0,
 ) -> RegelErgebnis:
     """
     Adaptive-PV-Regel: PV-Schwelle passt sich dynamisch an.
@@ -978,11 +1009,15 @@ def evaluate_adaptive_pv(
     elif temp < adaptive_cfg.t_normal_kalt_c:
         schwelle *= 0.7  # Kalt: etwas niedrigere Schwelle
     
-    # Prognose-Anpassung
-    if forecast_wh_qm is not None:
-        if forecast_wh_qm >= adaptive_cfg.fc_schwelle_gut_wh:
+    # Prognose-Anpassung (fc_ratio = gelernte Haus-Kalibrierung)
+    prognose_eff = (
+        forecast_wh_qm * fc_ratio
+        if forecast_wh_qm is not None and fc_ratio != 1.0 else forecast_wh_qm
+    )
+    if prognose_eff is not None:
+        if prognose_eff >= adaptive_cfg.fc_schwelle_gut_wh:
             schwelle *= 1.5  # Sehr sonnig: höhere Schwelle = konservativer
-        elif forecast_wh_qm <= adaptive_cfg.fc_schwelle_schlecht_wh:
+        elif prognose_eff <= adaptive_cfg.fc_schwelle_schlecht_wh:
             schwelle *= 0.5  # Bewölkt: niedrige Schwelle = PV jetzt nutzen
     
     if pv_leistung >= schwelle:
@@ -1010,6 +1045,8 @@ def evaluate_calculated_start(
     learned_target_hour: Optional[float] = None,
     feedin_watt: float = 0.0,
     soc: Optional[float] = None,
+    fc_ratio: float = 1.0,
+    surplus_profile: Optional[Dict[str, float]] = None,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -1095,26 +1132,41 @@ def evaluate_calculated_start(
     # nutzen wir die Config-Puffer direkt mit Prognose-Anpassung.
     
     # Basis-Puffer aus Config
-    buffer_hours = time_left - hours_needed
-    
-    # Prognose-Anpassung: Heute viel PV erwartet? -> laenger warten
+    # Prognose-Anpassung: Heute viel PV erwartet? -> laenger warten.
+    # fc_ratio kalibriert die Prognose am gemessenen Netzeinschuss der
+    # Vergangenheit (Haus-spezifischer Langfehler des Forecast-Dienstes).
+    prognose_eff = forecast_wh_qm
+    kalibrier_label = ""
+    if forecast_wh_qm is not None and fc_ratio != 1.0:
+        prognose_eff = forecast_wh_qm * fc_ratio
+        kalibrier_label = f", Kalibrierung x{fc_ratio:.2f}"
     pv_faktor = 1.0
-    if forecast_wh_qm is not None:
-        if forecast_wh_qm >= 3000:  # Sehr sonnig
+    if prognose_eff is not None:
+        if prognose_eff >= 3000:  # Sehr sonnig
             pv_faktor = 2.0
-            pv_label = "sehr sonnig"
-        elif forecast_wh_qm >= 1500:  # Sonnig
+            pv_label = f"sehr sonnig{kalibrier_label}"
+        elif prognose_eff >= 1500:  # Sonnig
             pv_faktor = 1.5
-            pv_label = "sonnig"
-        elif forecast_wh_qm <= 500:  # Bewoelkt
+            pv_label = f"sonnig{kalibrier_label}"
+        elif prognose_eff <= 500:  # Bewoelkt
             pv_faktor = 0.5
-            pv_label = "bewoelkt"
+            pv_label = f"bewoelkt{kalibrier_label}"
         else:
             pv_faktor = 1.0
-            pv_label = f"{forecast_wh_qm:.0f} Wh/qm"
+            pv_label = f"{prognose_eff:.0f} Wh/qm{kalibrier_label}"
     else:
         pv_label = "keine Prognose"
-    
+
+    # Verbrauchsbewusstsein: Gelernte Stunden mit wenig Netzeinschuss
+    # (Mittags Kochen etc.) zaehlen nur zu 75% als Heizzeit -> frueherer
+    # Start, damit waehrend des Tiefs pausiert werden kann.
+    dip_h, dip_label = _mittagstief_stunden(
+        current_time, ziel_uhr, surplus_profile
+    ) if surplus_profile else (0.0, "")
+    if dip_h:
+        hours_needed = hours_needed + dip_h * 0.75
+
+    buffer_hours = time_left - hours_needed
     effektiver_puffer = buffer_hours * pv_faktor
 
     quelle_ok, quelle_grund = _energiequelle_mit_grund(
@@ -1148,26 +1200,29 @@ def evaluate_calculated_start(
         # Sicherheitspuffer. Ab hier droht die Zapf-Garantie - heizen notfalls
         # auch ohne PV/Batterie (dann eben mit Netz).
         result.einschalten = True
+        dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
         result.grund = (
             f"CalcStart: SPAETEST-START ({buffer_hours:.1f}h Restpuffer, "
-            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> EIN "
+            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00{dip_txt}) -> EIN "
             f"(Zapf-Garantie; Quelle: {quelle_grund})"
         )
         return result
 
     # Genug Puffer -> warten; ohne Quelle explizit benennen, worauf gewartet wird
     if not quelle_ok:
+        dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
         result.einschalten = None
         result.grund = (
             f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht, warte auf "
             f"PV/Batterie ({quelle_grund}; brauche {hours_needed:.1f}h bis "
-            f"{ziel_uhr:.0f}:00)"
+            f"{ziel_uhr:.0f}:00{dip_txt})"
         )
         return result
     result.einschalten = None
+    dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
     result.grund = (
         f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht (PV={pv_label}, "
-        f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> warte auf PV"
+        f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00{dip_txt}) -> warte auf PV"
     )
     return result
 
@@ -1188,6 +1243,8 @@ def bewerte_alle_regeln(
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
+    fc_ratio: float = 1.0,
+    surplus_profile: Optional[Dict[str, float]] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -1270,7 +1327,7 @@ def bewerte_alle_regeln(
     # 6. Adaptive-PV-Regel (dynamische PV-Schwelle)
     ergebnis = evaluate_adaptive_pv(
         config.adaptive_pv, temp_dict, pv_leistung, forecast_wh_qm, kompressor_ein,
-        now_hour, nachtsperre_start, nachtsperre_ende
+        now_hour, nachtsperre_start, nachtsperre_ende, fc_ratio=fc_ratio
     )
     ergebnisse.append(ergebnis)
     
@@ -1284,6 +1341,8 @@ def bewerte_alle_regeln(
         learned_target_hour=learned_target_hour,
         feedin_watt=pv_leistung,
         soc=soc,
+        fc_ratio=fc_ratio,
+        surplus_profile=surplus_profile,
     )
     ergebnisse.append(ergebnis)
     
