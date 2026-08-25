@@ -172,12 +172,15 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_today_wh = None
     
     # Alle Regeln bewerten (mit effektiver Config)
-    # Learning Engine aktualisieren (Heizzyklen + Zapfprofil)
+    # Learning Engine aktualisieren (Heizzyklen + Zapfprofil + Solar-Tracking)
     if learning_engine is not None:
         learning_engine.update(
             now=datetime.now(state.local_tz),
             temp_dict=temp_dict,
             compressor_is_on=state.control.kompressor_ein,
+            feedin_watt=pv_leistung,
+            soc=getattr(state.solar, 'soc', None),
+            forecast_today_wh_qm=forecast_today_wh,
         )
         gelernte_rate_unten = learning_engine.get_learned_heating_rate(
             datetime.now(state.local_tz).month, 'unten'
@@ -186,14 +189,21 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             datetime.now(state.local_tz).month, 'gesamt'
         )
         gelernte_zielzeit = learning_engine.get_learned_target_hour()
-        # Defensiv: aeltere Lern-Engines/Fakes kennen die Methode evtl. nicht
+        # Defensiv: aeltere Lern-Engines/Fakes kennen die Methoden evtl.
+        # nicht -> dann neutral bleiben (Ratio 1.0 / kein Profil).
         _get_fenster = getattr(learning_engine, 'get_learned_evening_window', None)
         gelerntes_abendfenster = _get_fenster() if callable(_get_fenster) else None
+        _ratio_getter = getattr(learning_engine, 'get_forecast_ratio', None)
+        fc_ratio = _ratio_getter() if callable(_ratio_getter) else 1.0
+        _profil_getter = getattr(learning_engine, 'get_surplus_profile', None)
+        surplus_profil = _profil_getter() if callable(_profil_getter) else None
     else:
         gelernte_rate_unten = None
         gelernte_rate_gesamt = None
         gelernte_zielzeit = None
         gelerntes_abendfenster = None
+        fc_ratio = 1.0
+        surplus_profil = None
 
     # Konfigurations-Guard: CalcStart-Zielzeit vs. Nachtsperre.
     # Eine Zielzeit innerhalb/hinter der Sperre macht die Regel stumm -
@@ -238,6 +248,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
         learned_target_hour=gelernte_zielzeit,
+        fc_ratio=fc_ratio,
+        surplus_profile=surplus_profil,
     )
     
     # Ergebnisse loggen (gethrottelt)

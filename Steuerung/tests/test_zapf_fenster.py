@@ -182,7 +182,7 @@ async def test_pcl_uebergibt_gelerntes_abendfenster():
     )
 
     class _MockEngine:
-        def update(self, now, temp_dict, compressor_is_on):
+        def update(self, now, temp_dict, compressor_is_on, **kwargs):
             pass
 
         def get_learned_heating_rate(self, month, sensor):
