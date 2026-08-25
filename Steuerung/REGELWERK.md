@@ -98,6 +98,10 @@ Heizen mit Hausbatterie-Strom, **ohne dass das Haus Netzstrom kauft**:
   3. Fühler ≤ `einschalten_bei_c` (42 °C)
 - **Weiterlauf** aus der Batterie bis `ausschalten_bei_c` (47 °C), solange 1.+2. halten
 - Sinkt der SOC darunter oder bezieht das Haus Netz → keine Aktion (Schonung)
+- **SOC-Hysterese** (`soc_hysterese_prozent`, default 2): Solange der Kompressor
+  läuft, genügt für den Weiterlauf `min_soc − Hysterese` (z. B. 88 %). Ein
+  1-%-Ticken der BMS-Anzeige an der Grenzkante bricht einen Lauf nicht mehr ab;
+  ein *Neustart* erfordert weiterhin die volle Schwelle.
 - Respektiert die Nachtsperre (nachts so wenig wie möglich)
 
 Konfiguration: `batterie.{min_soc_prozent, max_netzbezug_watt, einschalten_bei_c,
@@ -228,6 +232,19 @@ Wichtig: Gezählt werden nur tatsächliche Wechsel des Gewinners (z. B.
 `Abweichung` → `PV_unten`) – **nicht** jeder Loop-Durchlauf (~13 s). Ein
 stabiler Gewinner über Stunden produziert also genau einen Eintrag; erst
 wirkliches Takten des Kompressors aktiviert die Zusatzpause.
+
+Zusätzlich flattersicher:
+
+- **Gewinner-Debouncing**: Ein Wechsel zählt/loggt erst, wenn derselbe neue
+  Gewinner **2× hintereinander** bewertet wurde (`_gewinner_debounce`). Grund:
+  Mehrere Regeln teilen sich scharfe Kanten (Batterie-EIN bei `unten ≤ 42 °C`
+  gegen Komfort-AUS bei `unten ≥ 42 °C`, SOC-Grenze 90 %) – Sensor-/SOC-Jitter
+  dort erzeugte sonst Dutzende echte Wechsel pro Stunde. Ein-Sensor-Ticks
+  bleiben jetzt ohne Wirkung; die Verzögerung eines echten Wechsels beträgt
+  maximal einen Loop (~13 s).
+- **Episode-Logging**: „Taktschutz aktiv" wird nur beim Übergang in die
+  Episode gemeldet, „Taktschutz beendet" beim Verlassen – nicht mehr bei jedem
+  Durchlauf. Die Meldung „verlängert Pause" erscheint max. alle 30 min.
 
 ---
 

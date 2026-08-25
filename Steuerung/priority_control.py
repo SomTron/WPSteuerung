@@ -370,7 +370,12 @@ def evaluate_batterie(
             eff_min_soc - getattr(batt_cfg, "min_soc_absolut", 10.0)
         )
         eff_min_soc -= max(entlastung, 0.0)
-    strom_ok = (soc >= eff_min_soc and feedin_watt >= batt_cfg.max_netzbezug_watt)
+    # SOC-Hysterese gegen Grenzkanten-Flattern: Im laufenden Zyklus genuegt
+    # (eff_min_soc - Hysterese), damit ein 1%-SOC-Ticken den Lauf nicht abbricht.
+    soc_schwelle = eff_min_soc
+    if kompressor_ein:
+        soc_schwelle -= max(getattr(batt_cfg, "soc_hysterese_prozent", 2.0), 0.0)
+    strom_ok = (soc >= soc_schwelle and feedin_watt >= batt_cfg.max_netzbezug_watt)
     if kompressor_ein and strom_ok and temp > batt_cfg.einschalten_bei_c:
         result.einschalten = True
         result.grund = (
@@ -387,8 +392,8 @@ def evaluate_batterie(
             f"{batt_cfg.temperaturfuehler} {temp:.1f}C -> EIN"
         )
         return result
-    if soc < eff_min_soc:
-        result.grund = f"Batterie: SOC {soc:.0f}% < {eff_min_soc:.0f}% (Schonung)"
+    if soc < soc_schwelle:
+        result.grund = f"Batterie: SOC {soc:.0f}% < {soc_schwelle:.0f}% (Schonung)"
     elif feedin_watt < batt_cfg.max_netzbezug_watt:
         result.grund = f"Batterie: Netzbezug {feedin_watt:.0f}W < {batt_cfg.max_netzbezug_watt:.0f}W (kein Netzstrom!)"
     else:

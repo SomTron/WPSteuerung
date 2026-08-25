@@ -166,6 +166,14 @@ class BatterieConfig(BaseModel):
         default=-50.0,
         description="Heizen nur wenn Einspeisung >= Wert (W); <0 = kleiner Netzkauftoleranz",
     )
+    soc_hysterese_prozent: float = Field(
+        default=2.0,
+        description=(
+            "SOC-Hysterese gegen Flattern an der Grenzkante: Waehrend der "
+            "Kompressor laeuft, genuegt (min_soc_prozent - Hysterese) zum "
+            "Weiterlauf; ein 1%-SOC-Ticken schaltet nicht mehr ab."
+        ),
+    )
 
     # Dynamische Reserve (Punkt C): Bei gutem Morgen-Forecast darf die
     # Batterie tiefer entladen werden als min_soc_prozent.

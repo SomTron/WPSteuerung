@@ -322,13 +322,14 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         "alle_ergebnisse": alle_ergebnisse,
     }
     
-    # Moduswechsel-Logging
-    if state.control.previous_modus != res["modus"]:
+    # Moduswechsel-Logging + Taktschutz-Tracking - erst nach Bestaetigung
+    # durch das Debouncing (siehe _gewinner_debounce): Ein-Sensor-Ticks an
+    # Regel-Grenzen erzeugen weder Log-Zeilen noch Taktschutz-Zaehler.
+    if _gewinner_debounce(state, res["modus"]):
         logging.info(f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})")
         state.control.previous_modus = res["modus"]
-
-    # Taktschutz (Punkt D): Wechsel tracken
-    _track_wechsel(state, res["modus"])
+        # Taktschutz (Punkt D): nur bestaetigte Wechsel tracken
+        _track_wechsel(state, res["modus"])
 
     # Entscheidungs-Historie (JSONL) fuer Webapp/KPIs - darf nie blockieren
     if entscheidungs_log is not None:
@@ -481,26 +482,83 @@ def _track_wechsel(state, gewinner_name):
         return
     hist.append((now, gewinner_name))
 
+def _gewinner_debounce(state, modus):
+    """Bestaetigt einen Gewinnerwechsel erst nach 2 identischen Bewertungen.
+
+    Hintergrund: Mehrere Regeln teilen sich scharfe Kanten (z.B. Batterie-EIN
+    bei unten <= 42.0C gegen Komfort-AUS bei unten >= 42.0C). Sensor-/SOC-
+    Jitter an diesen Kanten liess den Gewinner sonst im Sekundentakt pendeln -
+    jeder Hub war ein echter Wechsel fuer Taktschutz und Log.
+    """
+    control = getattr(state, "control", None)
+    if control is None:
+        return True  # ohne Control-Objekt kein Debouncing moeglich
+    if modus == getattr(control, "previous_modus", None):
+        control._pending_modus = None
+        return False
+    pend = getattr(control, "_pending_modus", None)
+    name, cnt = pend if isinstance(pend, tuple) else (None, 0)
+    if name == modus:
+        cnt += 1
+    else:
+        name, cnt = modus, 1
+    try:
+        control._pending_modus = (name, cnt)
+    except Exception:
+        return True
+    if cnt >= 2:
+        control._pending_modus = None
+        return True
+    return False
+
 def _taktschutz_blockiert(state, cfg) -> float:
     """Prueft Taktschutz (Punkt D): zu viele Wechsel/h -> zusaetzliche Pause.
-    Returns: zusaetzliche Pause in Sekunden (0 = keine Blockade)."""
+    Returns: zusaetzliche Pause in Sekunden (0 = keine Blockade).
+
+    Meldungen erscheinen nur beim Uebergang (Episode startet/endet), nicht
+    bei jedem Loop-Durchlauf.
+    """
     ts_cfg = getattr(cfg, "taktschutz", None)
     if ts_cfg is None or not getattr(ts_cfg, "aktiv", False):
         return 0.0
     hist = getattr(state.control, "_wechsel_historie", deque())
+    kontrolle = getattr(state, "control", None)
+
+    def _merker(wert):
+        if kontrolle is not None:
+            try:
+                kontrolle._taktschutz_aktiv_merker = wert
+            except Exception:
+                pass
+
+    def _episode_beenden():
+        if getattr(kontrolle, "_taktschutz_aktiv_merker", False):
+            logging.info(
+                f"Taktschutz beendet: weniger als "
+                f"{ts_cfg.max_wechsel_pro_stunde} Wechsel/h"
+            )
+            _merker(False)
+
     if len(hist) < ts_cfg.max_wechsel_pro_stunde:
+        _episode_beenden()
         return 0.0
     # Sind die Wechsel innerhalb der letzten Stunde?
     now = datetime.now(state.local_tz)
     grenze = now - timedelta(hours=1)
     aktuelle = sum(1 for ts, _ in hist if ts >= grenze)
     if aktuelle >= ts_cfg.max_wechsel_pro_stunde:
-        logging.warning(
-            f"Taktschutz aktiv: {aktuelle} Wechsel/h >= {cfg.taktschutz.max_wechsel_pro_stunde}, "
-            f"zusaetzliche Pause {ts_cfg.zusatz_pause_minuten} min"
-        )
+        if not getattr(kontrolle, "_taktschutz_aktiv_merker", False):
+            # Nur beim Uebergang in die Episode melden - nicht jeden Loop
+            logging.warning(
+                f"Taktschutz aktiv: {aktuelle} Wechsel/h >= "
+                f"{ts_cfg.max_wechsel_pro_stunde}, zusaetzliche Pause "
+                f"{ts_cfg.zusatz_pause_minuten} min (Meldung 1x pro Episode)"
+            )
+            _merker(True)
         return ts_cfg.zusatz_pause_minuten * 60.0
+    _episode_beenden()
     return 0.0
+
 
 def _boiler_max_info(state):
     """Infos zum harten Boiler-Maximum: (temp, limit, wiederein, fuehler).
@@ -646,10 +704,11 @@ async def handle_compressor_on(
     if takt_pause > 0 and min_pause.total_seconds() < takt_pause:
         min_pause_orig = min_pause
         min_pause = timedelta(seconds=takt_pause)
-        logging.info(
-            f"Taktschutz verlaengert Pause von {min_pause_orig.total_seconds()/60:.0f} "
-            f"auf {takt_pause/60:.0f} min"
-        )
+        if check_log_throttle(state, "log_taktschutz_verlaengerung", interval_minutes=30):
+            logging.info(
+                f"Taktschutz verlaengert Pause von "
+                f"{min_pause_orig.total_seconds()/60:.0f} auf {takt_pause/60:.0f} min"
+            )
 
     # Explizite Neustartsperre (z.B. nach Verifizierungsfehler): blockiert
     # VOR der Mindestpausen-Pruefung, damit der Grund eindeutig im Log steht.
