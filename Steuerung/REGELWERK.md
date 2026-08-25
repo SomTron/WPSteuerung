@@ -152,10 +152,23 @@ nachtsperre_ueberschreiben}}`
 
 Nimmt die Wh/m²-Prognose von MORGEN (Richtung bewusst so gewählt):
 
-- **Morgen schlecht** (≤ 800 Wh/m²): heute bis 17 Uhr vorheizen (bis 44 °C), solange
-  der Fühler kälter als 44 °C ist – der Buffer wird aufgebaut, solange Strom da ist
+- **Morgen schlecht** (≤ 800 Wh/m²): heute vorheizen (bis `t_vorheiz_ab_c` = 44 °C)
+  im Fenster 8–19 Uhr – also bis zum Nachtsperren-Beginn
 - **Morgen gut** (≥ 3000 Wh/m²): zwischen 11–15 Uhr nicht unnötig heizen – morgen
   kommt wieder PV-Strom
+
+**Energie-Quellen-Gate fürs Vorheizen:** Die Regel ist quellenblind gewesen und
+heizte notfalls mit Batterie-/Netzstrom. Jetzt gilt für den EIN-Wunsch:
+
+- **PV-Direkt**: echte Netzeinspeisung ≥ `pv_einspeisung_min_watt` (50 W), oder
+- **Batterie**: SOC ≥ `soc_min_prozent` (90 %) UND keine nennenswerter Netzkauf
+  (Einspeisung ≥ `vorheiz_max_netzbezug_watt`, −50 W)
+- Ist beides nicht erfüllt, wartet die Regel (stumm, kein AUS) – niedriger
+  priorisierte Regeln wie Abweichung entscheiden weiter. Mit
+  `vorheiz_netz_erlaubt: true` stellt man das alte Verhalten (Netzstrom erlaubt)
+  wieder her. Die Sparen-Entscheidung (AUS) braucht keine Quelle.
+- Sicherheitsnetz bleibt der Komfort-Notfall (3.6): Fällt oben ≤ 36 °C, heizt er
+  auch nachts – unabhängig vom Quellen-Gate.
 
 ### 3.8 AdaptivePV — Prio 55
 

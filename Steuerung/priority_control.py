@@ -733,6 +733,32 @@ def evaluate_abweichung(
 
 
 
+def _forecast_quelle_ok(
+    forecast_cfg: ForecastConfig,
+    feedin_watt: float,
+    soc: Optional[float],
+) -> tuple:
+    """Energie-Quelle fuer das Vorheizen: PV-Direkt vor Batterie.
+
+    Netz nur, wenn vorheiz_netz_erlaubt=True explizit freigegeben ist.
+    Returns: (ok, beschreibung_der_quelle_bzw._des_grunds)
+    """
+    if getattr(forecast_cfg, "vorheiz_netz_erlaubt", False):
+        return True, "Netz erlaubt (Konfig)"
+    pv_schwelle = getattr(forecast_cfg, "pv_einspeisung_min_watt", 50.0)
+    if feedin_watt >= pv_schwelle:
+        return True, f"PV {feedin_watt:.0f}W >= {pv_schwelle:.0f}W"
+    soc_grenze = getattr(forecast_cfg, "soc_min_prozent", 90.0)
+    if (
+        soc is not None
+        and soc >= soc_grenze
+        and feedin_watt >= getattr(forecast_cfg, "vorheiz_max_netzbezug_watt", -50.0)
+    ):
+        return True, f"Batterie SOC {soc:.0f}% >= {soc_grenze:.0f}%"
+    soc_txt = "keine Daten" if soc is None else f"{soc:.0f}% < {soc_grenze:.0f}%"
+    return False, f"SOC {soc_txt}"
+
+
 def evaluate_forecast(
     forecast_cfg: ForecastConfig,
     temp_dict: Dict[str, Optional[float]],
@@ -740,6 +766,8 @@ def evaluate_forecast(
     now_hour: int,
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
+    feedin_watt: float = 0.0,
+    soc: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter.
@@ -782,11 +810,28 @@ def evaluate_forecast(
     if forecast_wh_qm <= forecast_cfg.fc_schwelle_niedrig_wh:
         if forecast_cfg.vorheiz_start_uhr <= now_hour < forecast_cfg.vorheiz_ende_uhr:
             if temp <= forecast_cfg.t_vorheiz_ab_c:
+                quelle_ok, quelle_grund = _forecast_quelle_ok(
+                    forecast_cfg, feedin_watt, soc
+                )
+                if not quelle_ok:
+                    # Keine akzeptierte Quelle (weder PV noch volle Batterie):
+                    # Warten statt Netzstrom verbrauchen. Bewusst STUMM
+                    # (kein AUS), damit niedriger priorisierte Regeln wie
+                    # Abweichung weiterhin entscheiden koennen.
+                    result.einschalten = None
+                    result.grund = (
+                        f"Forecast-Vorheiz wartet auf Quelle: PV "
+                        f"{feedin_watt:.0f}W < "
+                        f"{getattr(forecast_cfg, 'pv_einspeisung_min_watt', 50.0):.0f}W, "
+                        f"{quelle_grund}"
+                    )
+                    return result
                 result.einschalten = True
                 result.grund = (
                     f"Forecast-Vorheiz: Morgen {forecast_wh_qm:.0f} Wh/qm <= "
                     f"{forecast_cfg.fc_schwelle_niedrig_wh:.0f} (schlecht), "
-                    f"Temp {temp:.1f}C <= {forecast_cfg.t_vorheiz_ab_c}C -> EIN"
+                    f"Temp {temp:.1f}C <= {forecast_cfg.t_vorheiz_ab_c}C -> EIN "
+                    f"[{quelle_grund}]"
                 )
                 return result
             result.einschalten = None
@@ -1133,7 +1178,8 @@ def bewerte_alle_regeln(
     # 5. Forecast-Regel (Prognose-basiert vorheizen/sparen)
     ergebnis = evaluate_forecast(
         config.forecast, temp_dict, forecast_wh_qm, now_hour,
-        nachtsperre_start, nachtsperre_ende
+        nachtsperre_start, nachtsperre_ende,
+        feedin_watt=pv_leistung, soc=soc
     )
     ergebnisse.append(ergebnis)
     

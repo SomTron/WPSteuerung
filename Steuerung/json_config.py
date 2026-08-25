@@ -291,6 +291,27 @@ class ForecastConfig(BaseModel):
     sparen_start_uhr: int = Field(default=11, description="Spar-Fenster Start-Stunde")
     sparen_ende_uhr: int = Field(default=15, description="Spar-Fenster Ende-Stunde")
 
+    # Energie-Quellen-Gate fuer das Vorheizen: Die Regel war quellenblind und
+    # heizte notfalls mit Netzstrom. Default jetzt: nur echte PV-Einspeisung
+    # oder volle Hausbatterie ohne Netzkauf; vorheiz_netz_erlaubt=True stellt
+    # das alte Verhalten wieder her.
+    pv_einspeisung_min_watt: float = Field(
+        default=50.0,
+        description="Vorheizen ab dieser echten Netzeinspeisung (W)",
+    )
+    soc_min_prozent: float = Field(
+        default=90.0,
+        description="...oder Hausbatterie mindestens so voll (%)",
+    )
+    vorheiz_max_netzbezug_watt: float = Field(
+        default=-50.0,
+        description="Batterie-Quelle nur solange Einspeisung >= Wert (kein Netzkauf)",
+    )
+    vorheiz_netz_erlaubt: bool = Field(
+        default=False,
+        description="True = Vorheizen notfalls auch mit Netzstrom (altes Verhalten)",
+    )
+
 
     @model_validator(mode="after")
     def _plausibel(self):
