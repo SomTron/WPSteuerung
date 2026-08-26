@@ -39,6 +39,15 @@ cd "$REPO_DIR"
 # Verhindere "fatal: Need to specify how to reconcile divergent branches"
 git config pull.rebase false
 
+# Remote-Refs aktualisieren, damit "wie viele Commits hinten"-Anzeigen
+# (hier und im wp-manager.sh Header) aktuell sind. Mit Timeout, falls offline.
+FETCH_FAILED=0
+if command -v timeout >/dev/null 2>&1; then
+    timeout 15 git fetch --all --quiet >/dev/null 2>&1 || FETCH_FAILED=1
+else
+    git fetch --all --quiet >/dev/null 2>&1 || FETCH_FAILED=1
+fi
+
 # Zeige aktuellen Branch
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$CURRENT_BRANCH" = "HEAD" ]; then
@@ -72,6 +81,25 @@ if [ -n "$(git status -uno --porcelain)" ]; then
             exit 1
             ;;
     esac
+fi
+
+# Zeige Abstand zum Remote-Branch (Entscheidungshilfe fuer Option 1)
+UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || true)
+[ -z "$UPSTREAM" ] && UPSTREAM="origin/$CURRENT_BRANCH"
+BEHIND=$(git rev-list --count "HEAD..$UPSTREAM" 2>/dev/null || echo "?")
+
+printf "\n"
+if [ "$FETCH_FAILED" = "1" ]; then
+    color_print "$YELLOW" "Hinweis: Remote nicht erreichbar (offline?) – Angaben basieren auf letztem Fetch."
+fi
+if [ "$CURRENT_BRANCH" = "HEAD" ]; then
+    : # detached HEAD: keine sinnvolle Vergleichsmoeglichkeit
+elif [ "$BEHIND" = "0" ]; then
+    color_print "$GREEN" "Lokal ist auf dem neuesten Stand von '$UPSTREAM'."
+elif [ "$BEHIND" = "?" ]; then
+    color_print "$YELLOW" "Kein Upstream-Branch konfiguriert (kein Vergleich moeglich)."
+else
+    color_print "$YELLOW" "Lokal haengt $BEHIND Commit(s) hinter '$UPSTREAM' zurueck – Option 1 holt sie."
 fi
 
 # Hauptmenue
@@ -252,12 +280,28 @@ case "$choice" in
         printf "${GREEN}Service neu gestartet!${NC}\n"
         ;;
 
-    5)
+        5)
         printf "\n${CYAN}=========================================${NC}\n"
         printf "${GREEN}=== Aktueller Status ===${NC}\n"
         printf "${CYAN}=========================================${NC}\n"
         printf "  Branch:        ${YELLOW}%s${NC}\n" "$(git rev-parse --abbrev-ref HEAD)"
         printf "  Letzter Commit: %s\n" "$(git log -1 --oneline)"
+
+        # Remote-Infos frisch holen (mit Timeout, falls offline)
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 15 git fetch --all --quiet >/dev/null 2>&1 || true
+        else
+            git fetch --all --quiet >/dev/null 2>&1 || true
+        fi
+        STATUS_UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || true)
+        [ -z "$STATUS_UPSTREAM" ] && STATUS_UPSTREAM="origin/$(git rev-parse --abbrev-ref HEAD)"
+        STATUS_BEHIND=$(git rev-list --count "HEAD..$STATUS_UPSTREAM" 2>/dev/null || echo "?")
+        STATUS_DIRTY=$(git status --porcelain | wc -l | tr -d ' ')
+
+        printf "  Upstream:      %s\n" "$STATUS_UPSTREAM"
+        printf "  Rueckstand:    ${YELLOW}%s Commit(s) hinter '%s'${NC}\n" "$STATUS_BEHIND" "$STATUS_UPSTREAM"
+        printf "  Lokale Aend.:  %s Datei(en)\n" "$STATUS_DIRTY"
+
         if systemctl is-active --quiet "$SERVICE_NAME"; then
             printf "  Service:       ${GREEN}✓ AKTIV${NC}\n"
         else
