@@ -12,7 +12,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -1838,46 +1837,6 @@
         }
 
                 // ===== Zoom / Horizontal / Fullscreen Funktionen =====
-        function resetChartZoom() {
-            if (chart) {
-                chart.resetZoom();
-            }
-        }
-
-        function toggleHorizontal() {
-            const wrapper = document.getElementById('chart-wrapper');
-            const btn = document.getElementById('btn-horizontal');
-            wrapper.classList.toggle('horizontal-mode');
-            btn.classList.toggle('active');
-            if (chart) chart.resize();
-        }
-
-        function toggleFullscreen() {
-            const wrapper = document.getElementById('chart-wrapper');
-            const btn = document.getElementById('btn-fullscreen');
-            wrapper.classList.toggle('fullscreen');
-            btn.classList.toggle('active');
-            if (chart) chart.resize();
-            if (wrapper.classList.contains('fullscreen')) {
-                document.addEventListener('keydown', _fsEscapeHandler);
-            } else {
-                document.removeEventListener('keydown', _fsEscapeHandler);
-            }
-        }
-
-        function _fsEscapeHandler(e) {
-            if (e.key === 'Escape') {
-                const wrapper = document.getElementById('chart-wrapper');
-                if (wrapper.classList.contains('fullscreen')) {
-                    wrapper.classList.remove('fullscreen');
-                    document.getElementById('btn-fullscreen').classList.remove('active');
-                    if (chart) chart.resize();
-                    document.removeEventListener('keydown', _fsEscapeHandler);
-                }
-            }
-        }
-
-        // ===== Zoom / Horizontal / Fullscreen Funktionen =====
         function resetChartZoom() {
             if (chart) {
                 chart.resetZoom();

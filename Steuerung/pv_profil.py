@@ -17,6 +17,10 @@ from typing import Dict, List, Optional
 from utils import HEIZUNGSDATEN_CSV
 
 
+_cache: Dict[str, tuple] = {}
+CACHE_TTL_SEKUNDEN = 1800  # 30 Minuten
+
+
 def _lies_csv_letzte_tage(
     csv_path: str = HEIZUNGSDATEN_CSV,
     tage: int = 14,
@@ -27,8 +31,15 @@ def _lies_csv_letzte_tage(
     grenze = datetime.now() - timedelta(days=tage)
     zeilen = []
     try:
+        from collections import deque
+        # Ca. 1 Zeile pro Minute fuer `tage` Tage (z.B. 14*24*60 = 20.160 Zeilen)
+        max_rows = max(1000, tage * 24 * 60 + 1000)
         with open(csv_path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+            header_line = f.readline()
+            if not header_line.strip():
+                return []
+            tail_lines = list(deque(f, maxlen=max_rows))
+            reader = csv.DictReader([header_line] + tail_lines)
             for row in reader:
                 try:
                     ts = datetime.fromisoformat(row.get("Zeitstempel", ""))
@@ -56,13 +67,21 @@ def _parse_float(val) -> Optional[float]:
 def berechne_profil(
     csv_path: str = HEIZUNGSDATEN_CSV,
     tage: int = 14,
+    force_refresh: bool = False,
 ) -> Dict[int, float]:
     """Berechnet das durchschnittliche PV-Profil (feedinpower) pro Stunde.
 
     Returns:
         Dict[stunde=0..23, durchschnittliche_einspeisung_in_watt]
-        Leeres Dict wenn keine Daten.
+        Leeres/Null-Dict wenn keine Daten.
     """
+    global _cache
+    jetzt = datetime.now()
+    if not force_refresh and csv_path in _cache:
+        cache_time, cache_profil = _cache[csv_path]
+        if (jetzt - cache_time).total_seconds() < CACHE_TTL_SEKUNDEN:
+            return cache_profil
+
     zeilen = _lies_csv_letzte_tage(csv_path, tage=tage)
 
     # Pro Stunde sammeln
@@ -89,6 +108,7 @@ def berechne_profil(
         else:
             profil[h] = 0.0
 
+    _cache[csv_path] = (jetzt, profil)
     return profil
 
 
