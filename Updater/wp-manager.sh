@@ -2,6 +2,8 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.7: Option 10 Raeumt blockierende lokale Aenderungen vorher weg (mit Ruefrage,
+#       wie im Deploy-Skript) - Pull scheiterte sonst an Runtime-Dateien.
 # v1.6: Farb-Fix (%b statt %s bei Service/VPN-Status - zeigte vorher rohe \033-Codes),
 #       lokale-Aenderungen-Zaehler nur noch getrackte Dateien (-uno).
 # v1.5: CYAN-Farbe ergänzt (war vorher nicht definiert), informativer Status-Header
@@ -157,7 +159,7 @@ while true; do
 
     clear
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.6                  ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager v1.7                  ${NC}\n"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Branch:   ${YELLOW}%s${NC}" "$CUR_BRANCH"
@@ -297,6 +299,33 @@ while true; do
             ;;
         10)
             printf "${CYAN}Aktualisiere WP-Manager (Updater-Repo)...${NC}\n"
+            # Vorab-Check: Lokale Aenderungen an getrackten Dateien blockieren
+            # den Pull ("would be overwritten by merge"). Klassiker: Die vom
+            # Service fortlaufend geschriebene sonnen_prognose.csv.
+            REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)
+            GIT_DIRTY_TRACKED=$(git -C "$REPO_ROOT" status --porcelain -uno 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$GIT_DIRTY_TRACKED" != "0" ] && [ -n "$GIT_DIRTY_TRACKED" ]; then
+                printf "${YELLOW}⚠ %s lokale Aenderungen blockieren den Pull:${NC}\n" "$GIT_DIRTY_TRACKED"
+                git -C "$REPO_ROOT" status --porcelain -uno 2>/dev/null | head -5 | sed 's/^/   /'
+                printf "Diese Aenderungen verwerfen (git reset --hard)? (j/n): "
+                read reply
+                case "$reply" in
+                    [Jj]*)
+                        if git -C "$REPO_ROOT" reset --hard >/dev/null 2>&1; then
+                            printf "${GREEN}✓ Lokale Aenderungen verworfen.${NC}\n"
+                        else
+                            printf "${RED}✗ Reset fehlgeschlagen – bitte manuell loesen.${NC}\n"
+                            wait_for_key
+                            continue
+                        fi
+                        ;;
+                    *)
+                        printf "${YELLOW}Abgebrochen. Alternativ: Option 4 (Deploy) nutzt denselben Ablauf.${NC}\n"
+                        wait_for_key
+                        continue
+                        ;;
+                esac
+            fi
             OLD_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)
             if git -C "$SCRIPT_DIR" pull --ff-only; then
                 NEW_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)
