@@ -2,6 +2,8 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.6: Farb-Fix (%b statt %s bei Service/VPN-Status - zeigte vorher rohe \033-Codes),
+#       lokale-Aenderungen-Zaehler nur noch getrackte Dateien (-uno).
 # v1.5: CYAN-Farbe ergänzt (war vorher nicht definiert), informativer Status-Header
 #       (Uptime, RAM, Git-Diff, Temperatur, Disk, letzter Fehler), Eingabevalidierung,
 #       Fehlerbehandlung bei Upload / Self-Update / Service-Steuerung, neue Option 13.
@@ -96,7 +98,7 @@ while true; do
     CUR_COMMIT=$(cd "$TARGET_DIR" && git log -1 --oneline 2>/dev/null || echo "No commits")
     
     # ---- Git: lokale Änderungen & Abstand zum Remote ----
-    GIT_DIRTY=$(cd "$TARGET_DIR" && git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    GIT_DIRTY=$(cd "$TARGET_DIR" && git status --porcelain -uno 2>/dev/null | wc -l | tr -d ' ')
     GIT_BEHIND=$(cd "$TARGET_DIR" && git rev-list --count "HEAD..@{u}" 2>/dev/null)
     [ -z "$GIT_BEHIND" ] && GIT_BEHIND="?"
 
@@ -155,7 +157,7 @@ while true; do
 
     clear
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.5                  ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager v1.6                  ${NC}\n"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Branch:   ${YELLOW}%s${NC}" "$CUR_BRANCH"
@@ -172,7 +174,7 @@ while true; do
     else
         printf "${YELLOW}%s Commit(s) hinterher – Update empfohlen (Option 4)${NC}\n" "$GIT_BEHIND"
     fi
-    printf "Service:  %s" "$SVC_STATUS"
+    printf "Service:  %b" "$SVC_STATUS"
     if [ -n "$SVC_PID" ] && [ "$SVC_PID" != "0" ]; then
         printf "  ${DIM}PID %s${NC}" "$SVC_PID"
     fi
@@ -183,7 +185,7 @@ while true; do
     if [ -n "$SVC_SINCE" ]; then
         printf "          ${DIM}läuft seit %s${NC}\n" "$SVC_SINCE"
     fi
-    printf "VPN:      %s%s\n" "$VPN_STATUS" "$VPN_INFO"
+    printf "VPN:      %b%s\n" "$VPN_STATUS" "$VPN_INFO"
     SYS_LINE="System:   ${HOST_UP:-unbekannt}"
     [ -n "$CPU_TEMP" ] && SYS_LINE="$SYS_LINE | CPU $CPU_TEMP"
     if [ -n "$DISK_AVAIL" ]; then

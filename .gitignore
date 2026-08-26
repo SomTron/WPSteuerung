@@ -8,6 +8,10 @@ Infos
 # Ignoriere Runtime-Dateien (Logs)
 *.log
 
+# Laufzeit-Datei des Services (wird fortlaufend neu geschrieben - nervt sonst
+# bei jedem Deploy mit "lokale Aenderungen verwerfen?")
+Steuerung/sonnen_prognose.csv
+
 # heizungsdaten.csv im Hauptordner ignorieren, aber nicht im Analyse-Ordner
 Steuerung/csv\ log/heizungsdaten.csv
 !Analyse/
