@@ -41,6 +41,12 @@ except ImportError:
 
 from collections import deque
 
+# Sicherheitsabstand zum harten Boiler-Maximum beim Neueinschalten (K).
+# Default 2.0: Bei Bezugsfuehler >= 46C (Limit 48C) wird kein EIN mehr
+# ausgeloest, damit ein Start das Limit nicht innerhalb der Mindestlaufzeit
+# erreicht (Incident 26.08.: EIN bei unten 47.94C -> nach 2 min BOILERMAX-AUS).
+BOILER_MAX_EIN_ABSTAND_K = 2.0
+
 
 def set_last_compressor_off_time(state, time_val):
     """Setzt den Zeitpunkt des letzten Kompressor-Ausschaltens."""
@@ -699,7 +705,7 @@ async def handle_compressor_on(
     # Boiler-Maximum-Kuehlphase: Nur nach einem tatsaechlichen Limit-Abschalten
     # aktiv (Flag boiler_max_blockiert). Der normale EIN-Bereich unterhalb des
     # Limits bleibt unangetastet - bewusst KEINE pauschale Hysterese, damit
-    # z.B. PV-Heizen bei unten 47 C weiter moeglich bleibt.
+        # z.B. PV-Heizen bei unten 47 C weiter moeglich bleibt.
     schwelle = getattr(state.control, "boiler_max_blockiert", None)
     if schwelle is not None:
         t_max, _limit, _wiederein, fuehler = _boiler_max_info(state)
@@ -710,6 +716,25 @@ async def handle_compressor_on(
             )
             return False
         state.control.boiler_max_blockiert = None  # abgekuehlt -> freigegeben
+
+    # Ein-Sperre in Limitnaehe (Anforderung 2026-08-26, Default 2K):
+    # Reicht der Bezugsfuehler schon dicht an das Maximum heran, erreicht ein
+    # Start das harte Limit noch innerhalb der Mindestlaufzeit - die Folge
+    # waere ein Kurzlauf mit gebrochener Laufzeit und verschenktem Puffer
+    # durch die anschliessende Kuehlphase. Diese Sperre greift dauerhaft im
+    # Naehbereich (unabhaengig vom Kuehlphase-Flag) und hebt sich automatisch
+    # auf, sobald wieder boiler_max_ein_abstand_k Luft zum Limit besteht.
+    _sicher_cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+    ein_abstand = float(getattr(
+        _sicher_cfg, "boiler_max_ein_abstand_k", BOILER_MAX_EIN_ABSTAND_K
+    ))
+    t_nahe, nahe_limit, _kuehl_schwelle, fuehler_nahe = _boiler_max_info(state)
+    if t_nahe is not None and t_nahe >= nahe_limit - ein_abstand:
+        state.control.blocking_reason = (
+            f"Boiler-Max-Naehe ({fuehler_nahe} {t_nahe:.1f}C, "
+            f"Einschalten erst < {nahe_limit - ein_abstand:.1f}C)"
+        )
+        return False
     # Taktschutz (Punkt D): Bei zu vielen Wechseln zusaetzliche Pause
     _ts_cfg = getattr(state, "priority_config", None)
     takt_pause = _taktschutz_blockiert(state, _ts_cfg)
@@ -764,12 +789,18 @@ async def handle_compressor_on(
                 state.control.blocking_reason = "Zieltemp erreicht"
                 return False
             
+                        
             if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
                 state.control.blocking_reason = None
                 state.control.restart_lockout_until = None  # Sperre erledigt
+                # Regelnamen + tatsaechliche Ausschaltgrenze loggen (nicht den
+                # nur fuer die Anzeige abgeleiteten Einschaltpunkt - bei der
+                # Einspeisungs-Regel waere das ein Dummy-Wert wie 42.0).
+                aktive_regel = getattr(state.control, 'active_rule_name', None)
+                regel_txt = f"'{aktive_regel}'" if aktive_regel else "(keine Regel ermittelt)"
                 logging.info(
-                    f"Eingeschaltet um {now}. "
-                    f"Grund: Regel-Einschalt (Regelfuehler={regelfuehler}, Ziel={einschaltpunkt})"
+                    f"Eingeschaltet um {now}. Grund: Regel-Einschalt {regel_txt} "
+                    f"(Regelfuehler={regelfuehler}, Ausschaltgrenze={ausschaltpunkt})"
                 )
                 return True
     

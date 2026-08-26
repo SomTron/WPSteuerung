@@ -35,6 +35,7 @@ class SicherheitConfig(BaseModel):
 
     boiler_max_fuehler: str = Field(default="unten", description="Bezugsfuehler fuer das Boiler-Maximum (unten/mittig/oben)")
     boiler_max_hysterese_k: float = Field(default=2.0, description="Nach einem Maximum-Abschalten erst wieder einschalten, wenn der Bezugsfuehler <= max_temp_c - Hysterese ist")
+    boiler_max_ein_abstand_k: float = Field(default=2.0, description="Kein Einschalten, wenn der Bezugsfuehler bereits naeher als dieser Abstand an max_temp_c heranreicht (verhindert Kurzlaufe am Limit)")
 
     @model_validator(mode="after")
     def _pruefe_sicherheit(self):
@@ -45,6 +46,8 @@ class SicherheitConfig(BaseModel):
             )
         if self.boiler_max_hysterese_k < 0:
             raise ValueError("boiler_max_hysterese_k darf nicht negativ sein")
+        if self.boiler_max_ein_abstand_k < 0:
+            raise ValueError("boiler_max_ein_abstand_k darf nicht negativ sein")
         if not (20.0 <= self.max_temp_c <= 70.0):
             raise ValueError(f"max_temp_c={self.max_temp_c} ausserhalb des plausiblen Bereichs (20-70 C)")
         if self.max_temp_c > self.ueberhitzung_c:

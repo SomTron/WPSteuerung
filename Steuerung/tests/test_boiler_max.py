@@ -179,19 +179,44 @@ async def test_userfall_oben_warm_unten_kalt_darf_einschalten():
 
 
 @pytest.mark.asyncio
-async def test_on_ohne_flag_keine_sperre_trotz_hoher_temp():
-    """Kein Limit-Ereignis passiert -> EIN bei unten 47 bleibt unangetastet."""
-    state = baue_state(t_unten=47.0)
+async def test_on_blockiert_in_der_limitnaehe_ohne_vorheriges_limit():
+    """Incident 26.08. 14:38: unten 47.9C am Limit -> EIN wird verhindert.
+
+    Vorher startete der Kompressor bei 47.94C und erreichte nach 2 min das
+    harte Maximum (BOILERMAX-AUS, Mindestlaufzeit gebrochen). Neu greift die
+    Ein-Sperre schon im Naehbereich - ganz ohne vorheriges Limit-Ereignis."""
+    state = baue_state(t_unten=47.9)
     state.control.kompressor_ein = False
     state.control._soll_einschalten = True
     calls = []
     erg = await pcl.handle_compressor_on(
-        state, None, regelfuehler=45.0, einschaltpunkt=45.0, ausschaltpunkt=48.0,
+        state, None, regelfuehler=47.9, einschaltpunkt=42.0, ausschaltpunkt=48.0,
+        min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
+        t_oben=state.sensors.t_oben,
+        set_kompressor_status_func=_set_status_sammler(calls),
+    )
+    assert erg is False
+    assert calls == []
+    assert "Boiler-Max-Naehe" in (state.control.blocking_reason or "")
+    # Kein Kuehlphase-Flag gesetzt worden - es war ja kein Limit-Ereignis
+    assert getattr(state.control, "boiler_max_blockiert", None) is None
+
+
+@pytest.mark.asyncio
+async def test_on_erlaubt_mit_zwei_kelvin_luft():
+    """unten 45.9C (< 48 - 2K) -> EIN weiterhin erlaubt (PV-Heizen bleibt moeglich)."""
+    state = baue_state(t_unten=45.9)
+    state.control.kompressor_ein = False
+    state.control._soll_einschalten = True
+    calls = []
+    erg = await pcl.handle_compressor_on(
+        state, None, regelfuehler=45.9, einschaltpunkt=42.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
         t_oben=state.sensors.t_oben,
         set_kompressor_status_func=_set_status_sammler(calls),
     )
     assert erg is True
+    assert calls and calls[0][0] is True
 
 
 # ---------- Konfiguration ----------
@@ -202,6 +227,7 @@ def test_default_werte_matchen_anforderung():
     assert s.max_temp_c == 48.0
     assert s.boiler_max_fuehler == "unten"
     assert s.boiler_max_hysterese_k == 2.0
+    assert s.boiler_max_ein_abstand_k == 2.0
 
 
 def test_validatoren():
@@ -210,6 +236,8 @@ def test_validatoren():
         SicherheitConfig(boiler_max_fuehler="seitlich")
     with pytest.raises(ValidationError):
         SicherheitConfig(boiler_max_hysterese_k=-1.0)
+    with pytest.raises(ValidationError):
+        SicherheitConfig(boiler_max_ein_abstand_k=-0.5)
     with pytest.raises(ValidationError):
         SicherheitConfig(max_temp_c=60.0, ueberhitzung_c=55.0)
     with pytest.raises(ValidationError):

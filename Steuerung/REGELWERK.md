@@ -281,6 +281,30 @@ Zusätzlich flattersicher:
   Episode gemeldet, „Taktschutz beendet" beim Verlassen – nicht mehr bei jedem
   Durchlauf. Die Meldung „verlängert Pause" erscheint max. alle 30 min.
 
+### 4.5 Hartes Boiler-Maximum & Ein-Sperre in Limitnaehe
+
+Zwei voneinander unabhaengige Schutzebenen am Bezugsfuehler
+(`boiler_max_fuehler`, default `unten`) gegen das Limit `max_temp_c` (48 C):
+
+1. **Abschaltung (nachtraeglich):** Erreicht der Fuehler 48 C, wird der Kompressor
+   sofort ausgeschaltet - auch wenn dadurch die Mindestlaufzeit gebrochen wird.
+   Zusätzlich wird die Kuehlschwelle `boiler_max_blockiert = max_temp_c -
+   boiler_max_hysterese_k` (= 46 C) gesetzt: Ein Neustart ist erst wieder
+   moeglich, wenn der Fuehler die Schwelle unterschreitet. Telegram-Warnung inklusive.
+2. **Ein-Sperre im Naecherbereich (proaktiv, seit Incident 26.08.2026):** Schon
+   **vor** dem Einschalten greift `boiler_max_ein_abstand_k` (default **2.0 K**):
+   Liegt der Fuehler bei >= max_temp_c - Abstand (= 46 C), wird kein EIN mehr
+   ausgeloest, sondern nur der Blocking-Reason „Boiler-Max-Naehe ..." gesetzt.
+   Hintergrund: Startet die WP knapp unter dem Limit, erreicht sie es noch
+   innerhalb der Mindestlaufzeit -> Kurzlauf mit gebrochener Laufzeit und
+   anschliessend verschenkter Puffer durch die Kuehlphase (im Incident lief die WP
+   bei unten 47,94 C genau 2 min und loeste dann BOILERMAX-AUS aus).
+
+Die Ein-Sperre gilt dauerhaft im Naecherbereich (unabhaengig vom
+Kuehlschwellen-Flag) und hebt sich automatisch auf, sobald wieder >= 2 K Luft
+zum Limit bestehen. Sonderfall bleibt erlaubt: oben warm (48,7 C) / unten kalt
+(30 C) -> EIN, weil nur der Bezugsfuehler zaehlt.
+
 ---
 
 ## 5. Selbstlernen (`learning_engine.py`, Persistenz: `learning_data.json`)
@@ -379,7 +403,7 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
 
 ```jsonc
 {
-  "sicherheit":   { "max_temp_c": 48, "nachtsperre_start": 19, "nachtsperre_ende": 8 },
+  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 2.0, "nachtsperre_start": 19, "nachtsperre_ende": 8 },
   "abweichung":   { "solltemperatur_c": 40, "schichtung_min_oben_c": 42 },
   "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500 },
   "batterie":     { "min_soc_prozent": 90, "max_netzbezug_watt": -50 },
