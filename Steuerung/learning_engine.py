@@ -262,6 +262,9 @@ class LearningEngine:
         if now is None:
             now = datetime.now()
         grenze = now - timedelta(days=tage)
+        # JSON-Timestamps sind naive-Strings; tzinfo entfernen falls vorhanden
+        if grenze.tzinfo is not None:
+            grenze = grenze.replace(tzinfo=None)
         stunden = []
         for e in self.data.usage_events:
             try:
@@ -299,6 +302,9 @@ class LearningEngine:
             if now is None:
                 now = datetime.now()
             grenze = now - timedelta(days=tage)
+            # JSON-Timestamps sind naive-Strings; tzinfo entfernen falls vorhanden
+            if grenze.tzinfo is not None:
+                grenze = grenze.replace(tzinfo=None)
             stunden = []
             for e in self.data.usage_events:
                 try:
@@ -433,6 +439,12 @@ class LearningEngine:
         Quellen-Attribution, Forecast-Kalibrierung und Surplus-Profil.
         """
         # ── Solar-Tracking ──
+        # now immer auf naive-UTC reduzieren, damit interne Speicherung
+        # (JSON naive-Timestamps) mit Produktions-now (timezone-aware)
+        # konsistent bleibt.
+        if now.tzinfo is not None:
+            now = now.replace(tzinfo=None)
+
         dt_secs = 0.0
         if self._last_update_time is not None:
             dt_secs = (now - self._last_update_time).total_seconds()
@@ -479,6 +491,9 @@ class LearningEngine:
                     ende = datetime.fromisoformat(ende_iso)
                 except ValueError:
                     continue
+                # JSON-Timestamps sind naive; now kann tzinfo haben
+                if now.tzinfo is not None:
+                    ende = ende.replace(tzinfo=now.tzinfo)
                 if (now - ende).total_seconds() < 45 * 60:
                     noch_offen.append(ende_iso)
                     continue
@@ -788,6 +803,9 @@ class LearningEngine:
         if now is None:
             now = datetime.now()
         grenze = now - timedelta(hours=hours)
+        # JSON-Timestamps sind naive-Strings; tzinfo entfernen falls vorhanden
+        if grenze.tzinfo is not None:
+            grenze = grenze.replace(tzinfo=None)
         return [
             e for e in self.data.usage_events
             if datetime.fromisoformat(e["timestamp"]) >= grenze

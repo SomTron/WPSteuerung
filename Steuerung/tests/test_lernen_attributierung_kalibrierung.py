@@ -387,3 +387,74 @@ def test_calcstart_usage_events_verdrahtung_im_gesamtsystem():
         f"Mit frischer Zapfung um 16:00 sollte CalcStart warten: {cs.grund}"
     assert "Puffer" in cs.grund and "reicht" in cs.grund
 
+
+
+# ─── Zeitachsen-Bug: timezone-aware now vs naive JSON-Timestamps ───
+
+def test_timezone_aware_now_crasht_nicht(engine):
+    """Regression: timezone-aware 'now' darf keinen TypeError
+
+    'can't compare offset-naive and offset-aware datetimes' ausloesen.
+    Wurde uebersehen, weil alle Tests naive datetimes verwenden.
+    """
+    # Timezone-aware now (wie in Produktion auf dem Pi)
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo("Europe/Berlin")
+    except Exception:
+        pytest.skip("zoneinfo nicht verfuegbar")
+    
+    aware = datetime(2026, 8, 26, 19, 30, tzinfo=tz)
+
+    # Erstmal eine Zapfung registrieren (mit naive-timestamp, wie aus JSON)
+    engine.data.usage_events.append({
+        "timestamp": "2026-08-26T18:45:00",
+        "drop_gesamt_k": 4.5, "drop_unten_k": 3.0,
+        "drop_mitte_k": 1.0, "drop_oben_k": 0.5,
+        "temp_before_unten": 45.0, "temp_after_unten": 42.0,
+        "temp_before_mitte": 44.0, "temp_after_mitte": 43.0,
+        "temp_before_oben": 46.0, "temp_after_oben": 45.5,
+    })
+
+    # Diese drei Aufrufe duerfen NICHT mit TypeError crashen
+    result_morgen = engine.get_learned_morning_window(now=aware)
+    result_abend = engine.get_learned_evening_window(now=aware, min_samples=1)
+    result_recent = engine.get_recent_usage_events(now=aware)
+
+    assert result_abend is not None  # Zapfung um 18:45 liegt im Abendfenster
+    assert result_morgen is None     # 18:45 liegt NICHT im Morgenfenster
+    assert len(result_recent) == 1   # liegt in den letzten 2h
+
+
+def test_zu_frueh_pending_timezone_aware(engine):
+    """Regression: auch die 'Zu frueh'-Erkennung muss mit aware now klappen."""
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo("Europe/Berlin")
+    except Exception:
+        pytest.skip("zoneinfo nicht verfuegbar")
+
+    # Netz-Zyklus beenden (haengt pending_zu_frueh an)
+    _zyklus(engine, datetime(2026, 8, 26, 14, 0), dauer_min=55,
+            feedin=-300.0, soc=40.0)
+
+    engine._pending_zu_frueh = ["2026-08-26T14:55:00"]
+
+    # Timezone-aware weiter (45 min noch nicht um -> kein Event)
+    aware = datetime(2026, 8, 26, 15, 20, tzinfo=tz)
+    engine.update(
+        aware,
+        {"oben": 45.0, "mittig": 43.0, "unten": 40.0},
+        False, feedin_watt=1200.0,
+    )
+    assert engine.get_quellen_statistik()["zu_frueh_events_gesamt"] == 0
+
+    # Nach 45 min + Sonne -> Event
+    engine._pending_zu_frueh = ["2026-08-26T14:55:00"]
+    aware2 = datetime(2026, 8, 26, 16, 0, tzinfo=tz)
+    engine.update(
+        aware2,
+        {"oben": 45.0, "mittig": 43.0, "unten": 40.0},
+        False, feedin_watt=1200.0,
+    )
+    assert engine.get_quellen_statistik()["zu_frueh_events_gesamt"] == 1
