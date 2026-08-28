@@ -245,6 +245,11 @@ class LearningEngine:
             return 7.0
         return self.data.learned_morning_target_hour
 
+    @staticmethod
+    def _naiv(dt: datetime) -> datetime:
+        """Zeitzonen-Info entfernen fuer sicheren Vergleich mit JSON-Timestamps."""
+        return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
     def get_learned_morning_window(
         self,
         vorlauf_h: float = 1.0,
@@ -261,14 +266,11 @@ class LearningEngine:
         """
         if now is None:
             now = datetime.now()
-        grenze = now - timedelta(days=tage)
-        # JSON-Timestamps sind naive-Strings; tzinfo entfernen falls vorhanden
-        if grenze.tzinfo is not None:
-            grenze = grenze.replace(tzinfo=None)
+        grenze = self._naiv(now - timedelta(days=tage))
         stunden = []
         for e in self.data.usage_events:
             try:
-                ts = datetime.fromisoformat(e["timestamp"])
+                ts = self._naiv(datetime.fromisoformat(e["timestamp"]))
             except (KeyError, ValueError):
                 continue
             if ts < grenze or not (5 <= ts.hour < 12):
@@ -301,14 +303,11 @@ class LearningEngine:
             """
             if now is None:
                 now = datetime.now()
-            grenze = now - timedelta(days=tage)
-            # JSON-Timestamps sind naive-Strings; tzinfo entfernen falls vorhanden
-            if grenze.tzinfo is not None:
-                grenze = grenze.replace(tzinfo=None)
+            grenze = self._naiv(now - timedelta(days=tage))
             stunden = []
             for e in self.data.usage_events:
                 try:
-                    ts = datetime.fromisoformat(e["timestamp"])
+                    ts = self._naiv(datetime.fromisoformat(e["timestamp"]))
                 except (KeyError, ValueError):
                     continue
                 if ts < grenze or not (16 <= ts.hour < 24):
@@ -442,8 +441,7 @@ class LearningEngine:
         # now immer auf naive-UTC reduzieren, damit interne Speicherung
         # (JSON naive-Timestamps) mit Produktions-now (timezone-aware)
         # konsistent bleibt.
-        if now.tzinfo is not None:
-            now = now.replace(tzinfo=None)
+        now = self._naiv(now)
 
         dt_secs = 0.0
         if self._last_update_time is not None:
@@ -491,9 +489,7 @@ class LearningEngine:
                     ende = datetime.fromisoformat(ende_iso)
                 except ValueError:
                     continue
-                # JSON-Timestamps sind naive; now kann tzinfo haben
-                if now.tzinfo is not None:
-                    ende = ende.replace(tzinfo=now.tzinfo)
+                # JSON-Timestamps sind naive; now ist bereits naiv (wurde in update() reduziert)
                 if (now - ende).total_seconds() < 45 * 60:
                     noch_offen.append(ende_iso)
                     continue
@@ -802,11 +798,8 @@ class LearningEngine:
         """
         if now is None:
             now = datetime.now()
-        grenze = now - timedelta(hours=hours)
-        # JSON-Timestamps sind naive-Strings; tzinfo entfernen falls vorhanden
-        if grenze.tzinfo is not None:
-            grenze = grenze.replace(tzinfo=None)
+        grenze = self._naiv(now - timedelta(hours=hours))
         return [
             e for e in self.data.usage_events
-            if datetime.fromisoformat(e["timestamp"]) >= grenze
+            if self._naiv(datetime.fromisoformat(e["timestamp"])) >= grenze
         ]
