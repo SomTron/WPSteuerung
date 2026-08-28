@@ -259,8 +259,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         learned_target_hour=gelernte_zielzeit,
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profil,
-                recent_usage_events=recent_usage_events,
-            )
+                        recent_usage_events=recent_usage_events,
+                        bademodus_aktiv=bool(state.bademodus_aktiv),
+                    )
     
     # Ergebnisse loggen (gethrottelt)
     if check_log_throttle(state, "_last_priority_log", interval_minutes=5.0):

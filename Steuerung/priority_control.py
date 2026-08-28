@@ -660,6 +660,7 @@ def evaluate_abweichung(
     nachtsperre_ende: int,
     feedin_watt: float = 0.0,
     soc: Optional[float] = None,
+    bademodus_aktiv: bool = False,
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: Haelt Temperatur nahe am Sollwert.
@@ -667,8 +668,10 @@ def evaluate_abweichung(
     Einschalten wenn: Soll - Ist >= Einschalt-Abweichung
     Ausschalten wenn: Soll - Ist <= Ausschalt-Abweichung
     
-    Bei Nachtsperre: Nur Ausschalten erlaubt, kein Einschalten
-    (Negative Abweichung = Ist > Soll)
+    Bei Nachtsperre: Nur Ausschalten erlaubt, kein Einschalten.
+    AUSNAHME: Wenn Bademodus aktiv ist, darf die Nachtsperre das
+    Einschalten NICHT unterbinden (der Nutzer moechte warmes Wasser,
+    auch nachts).
     """
     result = RegelErgebnis(
         name="Abweichung",
@@ -695,7 +698,9 @@ def evaluate_abweichung(
         return result
     
     # Bei Nachtsperre: Kein Einschalten (Blockierungsgrund anzeigen)
-    if nachtsperre:
+    # AUSNAHME Bademodus: Der Nutzer moechte warmes Wasser, Nachtsperre
+    # darf dann nicht blockieren.
+    if nachtsperre and not bademodus_aktiv:
         result.aktiv = False
         result.grund = f"Nachtsperre (kein Einschalten, {abw.temperaturfuehler}={temp:.1f}C)"
         return result
@@ -1270,6 +1275,7 @@ def bewerte_alle_regeln(
     fc_ratio: float = 1.0,
     surplus_profile: Optional[Dict[str, float]] = None,
     recent_usage_events: Optional[List[Dict]] = None,
+    bademodus_aktiv: bool = False,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -1337,7 +1343,8 @@ def bewerte_alle_regeln(
     ergebnis = evaluate_abweichung(
         config.abweichung, temp_dict, kompressor_ein,
         now_hour, nachtsperre_start, nachtsperre_ende,
-        feedin_watt=pv_leistung, soc=soc
+        feedin_watt=pv_leistung, soc=soc,
+        bademodus_aktiv=bademodus_aktiv,
     )
     ergebnisse.append(ergebnis)
     
