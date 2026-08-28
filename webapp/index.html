@@ -1336,8 +1336,21 @@
                 }
             }
 
-            // PV-Ueberschuss-Profil (Balkendiagramm)
-            const spWrap = document.getElementById('surplus-bars');
+            // Letzte Zapfung anzeigen
+                        const lzEl = document.getElementById('learn-letzte-zapfung');
+                        if (lzEl && lrn.letzte_zapfung) {
+                            const ev = lrn.letzte_zapfung;
+                            const ts = ev.timestamp ? ev.timestamp.slice(11, 16) : '?';
+                            const drop = Number(ev.drop_gesamt_k || 0).toFixed(1);
+                            const nutzen = Math.round(drop * 0.5 * 10) / 10;
+                            lzEl.textContent = ts + ' Uhr &rarr; Abfall ' + drop + 'K (gew.), CalcStart-Einsparung ~' + nutzen + 'h';
+                            lzEl.title = 'Temp-Verlauf: unten ' + (ev.drop_unten_k ?? '?') + 'K, mitte ' + (ev.drop_mitte_k ?? '?') + 'K, oben ' + (ev.drop_oben_k ?? '?') + 'K';
+                        } else if (lzEl) {
+                            lzEl.textContent = 'keine erkannte Zapfung';
+                        }
+
+                        // PV-Ueberschuss-Profil (Balkendiagramm)
+                        const spWrap = document.getElementById('surplus-bars');
             if (spWrap) {
                 const prof = statusData.learning && statusData.learning.surplus_profil || {};
                 const stunden = Object.keys(prof).map(Number).sort((a, b) => a - b);
@@ -1755,7 +1768,8 @@
                         <div class="info-row"><span class="info-label">Forecast-Kalibrierung</span><span class="info-value" id="learn-fc-ratio">N/A</span></div>
                         <div class="info-row"><span class="info-label">WW-Quellen (Laufzeit)</span><span class="info-value" id="learn-quellen" style="font-size:0.75rem">N/A</span></div>
                         <div class="info-row"><span class="info-label">Zu fr&uuml;h geheizt (14T)</span><span class="info-value" id="learn-zufrueh">N/A</span></div>
-                    </div>
+                                                <div class="info-row"><span class="info-label">Letzte Zapfung</span><span class="info-value" id="learn-letzte-zapfung" style="font-size:0.75rem">N/A</span></div>
+                                            </div>
 
                     <!-- PV-Ueberschuss-Profil (gelernt) -->
                     <div class="card">

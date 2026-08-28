@@ -275,3 +275,115 @@ class TestVerdrahtungBewerteAlleRegeln:
         cs = [e for e in alle if e.name == "CalcStart"][0]
         assert "x0.40" in cs.grund
         assert "Mittagstief" in cs.grund
+
+# ─────────────── CalcStart + Usage-Events (Punkt 4) ───────────────
+
+def test_calcstart_usage_events_reduzieren_stundenbedarf():
+    """Zapfung mit Temperaturabfall -> hours_needed sinkt -> frueher EIN."""
+    usage_event = {
+        "timestamp": "2026-08-26T14:30:00",
+        "temp_before_unten": 47.0,
+        "temp_before_mitte": 46.0,
+        "temp_before_oben": 47.0,
+        "temp_after_unten": 41.0,
+        "temp_after_mitte": 43.0,
+        "temp_after_oben": 45.0,
+        "drop_unten_k": 6.0,
+        "drop_mitte_k": 3.0,
+        "drop_oben_k": 2.0,
+        "drop_gesamt_k": 6.0,
+    }
+
+    erg_ohne = evaluate_calculated_start(
+        _calc_cfg(), TEMPS, 14, 45,
+        forecast_wh_qm=None,
+    )
+    assert erg_ohne.einschalten is None, \
+        f"Ohne Zapfung sollte CalcStart warten, war: {erg_ohne.grund}"
+
+    erg_mit = evaluate_calculated_start(
+        _calc_cfg(), TEMPS, 14, 45,
+        recent_usage_events=[usage_event],
+        forecast_wh_qm=None,
+    )
+    assert erg_mit.einschalten is None, \
+        f"Mit Zapfung bei 14:45 sollte CalcStart noch warten: {erg_mit.grund}"
+    assert "Puffer" in erg_mit.grund, \
+        f"Sollte Puffer anzeigen: {erg_mit.grund}"
+
+    erg_spaet_ohne = evaluate_calculated_start(
+        _calc_cfg(), TEMPS, 16, 0,
+        forecast_wh_qm=None,
+    )
+    assert erg_spaet_ohne.einschalten is True
+    assert "SPAETEST" in erg_spaet_ohne.grund or "ZU SPAET" in erg_spaet_ohne.grund
+
+    erg_spaet_mit = evaluate_calculated_start(
+        _calc_cfg(), TEMPS, 16, 0,
+        recent_usage_events=[usage_event],
+        forecast_wh_qm=None,
+    )
+    assert erg_spaet_mit.einschalten is None, \
+        f"Mit Zapfung um 16:00 sollte CalcStart noch warten: {erg_spaet_mit.grund}"
+
+
+def test_calcstart_usage_events_leere_liste_wirkt_nicht():
+    """Leere Liste oder None -> kein Einfluss auf hours_needed."""
+    erg_none = evaluate_calculated_start(
+        _calc_cfg(), TEMPS, 14, 45,
+        recent_usage_events=None,
+        forecast_wh_qm=None,
+    )
+    erg_leer = evaluate_calculated_start(
+        _calc_cfg(), TEMPS, 14, 45,
+        recent_usage_events=[],
+        forecast_wh_qm=None,
+    )
+    assert erg_none.einschalten == erg_leer.einschalten
+    assert erg_none.grund == erg_leer.grund
+
+
+def test_calcstart_usage_events_verdrahtung_im_gesamtsystem():
+    """recent_usage_events von der Engine ueber bewerte_alle_regeln bis
+    zu evaluate_calculated_start."""
+    from learning_engine import LearningEngine
+    import tempfile
+    import os
+    td = tempfile.mkdtemp()
+    eng = LearningEngine(data_path=os.path.join(td, "lern.json"))
+    zapf_event = {
+        "timestamp": "2026-08-26T15:55:00",
+        "drop_gesamt_k": 8.0,
+    }
+    eng.data.usage_events.append(zapf_event)
+    events = eng.get_recent_usage_events(hours=2, now=datetime(2026, 8, 26, 16, 0))
+
+    assert len(events) == 1
+    assert events[0]["drop_gesamt_k"] == 8.0
+
+    config = WPSteuerungConfig()
+    config.calculated_start.aktiv = True
+    config.calculated_start.target_uhr = 17
+    config.zeitfenster.start_uhr = 0
+    config.zeitfenster.ende_uhr = 0
+    config.forecast.aktiv = False
+    config.adaptive_pv.aktiv = False
+    config.komfort.notfall_einschalten_bei_c = 30.0
+    config.komfort.komfort_einschalten_bei_c = 30.0
+    config.komfort.min_pv_fuer_komfort_watt = 999999
+    config.wochenende.aktiv = False
+
+    temps = {"oben": 45.0, "mittig": 43.0, "unten": 41.0}
+    _, alle = bewerte_alle_regeln(
+        config=config,
+        temp_dict=temps,
+        pv_leistung=0.0,
+        kompressor_ein=False,
+        now=datetime(2026, 8, 26, 16, 0),
+        recent_usage_events=events,
+    )
+    cs = [e for e in alle if e.name == "CalcStart"][0]
+    assert cs.einschalten is None, \
+        f"Mit frischer Zapfung um 16:00 sollte CalcStart warten: {cs.grund}"
+    assert "Puffer" in cs.grund and "reicht" in cs.grund
+

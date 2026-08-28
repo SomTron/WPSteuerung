@@ -203,6 +203,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         fc_ratio = _ratio_getter() if callable(_ratio_getter) else 1.0
         _profil_getter = getattr(learning_engine, 'get_surplus_profile', None)
         surplus_profil = _profil_getter() if callable(_profil_getter) else None
+        _usage_getter = getattr(learning_engine, 'get_recent_usage_events', None)
+        recent_usage_events = _usage_getter(hours=2) if callable(_usage_getter) else []
     else:
         gelernte_rate_unten = None
         gelernte_rate_gesamt = None
@@ -210,6 +212,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         gelerntes_abendfenster = None
         fc_ratio = 1.0
         surplus_profil = None
+        recent_usage_events = []
 
     # Konfigurations-Guard: CalcStart-Zielzeit vs. Nachtsperre.
     # Eine Zielzeit innerhalb/hinter der Sperre macht die Regel stumm -
@@ -256,7 +259,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         learned_target_hour=gelernte_zielzeit,
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profil,
-    )
+                recent_usage_events=recent_usage_events,
+            )
     
     # Ergebnisse loggen (gethrottelt)
     if check_log_throttle(state, "_last_priority_log", interval_minutes=5.0):

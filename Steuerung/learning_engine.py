@@ -39,11 +39,26 @@ class HeatingCycle:
 
 @dataclass
 class UsageEvent:
-    """Erkannte Warmwasser-Zapfung."""
+    """Erkannte Warmwasser-Zapfung.
+    
+    Temperaturabfall an allen drei Fühler:
+    unten kühlt zuerst, mitte folgt, oben zuletzt.
+    """
     timestamp: str  # ISO-Format
-    temp_before: float
-    temp_after: float
-    drop_k: float
+    # Temperaturwerte VOR der Zapfung (Stand des vorherigen Zyklus)
+    temp_before_unten: float
+    temp_before_mitte: float
+    temp_before_oben: float
+    # Temperaturwerte NACH der Zapfung (aktueller Zyklus)
+    temp_after_unten: float
+    temp_after_mitte: float
+    temp_after_oben: float
+    # Temperaturabfall je Fühler in Kelvin
+    drop_unten_k: float
+    drop_mitte_k: float
+    drop_oben_k: float
+    # Gewichteter Gesamt-Abfall (gewichtet nach Sensorempfindlichkeit)
+    drop_gesamt_k: float
 
 
 @dataclass
@@ -128,10 +143,31 @@ class LearningEngine:
             if os.path.exists(self.data_path):
                 with open(self.data_path, 'r', encoding='utf-8') as f:
                     raw = json.load(f)
+                # Abwaertskompatibilitaet: alte Zapfungsereignisse
+                # (temp_before/temp_after/drop_k) in neues Format
+                # konvertieren
+                usage_events = raw.get("usage_events", [])
+                for ev in usage_events:
+                    if "drop_unten_k" not in ev and "drop_k" in ev:
+                        # Altes Format -> neues Format
+                        ev["temp_before_unten"] = ev.get("temp_before", 0.0)
+                        ev["temp_before_mitte"] = 0.0
+                        ev["temp_before_oben"] = ev.get("temp_before", 0.0)
+                        ev["temp_after_unten"] = ev.get("temp_after", 0.0)
+                        ev["temp_after_mitte"] = 0.0
+                        ev["temp_after_oben"] = ev.get("temp_after", 0.0)
+                        ev["drop_unten_k"] = ev.get("drop_k", 0.0)
+                        ev["drop_mitte_k"] = 0.0
+                        ev["drop_oben_k"] = ev.get("drop_k", 0.0)
+                        ev["drop_gesamt_k"] = ev.get("drop_k", 0.0)
+                        # Alte Felder entfernen
+                        ev.pop("temp_before", None)
+                        ev.pop("temp_after", None)
+                        ev.pop("drop_k", None)
                 return LearningData(
                     cycles=raw.get("cycles", []),
                     heat_rates=raw.get("heat_rates", defaults.heat_rates),
-                    usage_events=raw.get("usage_events", []),
+                    usage_events=usage_events,
                     learned_target_hour=raw.get("learned_target_hour", 17.0),
                     target_hour_samples=raw.get("target_hour_samples", 0),
                     learned_morning_target_hour=raw.get("learned_morning_target_hour", 7.0),
@@ -374,6 +410,10 @@ class LearningEngine:
                  for h, w in self.get_surplus_profile().items()}
                 if self.get_surplus_profile() else None
             ),
+            # ── Multisensor-Zapfungsdaten ──
+            "usage_events": self.data.usage_events[-20:],   # Letzte 20 Ereignisse
+            # Letzte erkannte Zapfung fuer CalcStart
+            "letzte_zapfung": self.data.usage_events[-1] if self.data.usage_events else None,
         }
 
     # ── Zyklus-Update ──────────────────────────────────────
@@ -482,7 +522,9 @@ class LearningEngine:
                 grenz_c=self._komfort_grenz_c,
             )
 
-        self._last_temps = temp_dict
+        # Kopie der Temperaturen speichern (nicht die Referenz auf
+        # das temp_dict von außen, um unerwartete Aenderungen zu vermeiden)
+        self._last_temps = dict(temp_dict)
         self._last_temp_time = now
 
     # ── Heizzyklus auswerten ───────────────────────────────
@@ -620,58 +662,133 @@ class LearningEngine:
 
     def _detect_usage(self, now: datetime, temp_dict: Dict[str, Optional[float]]):
         """
-        Erkennt Warmwasser-Zapfung durch Temperaturabfall.
-        Kriterien: Kompressor AUS, Abfall >1.5°C, 05:00-23:00 Uhr.
-        Vor 12 Uhr zaehlt die Zapfung zur MORGEN-Zielzeit, danach zur ABEND-Zielzeit.
+        Erkennt Warmwasser-Zapfung durch Temperaturabfall an ALLEN drei
+        Fühler (unten kühlt zuerst, mitte folgt, oben zuletzt).
+        
+        Schwellwerte pro Fühler:
+          - unten:  0.5 K (empfindlichster, kühlt zuerst)
+          - mitte:  0.8 K
+          - oben:   1.5 K (bisheriger Schwellwert)
+        
+        Ein Ereignis wird erkannt, wenn mindestens EIN Fühler seinen
+        Schwellwert überschreitet. Alle drei Abfälle werden gespeichert
+        und fließen in die Startzeitenberechnung (CalcStart) ein.
         """
         if not (5 <= now.hour < 23):
             return
 
-        temp_oben = temp_dict.get("oben")
-        last_oben = self._last_temps.get("oben") if self._last_temps else None
+        # Temperaturwerte von aktuell und vorherigem Zyklus
+        current = {
+            "unten": temp_dict.get("unten"),
+            "mittig": temp_dict.get("mittig"),
+            "oben": temp_dict.get("oben"),
+        }
+        previous = {
+            "unten": self._last_temps.get("unten") if self._last_temps else None,
+            "mittig": self._last_temps.get("mittig") if self._last_temps else None,
+            "oben": self._last_temps.get("oben") if self._last_temps else None,
+        }
 
-        if temp_oben is None or last_oben is None:
+        # Prüfen ob alle benötigten Sensoren Werte liefern
+        if any(current[s] is None for s in ["unten", "mittig"]):
+            return
+        if all(previous[s] is None for s in ["unten", "mittig", "oben"]):
             return
 
-        drop = last_oben - temp_oben
-        if drop >= 1.5 and self._last_temp_time is not None:
-            event = UsageEvent(
-                timestamp=now.isoformat(),
-                temp_before=round(last_oben, 1),
-                temp_after=round(temp_oben, 1),
-                drop_k=round(drop, 1),
-            )
-            self.data.usage_events.append(asdict(event))
-            if len(self.data.usage_events) > 100:
-                self.data.usage_events = self.data.usage_events[-100:]
+        # Temperaturabfall je Fühler berechnen
+        drops = {}
+        for sensor in ["unten", "mittig", "oben"]:
+            if current[sensor] is not None and previous[sensor] is not None:
+                drops[sensor] = previous[sensor] - current[sensor]
+            else:
+                drops[sensor] = 0.0
 
-            # Nur erste Zapfung(en) pro Tageshaelfte beruecksichtigen
-            ist_morgen = now.hour < 12
-            today_str = now.strftime("%Y-%m-%d")
-            today_events = [
-                e for e in self.data.usage_events
-                if e["timestamp"].startswith(today_str)
-                and (datetime.fromisoformat(e["timestamp"]).hour < 12) == ist_morgen
-            ]
-            if len(today_events) <= 2:
-                hour_f = now.hour + now.minute / 60.0
-                # EWMA (alpha=0.15): reagiert auf Veraenderungen des
-                # Duschverhaltens schneller als ein kumulativer Mittelwert
-                if ist_morgen:
-                    count = self.data.morning_target_hour_samples + 1
-                    alt = self.data.learned_morning_target_hour
-                    new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
-                    self.data.learned_morning_target_hour = round(new_target, 2)
-                    self.data.morning_target_hour_samples = count
-                else:
-                    count = self.data.target_hour_samples + 1
-                    alt = self.data.learned_target_hour
-                    new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
-                    self.data.learned_target_hour = round(new_target, 2)
-                    self.data.target_hour_samples = count
-                self._save()
-                logging.info(
-                    f"Learning: Zapfung {now.strftime('%H:%M')} "
-                    f"(drop {drop:.1f}C) -> {'Morgen-' if ist_morgen else 'Abend-'}"
-                    f"Zielzeit {new_target:.1f}h (n={count})"
-                )
+        # Schwellwerte pro Fühler
+        SCHWELLWENGE = {
+            "unten": 0.5,   # kühlt zuerst, niedriger Schwellwert
+            "mittig": 0.8,
+            "oben": 1.5,    # bester Schwellwert
+        }
+
+        # Ereignis erkennen: mindestens EIN Fühler ueberschreitet Schwellwert
+        if not any(drops[s] >= SCHWELLWENGE[s] for s in drops):
+            return
+
+        if self._last_temp_time is None:
+            return
+
+        # Gewichteten Gesamt-Abfall berechnen
+        # unten hat das hoechste Gewicht (1.0), mitte (0.5), oben (0.25)
+        # da unten der Hauptindikator fuer Warmwasserentnahme ist
+        gewichte = {"unten": 1.0, "mittig": 0.5, "oben": 0.25}
+        drop_gesamt = sum(
+            drops[s] * gewichte[s] for s in drops
+        )
+
+        event = UsageEvent(
+            timestamp=now.isoformat(),
+            temp_before_unten=round(previous["unten"], 1) if previous["unten"] is not None else 0.0,
+            temp_before_mitte=round(previous["mittig"], 1) if previous["mittig"] is not None else 0.0,
+            temp_before_oben=round(previous["oben"], 1) if previous["oben"] is not None else 0.0,
+            temp_after_unten=round(current["unten"], 1),
+            temp_after_mitte=round(current["mittig"], 1),
+            temp_after_oben=round(current["oben"], 1) if current["oben"] is not None else 0.0,
+            drop_unten_k=round(drops["unten"], 1),
+            drop_mitte_k=round(drops["mittig"], 1),
+            drop_oben_k=round(drops["oben"], 1),
+            drop_gesamt_k=round(drop_gesamt, 2),
+        )
+        self.data.usage_events.append(asdict(event))
+        if len(self.data.usage_events) > 100:
+            self.data.usage_events = self.data.usage_events[-100:]
+
+        # Nur erste Zapfung(en) pro Tageshaelfte beruecksichtigen
+        ist_morgen = now.hour < 12
+        today_str = now.strftime("%Y-%m-%d")
+        today_events = [
+            e for e in self.data.usage_events
+            if e["timestamp"].startswith(today_str)
+            and (datetime.fromisoformat(e["timestamp"]).hour < 12) == ist_morgen
+        ]
+        if len(today_events) <= 2:
+            hour_f = now.hour + now.minute / 60.0
+            # EWMA (alpha=0.15): reagiert auf Veraenderungen des
+            # Duschverhaltens schneller als ein kumulativer Mittelwert
+            if ist_morgen:
+                count = self.data.morning_target_hour_samples + 1
+                alt = self.data.learned_morning_target_hour
+                new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
+                self.data.learned_morning_target_hour = round(new_target, 2)
+                self.data.morning_target_hour_samples = count
+            else:
+                count = self.data.target_hour_samples + 1
+                alt = self.data.learned_target_hour
+                new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
+                self.data.learned_target_hour = round(new_target, 2)
+                self.data.target_hour_samples = count
+            self._save()
+            logging.info(
+                f"Learning: Zapfung {now.strftime('%H:%M')} "
+                f"(unten {drops['unten']:.1f}K, mitte {drops['mittig']:.1f}K, "
+                f"oben {drops['oben']:.1f}K, gew. {drop_gesamt:.2f}K) -> "
+                f"{'Morgen-' if ist_morgen else 'Abend-'}"
+                f"Zielzeit {new_target:.1f}h (n={count})"
+            )
+
+    def get_recent_usage_events(
+        self,
+        hours: int = 2,
+        now: Optional[datetime] = None,
+    ) -> List[Dict]:
+        """Gibt alle Zapfungsereignisse der letzten Stunden zurueck.
+        
+        Wird von CalcStart genutzt um den Temperaturverlust aus
+        erkannten Zapfungen in die Startzeitenberechnung einzubeziehen.
+        """
+        if now is None:
+            now = datetime.now()
+        grenze = now - timedelta(hours=hours)
+        return [
+            e for e in self.data.usage_events
+            if datetime.fromisoformat(e["timestamp"]) >= grenze
+        ]

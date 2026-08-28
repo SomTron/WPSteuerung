@@ -1047,6 +1047,7 @@ def evaluate_calculated_start(
     soc: Optional[float] = None,
     fc_ratio: float = 1.0,
     surplus_profile: Optional[Dict[str, float]] = None,
+    recent_usage_events: Optional[List[Dict]] = None,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -1122,6 +1123,29 @@ def evaluate_calculated_start(
     hours_needed = diff_unten / max(heizrate_unten, 0.1)
     hours_needed_mitte = diff_mitte / max(heizrate_gesamt, 0.1)
     hours_needed = max(hours_needed, hours_needed_mitte)
+    
+    # === Multisensor-Zapfungsdaten einbeziehen (Punkt 4) ===
+    # Temperaturverlust aus erkannter Zapfung abziehen, damit der
+    # CalcStart die tatsaechliche Startzeit korrigeriert und die
+    # Zapf-Garantie waerert.
+    usage_drop_gesamt_k = 0.0
+    if recent_usage_events:
+        # Letzte Zapfung nehmen und Temperaturverlust als "bereits verlorene
+        # Energie" interpretieren -> reduziert effektive Heizzeit
+        # (die WP muss den Verlust nicht mehr kompensieren, er ist
+        #  already passiert; der Schicht-Temperaturabfall muss aber
+        #  innerhalb des Zeitfensters ausgeglichen werden, daher
+        #  begrenzen wir den Effekt auf max. 50% des Abfalls)
+        neueste = recent_usage_events[-1]
+        drop = neueste.get("drop_gesamt_k", 0.0)
+        usage_drop_gesamt_k = round(drop * 0.5, 2)
+        if usage_drop_gesamt_k > 0:
+            hours_needed = max(0.0, hours_needed - usage_drop_gesamt_k / max(heizrate_unten, 0.1))
+            logging.debug(
+                f"CalcStart: Nutzungsevent {neueste.get('timestamp','')} "
+                f"drop {drop:.1f}K -> Stundenbedarf -{usage_drop_gesamt_k:.2f}h "
+                f"(neu {hours_needed:.2f}h)"
+            )
     
     time_left = ziel_uhr - current_time
     
@@ -1245,6 +1269,7 @@ def bewerte_alle_regeln(
     learned_target_hour: Optional[float] = None,
     fc_ratio: float = 1.0,
     surplus_profile: Optional[Dict[str, float]] = None,
+    recent_usage_events: Optional[List[Dict]] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -1343,6 +1368,7 @@ def bewerte_alle_regeln(
         soc=soc,
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profile,
+        recent_usage_events=recent_usage_events,
     )
     ergebnisse.append(ergebnis)
     
