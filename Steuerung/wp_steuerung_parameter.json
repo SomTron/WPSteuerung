@@ -9,7 +9,7 @@
     "mindestlaufzeit_minuten": 60,
     "mindestpausenzeit_minuten": 30
   },
-    "sicherheit": {
+  "sicherheit": {
     "nachtsperre_start": 19,
     "nachtsperre_ende": 8,
     "max_temp_c": 48,
@@ -53,13 +53,13 @@
   },
   "zeitfenster": {
     "aktiv": false,
-        "prioritaet": 53,
-        "start_uhr": 16,
-        "ende_uhr": 17,
-        "modus": "einschalten",
-        "temperaturfuehler": "mitte",
-        "max_temp_fuer_einschalten_c": 44.5,
-        "min_pv_watt": 410
+    "prioritaet": 53,
+    "start_uhr": 16,
+    "ende_uhr": 17,
+    "modus": "einschalten",
+    "temperaturfuehler": "mitte",
+    "max_temp_fuer_einschalten_c": 44.5,
+    "min_pv_watt": 410
   },
   "abweichung": {
     "prioritaet": 47,
@@ -123,7 +123,7 @@
         "ende_uhr": 16,
         "hysterese_k": 2.0
       },
-            {
+      {
         "name": "Abend-Mitte",
         "temperaturfuehler": "mitte",
         "min_temp_c": 42.0,
@@ -151,5 +151,10 @@
     "weiterlauf_ab_watt": 6500.0,
     "temperaturfuehler": "unten",
     "ausschalten_bei_c": 48.0
+  },
+  "boiler_modell": {
+    "volumen_l": 300.0,
+    "nutztemp_c": 40.0,
+    "kaltwasser_c": 10.0
   }
 }
