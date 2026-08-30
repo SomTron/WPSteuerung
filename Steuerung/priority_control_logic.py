@@ -395,6 +395,15 @@ def wende_sommer_offset_an(config) -> None:
         # Klemme: Ausschaltpunkt bleibt mind. 2K ueber dem Einschaltpunkt
         pv.ausschalten_bei_c = max(neuer_aus, pv.einschalten_bei_c + 2.0)
 
+    # --- NEU: Auch Einspeisung im Sommermodus kappen (wie PV-Regeln) ---
+    # Die Einspeisung-Regel (Prio 83) ist die hoechste Heiz-Prioritaet und
+    # heizte bisher ungebremst bis 48C, obwohl der Boiler im Sommer jeden
+    # Tag wieder PV bekommt. Mit diesem Offset senkt sie ihr Ziel auf 46C
+    # (ausschalten_bei_c=48 + pv_ausschalt_offset_c=-2 = 46C).
+    einsp_aus = config.einspeisung.ausschalten_bei_c + pv_offset
+    # Klemme: Ausschaltpunkt nicht unter 42C (Regel hat keinen eigenen EP)
+    config.einspeisung.ausschalten_bei_c = max(einsp_aus, 42.0)
+
     apv = config.adaptive_pv
     # Absoluter Boden 42C, damit die Regel nicht wirkungslos/kippelig wird
     apv.tmax_c = max(apv.tmax_c + pv_offset, 42.0)
