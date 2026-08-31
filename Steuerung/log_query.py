@@ -94,9 +94,9 @@ def query_logs(
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         if start_pos is not None:
             f.seek(start_pos)
-            # Sicherstellen, dass wir nicht mitten in einer Zeile sind
-            if start_pos > 0:
-                f.readline()  # Rest der angefangenen Zeile ueberspringen
+            # _binary_search_ts liefert immer eine Position am Zeilenanfang,
+            # daher KEIN f.readline() – das wuerde die erste passende Zeile
+            # verschlucken (Bug #1, siehe wp-manager v1.7).
 
         for line in f:
             line_ts = _parse_ts(line)
