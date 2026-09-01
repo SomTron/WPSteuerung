@@ -12,8 +12,8 @@
   "sicherheit": {
     "nachtsperre_start": 19,
     "nachtsperre_ende": 8,
-    "max_temp_c": 48,
-    "boiler_max_fuehler": "unten",
+    "max_temp_c": 49,
+        "boiler_max_fuehler": "unten",
     "boiler_max_hysterese_k": 2.0,
     "boiler_max_ein_abstand_k": 3.0,
     "ueberhitzung_c": 58,
