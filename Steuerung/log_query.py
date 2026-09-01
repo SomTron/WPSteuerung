@@ -233,6 +233,7 @@ def tail_log(
 
 def main():
     """CLI entry point for querying logs."""
+    import sys
     import argparse
     parser = argparse.ArgumentParser(description="Durchsuche das heizungssteuerung.log nach Datum/Zeit")
     parser.add_argument("--after", help="Nur Zeilen NACH diesem Zeitpunkt (YYYY-MM-DD HH:MM:SS)")
@@ -241,9 +242,18 @@ def main():
     parser.add_argument("--level", help="Filter: INFO, WARNING, ERROR, DEBUG, CRITICAL")
     parser.add_argument("--log-path", help="Pfad zur Log-Datei")
     parser.add_argument("--tail", action="store_true", help="Letzte X Zeilen anzeigen")
+    parser.add_argument("--debug", action="store_true", help="Diagnose-Informationen anzeigen")
     args = parser.parse_args()
 
     log_path = args.log_path or _find_default_log_path()
+    
+    if args.debug:
+        print(f"[DEBUG] log_path={log_path}", file=sys.stderr)
+        print(f"[DEBUG] after={args.after}", file=sys.stderr)
+        print(f"[DEBUG] lines={args.lines}", file=sys.stderr)
+        print(f"[DEBUG] File exists: {os.path.exists(log_path)}", file=sys.stderr)
+        if os.path.exists(log_path):
+            print(f"[DEBUG] File size: {os.path.getsize(log_path)}", file=sys.stderr)
 
     if args.tail:
         result, meta = tail_log(lines=args.lines, log_path=log_path)
@@ -256,8 +266,25 @@ def main():
         before = None
         if args.before:
             before = datetime.strptime(args.before, "%Y-%m-%d %H:%M:%S")
+        
+        if args.debug:
+            print(f"[DEBUG] after={after}", file=sys.stderr)
+            # Manuellen binary search test machen
+            test_pos = _binary_search_ts(log_path, after)
+            with open(log_path, 'rb') as f:
+                f.seek(test_pos)
+                first_line = f.readline().decode('utf-8', errors='replace')
+            print(f"[DEBUG] binary_search returned pos={test_pos}", file=sys.stderr)
+            print(f"[DEBUG] first line at that pos: {first_line.rstrip()[:100]}", file=sys.stderr)
+        
         result, meta = query_logs(after=after, before=before, lines=args.lines,
                                   level=args.level, log_path=log_path)
+        
+        if args.debug:
+            print(f"[DEBUG] result count: {len(result)}", file=sys.stderr)
+            if result:
+                print(f"[DEBUG] first result line: {result[0].rstrip()[:100]}", file=sys.stderr)
+                print(f"[DEBUG] last result line: {result[-1].rstrip()[:100]}", file=sys.stderr)
     else:
         result, meta = query_logs(lines=args.lines, level=args.level, log_path=log_path)
 
