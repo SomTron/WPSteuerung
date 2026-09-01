@@ -247,20 +247,32 @@ class TestMainCheckPeriodicTasks:
 
     def _baue_state(self):
         from types import SimpleNamespace
-        from json_config import SommerModusConfig
+        from json_config import SommerModusConfig, LegionellenConfig
         state = SimpleNamespace()
         state.local_tz = pytz.timezone("Europe/Berlin")
         state.last_forecast_update = None
         state.config = None
         state.sommer_modus_aktiv = False
         state.sommer_modus_zaehler = 0
+        state.legionellen_aktiv = False
+        state.legionellen_last_done = None
+        state.legionellen_started_at = None
+        state.legionellen_planned_day = None
+        state.legionellen_planned_time = None
+        state.legionellen_planned_reason = None
+        state.legionellen_telegram_start_sent = False
+        state.legionellen_telegram_done_sent = False
+        state.legionellen_temp_override = None
+        state.legionellen_target_reached_at = None
+        state.legionellen_wochennummer = None
         state.solar = SimpleNamespace(forecast_today=None, forecast_tomorrow=None,
                                       forecast_day2=None)
         state.priority_config = SimpleNamespace(
             sommer_modus=SommerModusConfig(
                 aktiv=True, mindest_prognose_wh=2000.0,
                 benoetigte_tage=3, temperatur_offset_c=-3.0,
-            )
+            ),
+            legionellen=LegionellenConfig(aktiv=False),
         )
         return state
 

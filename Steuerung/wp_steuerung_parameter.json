@@ -152,9 +152,22 @@
     "temperaturfuehler": "unten",
     "ausschalten_bei_c": 48.0
   },
-  "boiler_modell": {
-    "volumen_l": 300.0,
-    "nutztemp_c": 40.0,
-    "kaltwasser_c": 10.0
+  "legionellen": {
+      "aktiv": true,
+      "prioritaet": 90,
+      "target_temp_c": 60.0,
+      "legionellen_max_temp_c": 65.0,
+      "bevorzugter_tag": 4,
+      "letzter_tag": 6,
+      "start_uhr": 8,
+      "spaeteste_start_uhr": 16,
+      "probezeit_minuten": 30,
+      "erforderliche_wh_qm": 800.0,
+      "pv_prognose_schwelle_gut": 2000.0
+    },
+    "boiler_modell": {
+      "volumen_l": 300.0,
+      "nutztemp_c": 40.0,
+      "kaltwasser_c": 10.0
+    }
   }
-}

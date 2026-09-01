@@ -14,6 +14,7 @@ from utils import safe_timedelta
 from constants import (
     CONFIG_CHECK_INTERVAL_SEC,
 )
+
 try:
     from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
 except ImportError:
@@ -59,14 +60,17 @@ def setze_neustartsperre(state, minuten: int = 10) -> None:
     Ersetzt den alten Trick, last_compressor_off_time in die Zukunft zu
     setzen: Die Sperre ist jetzt ein eigenes Feld mit klar lesbarem
     Blocking-Reason, statt eine Mindestpausen-Rechnung zu verfaelschen."""
-    state.control.restart_lockout_until = (
-        datetime.now(state.local_tz) + timedelta(minutes=minuten)
+    state.control.restart_lockout_until = datetime.now(state.local_tz) + timedelta(
+        minutes=minuten
     )
 
 
 async def check_pressure_and_config(
-    session, state, handle_pressure_check_func: Callable,
-    set_kompressor_status_func: Callable, only_pressure: bool = False
+    session,
+    state,
+    handle_pressure_check_func: Callable,
+    set_kompressor_status_func: Callable,
+    only_pressure: bool = False,
 ):
     """Prueft Druckschalter und aktualisiert Konfiguration bei Bedarf."""
     pressure_ok = await handle_pressure_check_func(session, state)
@@ -81,7 +85,9 @@ async def check_pressure_and_config(
         return False
 
     if not only_pressure:
-        if safe_timedelta(datetime.now(state.local_tz), state._last_config_check, state.local_tz) > timedelta(seconds=CONFIG_CHECK_INTERVAL_SEC):
+        if safe_timedelta(
+            datetime.now(state.local_tz), state._last_config_check, state.local_tz
+        ) > timedelta(seconds=CONFIG_CHECK_INTERVAL_SEC):
             state.update_config()
             state._last_config_check = datetime.now(state.local_tz)
     return True
@@ -105,7 +111,9 @@ def _solar_daten_veraltet(state) -> bool:
 
 def _gelerntes_morgenfenster(learning_engine):
     """Gelerntes Morgen-Zapffenster defensiv abfragen (alte Fakes fehlt es)."""
-    if not learning_engine or not hasattr(learning_engine, "get_learned_morning_window"):
+    if not learning_engine or not hasattr(
+        learning_engine, "get_learned_morning_window"
+    ):
         return None
     try:
         return learning_engine.get_learned_morning_window()
@@ -117,7 +125,7 @@ def _gelerntes_morgenfenster(learning_engine):
 async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
     """
     Bestimmt den Betriebsmodus basierend auf den Prioritaeten-Regeln.
-    
+
     Statt fester Modus-Logik wird die Prioritaeten-Engine befragt.
     """
     temp_dict = {
@@ -126,34 +134,43 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         "mittig": t_mittig,
         "verd": state.sensors.t_verd,
     }
-    
+
     pv_leistung = state.solar.feedinpower if state.solar.feedinpower else 0.0
     if pv_leistung < 0:
         pv_leistung = 0.0
-    
+
     # --- Bademodus/Urlaubsmodus-Kopplung ---
     # Wir arbeiten mit einer Kopie der Config, um die original-Config nicht zu aendern.
     # Falls Bademodus/Urlaub aktiv, passen wir die Solltemperatur der Abweichungs-Regel an.
     import copy
+
     effektive_config = copy.deepcopy(state.priority_config)
-    
+
     if state.bademodus_aktiv:
         # Bademodus: Zieltemperatur-Erhoehung aus der Config (fuer warmes Wasser)
         erhoehung = effektive_config.bademodus.solltemperatur_erhoehung_c
         effektive_config.abweichung.solltemperatur_c += erhoehung
-        logging.debug(f"Bademodus aktiv: Solltemperatur +{erhoehung}C auf {effektive_config.abweichung.solltemperatur_c}C")
-    
+        logging.debug(
+            f"Bademodus aktiv: Solltemperatur +{erhoehung}C auf {effektive_config.abweichung.solltemperatur_c}C"
+        )
+
     if state.urlaubsmodus_aktiv:
         # Urlaubsmodus: Solltemperatur senken (Sparmodus)
-        absenkung = float(state.config.Urlaubsmodus.URLAUBSABSENKUNG) if hasattr(state.config, 'Urlaubsmodus') else 5.0
+        absenkung = (
+            float(state.config.Urlaubsmodus.URLAUBSABSENKUNG)
+            if hasattr(state.config, "Urlaubsmodus")
+            else 5.0
+        )
         effektive_config.abweichung.solltemperatur_c -= absenkung
-        logging.debug(f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C")
+        logging.debug(
+            f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C"
+        )
 
     # Sommer-Modus: Solltemperatur senken bei mehrtÃ¤gig guter PV-Prognose.
     # Im Sommer scheint fast jeden Tag die Sonne, daher braucht der Boiler nicht
     # jeden Tag auf 44Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
     # Der Offset (default -3Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
-    if hasattr(state, 'sommer_modus_aktiv') and state.sommer_modus_aktiv:
+    if hasattr(state, "sommer_modus_aktiv") and state.sommer_modus_aktiv:
         wende_sommer_offset_an(effektive_config)
         logging.debug(
             f"Sommer-Modus aktiv: Abweichungs-Soll {effektive_config.abweichung.solltemperatur_c:.1f}C, "
@@ -163,20 +180,20 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
 
     # Forecast-Daten aus State holen
     # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
-    forecast_wh_qm = getattr(state.solar, 'forecast_tomorrow', None)
+    forecast_wh_qm = getattr(state.solar, "forecast_tomorrow", None)
     if forecast_wh_qm is not None:
         try:
             forecast_wh_qm = float(forecast_wh_qm)
         except (TypeError, ValueError):
             forecast_wh_qm = None
     # CalcStart braucht die HEUTE-Prognose (PV-Erwartung zum Warten/Heizen)
-    forecast_today_wh = getattr(state.solar, 'forecast_today', None)
+    forecast_today_wh = getattr(state.solar, "forecast_today", None)
     if forecast_today_wh is not None:
         try:
             forecast_today_wh = float(forecast_today_wh)
         except (TypeError, ValueError):
             forecast_today_wh = None
-    
+
     # Alle Regeln bewerten (mit effektiver Config)
     # Learning Engine aktualisieren (Heizzyklen + Zapfprofil + Solar-Tracking)
     if learning_engine is not None:
@@ -185,25 +202,25 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             temp_dict=temp_dict,
             compressor_is_on=state.control.kompressor_ein,
             feedin_watt=pv_leistung,
-            soc=getattr(state.solar, 'soc', None),
+            soc=getattr(state.solar, "soc", None),
             forecast_today_wh_qm=forecast_today_wh,
         )
         gelernte_rate_unten = learning_engine.get_learned_heating_rate(
-            datetime.now(state.local_tz).month, 'unten'
+            datetime.now(state.local_tz).month, "unten"
         )
         gelernte_rate_gesamt = learning_engine.get_learned_heating_rate(
-            datetime.now(state.local_tz).month, 'gesamt'
+            datetime.now(state.local_tz).month, "gesamt"
         )
         gelernte_zielzeit = learning_engine.get_learned_target_hour()
         # Defensiv: aeltere Lern-Engines/Fakes kennen die Methoden evtl.
         # nicht -> dann neutral bleiben (Ratio 1.0 / kein Profil).
-        _get_fenster = getattr(learning_engine, 'get_learned_evening_window', None)
+        _get_fenster = getattr(learning_engine, "get_learned_evening_window", None)
         gelerntes_abendfenster = _get_fenster() if callable(_get_fenster) else None
-        _ratio_getter = getattr(learning_engine, 'get_forecast_ratio', None)
+        _ratio_getter = getattr(learning_engine, "get_forecast_ratio", None)
         fc_ratio = _ratio_getter() if callable(_ratio_getter) else 1.0
-        _profil_getter = getattr(learning_engine, 'get_surplus_profile', None)
+        _profil_getter = getattr(learning_engine, "get_surplus_profile", None)
         surplus_profil = _profil_getter() if callable(_profil_getter) else None
-        _usage_getter = getattr(learning_engine, 'get_recent_usage_events', None)
+        _usage_getter = getattr(learning_engine, "get_recent_usage_events", None)
         recent_usage_events = _usage_getter(hours=2) if callable(_usage_getter) else []
     else:
         gelernte_rate_unten = None
@@ -231,7 +248,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         )
         signatur = (calc_tot, round(float(ziel_pruefung), 2))
         if (calc_tot or calc_hinweis) and getattr(
-            state, '_calcstart_warn_signatur', None
+            state, "_calcstart_warn_signatur", None
         ) != signatur:
             state._calcstart_warn_signatur = signatur
             if calc_tot:
@@ -249,31 +266,39 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         now=datetime.now(state.local_tz),
         forecast_wh_qm=forecast_wh_qm,
         forecast_today_wh_qm=forecast_today_wh,
-        soc=getattr(state.solar, 'soc', None),
-        battery_power=getattr(state.solar, 'batpower', None),
+        soc=getattr(state.solar, "soc", None),
+        battery_power=getattr(state.solar, "batpower", None),
         learned_evening_window=gelerntes_abendfenster,
-        learned_morning_window=_gelerntes_morgenfenster_mit_bonus(state, learning_engine),
+        learned_morning_window=_gelerntes_morgenfenster_mit_bonus(
+            state, learning_engine
+        ),
         solar_stale=_solar_daten_veraltet(state),
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
         learned_target_hour=gelernte_zielzeit,
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profil,
-                        recent_usage_events=recent_usage_events,
-                        bademodus_aktiv=bool(state.bademodus_aktiv),
-                    )
-    
+        recent_usage_events=recent_usage_events,
+        bademodus_aktiv=bool(state.bademodus_aktiv),
+        legionellen_aktiv=bool(state.legionellen_aktiv),
+        legionellen_last_done=state.legionellen_last_done,
+        legionellen_started_at=state.legionellen_started_at,
+        forecast_day2_wh_qm=getattr(state.solar, "forecast_day2", None),
+    )
+
     # Ergebnisse loggen (gethrottelt)
     if check_log_throttle(state, "_last_priority_log", interval_minutes=5.0):
-        logging.info(f"Regel-Bewertung ({len(alle_ergebnisse)} Regeln):\n{formatiere_ergebnisse(alle_ergebnisse)}")
-    
+        logging.info(
+            f"Regel-Bewertung ({len(alle_ergebnisse)} Regeln):\n{formatiere_ergebnisse(alle_ergebnisse)}"
+        )
+
     # Gewinner-Regel in State speichern fuer Anzeige
     state.control.active_rule_sensor = None
     state.control.active_rule_name = None
-    
+
     if gewinner is not None:
         state.control.active_rule_name = gewinner.name
-        
+
         # Sensor-Name aus Regel ermitteln
         if "mitte" in gewinner.grund.lower():
             state.control.active_rule_sensor = "Mittig"
@@ -281,7 +306,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             state.control.active_rule_sensor = "Unten"
         elif "oben" in gewinner.grund.lower():
             state.control.active_rule_sensor = "Oben"
-        
+
         # Ein/Ausschaltpunkte aus Regel ermitteln.
         # WICHTIG: effektive_config (mit Bademodus-/Urlaubs-Offsets) verwenden,
         # nicht state.priority_config - sonst melden die Setpoints einen
@@ -298,42 +323,60 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             # weil z.B. t_unten=43.2C < max_temp_c=48C.
             eps = _extract_einschaltpunkt(gewinner, effektive_config)
             ausp = _extract_ausschaltpunkt(gewinner, effektive_config)
-            state.control.aktueller_einschaltpunkt = max(eps, ausp)  # hoch, damit kein Neueinschalten
-            state.control.aktueller_ausschaltpunkt = ausp            # korrekt, damit Abschaltung funktioniert
+            state.control.aktueller_einschaltpunkt = max(
+                eps, ausp
+            )  # hoch, damit kein Neueinschalten
+            state.control.aktueller_ausschaltpunkt = (
+                ausp  # korrekt, damit Abschaltung funktioniert
+            )
     else:
         # Keine Regel will einschalten: Standard = ausschalten
-        state.control.aktueller_einschaltpunkt = state.priority_config.sicherheit.max_temp_c
-        state.control.aktueller_ausschaltpunkt = state.priority_config.sicherheit.max_temp_c
-    
+        state.control.aktueller_einschaltpunkt = (
+            state.priority_config.sicherheit.max_temp_c
+        )
+        state.control.aktueller_ausschaltpunkt = (
+            state.priority_config.sicherheit.max_temp_c
+        )
+
     # Komfort-Einschaltstatus (fuer Komfort-Regel)
     state.control.komfort_aktiv = any(
         e.name == "Komfort" and e.aktiv and e.einschalten is True
         for e in alle_ergebnisse
     )
-    
+
     # Alle Ergebnisse im State speichern fuer API/HTML-Anzeige
     state.control.alle_ergebnisse = alle_ergebnisse
-    
+
     # Ergebnis aufbereiten
     should_on = gewinner is not None and gewinner.einschalten is True
-    
+
     # Regelfuehler dynamisch aus der aktiven Regel ermitteln, nicht hartcodiert t_unten
     regelfuehler = t_unten  # Fallback
     if gewinner is not None:
-        if "unten" in gewinner.grund.lower() or "unten" in (gewinner.name or "").lower():
+        if (
+            "unten" in gewinner.grund.lower()
+            or "unten" in (gewinner.name or "").lower()
+        ):
             regelfuehler = t_unten
-        elif "mitte" in gewinner.grund.lower() or "mitte" in (gewinner.name or "").lower():
+        elif (
+            "mitte" in gewinner.grund.lower()
+            or "mitte" in (gewinner.name or "").lower()
+        ):
             regelfuehler = t_mittig
-        elif "oben" in gewinner.grund.lower() or "oben" in (gewinner.name or "").lower():
+        elif (
+            "oben" in gewinner.grund.lower() or "oben" in (gewinner.name or "").lower()
+        ):
             regelfuehler = state.sensors.t_oben
-    
+
     # Solarueberschuss aktiv wenn PV-Leistung >= niedrigste Schwelle aller PV-Regeln
     if state.priority_config.pv_regeln:
-        min_pv_schwelle = min(r.pv_schwelle_watt for r in state.priority_config.pv_regeln)
+        min_pv_schwelle = min(
+            r.pv_schwelle_watt for r in state.priority_config.pv_regeln
+        )
         solar_ueberschuss_aktiv = pv_leistung >= min_pv_schwelle
     else:
         solar_ueberschuss_aktiv = False
-    
+
     res = {
         "modus": gewinner.name if gewinner else "Keine Regel aktiv",
         "einschaltpunkt": state.control.aktueller_einschaltpunkt,
@@ -344,12 +387,14 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         "gewinner_ergebnis": gewinner,
         "alle_ergebnisse": alle_ergebnisse,
     }
-    
+
     # Moduswechsel-Logging + Taktschutz-Tracking - erst nach Bestaetigung
     # durch das Debouncing (siehe _gewinner_debounce): Ein-Sensor-Ticks an
     # Regel-Grenzen erzeugen weder Log-Zeilen noch Taktschutz-Zaehler.
     if _gewinner_debounce(state, res["modus"]):
-        logging.info(f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})")
+        logging.info(
+            f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})"
+        )
         state.control.previous_modus = res["modus"]
         # Taktschutz (Punkt D): nur bestaetigte Wechsel tracken
         _track_wechsel(state, res["modus"])
@@ -363,10 +408,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 soll_einschalten=bool(should_on),
                 kompressor_laeuft=bool(state.control.kompressor_ein),
                 feedin_watt=pv_leistung,
-                batpower_watt=getattr(state.solar, 'batpower', None),
-                soc=getattr(state.solar, 'soc', None),
+                batpower_watt=getattr(state.solar, "batpower", None),
+                soc=getattr(state.solar, "soc", None),
                 t_unten=t_unten,
-                t_oben=getattr(state.sensors, 't_oben', None),
+                t_oben=getattr(state.sensors, "t_oben", None),
             )
         except Exception as e:  # pragma: no cover
             logging.debug(f"Entscheidungslog-Fehler: {e}")
@@ -409,10 +454,12 @@ def wende_sommer_offset_an(config) -> None:
     apv.tmax_c = max(apv.tmax_c + pv_offset, 42.0)
 
 
-def _extract_einschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) -> float:
+def _extract_einschaltpunkt(
+    ergebnis: RegelErgebnis, config: WPSteuerungConfig
+) -> float:
     """Extrahiert den Einschaltpunkt aus dem Regel-Ergebnis fuer Statusanzeige."""
     name = ergebnis.name
-    
+
     if name.startswith("PV_"):
         # PV-Regel: Finde die passende
         for pv in config.pv_regeln:
@@ -423,7 +470,10 @@ def _extract_einschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
     elif name == "Zeitfenster":
         return config.zeitfenster.max_temp_fuer_einschalten_c
     elif name == "Abweichung":
-        return config.abweichung.solltemperatur_c - config.abweichung.einschalten_bei_abweichung_k
+        return (
+            config.abweichung.solltemperatur_c
+            - config.abweichung.einschalten_bei_abweichung_k
+        )
     elif name == "Forecast":
         return config.forecast.t_vorheiz_ab_c
     elif name == "AdaptivePV":
@@ -438,14 +488,18 @@ def _extract_einschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
         return config.batterie.einschalten_bei_c
     elif name == "Einspeisung":
         return config.einspeisung.ausschalten_bei_c - 6.0  # Anzeige-Wert
+    elif name == "Legionellen":
+        return config.legionellen.target_temp_c - 5.0  # EIN unter 55C
 
     return config.sicherheit.max_temp_c
 
 
-def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) -> float:
+def _extract_ausschaltpunkt(
+    ergebnis: RegelErgebnis, config: WPSteuerungConfig
+) -> float:
     """Extrahiert den Ausschaltpunkt aus dem Regel-Ergebnis fuer Statusanzeige."""
     name = ergebnis.name
-    
+
     if name.startswith("PV_"):
         for pv in config.pv_regeln:
             if pv.name == name:
@@ -455,7 +509,10 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
     elif name == "Zeitfenster":
         return config.zeitfenster.max_temp_fuer_einschalten_c
     elif name == "Abweichung":
-        return config.abweichung.solltemperatur_c - config.abweichung.ausschalten_bei_abweichung_k
+        return (
+            config.abweichung.solltemperatur_c
+            - config.abweichung.ausschalten_bei_abweichung_k
+        )
     elif name == "Forecast":
         return config.forecast.tmax_c
     elif name == "AdaptivePV":
@@ -470,9 +527,10 @@ def _extract_ausschaltpunkt(ergebnis: RegelErgebnis, config: WPSteuerungConfig) 
         return config.batterie.ausschalten_bei_c
     elif name == "Einspeisung":
         return config.einspeisung.ausschalten_bei_c
+    elif name == "Legionellen":
+        return config.legionellen.target_temp_c
 
     return config.sicherheit.max_temp_c
-
 
 
 def _gelerntes_morgenfenster_mit_bonus(state, learning_engine):
@@ -487,6 +545,7 @@ def _gelerntes_morgenfenster_mit_bonus(state, learning_engine):
         fruehe, spaete = fenster
         fenster = (max(fruehe - bonus, 4.5), spaete)
     return fenster
+
 
 def _track_wechsel(state, gewinner_name):
     """Trackt echte Entscheidungswechsel (Punkt D) im letzten 60min-Fenster.
@@ -513,6 +572,7 @@ def _track_wechsel(state, gewinner_name):
     if hist and hist[-1][1] == gewinner_name:
         return
     hist.append((now, gewinner_name))
+
 
 def _gewinner_debounce(state, modus):
     """Bestaetigt einen Gewinnerwechsel erst nach 2 identischen Bewertungen.
@@ -542,6 +602,7 @@ def _gewinner_debounce(state, modus):
         control._pending_modus = None
         return True
     return False
+
 
 def _taktschutz_blockiert(state, cfg) -> float:
     """Prueft Taktschutz (Punkt D): zu viele Wechsel/h -> zusaetzliche Pause.
@@ -596,6 +657,8 @@ def _boiler_max_info(state):
     """Infos zum harten Boiler-Maximum: (temp, limit, wiederein, fuehler).
 
     temp kann None sein (Fuehler fehlt) -> die Pruefungen entfallen dann.
+    Bei aktiver Legionellenprophylaxe wird das Limit auf
+    legionellen_max_temp_c erhoeht (wenn gesetzt).
     """
     cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
     if cfg is None:
@@ -604,14 +667,28 @@ def _boiler_max_info(state):
     temp = getattr(getattr(state, "sensors", None), f"t_{fuehler}", None)
     if temp is None or not isinstance(temp, (int, float)):
         return None, None, None, fuehler
+    # Standard-Limit aus Config
     limit = float(getattr(cfg, "max_temp_c", 48.0))
+    # Legionellen-Uebersteuerung: Wenn die Prophylaxe aktiv ist, darf der
+    # Boiler auf legionellen_max_temp_c hochheizen, bevor das harte Maximum
+    # zuschlaegt.
+    legionellen_limit = getattr(state, "legionellen_temp_override", None)
+    if legionellen_limit is not None and legionellen_limit > limit:
+        limit = legionellen_limit
+
     wiederein = limit - float(getattr(cfg, "boiler_max_hysterese_k", 2.0))
     return temp, limit, wiederein, fuehler
 
 
 async def handle_compressor_off(
-    state, session, regelfuehler, ausschaltpunkt, min_laufzeit,
-    t_oben, set_kompressor_status_func: Callable, regel_name=None
+    state,
+    session,
+    regelfuehler,
+    ausschaltpunkt,
+    min_laufzeit,
+    t_oben,
+    set_kompressor_status_func: Callable,
+    regel_name=None,
 ):
     """Prueft Abschaltbedingungen und schaltet aus.
 
@@ -624,7 +701,9 @@ async def handle_compressor_off(
 
     # Absolute Sicherheitsgrenze
     if t_oben is not None and t_oben >= state.priority_config.sicherheit.ueberhitzung_c:
-        if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+        if await set_kompressor_status_func(
+            state, False, force=True, t_boiler_oben=t_oben
+        ):
             state.control.blocking_reason = f"Ueberhitzungsschutz ({t_oben:.1f}C >= {state.priority_config.sicherheit.ueberhitzung_c}C)"
             logging.warning(f"SICHERHEIT AUS: Ueberhitzung ({t_oben:.1f}C)")
             return True
@@ -637,7 +716,9 @@ async def handle_compressor_off(
     # v.a. die obere Schicht unnoetig weiter hoch.
     t_max, limit, wiederein, fuehler = _boiler_max_info(state)
     if t_max is not None and t_max >= limit:
-        if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+        if await set_kompressor_status_func(
+            state, False, force=True, t_boiler_oben=t_oben
+        ):
             state.control.boiler_max_blockiert = wiederein
             state.control.blocking_reason = (
                 f"Boiler-Maximum ({fuehler} {t_max:.1f}C >= {limit:.1f}C)"
@@ -654,7 +735,7 @@ async def handle_compressor_off(
     # Wenn keine Regel den Kompressor einschalten will (z.B. wegen Nachtsperre),
     # muss der Kompressor ausgeschaltet werden, auch wenn der regelfuehler
     # noch unter dem ausschaltpunkt liegt.
-    should_on = getattr(state.control, '_soll_einschalten', False)
+    should_on = getattr(state.control, "_soll_einschalten", False)
     if not should_on:
         # Zwei Faelle, die hier sauber getrennt werden: Eine Regel hat explizit
         # AUS entschieden (regel_name gesetzt) ODER gar keine Regel ist aktiv
@@ -665,9 +746,15 @@ async def handle_compressor_off(
             kontext = "Keine Regel aktiv"
 
         # Pruefe ob wir schon laenger als die Mindestlaufzeit laufen
-        elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
+        elapsed = safe_timedelta(
+            datetime.now(state.local_tz),
+            state.stats.last_compressor_on_time,
+            state.local_tz,
+        )
         if elapsed >= min_laufzeit:
-            if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+            if await set_kompressor_status_func(
+                state, False, force=True, t_boiler_oben=t_oben
+            ):
                 state.control.blocking_reason = None
                 logging.info(f"{kontext}: Kompressor AUS. Laufzeit: {elapsed}")
                 return True
@@ -676,8 +763,11 @@ async def handle_compressor_off(
             state.control.blocking_reason = (
                 f"{kontext}, warte auf Mindestlaufzeit (noch {remaining_min}m)"
             )
-            throttle_key = ("log_min_laufzeit_regel_aus" if regel_name is not None
-                            else "log_min_laufzeit_keine_regel")
+            throttle_key = (
+                "log_min_laufzeit_regel_aus"
+                if regel_name is not None
+                else "log_min_laufzeit_keine_regel"
+            )
             if check_log_throttle(state, throttle_key, interval_minutes=5):
                 logging.info(
                     f"{kontext}, aber Mindestlaufzeit noch nicht erreicht. "
@@ -687,9 +777,15 @@ async def handle_compressor_off(
 
     # Regel-basiertes Ausschalten
     if regelfuehler is not None and regelfuehler >= ausschaltpunkt:
-        elapsed = safe_timedelta(datetime.now(state.local_tz), state.stats.last_compressor_on_time, state.local_tz)
+        elapsed = safe_timedelta(
+            datetime.now(state.local_tz),
+            state.stats.last_compressor_on_time,
+            state.local_tz,
+        )
         if elapsed >= min_laufzeit:
-            if await set_kompressor_status_func(state, False, force=True, t_boiler_oben=t_oben):
+            if await set_kompressor_status_func(
+                state, False, force=True, t_boiler_oben=t_oben
+            ):
                 state.control.blocking_reason = None
                 logging.info(
                     f"Regel AUS: Regelfuehler ({regelfuehler:.1f}) >= Ziel ({ausschaltpunkt:.1f}). "
@@ -699,7 +795,9 @@ async def handle_compressor_off(
             await handle_critical_compressor_error(session, state, "")
         else:
             remaining_min = int((min_laufzeit - elapsed).total_seconds() // 60)
-            state.control.blocking_reason = f"Warte auf Mindestlaufzeit (noch {remaining_min}m)"
+            state.control.blocking_reason = (
+                f"Warte auf Mindestlaufzeit (noch {remaining_min}m)"
+            )
             if check_log_throttle(state, "log_min_laufzeit_off", interval_minutes=5):
                 logging.info(
                     f"Abschaltwunsch unterdrueckt: Mindestlaufzeit noch nicht erreicht. "
@@ -709,9 +807,15 @@ async def handle_compressor_off(
 
 
 async def handle_compressor_on(
-    state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
-    min_laufzeit, min_pause, t_oben,
-    set_kompressor_status_func: Callable
+    state,
+    session,
+    regelfuehler,
+    einschaltpunkt,
+    ausschaltpunkt,
+    min_laufzeit,
+    min_pause,
+    t_oben,
+    set_kompressor_status_func: Callable,
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = datetime.now(state.local_tz)
@@ -719,7 +823,7 @@ async def handle_compressor_on(
     # Boiler-Maximum-Kuehlphase: Nur nach einem tatsaechlichen Limit-Abschalten
     # aktiv (Flag boiler_max_blockiert). Der normale EIN-Bereich unterhalb des
     # Limits bleibt unangetastet - bewusst KEINE pauschale Hysterese, damit
-        # z.B. PV-Heizen bei unten 47 C weiter moeglich bleibt.
+    # z.B. PV-Heizen bei unten 47 C weiter moeglich bleibt.
     schwelle = getattr(state.control, "boiler_max_blockiert", None)
     if schwelle is not None:
         t_max, _limit, _wiederein, fuehler = _boiler_max_info(state)
@@ -739,9 +843,9 @@ async def handle_compressor_on(
     # Naehbereich (unabhaengig vom Kuehlphase-Flag) und hebt sich automatisch
     # auf, sobald wieder boiler_max_ein_abstand_k Luft zum Limit besteht.
     _sicher_cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
-    ein_abstand = float(getattr(
-        _sicher_cfg, "boiler_max_ein_abstand_k", BOILER_MAX_EIN_ABSTAND_K
-    ))
+    ein_abstand = float(
+        getattr(_sicher_cfg, "boiler_max_ein_abstand_k", BOILER_MAX_EIN_ABSTAND_K)
+    )
     t_nahe, nahe_limit, _kuehl_schwelle, fuehler_nahe = _boiler_max_info(state)
     if t_nahe is not None and t_nahe >= nahe_limit - ein_abstand:
         state.control.blocking_reason = (
@@ -755,7 +859,9 @@ async def handle_compressor_on(
     if takt_pause > 0 and min_pause.total_seconds() < takt_pause:
         min_pause_orig = min_pause
         min_pause = timedelta(seconds=takt_pause)
-        if check_log_throttle(state, "log_taktschutz_verlaengerung", interval_minutes=30):
+        if check_log_throttle(
+            state, "log_taktschutz_verlaengerung", interval_minutes=30
+        ):
             logging.info(
                 f"Taktschutz verlaengert Pause von "
                 f"{min_pause_orig.total_seconds()/60:.0f} auf {takt_pause/60:.0f} min"
@@ -763,7 +869,7 @@ async def handle_compressor_on(
 
     # Explizite Neustartsperre (z.B. nach Verifizierungsfehler): blockiert
     # VOR der Mindestpausen-Pruefung, damit der Grund eindeutig im Log steht.
-    lockout_until = getattr(state.control, 'restart_lockout_until', None)
+    lockout_until = getattr(state.control, "restart_lockout_until", None)
     if lockout_until is not None and now < lockout_until:
         rest = lockout_until - now
         mins = int(rest.total_seconds() // 60)
@@ -773,11 +879,13 @@ async def handle_compressor_on(
 
     # Die Prioritaeten-Engine hat bereits entschieden
     # Wir muessen nur noch Mindestlaufzeit/-pause und Basis-Sicherheit pruefen
-    
+
     pause_ok = True
     pause_remaining = None
     if state.stats.last_compressor_off_time:
-        elapsed_pause = safe_timedelta(now, state.stats.last_compressor_off_time, state.local_tz)
+        elapsed_pause = safe_timedelta(
+            now, state.stats.last_compressor_off_time, state.local_tz
+        )
         if elapsed_pause < min_pause:
             pause_ok = False
             pause_remaining = min_pause - elapsed_pause
@@ -786,14 +894,12 @@ async def handle_compressor_on(
     # t_oben wird hier NICHT geprueft, da:
     #   1. check_safety_limits() bereits t_oben >= max_temp_c / ueberhitzung_c abfaengt
     #   2. Der Boiler stratifiziert ist - t_oben kann hoch sein waehrend unten noch kalt ist.
-    stop_condition = (
-        regelfuehler is not None and regelfuehler >= ausschaltpunkt
-    )
-    
+    stop_condition = regelfuehler is not None and regelfuehler >= ausschaltpunkt
+
     if not state.control.kompressor_ein:
         # Pruefe ob die Regel einschalten will (ueber state oder Aufruf-Parameter)
-        should_on = getattr(state.control, '_soll_einschalten', False)
-        
+        should_on = getattr(state.control, "_soll_einschalten", False)
+
         if should_on and pause_ok:
             if stop_condition:
                 logging.info(
@@ -802,39 +908,41 @@ async def handle_compressor_on(
                 )
                 state.control.blocking_reason = "Zieltemp erreicht"
                 return False
-            
-                        
+
             if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
                 state.control.blocking_reason = None
                 state.control.restart_lockout_until = None  # Sperre erledigt
                 # Regelnamen + tatsaechliche Ausschaltgrenze loggen (nicht den
                 # nur fuer die Anzeige abgeleiteten Einschaltpunkt - bei der
                 # Einspeisungs-Regel waere das ein Dummy-Wert wie 42.0).
-                aktive_regel = getattr(state.control, 'active_rule_name', None)
-                regel_txt = f"'{aktive_regel}'" if aktive_regel else "(keine Regel ermittelt)"
+                aktive_regel = getattr(state.control, "active_rule_name", None)
+                regel_txt = (
+                    f"'{aktive_regel}'" if aktive_regel else "(keine Regel ermittelt)"
+                )
                 logging.info(
                     f"Eingeschaltet um {now}. Grund: Regel-Einschalt {regel_txt} "
                     f"(Regelfuehler={regelfuehler}, Ausschaltgrenze={ausschaltpunkt})"
                 )
                 return True
-    
-    # Blocking-Reason setzen wenn Bedingungen nicht erfuellt
+
+        # Blocking-Reason setzen wenn Bedingungen nicht erfuellt
         # Nur setzen, wenn ueberhaupt eine Regel einschalten will (sonst sinnlose Warnung)
         if not state.control.kompressor_ein:
-            should_on = getattr(state.control, '_soll_einschalten', False)
+            should_on = getattr(state.control, "_soll_einschalten", False)
             if should_on and not pause_ok and pause_remaining:
                 minutes = int(pause_remaining.total_seconds() // 60)
                 seconds = int(pause_remaining.total_seconds() % 60)
-                state.control.blocking_reason = f"Min. Pause (noch {minutes}m {seconds}s)"
+                state.control.blocking_reason = (
+                    f"Min. Pause (noch {minutes}m {seconds}s)"
+                )
             elif not should_on:
                 state.control.blocking_reason = None
-    
+
     return False
 
 
 async def handle_mode_switch(
-    state, session, t_oben, t_mittig,
-    set_kompressor_status_func: Callable
+    state, session, t_oben, t_mittig, set_kompressor_status_func: Callable
 ):
     """
     Prueft ob bei Regelwechsel der Kompressor ausgeschaltet werden sollte.
@@ -842,14 +950,22 @@ async def handle_mode_switch(
     """
     if not state.control.kompressor_ein:
         return False
-    
+
     # Bei Prioritaeten-System: Der neue Regel-Zyklus bestimmt automatisch
     # ob weiterlaufen soll. Kein aktives Ausschalten noetig bei Moduswechsel.
     # Das handle_compressor_off uebernimmt die Temp-Logik.
     return False
 
 
-async def check_safety_limits(session, state, t_oben, t_unten, t_mittig, t_verd, set_kompressor_status_func: Callable):
+async def check_safety_limits(
+    session,
+    state,
+    t_oben,
+    t_unten,
+    t_mittig,
+    t_verd,
+    set_kompressor_status_func: Callable,
+):
     """
     Erweiterte Sicherheitspruefungen basierend auf der JSON-Config.
     Prueft nur Ueberhitzung.
@@ -861,39 +977,45 @@ async def check_safety_limits(session, state, t_oben, t_unten, t_mittig, t_verd,
     solange der Bezugsfuehler darunter liegt.
     """
     cfg = state.priority_config.sicherheit
-    
+
     # 1. Ueberhitzungsschutz (einzige harte Abschaltung)
     if t_oben is not None and t_oben >= cfg.ueberhitzung_c:
-        state.control.blocking_reason = f"UEBERHITZUNG ({t_oben:.1f}C >= {cfg.ueberhitzung_c}C)"
+        state.control.blocking_reason = (
+            f"UEBERHITZUNG ({t_oben:.1f}C >= {cfg.ueberhitzung_c}C)"
+        )
         if state.control.kompressor_ein:
             logging.critical(f"UEBERHITZUNG: {t_oben:.1f}C - Sofort-Abschaltung!")
             await set_kompressor_status_func(state, False, force=True)
         return False
-    
+
     # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
     max_temp_warn = cfg.max_temp_c + 2.0
     if t_oben is not None and t_oben >= max_temp_warn:
         if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
-            logging.warning(f"Temperatur ueber Normalbereich: {t_oben:.1f}C >= {max_temp_warn}C (kein Abschalten)")
-    
+            logging.warning(
+                f"Temperatur ueber Normalbereich: {t_oben:.1f}C >= {max_temp_warn}C (kein Abschalten)"
+            )
+
     return True
 
 
 def get_priority_control_status(state) -> dict:
     """Gibt einen Status-Report der Prioritaeten-Steuerung zurueck."""
     cfg = state.priority_config
-    
+
     pv_leistung = state.solar.feedinpower if state.solar.feedinpower else 0.0
-    
+
     return {
         "wp_leistung_watt": cfg.wp.leistung_watt,
         "wp_typ": cfg.wp.typ,
         "pv_leistung_watt": pv_leistung,
-        "aktive_regel": getattr(state.control, 'active_rule_name', None),
+        "aktive_regel": getattr(state.control, "active_rule_name", None),
         "sensoren": state.control.active_rule_sensor,
         "nachtsperre_aktiv": _is_nachtsperre_aktiv(cfg, datetime.now(state.local_tz)),
-        "komfort_aktiv": getattr(state.control, 'komfort_aktiv', False),
-        "anzahl_regeln": len(cfg.pv_regeln) + 4 + 3,  # +Wochenende+PV+Komfort+Zeitfenster+Abweichung+Forecast+AdaptivePV+CalcStart
+        "komfort_aktiv": getattr(state.control, "komfort_aktiv", False),
+        "anzahl_regeln": len(cfg.pv_regeln)
+        + 4
+        + 3,  # +Wochenende+PV+Komfort+Zeitfenster+Abweichung+Forecast+AdaptivePV+CalcStart
     }
 
 
@@ -905,4 +1027,3 @@ def _is_nachtsperre_aktiv(cfg: WPSteuerungConfig, now: datetime) -> bool:
     if start <= ende:
         return start <= h < ende
     return h >= start or h < ende
-

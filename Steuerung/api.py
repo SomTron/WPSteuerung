@@ -439,6 +439,15 @@ def get_status():
         "boiler": boiler_info,
         "taktschutz": taktschutz_info,
         "komfort": komfort_info,
+        "legionellen": {
+            "aktiv": getattr(shared_state, 'legionellen_aktiv', False),
+            "planned_day": getattr(shared_state, 'legionellen_planned_day', None),
+            "planned_time": getattr(shared_state, 'legionellen_planned_time', None),
+            "planned_reason": getattr(shared_state, 'legionellen_planned_reason', None),
+            "last_done": str(getattr(shared_state, 'legionellen_last_done', '')) if getattr(shared_state, 'legionellen_last_done', None) else None,
+            "target_temp_c": getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None).target_temp_c if getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None) else None,
+            "probezeit_minuten": getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None).probezeit_minuten if getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None) else None,
+        },
         "pv_profil": pv_profil_info,
     }
 

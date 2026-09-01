@@ -107,10 +107,14 @@ def baue_pcl_state():
             active_rule_name=None, active_rule_sensor=None,
             komfort_aktiv=False, alle_ergebnisse=[], _soll_einschalten=False,
         ),
-        solar=SimpleNamespace(feedinpower=0.0, forecast_today=None, forecast_tomorrow=None),
+        solar=SimpleNamespace(feedinpower=0.0, forecast_today=None, forecast_tomorrow=None,
+                              forecast_day2=None),
         config=SimpleNamespace(Urlaubsmodus=SimpleNamespace(URLAUBSABSENKUNG=5.0)),
         bademodus_aktiv=False,
         urlaubsmodus_aktiv=False,
+        legionellen_aktiv=False,
+        legionellen_last_done=None,
+        legionellen_started_at=None,
     )
 
 

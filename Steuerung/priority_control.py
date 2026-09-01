@@ -7,30 +7,43 @@ deren Bedingungen erfüllt sind, gewinnt.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
 from dataclasses import dataclass
 
 from json_config import (
-    WPSteuerungConfig, PVRegel, KomfortConfig,
-    ZeitfensterConfig, AbweichungConfig, WochenendeConfig,
-    ForecastConfig, AdaptivePVConfig, CalculatedStartConfig,
-    MindestTempConfig, BatterieConfig, EinspeisungConfig
+    WPSteuerungConfig,
+    PVRegel,
+    KomfortConfig,
+    ZeitfensterConfig,
+    AbweichungConfig,
+    WochenendeConfig,
+    ForecastConfig,
+    AdaptivePVConfig,
+    CalculatedStartConfig,
+    MindestTempConfig,
+    BatterieConfig,
+    EinspeisungConfig,
 )
 
 
 @dataclass
 class RegelErgebnis:
     """Ergebnis einer einzelnen Regelbewertung."""
+
     name: str
     prioritaet: int
     aktiv: bool
-    einschalten: Optional[bool] = None  # True = Einschalten, False = Ausschalten, None = Keine Aktion
+    einschalten: Optional[bool] = (
+        None  # True = Einschalten, False = Ausschalten, None = Keine Aktion
+    )
     grund: str = ""
     regel_dict: Optional[Dict] = None  # Fuer API/Status-Anzeige
 
 
-def _parse_sensor(temp_dict: Dict[str, Optional[float]], sensor_name: str) -> Optional[float]:
+def _parse_sensor(
+    temp_dict: Dict[str, Optional[float]], sensor_name: str
+) -> Optional[float]:
     """Liest einen Sensorwert aus dem Dictionary (mit Alias-Unterstützung)."""
     # Alias-Mapping: "mitte" -> "mittig" (abweichende Benennung im JSON vs. Code)
     alias_map = {"mitte": "mittig"}
@@ -63,7 +76,6 @@ def _is_zeitfenster_active(now_hour: int, start: int, ende: int) -> bool:
         return now_hour >= start or now_hour < ende
 
 
-
 def calcstart_nachtsperre_konflikt(
     ziel_uhr: float,
     nachtsperre_start: int,
@@ -81,31 +93,39 @@ def calcstart_nachtsperre_konflikt(
         tot=False mit hinweis != "": Vorheizen wird von der Sperre abgeschnitten.
     """
     feuerbare_stunden = [
-        h for h in range(24)
-        if not _is_nachtsperre(h, nachtsperre_start, nachtsperre_ende)
-        and h < ziel_uhr
+        h
+        for h in range(24)
+        if not _is_nachtsperre(h, nachtsperre_start, nachtsperre_ende) and h < ziel_uhr
     ]
 
     if not feuerbare_stunden:
-        return True, None, (
-            f"CalcStart-Zielzeit {ziel_uhr:g}:00 liegt innerhalb/hinter der "
-            f"Nachtsperre ({nachtsperre_start}-{nachtsperre_ende} Uhr) - "
-            f"die Regel kann nie aktiv werden!"
+        return (
+            True,
+            None,
+            (
+                f"CalcStart-Zielzeit {ziel_uhr:g}:00 liegt innerhalb/hinter der "
+                f"Nachtsperre ({nachtsperre_start}-{nachtsperre_ende} Uhr) - "
+                f"die Regel kann nie aktiv werden!"
+            ),
         )
 
     letzte_stunde = max(feuerbare_stunden)
-    folge_stunde_gesperrt = (
-        letzte_stunde + 1 < 24
-        and _is_nachtsperre(letzte_stunde + 1, nachtsperre_start, nachtsperre_ende)
+    folge_stunde_gesperrt = letzte_stunde + 1 < 24 and _is_nachtsperre(
+        letzte_stunde + 1, nachtsperre_start, nachtsperre_ende
     )
     if folge_stunde_gesperrt and (letzte_stunde + 1) < ziel_uhr:
-        return False, letzte_stunde, (
-            f"CalcStart-Vorheizen wird um {letzte_stunde + 1}:00 Uhr von der "
-            f"Nachtsperre abgeschnitten (Zielzeit {ziel_uhr:g}:00 wird nicht "
-            f"voll erreicht)"
+        return (
+            False,
+            letzte_stunde,
+            (
+                f"CalcStart-Vorheizen wird um {letzte_stunde + 1}:00 Uhr von der "
+                f"Nachtsperre abgeschnitten (Zielzeit {ziel_uhr:g}:00 wird nicht "
+                f"voll erreicht)"
+            ),
         )
 
     return False, letzte_stunde, ""
+
 
 def evaluate_pv_regel(
     regel: PVRegel,
@@ -118,7 +138,7 @@ def evaluate_pv_regel(
 ) -> RegelErgebnis:
     """
     Bewertet eine PV-Regel mit Hysterese (einschalten_bei_c / ausschalten_bei_c).
-    
+
     Logik:
     - Wenn Nachtsperre aktiv -> Regel inaktiv
     - Wenn Temp >= Ausschalt-Schwelle -> AUS (Schritt 1)
@@ -128,38 +148,34 @@ def evaluate_pv_regel(
     """
     sensor_name = regel.temperaturfuehler
     temp = _parse_sensor(temp_dict, sensor_name)
-    
+
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
-    
+
     if nachtsperre:
         return RegelErgebnis(
             name=regel.name,
             prioritaet=regel.prioritaet,
             aktiv=False,
-            grund="Nachtsperre aktiv"
+            grund="Nachtsperre aktiv",
         )
-    
+
     if temp is None:
         return RegelErgebnis(
             name=regel.name,
             prioritaet=regel.prioritaet,
             aktiv=False,
-            grund=f"Sensor '{sensor_name}' nicht verfuegbar"
+            grund=f"Sensor '{sensor_name}' nicht verfuegbar",
         )
-    
+
     # Grundlage fuer Entscheidung
-    result = RegelErgebnis(
-        name=regel.name,
-        prioritaet=regel.prioritaet,
-        aktiv=True
-    )
-    
+    result = RegelErgebnis(name=regel.name, prioritaet=regel.prioritaet, aktiv=True)
+
     # 1. AUSSCHALTEN: Temp zu hoch (immer zuerst pruefen!)
     if temp >= regel.ausschalten_bei_c:
         result.einschalten = False
         result.grund = f"{sensor_name} {temp:.1f}C >= {regel.ausschalten_bei_c}C -> AUS"
         return result
-    
+
     # 2. WEITERLAUFEN (PV-Shaping): Kompressor laeuft schon und PV reicht fuer Weiterbetrieb.
     #    Dies ermoeglicht das PV-Shaping von der Einschaltschwelle bis zum Ausschaltpunkt
     #    (z.B. 42->48°C). Der Kompressor bleibt an, solange PV >= Weiterlauf-Schwelle,
@@ -171,7 +187,7 @@ def evaluate_pv_regel(
             f"{regel.weiterlaufen_ab_pv_watt}W (Weiterlauf bis {regel.ausschalten_bei_c}C)"
         )
         return result
-    
+
     # 3. EINSCHALTEN (Neustart): PV genug UND Temp unter Einschaltschwelle
     if pv_leistung >= regel.pv_schwelle_watt and temp <= regel.einschalten_bei_c:
         result.einschalten = True
@@ -180,7 +196,7 @@ def evaluate_pv_regel(
             f"PV {pv_leistung:.0f}W >= {regel.pv_schwelle_watt}W -> EIN"
         )
         return result
-    
+
     # 4. HYSTERESE: Temp zwischen Ein- und Ausschaltpunkt -> Keine Aktion
     if regel.einschalten_bei_c < temp < regel.ausschalten_bei_c:
         result.einschalten = None
@@ -189,10 +205,12 @@ def evaluate_pv_regel(
             f"{regel.einschalten_bei_c}C und {regel.ausschalten_bei_c}C (PV={pv_leistung:.0f}W)"
         )
         return result
-    
+
     # 5. Keine Bedingung erfuellt
     result.einschalten = None
-    result.grund = f"Keine Bedingung erfuellt (PV={pv_leistung:.0f}W, {sensor_name}={temp:.1f}C)"
+    result.grund = (
+        f"Keine Bedingung erfuellt (PV={pv_leistung:.0f}W, {sensor_name}={temp:.1f}C)"
+    )
     return result
 
 
@@ -245,6 +263,7 @@ def evaluate_mindesttemp(
             # Gelerntes Fenster mit Sicherheitsgrenzen klemmen:
             # max. 2h frueher Start, max. 1h spaeteres Ende als konfiguriert.
             import math
+
             start_uhr = max(eintrag.start_uhr - 2, int(math.floor(l_start)))
             ende_uhr = min(eintrag.ende_uhr + 1, int(math.ceil(l_ende)))
             ende_uhr = max(ende_uhr, start_uhr + 1)
@@ -276,7 +295,9 @@ def evaluate_mindesttemp(
 
         temp = _parse_sensor(temp_dict, eintrag.temperaturfuehler)
         if temp is None:
-            result.grund = f"{eintrag.name}: Sensor '{eintrag.temperaturfuehler}' nicht verfuegbar"
+            result.grund = (
+                f"{eintrag.name}: Sensor '{eintrag.temperaturfuehler}' nicht verfuegbar"
+            )
             ergebnisse.append(result)
             continue
 
@@ -367,7 +388,7 @@ def evaluate_batterie(
     if forecast_wh_qm is not None and forecast_wh_qm >= 2000.0:
         entlastung = min(
             getattr(batt_cfg, "entlastung_max_prozent", 15.0),
-            eff_min_soc - getattr(batt_cfg, "min_soc_absolut", 10.0)
+            eff_min_soc - getattr(batt_cfg, "min_soc_absolut", 10.0),
         )
         eff_min_soc -= max(entlastung, 0.0)
     # SOC-Hysterese gegen Grenzkanten-Flattern: Im laufenden Zyklus genuegt
@@ -375,7 +396,7 @@ def evaluate_batterie(
     soc_schwelle = eff_min_soc
     if kompressor_ein:
         soc_schwelle -= max(getattr(batt_cfg, "soc_hysterese_prozent", 2.0), 0.0)
-    strom_ok = (soc >= soc_schwelle and feedin_watt >= batt_cfg.max_netzbezug_watt)
+    strom_ok = soc >= soc_schwelle and feedin_watt >= batt_cfg.max_netzbezug_watt
     if kompressor_ein and strom_ok and temp > batt_cfg.einschalten_bei_c:
         result.einschalten = True
         result.grund = (
@@ -474,9 +495,7 @@ def evaluate_einspeisung(
         )
         return result
 
-    result.grund = (
-        f"Einspeisung {feedin_watt:.0f}W < {einsp_cfg.einspeisegrenze_watt:.0f}W -> keine Aktion"
-    )
+    result.grund = f"Einspeisung {feedin_watt:.0f}W < {einsp_cfg.einspeisegrenze_watt:.0f}W -> keine Aktion"
     return result
 
 
@@ -486,7 +505,7 @@ def evaluate_wochenende(
 ) -> RegelErgebnis:
     """
     Wochenende-Regel: Blockiert Einschalten am Wochenende vor fruehestens_uhr.
-    
+
     - Wenn Wochenende UND aktuelle Stunde < fruehestens_uhr -> AUS
     - Sonst -> inaktiv (andere Regeln entscheiden)
     """
@@ -495,17 +514,17 @@ def evaluate_wochenende(
             name="Wochenende",
             prioritaet=wochenende.prioritaet,  # blockierend
             aktiv=False,
-            grund="Wochenende-Regel inaktiv"
+            grund="Wochenende-Regel inaktiv",
         )
-    
+
     if not _is_weekend(now):
         return RegelErgebnis(
             name="Wochenende",
             prioritaet=wochenende.prioritaet,
             aktiv=False,
-            grund="Kein Wochenende"
+            grund="Kein Wochenende",
         )
-    
+
     # Wochenende aktiv: Pruefe ob vor fruehestens_uhr
     if now.hour < wochenende.fruehestens_uhr:
         return RegelErgebnis(
@@ -513,15 +532,15 @@ def evaluate_wochenende(
             prioritaet=wochenende.prioritaet,  # blockiert alles andere
             aktiv=True,
             einschalten=False,
-            grund=f"Wochenende: Vor {wochenende.fruehestens_uhr} Uhr ({now.hour}:xx) -> AUS"
+            grund=f"Wochenende: Vor {wochenende.fruehestens_uhr} Uhr ({now.hour}:xx) -> AUS",
         )
-    
+
     return RegelErgebnis(
         name="Wochenende",
         prioritaet=wochenende.prioritaet,
         aktiv=True,
         einschalten=None,  # Keine Aktion, andere Regeln dufen entscheiden
-        grund=f"Wochenende: Ab {wochenende.fruehestens_uhr} Uhr erlaubt ({now.hour}:xx)"
+        grund=f"Wochenende: Ab {wochenende.fruehestens_uhr} Uhr erlaubt ({now.hour}:xx)",
     )
 
 
@@ -535,7 +554,7 @@ def evaluate_komfort(
 ) -> RegelErgebnis:
     """
     Komfort-Regel: Haelt eine Mindesttemperatur im Boiler.
-    
+
     - Notfall: Immer einschalten wenn Temp <= Notfall-Schwelle (auch Nachts!)
     - Komfort: Einschalten wenn Temp <= Komfort-Schwelle UND genug PV
     - Ausschalten: Temp >= Ausschalt-Schwelle
@@ -543,56 +562,63 @@ def evaluate_komfort(
     temp = _parse_sensor(temp_dict, "unten")
     temp_oben = _parse_sensor(temp_dict, "oben")
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
-    
-    result = RegelErgebnis(
-        name="Komfort",
-        prioritaet=komfort.prioritaet,
-        aktiv=True
-    )
-    
+
+    result = RegelErgebnis(name="Komfort", prioritaet=komfort.prioritaet, aktiv=True)
+
     if temp is None:
         result.aktiv = False
         result.grund = "Sensor 'unten' nicht verfuegbar"
         return result
-    
+
     # Notfall: Auch bei Nachtsperre! (obener Sensor, da in der Nacht die
     # Schichtung relevant ist und oben die Nutztemperatur repraesentiert)
     if temp_oben is not None and temp_oben <= komfort.notfall_einschalten_bei_c:
         result.einschalten = True
         result.grund = f"NOTFALL: oben {temp_oben:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
         return result
-    
+
     # Wenn oben-Sensor nicht verfuegbar: Fallback auf mittig
     temp_mittig = _parse_sensor(temp_dict, "mittig")
-    if temp_oben is None and temp_mittig is not None and temp_mittig <= komfort.notfall_einschalten_bei_c:
+    if (
+        temp_oben is None
+        and temp_mittig is not None
+        and temp_mittig <= komfort.notfall_einschalten_bei_c
+    ):
         result.einschalten = True
         result.grund = f"NOTFALL (Fallback mittig): mittig {temp_mittig:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
         return result
-    
+
     # Wenn oben UND mittig nicht verfuegbar: Fallback auf unten
-    if temp_oben is None and temp_mittig is None and temp <= komfort.notfall_einschalten_bei_c:
+    if (
+        temp_oben is None
+        and temp_mittig is None
+        and temp <= komfort.notfall_einschalten_bei_c
+    ):
         result.einschalten = True
         result.grund = f"NOTFALL (Fallback unten): unten {temp:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
         return result
-    
+
     # Bei Nachtsperre: Nur Notfall, kein Komfort
     if nachtsperre:
         result.aktiv = False
         result.grund = "Nachtsperre (kein Komfort-Heizen)"
         return result
-    
+
     # Ausschalten
     if temp >= komfort.ausschalten_bei_c:
         result.einschalten = False
         result.grund = f"Komfort AUS: unten {temp:.1f}C >= {komfort.ausschalten_bei_c}C"
         return result
-    
+
     # Komfort-Einschalten: Genug PV
-    if pv_leistung >= komfort.min_pv_fuer_komfort_watt and temp <= komfort.komfort_einschalten_bei_c:
+    if (
+        pv_leistung >= komfort.min_pv_fuer_komfort_watt
+        and temp <= komfort.komfort_einschalten_bei_c
+    ):
         result.einschalten = True
         result.grund = f"Komfort: unten {temp:.1f}C <= {komfort.komfort_einschalten_bei_c}C, PV {pv_leistung:.0f}W -> EIN"
         return result
-    
+
     result.einschalten = None
     result.grund = f"Komfort aktiv, aber keine Bedingung (unten={temp:.1f}C, PV={pv_leistung:.0f}W)"
     return result
@@ -606,7 +632,7 @@ def evaluate_zeitfenster(
 ) -> RegelErgebnis:
     """
     Zeitfenster-Regel: Heizt zu festen Uhrzeiten.
-    
+
     Nur aktiv wenn:
     - Aktuelle Stunde im Fenster
     - Temperatur unter Schwellwert
@@ -616,38 +642,40 @@ def evaluate_zeitfenster(
         name="Zeitfenster",
         prioritaet=zf.prioritaet,
         aktiv=False,
-        grund="Auserhalb Zeitfenster"
+        grund="Auserhalb Zeitfenster",
     )
-    
+
     if not zf.aktiv:
         result.grund = "Zeitfenster-Regel inaktiv"
         return result
-    
+
     if not _is_zeitfenster_active(now_hour, zf.start_uhr, zf.ende_uhr):
         return result
-    
+
     result.aktiv = True
-    
+
     # PV-Check
     if zf.min_pv_watt > 0 and pv_leistung < zf.min_pv_watt:
-        result.grund = f"Zeitfenster aktiv, aber PV {pv_leistung:.0f}W < {zf.min_pv_watt}W"
+        result.grund = (
+            f"Zeitfenster aktiv, aber PV {pv_leistung:.0f}W < {zf.min_pv_watt}W"
+        )
         result.einschalten = None
         return result
-    
+
     # Temperatur-Check
     temp = _parse_sensor(temp_dict, zf.temperaturfuehler)
     if temp is None:
         result.grund = f"Zeitfenster aktiv, Sensor '{zf.temperaturfuehler}' fehlt"
         result.einschalten = None
         return result
-    
+
     if temp <= zf.max_temp_fuer_einschalten_c:
         result.einschalten = True
         result.grund = f"Zeitfenster {zf.start_uhr}-{zf.ende_uhr} Uhr: {zf.temperaturfuehler} {temp:.1f}C <= {zf.max_temp_fuer_einschalten_c}C -> EIN"
     else:
         result.einschalten = False
         result.grund = f"Zeitfenster: {zf.temperaturfuehler} {temp:.1f}C > {zf.max_temp_fuer_einschalten_c}C (bereits warm) -> AUS"
-    
+
     return result
 
 
@@ -664,30 +692,26 @@ def evaluate_abweichung(
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: Haelt Temperatur nahe am Sollwert.
-    
+
     Einschalten wenn: Soll - Ist >= Einschalt-Abweichung
     Ausschalten wenn: Soll - Ist <= Ausschalt-Abweichung
-    
+
     Bei Nachtsperre: Nur Ausschalten erlaubt, kein Einschalten.
     AUSNAHME: Wenn Bademodus aktiv ist, darf die Nachtsperre das
     Einschalten NICHT unterbinden (der Nutzer moechte warmes Wasser,
     auch nachts).
     """
-    result = RegelErgebnis(
-        name="Abweichung",
-        prioritaet=abw.prioritaet,
-        aktiv=True
-    )
-    
+    result = RegelErgebnis(name="Abweichung", prioritaet=abw.prioritaet, aktiv=True)
+
     temp = _parse_sensor(temp_dict, abw.temperaturfuehler)
     if temp is None:
         result.aktiv = False
         result.grund = f"Sensor '{abw.temperaturfuehler}' nicht verfuegbar"
         return result
-    
+
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     abweichung = abw.solltemperatur_c - temp  # Positiv = zu kalt, Negativ = zu warm
-    
+
     # Ausschalten: Ziel erreicht oder ueberschritten (immer erlaubt, auch Nachts)
     if abweichung <= abw.ausschalten_bei_abweichung_k:
         result.einschalten = False
@@ -696,15 +720,17 @@ def evaluate_abweichung(
             f"{abweichung:.1f}K <= +{abw.ausschalten_bei_abweichung_k}K -> AUS"
         )
         return result
-    
+
     # Bei Nachtsperre: Kein Einschalten (Blockierungsgrund anzeigen)
     # AUSNAHME Bademodus: Der Nutzer moechte warmes Wasser, Nachtsperre
     # darf dann nicht blockieren.
     if nachtsperre and not bademodus_aktiv:
         result.aktiv = False
-        result.grund = f"Nachtsperre (kein Einschalten, {abw.temperaturfuehler}={temp:.1f}C)"
+        result.grund = (
+            f"Nachtsperre (kein Einschalten, {abw.temperaturfuehler}={temp:.1f}C)"
+        )
         return result
-    
+
     # Einschalten: Zu kalt
     if abweichung >= abw.einschalten_bei_abweichung_k:
         # 2-Zonen-Schichtungs-Check: Wenn der konfigurierte Fuehler nicht "oben" ist
@@ -731,7 +757,8 @@ def evaluate_abweichung(
                 getattr(abw, "netz_notfall_offset_k", 8.0), 0.0
             )
             if temp > tief_grenze and not _energiequelle_ok(
-                feedin_watt, soc,
+                feedin_watt,
+                soc,
                 getattr(abw, "pv_einspeisung_min_watt", 50.0),
                 getattr(abw, "soc_min_prozent", 90.0),
                 getattr(abw, "max_netzbezug_watt", -50.0),
@@ -752,7 +779,7 @@ def evaluate_abweichung(
             f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K -> EIN"
         )
         return result
-    
+
     # In der Hysterese: Keine Aktion (Kompressor laeuft weiter/bleibt aus)
     result.einschalten = None
     result.grund = (
@@ -760,7 +787,6 @@ def evaluate_abweichung(
         f"{abweichung:.1f}K (zwischen {abw.ausschalten_bei_abweichung_k}K und {abw.einschalten_bei_abweichung_k}K)"
     )
     return result
-
 
 
 def _energiequelle_ok(
@@ -774,9 +800,7 @@ def _energiequelle_ok(
     if feedin_watt >= pv_min_watt:
         return True
     return (
-        soc is not None
-        and soc >= soc_min_prozent
-        and feedin_watt >= max_netzkauf_watt
+        soc is not None and soc >= soc_min_prozent and feedin_watt >= max_netzkauf_watt
     )
 
 
@@ -840,7 +864,8 @@ def _forecast_quelle_ok(
     if getattr(forecast_cfg, "vorheiz_netz_erlaubt", False):
         return True, "Netz erlaubt (Konfig)"
     return _energiequelle_mit_grund(
-        feedin_watt, soc,
+        feedin_watt,
+        soc,
         getattr(forecast_cfg, "pv_einspeisung_min_watt", 50.0),
         getattr(forecast_cfg, "soc_min_prozent", 90.0),
         getattr(forecast_cfg, "vorheiz_max_netzbezug_watt", -50.0),
@@ -859,32 +884,30 @@ def evaluate_forecast(
 ) -> RegelErgebnis:
     """
     Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter.
-    
+
     - Morgen bewölkt (Prognose < Niedrig-Schwelle): Heute vorheizen
     - Morgen sonnig (Prognose > Hoch-Schwelle): Heute sparen (nicht unnötig heizen)
     """
     result = RegelErgebnis(
-        name="Forecast",
-        prioritaet=forecast_cfg.prioritaet,
-        aktiv=forecast_cfg.aktiv
+        name="Forecast", prioritaet=forecast_cfg.prioritaet, aktiv=forecast_cfg.aktiv
     )
-    
+
     if not forecast_cfg.aktiv:
         result.grund = "Forecast-Regel inaktiv"
         return result
-    
+
     if forecast_wh_qm is None:
         result.aktiv = False
         result.grund = "Keine Prognose verfuegbar"
         return result
-    
+
     # Nachtsperre: Kein Vorheizen/Sparen waehrend der Sperrzeit
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     if nachtsperre:
         result.aktiv = False
         result.grund = "Nachtsperre aktiv"
         return result
-    
+
     temp_oben = _parse_sensor(temp_dict, "oben")
     sensor_name = forecast_cfg.temperaturfuehler
     temp_sensor = _parse_sensor(temp_dict, sensor_name)
@@ -893,7 +916,7 @@ def evaluate_forecast(
         result.aktiv = False
         result.grund = "Kein Sensorwert verfuegbar"
         return result
-    
+
     # VORHEIZEN: Prognose morgen schlecht -> heute vorheizen
     if forecast_wh_qm <= forecast_cfg.fc_schwelle_niedrig_wh:
         if forecast_cfg.vorheiz_start_uhr <= now_hour < forecast_cfg.vorheiz_ende_uhr:
@@ -928,7 +951,7 @@ def evaluate_forecast(
                 f"aber Temp {temp:.1f}C > {forecast_cfg.t_vorheiz_ab_c}C"
             )
             return result
-    
+
     # SPAREN: Prognose morgen gut -> heute sparen (nicht heizen)
     if forecast_wh_qm >= forecast_cfg.fc_schwelle_hoch_wh:
         if forecast_cfg.sparen_start_uhr <= now_hour < forecast_cfg.sparen_ende_uhr:
@@ -940,7 +963,7 @@ def evaluate_forecast(
                     f"Temp {temp:.1f}C >= {forecast_cfg.t_vorheiz_ab_c}C -> Sparen"
                 )
                 return result
-    
+
     result.grund = f"Forecast {forecast_wh_qm:.0f} Wh/qm -> keine Aktion"
     return result
 
@@ -958,45 +981,45 @@ def evaluate_adaptive_pv(
 ) -> RegelErgebnis:
     """
     Adaptive-PV-Regel: PV-Schwelle passt sich dynamisch an.
-    
+
     - Temperaturabhängig: Bei kaltem Boiler wird die Schwelle gesenkt
     - Prognoseabhängig: Bei schlechter Prognose wird die Schwelle gesenkt
     """
     result = RegelErgebnis(
-        name="AdaptivePV",
-        prioritaet=adaptive_cfg.prioritaet,
-        aktiv=adaptive_cfg.aktiv
+        name="AdaptivePV", prioritaet=adaptive_cfg.prioritaet, aktiv=adaptive_cfg.aktiv
     )
-    
+
     if not adaptive_cfg.aktiv:
         result.grund = "AdaptivePV-Regel inaktiv"
         return result
-    
+
     # Nachtsperre: Kein Einschalten waehrend der Sperrzeit
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     if nachtsperre:
         result.aktiv = False
         result.grund = "Nachtsperre aktiv"
         return result
-    
+
     sensor_name = adaptive_cfg.temperaturfuehler
     temp = _parse_sensor(temp_dict, sensor_name)
     if temp is None:
         result.aktiv = False
         result.grund = f"Sensor '{sensor_name}' nicht verfuegbar"
         return result
-    
+
     if temp >= adaptive_cfg.tmax_c:
         result.einschalten = False
-        result.grund = f"AdaptivePV: {sensor_name} {temp:.1f}C >= {adaptive_cfg.tmax_c}C -> AUS"
+        result.grund = (
+            f"AdaptivePV: {sensor_name} {temp:.1f}C >= {adaptive_cfg.tmax_c}C -> AUS"
+        )
         return result
-    
+
     # Hysterese: Nur einschalten wenn Temp unter Einschaltgrenze (tmax_c - 3K Default)
     # Sonst soll die PV-Regel mit ihrer Hysterese (42/48°C) entscheiden
-    einschalten_bis_c = getattr(adaptive_cfg, 'einschalten_bis_c', None)
+    einschalten_bis_c = getattr(adaptive_cfg, "einschalten_bis_c", None)
     if einschalten_bis_c is None:
         einschalten_bis_c = adaptive_cfg.tmax_c - 3.0
-    
+
     if temp >= einschalten_bis_c and not kompressor_ein:
         result.einschalten = None
         result.grund = (
@@ -1004,27 +1027,28 @@ def evaluate_adaptive_pv(
             f"(Einschaltgrenze) -> Hysterese, kein Einschalten"
         )
         return result
-    
+
     # Dynamische Schwelle berechnen
     schwelle = adaptive_cfg.base_threshold_watt
-    
+
     # Temperatur-Anpassung
     if temp < adaptive_cfg.t_aggressiv_kalt_c:
         schwelle *= 0.5  # Sehr kalt: aggressiver heizen
     elif temp < adaptive_cfg.t_normal_kalt_c:
         schwelle *= 0.7  # Kalt: etwas niedrigere Schwelle
-    
+
     # Prognose-Anpassung (fc_ratio = gelernte Haus-Kalibrierung)
     prognose_eff = (
         forecast_wh_qm * fc_ratio
-        if forecast_wh_qm is not None and fc_ratio != 1.0 else forecast_wh_qm
+        if forecast_wh_qm is not None and fc_ratio != 1.0
+        else forecast_wh_qm
     )
     if prognose_eff is not None:
         if prognose_eff >= adaptive_cfg.fc_schwelle_gut_wh:
             schwelle *= 1.5  # Sehr sonnig: höhere Schwelle = konservativer
         elif prognose_eff <= adaptive_cfg.fc_schwelle_schlecht_wh:
             schwelle *= 0.5  # Bewölkt: niedrige Schwelle = PV jetzt nutzen
-    
+
     if pv_leistung >= schwelle:
         result.einschalten = True
         result.grund = (
@@ -1032,7 +1056,7 @@ def evaluate_adaptive_pv(
             f"(Basis {adaptive_cfg.base_threshold_watt:.0f}W, {sensor_name}={temp:.1f}C) -> EIN"
         )
         return result
-    
+
     result.grund = f"AdaptivePV: PV {pv_leistung:.0f}W < {schwelle:.0f}W"
     return result
 
@@ -1056,16 +1080,14 @@ def evaluate_calculated_start(
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
-    
+
     Berechnet aus Temperaturdifferenz und Heizrate die benötigte Zeit.
     Wenn die verbleibende Zeit knapp wird -> einschalten.
     """
     result = RegelErgebnis(
-        name="CalcStart",
-        prioritaet=calc_cfg.prioritaet,
-        aktiv=calc_cfg.aktiv
+        name="CalcStart", prioritaet=calc_cfg.prioritaet, aktiv=calc_cfg.aktiv
     )
-    
+
     if not calc_cfg.aktiv:
         result.grund = "CalcStart-Regel inaktiv"
         return result
@@ -1076,59 +1098,79 @@ def evaluate_calculated_start(
         result.aktiv = False
         # Konflikt-Hinweis: Liegt die Zielzeit hinter/innerhalb der Sperre,
         # kann die Regel NIE feuern - das soll im Grund lesbar sein.
-        ziel = learned_target_hour if learned_target_hour is not None else float(calc_cfg.target_uhr)
+        ziel = (
+            learned_target_hour
+            if learned_target_hour is not None
+            else float(calc_cfg.target_uhr)
+        )
         tot, _, hinweis = calcstart_nachtsperre_konflikt(
             ziel, nachtsperre_start, nachtsperre_ende
         )
         result.grund = "Nachtsperre aktiv" + (f" | {hinweis}" if tot else "")
         return result
-    
+
     temp_unten = _parse_sensor(temp_dict, "unten")
     temp_mitte = _parse_sensor(temp_dict, "mitte")
     temp_oben = _parse_sensor(temp_dict, "oben")
-    
+
     if temp_unten is None or temp_mitte is None:
         result.aktiv = False
         result.grund = "Sensoren nicht verfuegbar"
         return result
-    
+
     # Bereits erreicht? Nur unteren Fuehler pruefen (kaltester Punkt im Boiler)
     # Der obere/mittige Fuehler kann durch Schichtung heiss sein, obwohl
     # die WP noch viel Energie unten reinstecken kann (vor allem bei PV!)
     if temp_unten is not None and temp_unten >= calc_cfg.tmax_c:
         result.einschalten = False
-        result.grund = f"CalcStart: Zieltemp {calc_cfg.tmax_c}C unten bereits erreicht -> AUS"
+        result.grund = (
+            f"CalcStart: Zieltemp {calc_cfg.tmax_c}C unten bereits erreicht -> AUS"
+        )
         return result
-    
+
     # Aktuelle Zeit
     current_time = now_hour + now_minute / 60.0
-    
+
     # Noch vor Zielzeit?
     if current_time >= calc_cfg.target_uhr:
         # Nach Zielzeit: nichts tun
         result.grund = f"CalcStart: Nach Zielzeit ({now_hour}:{now_minute:02d} > {calc_cfg.target_uhr}:00)"
         return result
-    
+
     # Temperaturdifferenz berechnen
     diff_unten = max(0, calc_cfg.solltemperatur_c - temp_unten)
     diff_mitte = max(0, calc_cfg.solltemperatur_c - temp_mitte)
-    diff_oben = max(0, calc_cfg.solltemperatur_c - temp_oben) if temp_oben is not None else 0
+    diff_oben = (
+        max(0, calc_cfg.solltemperatur_c - temp_oben) if temp_oben is not None else 0
+    )
     diff_gesamt = diff_unten + diff_mitte + diff_oben
-    
+
     if diff_gesamt <= 0:
         result.grund = f"CalcStart: Soll {calc_cfg.solltemperatur_c}C bereits erreicht"
         return result
-    
+
     # Gelernte Heizraten verwenden (falls vorhanden), sonst Config-Defaults
-    heizrate_unten = learned_heating_rate_unten if learned_heating_rate_unten is not None else calc_cfg.heizrate_unten_c_h
-    heizrate_gesamt = learned_heating_rate_gesamt if learned_heating_rate_gesamt is not None else calc_cfg.heizrate_gesamt_c_h
-    ziel_uhr = learned_target_hour if learned_target_hour is not None else float(calc_cfg.target_uhr)
+    heizrate_unten = (
+        learned_heating_rate_unten
+        if learned_heating_rate_unten is not None
+        else calc_cfg.heizrate_unten_c_h
+    )
+    heizrate_gesamt = (
+        learned_heating_rate_gesamt
+        if learned_heating_rate_gesamt is not None
+        else calc_cfg.heizrate_gesamt_c_h
+    )
+    ziel_uhr = (
+        learned_target_hour
+        if learned_target_hour is not None
+        else float(calc_cfg.target_uhr)
+    )
 
     # Benoetigte Heizzeit
     hours_needed = diff_unten / max(heizrate_unten, 0.1)
     hours_needed_mitte = diff_mitte / max(heizrate_gesamt, 0.1)
     hours_needed = max(hours_needed, hours_needed_mitte)
-    
+
     # === Multisensor-Zapfungsdaten einbeziehen (Punkt 4) ===
     # Temperaturverlust aus erkannter Zapfung abziehen, damit der
     # CalcStart die tatsaechliche Startzeit korrigeriert und die
@@ -1145,21 +1187,23 @@ def evaluate_calculated_start(
         drop = neueste.get("drop_gesamt_k", 0.0)
         usage_drop_gesamt_k = round(drop * 0.5, 2)
         if usage_drop_gesamt_k > 0:
-            hours_needed = max(0.0, hours_needed - usage_drop_gesamt_k / max(heizrate_unten, 0.1))
+            hours_needed = max(
+                0.0, hours_needed - usage_drop_gesamt_k / max(heizrate_unten, 0.1)
+            )
             logging.debug(
                 f"CalcStart: Nutzungsevent {neueste.get('timestamp','')} "
                 f"drop {drop:.1f}K -> Stundenbedarf -{usage_drop_gesamt_k:.2f}h "
                 f"(neu {hours_needed:.2f}h)"
             )
-    
+
     time_left = ziel_uhr - current_time
-    
+
     # === Saisonale + Prognose-basierte Puffer-Berechnung ===
     # Saison erkennen (0=Winter, 1=Sommer)
     # Wir nutzen now_hour/min + wissen nicht direkt den Monat, aber wir
     # kriegen ihn ueber das now datetime objekt... da wir nur now_hour haben,
     # nutzen wir die Config-Puffer direkt mit Prognose-Anpassung.
-    
+
     # Basis-Puffer aus Config
     # Prognose-Anpassung: Heute viel PV erwartet? -> laenger warten.
     # fc_ratio kalibriert die Prognose am gemessenen Netzeinschuss der
@@ -1189,9 +1233,11 @@ def evaluate_calculated_start(
     # Verbrauchsbewusstsein: Gelernte Stunden mit wenig Netzeinschuss
     # (Mittags Kochen etc.) zaehlen nur zu 75% als Heizzeit -> frueherer
     # Start, damit waehrend des Tiefs pausiert werden kann.
-    dip_h, dip_label = _mittagstief_stunden(
-        current_time, ziel_uhr, surplus_profile
-    ) if surplus_profile else (0.0, "")
+    dip_h, dip_label = (
+        _mittagstief_stunden(current_time, ziel_uhr, surplus_profile)
+        if surplus_profile
+        else (0.0, "")
+    )
     if dip_h:
         hours_needed = hours_needed + dip_h * 0.75
 
@@ -1199,7 +1245,8 @@ def evaluate_calculated_start(
     effektiver_puffer = buffer_hours * pv_faktor
 
     quelle_ok, quelle_grund = _energiequelle_mit_grund(
-        feedin_watt, soc,
+        feedin_watt,
+        soc,
         getattr(calc_cfg, "pv_einspeisung_min_watt", 50.0),
         getattr(calc_cfg, "soc_min_prozent", 90.0),
         getattr(calc_cfg, "max_netzbezug_watt", -50.0),
@@ -1256,6 +1303,104 @@ def evaluate_calculated_start(
     return result
 
 
+def evaluate_legionellen(
+    legionellen_cfg,
+    temp_dict,
+    now,
+    forecast_today_wh_qm=None,
+    forecast_wh_qm=None,
+    forecast_day2_wh_qm=None,
+    legionellen_aktiv=False,
+    legionellen_last_done=None,
+    legionellen_started_at=None,
+    kompressor_ein=False,
+):
+    """Bewertet, ob die Legionellenprophylaxe durchgefuehrt werden soll."""
+    result = RegelErgebnis(
+            name="Legionellen",
+            prioritaet=legionellen_cfg.prioritaet,
+            aktiv=True,
+        )
+    if not legionellen_cfg.aktiv:
+        result.aktiv = False
+        result.grund = "Legionellenprophylaxe deaktiviert"
+        return result
+    t_unten = temp_dict.get("unten")
+    if t_unten is None:
+        result.aktiv = False
+        result.grund = "Sensordaten nicht verfuegbar"
+        return result
+    if legionellen_aktiv:
+        if t_unten >= legionellen_cfg.target_temp_c:
+            if legionellen_started_at is not None:
+                probezeit_ende = legionellen_started_at + timedelta(
+                    minutes=legionellen_cfg.probezeit_minuten
+                )
+                if now >= probezeit_ende:
+                    result.einschalten = False
+                    result.grund = (
+                        f"Legionellen: {t_unten:.1f}C >= {legionellen_cfg.target_temp_c}C "
+                        f"erreicht und Probezeit ({legionellen_cfg.probezeit_minuten}m) abgelaufen -> AUS"
+                    )
+                    return result
+            result.einschalten = True
+            result.grund = (
+                f"Legionellen aktiv: {t_unten:.1f}C, Ziel {legionellen_cfg.target_temp_c}C "
+                f"erreicht, warte Probezeit ({legionellen_cfg.probezeit_minuten}m)"
+            )
+            return result
+        else:
+            result.einschalten = True
+            result.grund = (
+                f"Legionellen aktiv: {t_unten:.1f}C < {legionellen_cfg.target_temp_c}C, "
+                f"heize weiter"
+            )
+            return result
+    if legionellen_last_done is not None:
+        letzte_kw = legionellen_last_done.isocalendar()[1]
+        aktuelle_kw = now.isocalendar()[1]
+        if letzte_kw == aktuelle_kw:
+            result.aktiv = False
+            result.grund = f"Bereits in KW {aktuelle_kw} durchgefuehrt"
+            return result
+    start_h = int(legionellen_cfg.start_uhr)
+    start_m = int((legionellen_cfg.start_uhr - start_h) * 60 + 0.5)
+    if now.hour != start_h or now.minute < start_m:
+        result.aktiv = False
+        result.grund = f"Nicht zur geplanten Startzeit {legionellen_cfg.start_uhr}:00"
+        return result
+    if kompressor_ein:
+        result.einschalten = None
+        result.grund = "Kompressor laeuft bereits, warte auf Abschluss"
+        return result
+    result.einschalten = True
+    result.grund = (
+        f"Legionellenprophylaxe faellig: Starte Erhitzung auf "
+        f"{legionellen_cfg.target_temp_c:.0f}C (unten {t_unten:.1f}C)"
+    )
+    return result
+
+
+def _wochentag_name(tag: int) -> str:
+    """Gibt den deutschen Wochentagsnamen zurueck (0=Montag..6=Sonntag)."""
+    namen = [
+        "Montag",
+        "Dienstag",
+        "Mittwoch",
+        "Donnerstag",
+        "Freitag",
+        "Samstag",
+        "Sonntag",
+    ]
+    if 0 <= tag < 7:
+        return namen[tag]
+    return f"Unbekannt ({tag})"
+
+
+def bewerte_alle_regeln_placeholder():
+    pass
+
+
 def bewerte_alle_regeln(
     config: WPSteuerungConfig,
     temp_dict: Dict[str, Optional[float]],
@@ -1276,51 +1421,73 @@ def bewerte_alle_regeln(
     surplus_profile: Optional[Dict[str, float]] = None,
     recent_usage_events: Optional[List[Dict]] = None,
     bademodus_aktiv: bool = False,
+    legionellen_aktiv: bool = False,
+    legionellen_last_done=None,
+    legionellen_started_at=None,
+    forecast_day2_wh_qm: Optional[float] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
-    
+
     Returns:
         (gewinner, alle_ergebnisse): Die gewinnende Regel (oder None) und alle Ergebnisse.
     """
     if now is None:
         now = datetime.now()
-    
+
     now_hour = now.hour
     nachtsperre_start = config.sicherheit.nachtsperre_start
     nachtsperre_ende = config.sicherheit.nachtsperre_ende
-    
+
     ergebnisse: List[RegelErgebnis] = []
-    
+
     # 0. Wochenende-Regel (hoechste Prioritaet: blockiert Einschalten am Wochenende vor fruehestens_uhr)
     ergebnis = evaluate_wochenende(config.wochenende, now)
     ergebnisse.append(ergebnis)
-    
+
     # 1. Einspeise-Begrenzung (PV-Shaping am Netzlimit, hoechste Heizen-Prioritaet)
     ergebnis = evaluate_einspeisung(
-        config.einspeisung, temp_dict, pv_leistung, kompressor_ein,
-        now_hour, nachtsperre_start, nachtsperre_ende
+        config.einspeisung,
+        temp_dict,
+        pv_leistung,
+        kompressor_ein,
+        now_hour,
+        nachtsperre_start,
+        nachtsperre_ende,
     )
     ergebnisse.append(ergebnis)
 
     # 1a. PV-Regeln bewerten
     for pv_regel in config.pv_regeln:
         ergebnis = evaluate_pv_regel(
-            pv_regel, temp_dict, pv_leistung, kompressor_ein,
-            now_hour, nachtsperre_start, nachtsperre_ende
+            pv_regel,
+            temp_dict,
+            pv_leistung,
+            kompressor_ein,
+            now_hour,
+            nachtsperre_start,
+            nachtsperre_ende,
         )
         ergebnisse.append(ergebnis)
-    
+
     # 2. Komfort-Regel
     ergebnis = evaluate_komfort(
-        config.komfort, temp_dict, pv_leistung,
-        nachtsperre_start, nachtsperre_ende, now_hour
+        config.komfort,
+        temp_dict,
+        pv_leistung,
+        nachtsperre_start,
+        nachtsperre_ende,
+        now_hour,
     )
     ergebnisse.append(ergebnis)
-    
+
     # 2b. Mindest-Temperatur-Garantien (jeder Eintrag ein Ergebnis)
     for min_ergebnis in evaluate_mindesttemp(
-        config.mindest_temp, temp_dict, now_hour, nachtsperre_start, nachtsperre_ende,
+        config.mindest_temp,
+        temp_dict,
+        now_hour,
+        nachtsperre_start,
+        nachtsperre_ende,
         learned_evening_window=learned_evening_window,
         learned_morning_window=learned_morning_window,
     ):
@@ -1328,8 +1495,14 @@ def bewerte_alle_regeln(
 
     # 2c. Batterie-Regel (PV-Direkt > Batterie > Netz, mit dynamischer Reserve)
     ergebnis = evaluate_batterie(
-        config.batterie, temp_dict, pv_leistung, soc, kompressor_ein,
-        now_hour, nachtsperre_start, nachtsperre_ende,
+        config.batterie,
+        temp_dict,
+        pv_leistung,
+        soc,
+        kompressor_ein,
+        now_hour,
+        nachtsperre_start,
+        nachtsperre_ende,
         forecast_wh_qm=forecast_wh_qm,
     )
     ergebnisse.append(ergebnis)
@@ -1338,35 +1511,56 @@ def bewerte_alle_regeln(
         config.zeitfenster, temp_dict, pv_leistung, now_hour
     )
     ergebnisse.append(ergebnis)
-    
+
     # 4. Abweichungs-Regel
     ergebnis = evaluate_abweichung(
-        config.abweichung, temp_dict, kompressor_ein,
-        now_hour, nachtsperre_start, nachtsperre_ende,
-        feedin_watt=pv_leistung, soc=soc,
+        config.abweichung,
+        temp_dict,
+        kompressor_ein,
+        now_hour,
+        nachtsperre_start,
+        nachtsperre_ende,
+        feedin_watt=pv_leistung,
+        soc=soc,
         bademodus_aktiv=bademodus_aktiv,
     )
     ergebnisse.append(ergebnis)
-    
+
     # 5. Forecast-Regel (Prognose-basiert vorheizen/sparen)
     ergebnis = evaluate_forecast(
-        config.forecast, temp_dict, forecast_wh_qm, now_hour,
-        nachtsperre_start, nachtsperre_ende,
-        feedin_watt=pv_leistung, soc=soc
+        config.forecast,
+        temp_dict,
+        forecast_wh_qm,
+        now_hour,
+        nachtsperre_start,
+        nachtsperre_ende,
+        feedin_watt=pv_leistung,
+        soc=soc,
     )
     ergebnisse.append(ergebnis)
-    
+
     # 6. Adaptive-PV-Regel (dynamische PV-Schwelle)
     ergebnis = evaluate_adaptive_pv(
-        config.adaptive_pv, temp_dict, pv_leistung, forecast_wh_qm, kompressor_ein,
-        now_hour, nachtsperre_start, nachtsperre_ende, fc_ratio=fc_ratio
+        config.adaptive_pv,
+        temp_dict,
+        pv_leistung,
+        forecast_wh_qm,
+        kompressor_ein,
+        now_hour,
+        nachtsperre_start,
+        nachtsperre_ende,
+        fc_ratio=fc_ratio,
     )
     ergebnisse.append(ergebnis)
-    
+
     # 7. Calculated-Start-Regel (optimierter Startzeitpunkt)
     ergebnis = evaluate_calculated_start(
-        config.calculated_start, temp_dict, now_hour, now.minute,
-        nachtsperre_start, nachtsperre_ende,
+        config.calculated_start,
+        temp_dict,
+        now_hour,
+        now.minute,
+        nachtsperre_start,
+        nachtsperre_ende,
         forecast_wh_qm=forecast_today_wh_qm,
         learned_heating_rate_unten=learned_heating_rate_unten,
         learned_heating_rate_gesamt=learned_heating_rate_gesamt,
@@ -1378,19 +1572,40 @@ def bewerte_alle_regeln(
         recent_usage_events=recent_usage_events,
     )
     ergebnisse.append(ergebnis)
-    
+
+    # 8. Legionellenprophylaxe-Regel
+    ergebnis = evaluate_legionellen(
+        config.legionellen,
+        temp_dict,
+        now,
+        forecast_today_wh_qm=forecast_today_wh_qm,
+        forecast_wh_qm=forecast_wh_qm,
+        forecast_day2_wh_qm=forecast_day2_wh_qm,
+        legionellen_aktiv=legionellen_aktiv,
+        legionellen_last_done=legionellen_last_done,
+        legionellen_started_at=legionellen_started_at,
+        kompressor_ein=kompressor_ein,
+    )
+    ergebnisse.append(ergebnis)
+
     # Gewinner bestimmen: Hoechste priorisierte Regel, die eine klare Entscheidung trifft
     aktive_regeln = [e for e in ergebnisse if e.aktiv and e.einschalten is not None]
-    
+
     if not aktive_regeln:
         # Keine Regel will etwas tun
         return None, ergebnisse
-    
+
     # Solar-Daten veraltet: PV-/Batterie-/Prognose-Regeln duerfen nicht
     # auf eingefrorenen Werten entscheiden. Garantien (MinTemp, Komfort)
     # und Abweichung (Netzstrom) bleiben bewusst aktiv.
     if solar_stale:
-        _stale_namen = {"Einspeisung", "Batterie", "AdaptivePV", "Zeitfenster", "Forecast"}
+        _stale_namen = {
+            "Einspeisung",
+            "Batterie",
+            "AdaptivePV",
+            "Zeitfenster",
+            "Forecast",
+        }
         for e in ergebnisse:
             if (e.name in _stale_namen or e.name.startswith("PV_")) and (
                 e.aktiv or e.einschalten is not None
@@ -1405,20 +1620,24 @@ def bewerte_alle_regeln(
     # Nach Prioritaet sortieren (hoeher zuerst)
     aktive_regeln.sort(key=lambda e: e.prioritaet, reverse=True)
     gewinner = aktive_regeln[0]
-    
+
     # Notfall-Pruefung: Wenn Wochenende blockiert, aber Komfort-Notfall aktiv ist,
     # ueberschreibt der Notfall die Wochenende-Sperre.
     if gewinner.name == "Wochenende" and gewinner.einschalten is False:
         for e in ergebnisse:
-            if e.name == "Komfort" and e.aktiv and e.einschalten is True and "NOTFALL" in e.grund:
+            if (
+                e.name == "Komfort"
+                and e.aktiv
+                and e.einschalten is True
+                and "NOTFALL" in e.grund
+            ):
                 logging.info(f"Notfall ueberschreibt Wochenende-Sperre: {e.grund}")
                 gewinner = e
                 break
-    
+
     # Bewertung wird nur alle 5 Minuten in priority_control_logic.py geloggt (INFO, throttelt)
     # Hier nur minimales DEBUG, nicht bei jedem Durchlauf
-    
-    
+
     return gewinner, ergebnisse
 
 
@@ -1426,7 +1645,11 @@ def formatiere_ergebnisse(ergebnisse: List[RegelErgebnis]) -> str:
     """Formatiert alle Ergebnisse fuer Logging/Anzeige."""
     lines = []
     for e in sorted(ergebnisse, key=lambda x: x.prioritaet, reverse=True):
-        status = "EIN" if e.einschalten is True else ("AUS" if e.einschalten is False else "---")
+        status = (
+            "EIN"
+            if e.einschalten is True
+            else ("AUS" if e.einschalten is False else "---")
+        )
         aktive = "" if e.aktiv else " [INAKTIV]"
         lines.append(f"  [{e.prioritaet:3d}] {status} {e.name}{aktive}: {e.grund}")
     return "\n".join(lines)

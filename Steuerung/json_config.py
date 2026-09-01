@@ -480,6 +480,44 @@ class BoilerModellConfig(BaseModel):
         return self
 
 
+class LegionellenConfig(BaseModel):
+    """Legionellenprophylaxe: Einmal pro Woche Boiler auf 60°C aufheizen.
+
+    Bevorzugt Freitag; falls PV-Prognose am Samstag/Sonntag besser,
+    werden diese Tage gewählt. Spätestens Sonntag muss aufgeheizt sein.
+    Während der Prophylaxe wird max_temp_c auf legionellen_max_temp_c erhöht.
+    """
+    aktiv: bool = Field(default=True, description="Legionellenprophylaxe aktiv")
+    prioritaet: int = Field(default=90, description="Priorität (zwischen Wochenende=100 und Einspeisung=83)")
+    target_temp_c: float = Field(default=60.0, description="Zieltemperatur für die Prophylaxe (°C)")
+    legionellen_max_temp_c: float = Field(default=65.0, description="Temporäres max_temp_c während der Prophylaxe (°C)")
+    bevorzugter_tag: int = Field(default=4, description="Bevorzugter Wochentag (0=Montag..6=Sonntag, 4=Freitag)")
+    letzter_tag: int = Field(default=6, description="Spätester Tag für die Prophylaxe (6=Sonntag)")
+    start_uhr: int = Field(default=8, description="Früheste Startstunde am Tag")
+    spaeteste_start_uhr: int = Field(default=16, description="Späteste Startstunde (muss bis dahin begonnen haben)")
+    probezeit_minuten: int = Field(default=30, description="Wie lange die Zieltemperatur gehalten werden muss (Minuten)")
+    erforderliche_wh_qm: float = Field(default=800.0, description="Mindest-PV-Prognose Wh/qm für den bevorzugten Tag")
+    pv_prognose_schwelle_gut: float = Field(default=2000.0, description="PV-Prognose >= diesem Wert gilt als 'guter PV-Tag' (Wh/qm)")
+
+    @model_validator(mode="after")
+    def _pruefe_legionellen(self):
+        if not (0 <= self.bevorzugter_tag <= 6):
+            raise ValueError(f"bevorzugter_tag muss zwischen 0 (Mo) und 6 (So) sein, nicht {self.bevorzugter_tag}")
+        if not (0 <= self.letzter_tag <= 6):
+            raise ValueError(f"letzter_tag muss zwischen 0 (Mo) und 6 (So) sein, nicht {self.letzter_tag}")
+        if self.bevorzugter_tag > self.letzter_tag:
+            raise ValueError(f"bevorzugter_tag ({self.bevorzugter_tag}) muss <= letzter_tag ({self.letzter_tag}) sein")
+        if not (40.0 <= self.target_temp_c <= 80.0):
+            raise ValueError(f"target_temp_c={self.target_temp_c} ausserhalb 40-80 C")
+        if self.legionellen_max_temp_c <= self.target_temp_c:
+            raise ValueError("legionellen_max_temp_c muss > target_temp_c sein")
+        if not (0 <= self.start_uhr <= 23):
+            raise ValueError(f"start_uhr={self.start_uhr} ausserhalb 0-23")
+        if self.probezeit_minuten < 5:
+            raise ValueError(f"probezeit_minuten={self.probezeit_minuten} zu kurz (min. 5)")
+        return self
+
+
 class KpiConfig(BaseModel):
     """Konfiguration fuer die Energiebilanz-Anzeige (Webapp-Karte 'Ernte')."""
     strompreis_eur_kwh: float = Field(default=0.35, description="Netzstrompreis (EUR/kWh)")
@@ -505,6 +543,7 @@ class WPSteuerungConfig(BaseModel):
     mindest_temp: MindestTempConfig = Field(default_factory=MindestTempConfig)
     batterie: BatterieConfig = Field(default_factory=BatterieConfig)
     einspeisung: EinspeisungConfig = Field(default_factory=EinspeisungConfig)
+    legionellen: LegionellenConfig = Field(default_factory=LegionellenConfig)
 
 
     kpi: KpiConfig = Field(default_factory=KpiConfig)
