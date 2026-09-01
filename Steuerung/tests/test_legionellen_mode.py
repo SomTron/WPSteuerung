@@ -15,12 +15,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from json_config import (
-    WPSteuerungConfig, WPConfig, ZyklusConfig, SicherheitConfig,
-    KomfortConfig, ZeitfensterConfig, AbweichungConfig,
-    ForecastConfig, AdaptivePVConfig, CalculatedStartConfig,
-    SommerModusConfig, LegionellenConfig,
-)
+from json_config import LegionellenConfig
 
 
 @pytest.fixture
@@ -204,7 +199,6 @@ class TestExtractEinschaltpunktLegionellen:
         """Legionellen-Einschaltpunkt = target_temp_c - 5."""
         import priority_control_logic as pcl
         from priority_control import RegelErgebnis
-        from json_config import LegionellenConfig
 
         config = MagicMock()
         config.legionellen.target_temp_c = 60.0
