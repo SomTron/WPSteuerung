@@ -62,6 +62,8 @@ def _min_state(previous="Keine Regel aktiv"):
             restart_lockout_until=None,
             boiler_max_blockiert=None,
             blocking_reason=None,
+            schichtung_oben_max=None,
+            schichtung_oben_start=None,
         ),
         stats=SimpleNamespace(
             last_compressor_on_time=TZ.localize(datetime(2026, 1, 15, 11, 55)),
@@ -339,3 +341,131 @@ class TestLegionellenUeberhitzungCheckSafety:
         )
         assert "UEBERHITZUNG" in state.control.blocking_reason
         setter.assert_awaited_once_with(state, False, force=True)
+
+
+# ============================================================
+# 4) Schichtungs-Warmstart: oben heiss, unten/mitte kalt
+# ============================================================
+class TestSchichtungWarmstartAbschalten:
+    """Nach dem Legionellenmodus ist oben zu heiss, unten/mitte kuehlen aus.
+    Die WP darf einschalten (mit Obergrenze) und muss bei Erreichen der
+    Obergrenze stoppen, statt weiter die obere Schicht zu uebertreiben.
+    Hinweis: Die Testwerte liegen bewusst UNTER der Ueberhitzungsschwelle
+    (58C), damit die Schichtungs-Prüfung sauber isoliert wird - in der
+    Realitaet hat sich der Boiler nach der Legionellenfahrt bereits
+    abgekuehlt, bevor unten wieder heizt."""
+
+    def _state(self, oben_max, oben_start=50.0, kompressor_ein=True):
+        state = _min_state(previous="Abweichung")
+        state.control.kompressor_ein = kompressor_ein
+        state.control.schichtung_oben_max = oben_max
+        state.control.schichtung_oben_start = oben_start
+        state.stats.last_compressor_on_time = (
+            datetime.now(state.local_tz) - timedelta(minutes=20)
+        )
+        return state
+
+    @pytest.mark.asyncio
+    async def test_aus_wenn_oben_grenze_erreicht(self):
+        """Oben erreicht die dynamische Obergrenze -> Abschalten trotz laufender
+        Mindestlaufzeit (Schutz vor Uebertreiben der oberen Schicht)."""
+        state = self._state(oben_max=51.0)  # Start 50, +1K Grenze
+        calls = []
+
+        async def set_status(state, ein, **kwargs):
+            calls.append(ein)
+            return True
+
+        erg = await pcl.handle_compressor_off(
+            state, None, regelfuehler=38.0, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=60), t_oben=51.2,
+            set_kompressor_status_func=set_status, regel_name=None,
+        )
+        assert erg is True
+        assert calls == [False]
+        assert "Schichtungs-Obergrenze" in state.control.blocking_reason
+        # Obergrenze wurde zurueckgesetzt
+        assert state.control.schichtung_oben_max is None
+
+    @pytest.mark.asyncio
+    async def test_laeuft_weiter_unterhalb_grenze(self):
+        """Unterhalb der Obergrenze laeuft der Kompressor normal weiter."""
+        state = self._state(oben_max=51.0)
+        calls = []
+
+        async def set_status(state, ein, **kwargs):
+            calls.append(ein)
+            return True
+
+        erg = await pcl.handle_compressor_off(
+            state, None, regelfuehler=38.0, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=60), t_oben=50.5,
+            set_kompressor_status_func=set_status, regel_name=None,
+        )
+        assert erg is False  # nicht abschalten
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_ohne_grenze_kein_effekt(self):
+        """Ohne gesetzte Obergrenze (normaler Lauf) kein Schichtungs-Stopp."""
+        state = _min_state(previous="Abweichung")
+        state.control.kompressor_ein = True
+        state.stats.last_compressor_on_time = (
+            datetime.now(state.local_tz) - timedelta(minutes=20)
+        )
+        calls = []
+
+        async def set_status(state, ein, **kwargs):
+            calls.append(ein)
+            return True
+
+        erg = await pcl.handle_compressor_off(
+            state, None, regelfuehler=38.0, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=60), t_oben=50.5,
+            set_kompressor_status_func=set_status, regel_name=None,
+        )
+        assert erg is False
+        assert calls == []
+
+
+class TestSchichtungWarmstartSpiegelung:
+    """determine_mode_and_setpoints spiegelt die Obergrenze aus dem
+    Gewinner-regel_dict nach state.control."""
+
+    @pytest.mark.asyncio
+    async def test_obergrenze_wird_gespiegelt(self):
+        import priority_control as pc
+        from unittest.mock import patch
+
+        state = _min_state()
+        gewinner = pc.RegelErgebnis(
+            name="Abweichung", prioritaet=47, aktiv=True, einschalten=True,
+            grund="... Schichtungs-Start erlaubt (Obergrenze oben 61.0C) -> EIN",
+            regel_dict={
+                "schichtung_oben_max": 61.0,
+                "schichtung_oben_start": 60.0,
+                "schichtung_max_steig_k": 1.0,
+            },
+        )
+        with patch("priority_control_logic.bewerte_alle_regeln",
+                   return_value=(gewinner, [gewinner])):
+            await pcl.determine_mode_and_setpoints(state, 40.0, 43.0)
+
+        assert state.control.schichtung_oben_max == 61.0
+        assert state.control.schichtung_oben_start == 60.0
+
+    @pytest.mark.asyncio
+    async def test_ohne_regel_dict_bleibt_none(self):
+        import priority_control as pc
+        from unittest.mock import patch
+
+        state = _min_state()
+        gewinner = pc.RegelErgebnis(
+            name="Abweichung", prioritaet=47, aktiv=True, einschalten=True,
+            grund="Soll 44.0C - unten 40.0C = +4.0K -> EIN",
+        )
+        with patch("priority_control_logic.bewerte_alle_regeln",
+                   return_value=(gewinner, [gewinner])):
+            await pcl.determine_mode_and_setpoints(state, 40.0, 43.0)
+
+        assert state.control.schichtung_oben_max is None

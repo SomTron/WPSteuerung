@@ -55,6 +55,11 @@ class ControlState:
         # Merker, welche Regel den aktuell laufenden Kompressor-Lauf gestartet
         # hat - Basis fuer die PV-Mindestlaufzeit-Entkopplung.
         self._lauf_start_regel: Optional[str] = None
+        # Schichtungs-Warmstart: Dynamische Obergrenze fuer die obere Schicht
+        # (z.B. nach Legionellenmodus). Gesetzt von der Abweichungs-Regel via
+        # regel_dict; handle_compressor_off stoppt den Lauf bei Erreichen.
+        self.schichtung_oben_max: Optional[float] = None
+        self.schichtung_oben_start: Optional[float] = None
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
         # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).
         # Ersetzt den alten Hack, last_compressor_off_time in die Zukunft zu setzen.

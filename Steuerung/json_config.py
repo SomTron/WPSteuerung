@@ -296,6 +296,19 @@ class AbweichungConfig(BaseModel):
     einschalten_bei_abweichung_k: float = Field(default=3.0, description="Einschalten bei Abweichung >= (K)")
     ausschalten_bei_abweichung_k: float = Field(default=0.5, description="Ausschalten bei Abweichung <= (K)")
     schichtung_min_oben_c: float = Field(default=42.0, description="2-Zonen-Schichtungs-Check: Nicht einschalten wenn oben >= (°C), vermeidet Netzstrom-Start bei Zapfen")
+    schichtung_erlaube_start: bool = Field(
+        default=True,
+        description=("True = auch bei warmem Ober (oben >= schichtung_min_oben_c) "
+                     "darf eingeschaltet werden, wenn unten deutlich zu kalt. "
+                     "Dass die obere Schicht weiter steigt, wird ueber "
+                     "schichtung_max_steig_k begrenzt (Handle in handle_compressor_off). "
+                     "False = alte Logik (blockt komplett)."),
+    )
+    schichtung_max_steig_k: float = Field(
+        default=1.0,
+        description=("Maximale erlaubte Temperatursteigerung oben waehrend eines "
+                     "Schichtungs-Startlaufs (K). Obergrenze = oben bei Start + Wert."),
+    )
 
 
 

@@ -374,6 +374,25 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         ):
             regelfuehler = state.sensors.t_oben
 
+    # Schichtungs-Warmstart: Der Gewinner (Abweichung) kann eine dynamische
+    # Obergrenze fuer die obere Schicht mitgeben (nach Legionellenmodus etc.).
+    # Sie wird an state.control gespiegelt, damit handle_compressor_off() den
+    # Lauf stoppen kann, sobald oben die Grenze erreicht - ohne dass die WP
+    # dauerhaft blockiert wird. Eine bestehende Grenze bleibt erhalten, solange
+    # der Kompressor laeuft (auch bei anderen Gewinnern wie PV/Batterie).
+    try:
+        if gewinner is not None and gewinner.regel_dict:
+            _sd = gewinner.regel_dict
+            if "schichtung_oben_max" in _sd:
+                state.control.schichtung_oben_max = float(_sd["schichtung_oben_max"])
+                state.control.schichtung_oben_start = float(
+                    _sd.get("schichtung_oben_start", state.sensors.t_oben or 0.0)
+                )
+    except Exception:
+        # Bei MagicMock/Fehlern defensiv zuruecksetzen
+        state.control.schichtung_oben_max = None
+        state.control.schichtung_oben_start = None
+
     # Solarueberschuss aktiv wenn PV-Leistung >= niedrigste Schwelle aller PV-Regeln
     if state.priority_config.pv_regeln:
         min_pv_schwelle = min(
@@ -815,6 +834,37 @@ async def handle_compressor_off(
         await handle_critical_compressor_error(session, state, "bei Boiler-Maximum")
         return False
 
+    # Schichtungs-Warmstart-Obergrenze (Task: nach Legionellenmodus oben heiss,
+    # unten/mitte kalt -> einschalten erlaubt, aber oben darf nicht weiter
+    # stark steigen). Der Wert kommt aus dem Abweichungs-gewinn (regel_dict)
+    # und wurde in determine_mode_and_setpoints nach state.control gespiegelt.
+    schichtung_max = getattr(state.control, "schichtung_oben_max", None)
+    if (
+        schichtung_max is not None
+        and t_oben is not None
+        and isinstance(schichtung_max, (int, float))
+        and t_oben >= float(schichtung_max)
+    ):
+        start = getattr(state.control, "schichtung_oben_start", None)
+        steig_txt = (
+            f" (Start {float(start):.1f}C)" if isinstance(start, (int, float)) else ""
+        )
+        if await set_kompressor_status_func(
+            state, False, force=True, t_boiler_oben=t_oben
+        ):
+            state.control.blocking_reason = (
+                f"Schichtungs-Obergrenze ({t_oben:.1f}C >= {float(schichtung_max):.1f}C{steig_txt})"
+            )
+            logging.info(
+                f"SCHICHTUNG AUS: oben {t_oben:.1f}C >= {float(schichtung_max):.1f}C{steig_txt}"
+            )
+            # Obergrenze zuruecksetzen, damit der naechste normale Lauf nicht
+            # durch eine alte Grenze begrenzt wird.
+            state.control.schichtung_oben_max = None
+            state.control.schichtung_oben_start = None
+            return True
+        return False
+
     # --- NEU: Keine Regel aktiv -> Kompressor ausschalten ---
     # Wenn keine Regel den Kompressor einschalten will (z.B. wegen Nachtsperre),
     # muss der Kompressor ausgeschaltet werden, auch wenn der regelfuehler
@@ -919,6 +969,15 @@ async def handle_compressor_on(
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = datetime.now(state.local_tz)
+
+    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gültige
+    # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
+    # eine evtl. alte Grenze aus einem vorherigen Lauf entfernen - sie darf
+    # einen neuen Lauf nicht unnötig begrenzen.
+    hat_grenze = getattr(state.control, "schichtung_oben_max", None) is not None
+    if not state.control.kompressor_ein and not hat_grenze:
+        state.control.schichtung_oben_max = None
+        state.control.schichtung_oben_start = None
 
     # Boiler-Maximum-Kuehlphase: Nur nach einem tatsaechlichen Limit-Abschalten
     # aktiv (Flag boiler_max_blockiert). Der normale EIN-Bereich unterhalb des

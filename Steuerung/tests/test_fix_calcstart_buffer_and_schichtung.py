@@ -134,8 +134,11 @@ def test_calcstart_sonnig_wartet_laenger():
 # FIX 2: 2-Zonen-Schichtungs-Check in Abweichungs-Regel
 # ============================================================
 
-def test_abweichung_schichtung_verhindert_einschalten():
-    """unten bricht durch Zapfen ein, oben warm -> kein Einschalten."""
+def test_abweichung_schichtung_erlaubt_start_mit_obergrenze():
+    """unten bricht durch Zapfen ein, oben warm -> EINSCHALTEN erlaubt, aber
+    mit dynamischer Obergrenze (oben darf nur um schichtung_max_steig_k steigen).
+    Dies loest das Problem nach dem Legionellenmodus: oben heiss, unten/mitte
+    kuehlen aus -> die WP darf heizen, uebertreibt aber die obere Schicht nicht."""
     abw = AbweichungConfig(
         prioritaet=47,
         solltemperatur_c=40.0,
@@ -143,16 +146,22 @@ def test_abweichung_schichtung_verhindert_einschalten():
         einschalten_bei_abweichung_k=3.0,
         ausschalten_bei_abweichung_k=0.5,
         schichtung_min_oben_c=42.0,
+        schichtung_erlaube_start=True,
+        schichtung_max_steig_k=1.0,
     )
     # unten=36 (Abweichung +4K >= 3K -> normalerweise EIN),
-    # oben=46 (noch warm) -> muss verhindert werden
+    # oben=46 (noch warm) -> EIN erlaubt, aber Obergrenze 47 gesetzt
     r = evaluate_abweichung(
         abw, _temp(unten=36.0, mitte=40.0, oben=46.0),
         kompressor_ein=False, now_hour=14,
-        nachtsperre_start=19, nachtsperre_ende=8
+        nachtsperre_start=19, nachtsperre_ende=8,
+        feedin_watt=200.0,
     )
-    assert r.einschalten is None, f"Schichtung sollte Einschalten verhindern: {r.grund}"
-    assert "Schichtung" in r.grund
+    assert r.einschalten is True, f"Schichtungs-Warmstart sollte EIN sein: {r.grund}"
+    assert "Schichtungs-Start erlaubt" in r.grund
+    assert r.regel_dict is not None
+    assert r.regel_dict["schichtung_oben_max"] == 47.0  # 46 + 1
+    assert r.regel_dict["schichtung_oben_start"] == 46.0
 
 
 def test_abweichung_schichtung_erlaubt_wenn_oben_kalt():
@@ -232,7 +241,8 @@ def test_abweichung_schichtung_oben_sensor_fehlt():
 
 
 def test_abweichung_schichtung_in_gesamtbewertung():
-    """End-to-End: In bewerte_alle_regeln gewinnt nicht Abweichung bei Schichtung."""
+    """End-to-End: Bei warmem Ober liefert die Abweichungs-Regel EIN mit
+    Obergrenze (statt Block); die Schichtungs-Obergrenze wird gespiegelt."""
     config = WPSteuerungConfig()
     config.abweichung.temperaturfuehler = "unten"
     config.abweichung.schichtung_min_oben_c = 42.0
@@ -250,7 +260,7 @@ def test_abweichung_schichtung_in_gesamtbewertung():
     config.komfort.komfort_einschalten_bei_c = 30.0  # Kein Komfort bei 36°C
     config.komfort.min_pv_fuer_komfort_watt = 999999  # Kein PV-Komfort-Heizen
 
-    # unten kalt durch Zapfen, oben warm
+    # unten kalt durch Zapfen, oben warm -> EIN mit Obergrenze (nicht block)
     temps = _temp(unten=36.0, mitte=40.0, oben=46.0)
     gewinner, ergebnisse = bewerte_alle_regeln(
         config, temps, pv_leistung=0.0, kompressor_ein=False,
@@ -259,9 +269,11 @@ def test_abweichung_schichtung_in_gesamtbewertung():
     )
 
     abw_ergebnis = [e for e in ergebnisse if e.name == "Abweichung"][0]
-    assert abw_ergebnis.einschalten is None, f"Schichtung sollte verhindern: {abw_ergebnis.grund}"
+    assert abw_ergebnis.einschalten is True, f"Schichtungs-Warmstart sollte EIN sein: {abw_ergebnis.grund}"
+    assert abw_ergebnis.regel_dict is not None
+    assert "schichtung_oben_max" in abw_ergebnis.regel_dict
 
-    # Gegentest: oben kalt -> Abweichung darf einschalten
+    # Gegentest: oben kalt -> Abweichung darf einschalten (ohne Obergrenze)
     gewinner2, ergebnisse2 = bewerte_alle_regeln(
         config, _temp(unten=36.0, mitte=38.0, oben=38.0), pv_leistung=200.0,
         kompressor_ein=False, now=datetime(2025, 6, 15, 14, 0),

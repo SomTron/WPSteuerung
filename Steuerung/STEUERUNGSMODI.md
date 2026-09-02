@@ -772,7 +772,7 @@ Konfigurationsschlüsseln.
 
 - **Zweck:** Hält die Boiler-Temperatur (Fühler unten) nahe am Sollwert
   (`solltemperatur_c`). Es ist die **Basis-Regel**, wenn keine PV-/Batterie-/
-  Prognose-Regel greift – mit Tiefschutz und Schichtungs-Check.
+  Prognose-Regel greift – mit Tiefschutz und Schichtungs-Logik.
 - **Eingänge:** `temp_dict[temperaturfuehler]` (unten), `kompressor_ein`,
   `now_hour`, `feedin_watt`, `soc`, `bademodus_aktiv`.
 - **Logik** (`evaluate_abweichung`), `abweichung = soll − ist`:
@@ -781,9 +781,18 @@ Konfigurationsschlüsseln.
      (Ziel erreicht/überschritten).
   3. Nachtsperre **und nicht** Bademodus → inaktiv (kein Einschalten).
   4. **EIN** wenn `abweichung >= einschalten_bei_abweichung_k` (4.9):
-     - **Schichtungs-Check:** Fühler ≠ `oben` und `oben >= schichtung_min_oben_c`
-       (42) → `einschalten=None` (kein Netz-Start, wenn oben noch warm –
-       vermeidet unnötiges Heizen nach Zapfen).
+     - **Schichtungs-Warmstart (neu):** Fühler ≠ `oben` und
+       `oben >= schichtung_min_oben_c` (42):
+       - `schichtung_erlaube_start=true` (Standard) → `EIN` **mit dynamischer
+         Obergrenze**: `state.control.schichtung_oben_max = oben + 1 K`
+         (via `regel_dict`). Damit heizt die WP nach einer Legionellenfahrt
+         (oben heiß, unten/mitte kalt) wieder – aber die obere Schicht darf
+         nur noch um `schichtung_max_steig_k` (Standard **1,0 K**) steigen.
+         `handle_compressor_off` stoppt den Lauf bei Erreichen der Obergrenze
+         (`Schichtungs-Obergrenze`).
+       - `schichtung_erlaube_start=false` → alte Logik: `einschalten=None`
+         (kein Netz-Start, wenn oben noch warm – vermeidet unnötiges Heizen
+         nach Zapfen).
      - **Quellen-Gate** (`quelle_warten=true`, Default):
        `temp > soll − netz_notfall_offset_k` (44 − 8 = 36) und keine PV/Batterie-
        Quelle → `einschalten=None` („wartet auf PV/Batterie (Netz erst unter
@@ -794,10 +803,8 @@ Konfigurationsschlüsseln.
      `einschalten=None`.
 - **Konfig:** `abweichung.{prioritaet (47), solltemperatur_c (44),
   temperaturfuehler (unten), einschalten_bei_abweichung_k (4.9),
-  ausschalten_bei_abweichung_k (0.7), schichtung_min_oben_c (42)}`.
-  Zusätzlich (Defaults aus `json_config.py`): `quelle_warten=true`,
-  `netz_notfall_offset_k=8.0`, `pv_einspeisung_min_watt=50`,
-  `soc_min_prozent=90`, `max_netzbezug_watt=-50`.
+  ausschalten_bei_abweichung_k (0.7), schichtung_min_oben_c (42),
+  schichtung_erlaube_start (true), schichtung_max_steig_k (1.0)}`.
 - **Besonderheit:** Der **Bademodus** hebt nicht nur den Sollwert (Kap. 2.2),
   sondern lässt die Abweichungs-Regel auch **während der Nachtsperre**
   einschalten.

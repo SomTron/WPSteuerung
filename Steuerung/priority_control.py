@@ -763,19 +763,44 @@ def evaluate_abweichung(
     # Einschalten: Zu kalt
     if abweichung >= abw.einschalten_bei_abweichung_k:
         # 2-Zonen-Schichtungs-Check: Wenn der konfigurierte Fuehler nicht "oben" ist
-        # (z.B. unten/mittig), prüfe ob oben noch warm genug ist.
+        # (z.B. unten/mittig), pruefe ob oben noch warm genug ist.
         # Verhindert unnötige Netzstrom-Starts nach Zapfen, wenn oben noch warmes
         # Wasser vorhanden ist (vermiedene Schichtungs-Falle).
+        #
+        # NEU (Task): Nach dem Legionellenmodus ist oben zu heiss, aber unten/
+        # mitte kuehlen aus. Die WP soll in diesem Fall EINSCHALTEN duerfen -
+        # aber die obere Schicht darf nicht weiter steigen. Deshalb wird statt
+        # eines harten Blocks (einschalten=None) ein EIN mit einer dynamischen
+        # Obergrenze gesetzt: state.control.schichtung_oben_max = oben + offset.
+        # handle_compressor_off() stoppt den Lauf bei Ueberschreitung.
         if abw.temperaturfuehler != "oben" and abw.schichtung_min_oben_c > 0:
             temp_oben = _parse_sensor(temp_dict, "oben")
             if temp_oben is not None and temp_oben >= abw.schichtung_min_oben_c:
-                result.einschalten = None
-                result.grund = (
-                    f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
-                    f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
-                    f"aber oben {temp_oben:.1f}C >= {abw.schichtung_min_oben_c}C "
-                    f"(Schichtung) -> kein Einschalten"
-                )
+                erlaube = getattr(abw, "schichtung_erlaube_start", False)
+                steig = max(getattr(abw, "schichtung_max_steig_k", 1.0), 0.1)
+                if erlaube:
+                    # Warmstart: einschalten erlaubt, aber oben darf nur um
+                    # schichtung_max_steig_k (Standard 1 K) steigen.
+                    result.einschalten = True
+                    result.regel_dict = {
+                        "schichtung_oben_max": temp_oben + steig,
+                        "schichtung_oben_start": temp_oben,
+                        "schichtung_max_steig_k": steig,
+                    }
+                    result.grund = (
+                        f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                        f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                        f"oben {temp_oben:.1f}C warm, Schichtungs-Start erlaubt "
+                        f"(Obergrenze oben {temp_oben + steig:.1f}C) -> EIN"
+                    )
+                else:
+                    result.einschalten = None
+                    result.grund = (
+                        f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                        f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                        f"aber oben {temp_oben:.1f}C >= {abw.schichtung_min_oben_c}C "
+                        f"(Schichtung) -> kein Einschalten"
+                    )
                 return result
 
         # Quellen-Gate mit Tiefenschutz: Im Normalfall auf PV/Batterie warten
