@@ -84,7 +84,7 @@ class NotfallschutzConfig(BaseModel):
                 f"muss kleiner als ausschalten_bei_c ({self.ausschalten_bei_c}) sein"
             )
         if not (20.0 <= self.einschalten_bei_c <= 50.0):
-            raise ValueError(f"notfallschutz: einschalten_bei_c ausserhalb 20-50 C")
+            raise ValueError("notfallschutz: einschalten_bei_c ausserhalb 20-50 C")
         return self
 
 class WochenendeConfig(BaseModel):
