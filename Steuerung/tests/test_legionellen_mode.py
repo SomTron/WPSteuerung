@@ -403,3 +403,113 @@ class TestDetermineModeAndSetpointsLegionellen:
             assert kwargs.get('legionellen_last_done') == date(2025, 3, 17)
             assert kwargs.get('legionellen_started_at') == datetime(2025, 3, 21, 10, 0, 0, tzinfo=state.local_tz)
             assert kwargs.get('forecast_day2_wh_qm') is None
+            # Neu: Wochenende-Config wird zur Wochenende-Nachholung gereicht
+            assert kwargs.get('wochenende_cfg') is state.priority_config.wochenende
+
+
+# ============================================================
+# Wochenende-Sperre & flexible Nachholung (Prio 90 < 100)
+# ============================================================
+class TestLegionellenWochenendeNachholung:
+    """Am Wochenende blockt die Prio-100-Sperre Starts vor fruehestens_uhr.
+    Die Regel haelt das Startfenster offen und holt die Fahrt direkt nach
+    der Sperre (z.B. 09:00) nach."""
+
+    def _weekend_cfg(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(fruehestens_uhr=9)
+
+    def _samstag(self, hour, minute=0):
+        # 2025-06-14 ist ein Samstag
+        return datetime(2025, 6, 14, hour, minute)
+
+    def _cfg_start8(self, legionellen_config):
+        cfg = legionellen_config
+        cfg.start_uhr = 8.0
+        cfg.spaeteste_start_uhr = 16
+        return cfg
+
+    def test_wochenende_vor_sperre_fenster_offen(self, legionellen_config, temp_dict):
+        """Sa 08:30: Start faellig (8:00), wird aber von der Sperre gehalten.
+        Die Regel meldet trotzdem EIN-Wunsch -> gewinnt um 9:00 sofort."""
+        from priority_control import evaluate_legionellen
+        erg = evaluate_legionellen(
+            self._cfg_start8(legionellen_config), temp_dict,
+            self._samstag(8, 30),
+            wochenende_cfg=self._weekend_cfg(),
+        )
+        assert erg.einschalten is True
+        assert "Wochenende-Sperre" in erg.grund
+
+    def test_wochenende_nachholung_nach_sperre(self, legionellen_config, temp_dict):
+        """Sa 09:05: Nach der Sperre wird sofort nachgeholt (Fenster bis 16U)."""
+        from priority_control import evaluate_legionellen
+        erg = evaluate_legionellen(
+            self._cfg_start8(legionellen_config), temp_dict,
+            self._samstag(9, 5),
+            wochenende_cfg=self._weekend_cfg(),
+        )
+        assert erg.aktiv is True
+        assert erg.einschalten is True
+        assert "Nachholung" in erg.grund
+
+    def test_wochenende_startfenster_abgelaufen(self, legionellen_config, temp_dict):
+        """Sa 17:00: Nachhol-Fenster (bis spaeteste_start_uhr=16) abgelaufen."""
+        from priority_control import evaluate_legionellen
+        erg = evaluate_legionellen(
+            self._cfg_start8(legionellen_config), temp_dict,
+            self._samstag(17, 0),
+            wochenende_cfg=self._weekend_cfg(),
+        )
+        assert erg.aktiv is False
+        assert "Startfenster abgelaufen" in erg.grund
+
+    def test_werktag_bleibt_exakte_startstunde(self, legionellen_config, temp_dict):
+        """Do 09:30 (start=8): Werktag unveraendert - nur exakte Startstunde."""
+        from priority_control import evaluate_legionellen
+        # 2025-06-12 = Donnerstag
+        now = datetime(2025, 6, 12, 9, 30)
+        erg = evaluate_legionellen(
+            self._cfg_start8(legionellen_config), temp_dict, now,
+            wochenende_cfg=self._weekend_cfg(),
+        )
+        assert erg.aktiv is False
+        assert "Nicht zur geplanten Startzeit" in erg.grund
+
+    def test_werktag_startstunde_feuerung(self, legionellen_config, temp_dict):
+        """Do 08:00 (start=8): Werktag feuert normal (kein Wochenend-Einfluss)."""
+        from priority_control import evaluate_legionellen
+        now = datetime(2025, 6, 12, 8, 0)
+        erg = evaluate_legionellen(
+            self._cfg_start8(legionellen_config), temp_dict, now,
+            wochenende_cfg=self._weekend_cfg(),
+        )
+        assert erg.einschalten is True
+
+    def test_integration_samstag_9_gewinner_legionellen(self, legionellen_config):
+        """End-to-End: Sa 08:30 blockt die Wochenende-Sperre (100); Sa 09:00
+        gewinnt die Legionellen-Regel (90) und die Fahrt startet."""
+        import priority_control as pc
+        from json_config import WPSteuerungConfig
+
+        config = WPSteuerungConfig(beschreibung="Test", legionellen=legionellen_config)
+        config.wochenende.fruehestens_uhr = 9
+        config.calculated_start.aktiv = False
+        config.forecast.aktiv = False
+        config.adaptive_pv.aktiv = False
+        config.einspeisung.aktiv = False
+        config.batterie.aktiv = False
+        temp = {"oben": 45.0, "unten": 35.0, "mittig": 40.0, "verd": 30.0}
+
+        vor = pc.bewerte_alle_regeln(
+            config=config, temp_dict=temp, pv_leistung=0.0, kompressor_ein=False,
+            now=self._samstag(8, 30),
+        )
+        assert vor[0].name == "Wochenende"          # Sperre blockt trotz EIN-Wunsch
+
+        nach = pc.bewerte_alle_regeln(
+            config=config, temp_dict=temp, pv_leistung=0.0, kompressor_ein=False,
+            now=self._samstag(9, 0),
+        )
+        assert nach[0].name == "Legionellen"        # Nachholung um 09:00
+        assert nach[0].einschalten is True

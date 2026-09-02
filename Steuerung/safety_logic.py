@@ -52,15 +52,26 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
 
     safety_temp = None
     if hasattr(state, 'priority_config') and getattr(state.priority_config, 'sicherheit', None):
-        val = getattr(state.priority_config.sicherheit, 'ueberhitzung_c', None)
-        # Nur echte numerische Werte (int/float) akzeptieren, keine Mocks/MagicMocks
-        if isinstance(val, (int, float)):
-            try:
-                candidate = float(val)
-                if candidate > 40.0:  # Plausibilitätscheck: Sicherheitstemp muss > 40°C sein
-                    safety_temp = candidate
-            except (TypeError, ValueError):
-                pass
+        # Waehrend einer aktiven Legionellenfahrt wird die Sicherheitsschwelle
+        # dynamisch auf legionellen_max_temp_c angehoben, damit die Prophylaxe
+        # (Ziel 60/65C) nicht vom Ueberhitzungsschutz abgebrochen wird.
+        if getattr(state, 'legionellen_aktiv', False) is True:
+            lle_val = getattr(
+                getattr(state.priority_config, 'legionellen', None),
+                'legionellen_max_temp_c', None,
+            )
+            if isinstance(lle_val, (int, float)) and float(lle_val) > 40.0:
+                safety_temp = float(lle_val)
+        if safety_temp is None:
+            val = getattr(state.priority_config.sicherheit, 'ueberhitzung_c', None)
+            # Nur echte numerische Werte (int/float) akzeptieren, keine Mocks/MagicMocks
+            if isinstance(val, (int, float)):
+                try:
+                    candidate = float(val)
+                    if candidate > 40.0:  # Plausibilitätscheck: Sicherheitstemp muss > 40°C sein
+                        safety_temp = candidate
+                except (TypeError, ValueError):
+                    pass
             
     if safety_temp is None:
         val = getattr(getattr(state, 'config', None), 'Heizungssteuerung', None)

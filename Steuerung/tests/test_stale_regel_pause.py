@@ -28,13 +28,14 @@ def baue_config():
 
 
 def test_stale_pausiert_pv_regeln():
-    """solar_stale=True -> PV-Regeln werden deaktiviert, trotz hoher PV-Leistung."""
+    """solar_stale=True -> PV-Regeln (ohne Forecast als Backup aktiv) werden
+    deaktiviert, trotz hoher PV-Leistung."""
     config = baue_config()
     temp = {"oben": 43.0, "mittig": 42.0, "unten": 36.0}
     gewinner, alle = pc.bewerte_alle_regeln(
         config=config, temp_dict=temp, pv_leistung=8000.0, kompressor_ein=False,
         now=datetime(2026, 1, 15, 12, 0),
-        forecast_wh_qm=2500.0, forecast_today_wh_qm=2800.0,
+        forecast_wh_qm=None, forecast_today_wh_qm=2800.0,  # kein Forecast -> Backup aktiv
         soc=95.0, battery_power=1500.0,
         solar_stale=True,  # <-- Stale-Guard aktiv
     )
@@ -45,8 +46,9 @@ def test_stale_pausiert_pv_regeln():
             assert "Solar-Daten veraltet" in e.grund
 
 
-def test_frische_daten_lassen_pv_regeln_aktiv():
-    """solar_stale=False (frische Daten) -> PV-Regeln arbeiten normal."""
+def test_forecast_vorhanden_pv_regeln_nur_backup():
+    """PV-Exklusivitaet: Bei vorhandenem Forecast sind die statischen PV-Regeln
+    stumm (AdaptivePV steuert exklusiv) - auch bei frischen Daten."""
     config = baue_config()
     temp = {"oben": 43.0, "mittig": 42.0, "unten": 36.0}
     gewinner, alle = pc.bewerte_alle_regeln(
@@ -54,7 +56,24 @@ def test_frische_daten_lassen_pv_regeln_aktiv():
         now=datetime(2026, 1, 15, 12, 0),
         forecast_wh_qm=2500.0, forecast_today_wh_qm=2800.0,
         soc=95.0, battery_power=1500.0,
-        solar_stale=False,  # <-- frisch, kein Guard
+        solar_stale=False,
+    )
+    pv = next(e for e in alle if e.name.startswith("PV_"))
+    assert pv.aktiv is False
+    assert pv.einschalten is None
+    assert "PV-Exklusivitaet" in pv.grund
+
+
+def test_ohne_forecast_sind_pv_regeln_wieder_aktiv():
+    """Ohne Forecast greift die PV-Regel als Backup normal (Backup-Funktion)."""
+    config = baue_config()
+    temp = {"oben": 43.0, "mittig": 42.0, "unten": 36.0}
+    gewinner, alle = pc.bewerte_alle_regeln(
+        config=config, temp_dict=temp, pv_leistung=8000.0, kompressor_ein=False,
+        now=datetime(2026, 1, 15, 12, 0),
+        forecast_wh_qm=None, forecast_today_wh_qm=2800.0,
+        soc=95.0, battery_power=1500.0,
+        solar_stale=False,
     )
     pv = next(e for e in alle if e.name.startswith("PV_"))
     assert pv.aktiv is True

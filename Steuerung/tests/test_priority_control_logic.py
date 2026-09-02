@@ -470,8 +470,10 @@ class TestSommerModus:
             assert config.abweichung.solltemperatur_c == 40.0,                 f"Solltemperatur sollte 40.0C bleiben, ist {config.abweichung.solltemperatur_c}C"
 
     @pytest.mark.asyncio
-    async def test_sommer_modus_nicht_auf_andere_regeln(self, mock_state_sommer):
-        """Sommer-Modus: Offset gilt NUR fuer Abweichung, nicht fuer Komfort/PV/Forecast."""
+    async def test_sommer_modus_senkt_pv_einschaltpunkte_synchron(self, mock_state_sommer):
+        """Sommer-Modus: Abweichung gesenkt UND PV-Einschaltpunkte synchron
+        (-2K, 42->40), damit die Hysterese nicht schrumpft und es nicht taktet.
+        Komfort/Forecast bleiben unberuehrt."""
         import priority_control_logic as pcl
         from json_config import PVRegel
 
@@ -479,7 +481,7 @@ class TestSommerModus:
 
         # PV-Regeln hinzufuegen
         mock_state_sommer.priority_config.pv_regeln = [
-            PVRegel(name="PV_1", einschalten_bei_c=40.0, ausschalten_bei_c=45.0),
+            PVRegel(name="PV_1", einschalten_bei_c=42.0, ausschalten_bei_c=48.0),
         ]
 
         with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
@@ -489,10 +491,37 @@ class TestSommerModus:
             args, kwargs = mock_bewerte.call_args
             config = kwargs.get('config')
 
-            # Nur Abweichung wurde gesenkt
+            # Abweichung gesenkt
             assert config.abweichung.solltemperatur_c == 37.0,                 f"Abweichung sollte 37.0 sein, ist {config.abweichung.solltemperatur_c}"
-
             # Andere Regeln bleiben unveraendert
             assert config.komfort.ausschalten_bei_c == 42.0,                 f"Komfort sollte 42.0 bleiben, ist {config.komfort.ausschalten_bei_c}"
-            assert config.pv_regeln[0].einschalten_bei_c == 40.0,                 f"PV sollte 40.0 bleiben, ist {config.pv_regeln[0].einschalten_bei_c}"
             assert config.forecast.tmax_c == 48.0,                 f"Forecast sollte 48.0 bleiben, ist {config.forecast.tmax_c}"
+            # PV-Einschalt-/Ausschaltpunkt synchron -2K
+            assert config.pv_regeln[0].einschalten_bei_c == 40.0,                 f"PV-Einschaltpunkt sollte 40.0 sein, ist {config.pv_regeln[0].einschalten_bei_c}"
+            assert config.pv_regeln[0].ausschalten_bei_c == 46.0,                 f"PV-Ausschaltpunkt sollte 46.0 sein, ist {config.pv_regeln[0].ausschalten_bei_c}"
+
+    @pytest.mark.asyncio
+    async def test_bademodus_setzt_sommer_offset_aus(self, mock_state_sommer):
+        """Bademodus + Sommer-Modus: Der Bademodus setzt den Sommer-Offset
+        temporaer aus, damit die Temp-Anhebung (+3K) nicht neutralisiert wird.
+        Soll bleibt 40 + 3 = 43, keine PV-Absenkung."""
+        import priority_control_logic as pcl
+        from json_config import PVRegel
+
+        mock_state_sommer.sommer_modus_aktiv = True
+        mock_state_sommer.bademodus_aktiv = True
+        mock_state_sommer.priority_config.pv_regeln = [
+            PVRegel(name="PV_1", einschalten_bei_c=42.0, ausschalten_bei_c=48.0),
+        ]
+
+        with patch('priority_control_logic.bewerte_alle_regeln') as mock_bewerte:
+            mock_bewerte.return_value = (None, [])
+            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
+
+            args, kwargs = mock_bewerte.call_args
+            config = kwargs.get('config')
+
+            # Bademodus +3 (40+3=43), Sommer-Offset AUSGESETZT
+            assert config.abweichung.solltemperatur_c == 43.0,                 f"Soll sollte 43.0 sein, ist {config.abweichung.solltemperatur_c}"
+            assert config.pv_regeln[0].einschalten_bei_c == 42.0
+            assert config.pv_regeln[0].ausschalten_bei_c == 48.0

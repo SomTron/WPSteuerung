@@ -111,16 +111,13 @@ def test_integration_batterie_gewinnt_wenn_pv_schwelle_nicht_erreicht():
     assert gewinner.einschalten is True
 
 
-def test_integration_pv_regel_bleibt_vorrangig():
-    """Bei echter Netzeinspeisung (1000W) gewinnt weiterhin die PV-Regel.
-
-    Hinweis: WPSteuerungConfig()-Defaults haben keine PV-Regeln (die kommen
-    aus dem JSON) - daher hier eine explizite PV-Regel setzen.
-    """
+def test_integration_forecast_vorhanden_adaptive_gewinnt():
+    """PV-Exklusivitaet: Sobald Forecast-Daten da sind, steuert ausschliesslich
+    AdaptivePV - die statische PV-Regel ist nur Backup (bleibt stumm)."""
     from json_config import PVRegel
     config = baue_config()
     config.pv_regeln = [
-        PVRegel(name="PV_unten", prioritaet=81, temperaturfuehler="unten",
+        PVRegel(name="PV_unten", prioritaet=78, temperaturfuehler="unten",
                 pv_schwelle_watt=500.0, weiterlaufen_ab_pv_watt=50.0,
                 einschalten_bei_c=42.0, ausschalten_bei_c=48.0),
     ]
@@ -130,10 +127,30 @@ def test_integration_pv_regel_bleibt_vorrangig():
         now=datetime(2026, 1, 15, 12, 0),
         forecast_wh_qm=2500.0, soc=95.0, battery_power=1500.0,
     )
-    assert gewinner.prioritaet >= pc.evaluate_batterie(
-        config.batterie, temp, 1000.0, 95.0, False, 12, 19, 8
-    ).prioritaet
+    assert gewinner.name == "AdaptivePV"
+    assert gewinner.einschalten is True
+    pv_ergebnis = next(e for e in alle if e.name == "PV_unten")
+    assert pv_ergebnis.aktiv is False
+    assert "PV-Exklusivitaet" in pv_ergebnis.grund
+
+
+def test_integration_ohne_forecast_pv_regel_als_backup():
+    """Ohne Forecast uebernimmt die statische PV-Regel (Backup) wieder."""
+    from json_config import PVRegel
+    config = baue_config()
+    config.pv_regeln = [
+        PVRegel(name="PV_unten", prioritaet=78, temperaturfuehler="unten",
+                pv_schwelle_watt=500.0, weiterlaufen_ab_pv_watt=50.0,
+                einschalten_bei_c=42.0, ausschalten_bei_c=48.0),
+    ]
+    temp = {"oben": 43.0, "mittig": 42.0, "unten": 41.0}
+    gewinner, alle = pc.bewerte_alle_regeln(
+        config=config, temp_dict=temp, pv_leistung=1000.0, kompressor_ein=False,
+        now=datetime(2026, 1, 15, 12, 0),
+        forecast_wh_qm=None, soc=95.0, battery_power=1500.0,
+    )
     assert gewinner.name.startswith("PV_")
+    assert gewinner.einschalten is True
 
 
 # ── pcl-Durchreichung ──

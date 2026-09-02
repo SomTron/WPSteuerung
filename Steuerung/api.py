@@ -192,6 +192,7 @@ def get_status():
             "zyklus_interval": pc.zyklus.interval_minuten,
             "zyklus_min_laufzeit": pc.zyklus.mindestlaufzeit_minuten,
             "zyklus_min_pause": pc.zyklus.mindestpausenzeit_minuten,
+            "zyklus_pv_min_laufzeit": pc.zyklus.pv_min_laufzeit_minuten,
             "nachtsperre_aktiv": nightsperre,
             "nachtsperre_start": pc.sicherheit.nachtsperre_start,
             "nachtsperre_ende": pc.sicherheit.nachtsperre_ende,
@@ -209,10 +210,15 @@ def get_status():
                 "ein": pv.einschalten_bei_c,
                 "aus": pv.ausschalten_bei_c,
             })
-        # Komfort
+        # Notfallschutz (Prio 110, ausgekoppelter Schutzleiter)
+        priority_info["regeln"].append({
+            "name": "Notfallschutz", "typ": "notfallschutz", "prio": pc.notfallschutz.prioritaet,
+            "ein": pc.notfallschutz.einschalten_bei_c,
+            "aus": pc.notfallschutz.ausschalten_bei_c,
+        })
+        # Komfort (ohne Notfall - der steckt jetzt im Notfallschutz)
         priority_info["regeln"].append({
             "name": "Komfort", "typ": "komfort", "prio": pc.komfort.prioritaet,
-            "notfall": pc.komfort.notfall_einschalten_bei_c,
             "min_pvid": pc.komfort.min_pv_fuer_komfort_watt,
             "ein": pc.komfort.komfort_einschalten_bei_c,
             "aus": pc.komfort.ausschalten_bei_c,

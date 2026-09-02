@@ -171,7 +171,11 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # jeden Tag auf 44Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
     # Der Offset (default -3Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
     if hasattr(state, "sommer_modus_aktiv") and state.sommer_modus_aktiv:
-        wende_sommer_offset_an(effektive_config)
+        # AUSNAHME Bademodus (Nutzeranforderung): Der Bademodus setzt den
+        # Sommer-Offset temporaer aus, damit die Temp-Anhebung (+3K) nicht
+        # neutralisiert wird.
+        if not state.bademodus_aktiv:
+            wende_sommer_offset_an(effektive_config)
         logging.debug(
             f"Sommer-Modus aktiv: Abweichungs-Soll {effektive_config.abweichung.solltemperatur_c:.1f}C, "
             f"PV-Ausschaltpunkte "
@@ -284,6 +288,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         legionellen_last_done=state.legionellen_last_done,
         legionellen_started_at=state.legionellen_started_at,
         forecast_day2_wh_qm=getattr(state.solar, "forecast_day2", None),
+        wochenende_cfg=state.priority_config.wochenende,  # fuer Wochenende-Nachholung
     )
 
     # Ergebnisse loggen (gethrottelt)
@@ -391,13 +396,43 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # Moduswechsel-Logging + Taktschutz-Tracking - erst nach Bestaetigung
     # durch das Debouncing (siehe _gewinner_debounce): Ein-Sensor-Ticks an
     # Regel-Grenzen erzeugen weder Log-Zeilen noch Taktschutz-Zaehler.
-    if _gewinner_debounce(state, res["modus"]):
-        logging.info(
-            f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})"
+    #
+    # Debounce-Schaltverzug (Nutzeranforderung): `soll_einschalten` wird erst
+    # an die Hardware uebergeben, wenn der Gewinner-Moduswechsel per Debounce
+    # bestaetigt ist. Solange ein neuer Gewinner nur "pending" ist, gilt die
+    # letzte bestaetigte Schaltempfehlung (verhindert Hardware-Takten an
+    # Regel-Kanten).
+    modus = res["modus"]
+    prev_modus = getattr(state.control, "previous_modus", None)
+
+    if gewinner is not None and modus != prev_modus:
+        ist_bestaetigt = bool(_gewinner_debounce(state, modus))
+    else:
+        # Kein Wechsel / keine Regel aktiv: Empfehlung sofort uebernehmen und
+        # einen ggf. pendelnden Pending-Zustand aufloesen.
+        ist_bestaetigt = True
+        try:
+            state.control._pending_modus = None
+        except Exception:
+            pass
+
+    if ist_bestaetigt:
+        state.control.previous_modus = modus
+        state.control._soll_einschalten_bestaetigt = bool(should_on)
+        if modus != prev_modus:
+            logging.info(
+                f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})"
+            )
+            # Taktschutz (Punkt D): nur bestaetigte Wechsel tracken
+            _track_wechsel(state, modus)
+        soll_an_hardware = bool(should_on)
+    else:
+        # Wechsel noch nicht bestaetigt: letzte bestaetigte Empfehlung behalten
+        soll_an_hardware = bool(
+            getattr(state.control, "_soll_einschalten_bestaetigt", False)
         )
-        state.control.previous_modus = res["modus"]
-        # Taktschutz (Punkt D): nur bestaetigte Wechsel tracken
-        _track_wechsel(state, res["modus"])
+
+    res["soll_einschalten"] = soll_an_hardware
 
     # Entscheidungs-Historie (JSONL) fuer Webapp/KPIs - darf nie blockieren
     if entscheidungs_log is not None:
@@ -435,10 +470,16 @@ def wende_sommer_offset_an(config) -> None:
     config.abweichung.solltemperatur_c += offset
 
     pv_offset = config.sommer_modus.pv_ausschalt_offset_c
+    einschalt_offset = getattr(
+        config.sommer_modus, "pv_einschalt_offset_c", pv_offset
+    )
     for pv in config.pv_regeln:
         neuer_aus = pv.ausschalten_bei_c + pv_offset
         # Klemme: Ausschaltpunkt bleibt mind. 2K ueber dem Einschaltpunkt
         pv.ausschalten_bei_c = max(neuer_aus, pv.einschalten_bei_c + 2.0)
+        # NEU (Sommer-Hysterese): Einschaltpunkt synchron senken (42 -> 40C),
+        # damit die Hysterese im Sommer nicht schrumpft und es nicht taktet.
+        pv.einschalten_bei_c = max(pv.einschalten_bei_c + einschalt_offset, 20.0)
 
     # --- NEU: Auch Einspeisung im Sommermodus kappen (wie PV-Regeln) ---
     # Die Einspeisung-Regel (Prio 83) ist die hoechste Heiz-Prioritaet und
@@ -488,6 +529,8 @@ def _extract_einschaltpunkt(
         return config.batterie.einschalten_bei_c
     elif name == "Einspeisung":
         return config.einspeisung.ausschalten_bei_c - 6.0  # Anzeige-Wert
+    elif name == "Notfallschutz":
+        return config.notfallschutz.einschalten_bei_c
     elif name == "Legionellen":
         return config.legionellen.target_temp_c - 5.0  # EIN unter 55C
 
@@ -527,6 +570,8 @@ def _extract_ausschaltpunkt(
         return config.batterie.ausschalten_bei_c
     elif name == "Einspeisung":
         return config.einspeisung.ausschalten_bei_c
+    elif name == "Notfallschutz":
+        return config.notfallschutz.ausschalten_bei_c
     elif name == "Legionellen":
         return config.legionellen.target_temp_c
 
@@ -680,6 +725,35 @@ def _boiler_max_info(state):
     return temp, limit, wiederein, fuehler
 
 
+def _ist_pv_gesteuerter_lauf(name) -> bool:
+    """True, wenn der laufende Kompressor-Lauf von einer PV-/Einspeisung-
+    Regel gestartet wurde (fuer die PV-Mindestlaufzeit-Entkopplung)."""
+    if not isinstance(name, str) or not name:
+        return False
+    return name in ("Einspeisung", "AdaptivePV") or name.startswith("PV_")
+
+
+def _effektive_ueberhitzung_schwelle(state) -> float:
+    """Ueberhitzungsschwelle inkl. Legionellen-Bypass.
+
+    Nutzeranforderung: Waehrend einer aktiven Legionellenfahrt wird
+    ueberhitzung_c dynamisch auf legionellen_max_temp_c (z.B. 65C) angehoben,
+    damit der Ueberhitzungsschutz die Prophylaxefahrt (Ziel 60/65C) nicht
+    vorzeitig abbricht.
+    """
+    cfg = getattr(state, "priority_config", None)
+    sicherheit = getattr(cfg, "sicherheit", None)
+    base = getattr(sicherheit, "ueberhitzung_c", 58.0)
+    if not isinstance(base, (int, float)):
+        base = 58.0
+    if getattr(state, "legionellen_aktiv", False) is True:
+        lle_cfg = getattr(cfg, "legionellen", None)
+        lle_max = getattr(lle_cfg, "legionellen_max_temp_c", None)
+        if isinstance(lle_max, (int, float)) and float(lle_max) > float(base):
+            return float(lle_max)
+    return float(base)
+
+
 async def handle_compressor_off(
     state,
     session,
@@ -699,12 +773,14 @@ async def handle_compressor_off(
     if not state.control.kompressor_ein:
         return False
 
-    # Absolute Sicherheitsgrenze
-    if t_oben is not None and t_oben >= state.priority_config.sicherheit.ueberhitzung_c:
+    # Absolute Sicherheitsgrenze (dynamisch: waehrend einer Legionellenfahrt
+    # auf legionellen_max_temp_c angehoben)
+    ueberhitz = _effektive_ueberhitzung_schwelle(state)
+    if t_oben is not None and t_oben >= ueberhitz:
         if await set_kompressor_status_func(
             state, False, force=True, t_boiler_oben=t_oben
         ):
-            state.control.blocking_reason = f"Ueberhitzungsschutz ({t_oben:.1f}C >= {state.priority_config.sicherheit.ueberhitzung_c}C)"
+            state.control.blocking_reason = f"Ueberhitzungsschutz ({t_oben:.1f}C >= {ueberhitz:.1f}C)"
             logging.warning(f"SICHERHEIT AUS: Ueberhitzung ({t_oben:.1f}C)")
             return True
         await handle_critical_compressor_error(session, state, "bei Ueberhitzung")
@@ -745,21 +821,37 @@ async def handle_compressor_off(
         else:
             kontext = "Keine Regel aktiv"
 
-        # Pruefe ob wir schon laenger als die Mindestlaufzeit laufen
+        # Pruefe ob wir schon laenger als die Mindestlaufzeit laufen.
+        # PV-Mindestlaufzeit entkoppeln (Nutzeranforderung): Wurde der Lauf von
+        # einer PV-/Einspeisung-Regel gestartet, reicht nach Ablauf der
+        # Hardware-Schutzzeit (zyklus.pv_min_laufzeit_minuten, 10-15 min) ein
+        # PV-Einbruch zum Abschalten - die volle Mindestlaufzeit (60 min) darf
+        # dann keinen Netzbezug erzwingen.
+        min_laufzeit_eff = min_laufzeit
+        if _ist_pv_gesteuerter_lauf(
+            getattr(state.control, "_lauf_start_regel", None)
+        ):
+            _zyklus = getattr(getattr(state, "priority_config", None), "zyklus", None)
+            pv_min = getattr(_zyklus, "pv_min_laufzeit_minuten", 10)
+            if not isinstance(pv_min, (int, float)):
+                pv_min = 10
+            min_laufzeit_eff = timedelta(minutes=max(int(pv_min), 0))
+
         elapsed = safe_timedelta(
             datetime.now(state.local_tz),
             state.stats.last_compressor_on_time,
             state.local_tz,
         )
-        if elapsed >= min_laufzeit:
+        if elapsed >= min_laufzeit_eff:
             if await set_kompressor_status_func(
                 state, False, force=True, t_boiler_oben=t_oben
             ):
                 state.control.blocking_reason = None
+                state.control._lauf_start_regel = None  # Fahrt beendet
                 logging.info(f"{kontext}: Kompressor AUS. Laufzeit: {elapsed}")
                 return True
         else:
-            remaining_min = int((min_laufzeit - elapsed).total_seconds() // 60)
+            remaining_min = int((min_laufzeit_eff - elapsed).total_seconds() // 60)
             state.control.blocking_reason = (
                 f"{kontext}, warte auf Mindestlaufzeit (noch {remaining_min}m)"
             )
@@ -912,6 +1004,11 @@ async def handle_compressor_on(
             if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
                 state.control.blocking_reason = None
                 state.control.restart_lockout_until = None  # Sperre erledigt
+                # Merken, welche Regel diesen Lauf gestartet hat - Basis fuer die
+                # PV-Mindestlaufzeit-Entkopplung beim Abschalten (Task: PV-Lauf).
+                state.control._lauf_start_regel = getattr(
+                    state.control, "active_rule_name", None
+                )
                 # Regelnamen + tatsaechliche Ausschaltgrenze loggen (nicht den
                 # nur fuer die Anzeige abgeleiteten Einschaltpunkt - bei der
                 # Einspeisungs-Regel waere das ein Dummy-Wert wie 42.0).
@@ -978,10 +1075,13 @@ async def check_safety_limits(
     """
     cfg = state.priority_config.sicherheit
 
-    # 1. Ueberhitzungsschutz (einzige harte Abschaltung)
-    if t_oben is not None and t_oben >= cfg.ueberhitzung_c:
+    # 1. Ueberhitzungsschutz (einzige harte Abschaltung). Waehrend einer
+    #    Legionellenfahrt dynamisch auf legionellen_max_temp_c angehoben,
+    #    damit der Schutz die Prophylaxe nicht abbricht.
+    ueberhitz = _effektive_ueberhitzung_schwelle(state)
+    if t_oben is not None and t_oben >= ueberhitz:
         state.control.blocking_reason = (
-            f"UEBERHITZUNG ({t_oben:.1f}C >= {cfg.ueberhitzung_c}C)"
+            f"UEBERHITZUNG ({t_oben:.1f}C >= {ueberhitz:.1f}C)"
         )
         if state.control.kompressor_ein:
             logging.critical(f"UEBERHITZUNG: {t_oben:.1f}C - Sofort-Abschaltung!")

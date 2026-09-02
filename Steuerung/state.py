@@ -49,6 +49,12 @@ class ControlState:
         self.last_alert_type: Optional[str] = None
         self.komfort_aktiv: bool = False
         self._soll_einschalten: bool = False
+        # Debounce-Schaltverzug: Letzte per Gewinner-Debounce bestaetigte
+        # Schaltempfehlung (wird an die Hardware uebergeben).
+        self._soll_einschalten_bestaetigt: bool = False
+        # Merker, welche Regel den aktuell laufenden Kompressor-Lauf gestartet
+        # hat - Basis fuer die PV-Mindestlaufzeit-Entkopplung.
+        self._lauf_start_regel: Optional[str] = None
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
         # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).
         # Ersetzt den alten Hack, last_compressor_off_time in die Zukunft zu setzen.

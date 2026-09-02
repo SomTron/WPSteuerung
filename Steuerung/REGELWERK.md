@@ -24,16 +24,17 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 
 | Prio | Regel | Zweck | Quelle |
 |---|---|---|---|
+| 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre) | `notfallschutz` |
 | 100 | Wochenende | Wochenend-Vorheizen ab `fruehestens_uhr` | `wochenende` |
-| 83 | **Einspeisung** | PV-Shaping am Netzlimit (7500 W) – gratis Strom nutzen | `einspeisung` |
+| 90 | Legionellen | Legionellenprophylaxe 1×/Woche (60 °C, 30 min Probezeit); Wochenend-Nachholung | `legionellen` |
+| 85 | **Einspeisung** | PV-Shaping am Netzlimit (7500 W) – gratis Strom nutzen | `einspeisung` |
 | 82 | CalcStart | Berechneter Start für gelernte Zapf-Zeit (17:00) | `calculated_start` |
-| 81 | PV_unten | Heizen bei echter Netzeinspeisung ≥ 500 W (Fühler unten) | `pv_regeln[]` |
-| 80 | PV_mitte | wie oben, Schwelle 700 W (Fühler mittig) | `pv_regeln[]` |
+| 78 | **AdaptivePV** | Exklusive PV-Schwelle, sobald Forecast vorhanden | `adaptive_pv` |
+| 78 | PV_unten / PV_mitte | PV-Backup bei fehlendem Forecast (500/700 W) | `pv_regeln[]` |
 | 75 | **Batterie** | Heizen aus voller Hausbatterie ohne Netzbezug | `batterie` |
 | 65 | **MinTemp-\*** | Mindest-Temperatur-Garantien pro Fühler+Zeitfenster | `mindest_temp` |
-| 60 | Komfort | Notfall ≤ 36 °C (immer), Komfort ≤ 38 °C mit etwas PV | `komfort` |
+| 60 | Komfort | PV-Komfort ≤ 38 °C mit etwas PV (nur PV); Notfall liegt bei Prio 110 | `komfort` |
 | 57 | Forecast | Morgen schlecht → heute vorheizen; morgen gut → sparen | `forecast` |
-| 55 | AdaptivePV | Dynamische PV-Schwelle je nach Boiler-Temp & Tagesprognose | `adaptive_pv` |
 | 53 | Zeitfenster | Zeitfenster 6–16 Uhr mit min. 410 W PV | `zeitfenster` |
 | 47 | Abweichung | Solltemperatur ± Hysterese am unteren Fühler | `abweichung` |
 

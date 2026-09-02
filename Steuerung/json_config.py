@@ -23,6 +23,12 @@ class ZyklusConfig(BaseModel):
     interval_minuten: int = Field(default=15, description="Hauptloop-Intervall in Minuten")
     mindestlaufzeit_minuten: int = Field(default=60, description="Minimale Kompressor-Laufzeit in Minuten")
     mindestpausenzeit_minuten: int = Field(default=30, description="Minimale Pause zwischen Einschaltungen in Minuten")
+    pv_min_laufzeit_minuten: int = Field(
+        default=10,
+        description=("PV-Mindestlaufzeit: Nach dieser Hardware-Schutzzeit darf ein "
+                     "PV-Einbruch die WP abschalten, statt die volle Mindestlaufzeit "
+                     "(Netzstrom) zu erzwingen (10-15 min)."),
+    )
 
 
 class SicherheitConfig(BaseModel):
@@ -57,6 +63,30 @@ class SicherheitConfig(BaseModel):
             )
         return self
 
+class NotfallschutzConfig(BaseModel):
+    """Notfallschutz (Prio 110): Reiner Schutzleiter der Brauchwasser-Temperatur.
+
+    Gegenueber dem frueheren Komfort-Notfall eigenstaendig ausgeloest:
+    Greift ohne weitere Bedingungen vor ALLEN Sperren (Wochenende, Nachtsperre).
+    Entscheidet nur bei (drohender) Untertemperatur - im Normalbetrieb ist er
+    stumm und blockt andere Regeln nie.
+    """
+    aktiv: bool = Field(default=True, description="Notfallschutz aktiv")
+    prioritaet: int = Field(default=110, description="Prioritaet (hoechste Regel, vor Wochenende=100)")
+    einschalten_bei_c: float = Field(default=36.0, description="Einschalten wenn Nutz-Wassertemperatur <= (Cel)" )
+    ausschalten_bei_c: float = Field(default=38.0, description="Setpoint: ab Erreichen endet die Notfall-Heizung (Cel)")
+
+    @model_validator(mode="after")
+    def _pruefe_notfallschutz(self):
+        if self.einschalten_bei_c >= self.ausschalten_bei_c:
+            raise ValueError(
+                f"notfallschutz: einschalten_bei_c ({self.einschalten_bei_c}) "
+                f"muss kleiner als ausschalten_bei_c ({self.ausschalten_bei_c}) sein"
+            )
+        if not (20.0 <= self.einschalten_bei_c <= 50.0):
+            raise ValueError(f"notfallschutz: einschalten_bei_c ausserhalb 20-50 C")
+        return self
+
 class WochenendeConfig(BaseModel):
     """Wochenende-Einstellungen."""
     aktiv: bool = Field(default=True, description="Wochenendmodus aktiv")
@@ -65,9 +95,9 @@ class WochenendeConfig(BaseModel):
 
 
 class PVRegel(BaseModel):
-    """Eine einzelne PV-Steuerungsregel."""
+    """Eine einzelne PV-Steuerungsregel (Backup bei fehlendem Forecast)."""
     name: str = Field(default="PV Regel", description="Eindeutiger Name der Regel")
-    prioritaet: int = Field(default=80, description="Priorität (hoeher = wichtiger)")
+    prioritaet: int = Field(default=78, description="Priorität (Backup auf AdaptivPV-Niveau)")
     pv_schwelle_watt: float = Field(default=200.0, description="Minimale PV-Leistung zum Einschalten (W)")
     temperaturfuehler: str = Field(default="mitte", description="Welcher Fühler: oben/mitte/unten")
     einschalten_bei_c: float = Field(default=40.0, description="Einschalten bei Temperatur <= (°C)")
@@ -89,9 +119,12 @@ class PVRegel(BaseModel):
 
 
 class KomfortConfig(BaseModel):
-    """Komfort-Regel: Hält Mindesttemperatur."""
+    """Komfort-Regel: Hält zusätzliche Wärme, sofern PV verfügbar ist.
+
+    Der reine Notfall-Schutz (<=36C, auch nachts) ist in die eigenstaendige
+    Regel `Notfallschutz` (Prio 110) ausgkoppelt.
+    """
     prioritaet: int = Field(default=60, description="Priorität")
-    notfall_einschalten_bei_c: float = Field(default=36.0, description="Notfall: Einschalten bei (°C)")
     komfort_einschalten_bei_c: float = Field(default=38.0, description="Komfort: Einschalten bei (°C)")
     ausschalten_bei_c: float = Field(default=42.0, description="Ausschalten bei (°C)")
     min_pv_fuer_komfort_watt: float = Field(default=50.0, description="Minimale PV für Komfort-Heizen (W)")
@@ -219,7 +252,7 @@ class EinspeisungConfig(BaseModel):
     laeuft dann weiter (mit Abschlag, da er selbst ~600W zieht), solange die
     Einspeisung ueber weiterlauf_ab_watt bleibt."""
     aktiv: bool = Field(default=True, description="Regel aktiv")
-    prioritaet: int = Field(default=83, description="Prioritaet (ueber CalcStart/Batterie)")
+    prioritaet: int = Field(default=85, description="Prioritaet (glatte Kaskade: 110/100/90/85/78/75)")
     einspeisegrenze_watt: float = Field(
         default=7500.0, description="Einspeisen ab so viel Watt -> Heizung an (Netzlimit)",
     )
@@ -347,9 +380,20 @@ class ForecastConfig(BaseModel):
 
 
 class AdaptivePVConfig(BaseModel):
-    """Adaptive-PV-Regel: PV-Schwelle passt sich an Temperatur und Prognose an."""
-    prioritaet: int = Field(default=55, description="Prioritaet")
+    """Adaptive-PV-Regel: PV-Schwelle passt sich an Temperatur und Prognose an.
+
+    Bei vorhandenem Forecast ist sie die EXKLUSIVE PV-Heizregel; die
+    statischen PV-Regeln (PV_unten/PV_mitte) dienen nur als Backup bei
+    fehlendem Forecast.
+    """
+    prioritaet: int = Field(default=78, description="Prioritaet (Backup-Basis, gleiche Stufe wie PV_*)")
     aktiv: bool = Field(default=True, description="Regel aktiv")
+    exklusiv_mit_forecast: bool = Field(
+        default=True,
+        description=("True = sobald Forecast-Daten da sind, steuern die "
+                     "statischen PV-Regeln NICHT mehr (nur AdaptivePV). Ohne "
+                     "Forecast sind PV_* das Backup."),
+    )
     base_threshold_watt: float = Field(default=300.0, description="Basis-PV-Schwelle (W)")
     temperaturfuehler: str = Field(default="unten", description="Fuehler: oben/mitte/unten")
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
@@ -421,6 +465,11 @@ class SommerModusConfig(BaseModel):
     pv_ausschalt_offset_c: float = Field(
         default=-2.0,
         description="Zusaetzlicher Offset auf die PV-Ausschaltpunkte (Buffer nicht voll aufladen)",
+    )
+    pv_einschalt_offset_c: float = Field(
+        default=-2.0,
+        description="Offset auch auf die PV-Einschaltpunkte (synchron, z.B. 42->40C) "
+                    "- verhindert schrumpfende Hysterese und Takten",
     )
 
 
@@ -530,6 +579,7 @@ class WPSteuerungConfig(BaseModel):
     wp: WPConfig = Field(default_factory=WPConfig)
     zyklus: ZyklusConfig = Field(default_factory=ZyklusConfig)
     sicherheit: SicherheitConfig = Field(default_factory=SicherheitConfig)
+    notfallschutz: NotfallschutzConfig = Field(default_factory=NotfallschutzConfig)
     wochenende: WochenendeConfig = Field(default_factory=WochenendeConfig)
     pv_regeln: List[PVRegel] = Field(default_factory=list)
     komfort: KomfortConfig = Field(default_factory=KomfortConfig)

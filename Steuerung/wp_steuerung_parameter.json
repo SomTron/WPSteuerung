@@ -7,7 +7,8 @@
   "zyklus": {
     "interval_minuten": 15,
     "mindestlaufzeit_minuten": 60,
-    "mindestpausenzeit_minuten": 30
+    "mindestpausenzeit_minuten": 30,
+    "pv_min_laufzeit_minuten": 10
   },
   "sicherheit": {
     "nachtsperre_start": 19,
@@ -19,6 +20,12 @@
     "ueberhitzung_c": 58,
     "notfall_c": 36
   },
+  "notfallschutz": {
+    "aktiv": true,
+    "prioritaet": 110,
+    "einschalten_bei_c": 36.0,
+    "ausschalten_bei_c": 38.0
+  },
   "wochenende": {
     "aktiv": true,
     "fruehestens_uhr": 9,
@@ -27,7 +34,7 @@
   "pv_regeln": [
     {
       "name": "PV_mitte",
-      "prioritaet": 80,
+      "prioritaet": 78,
       "pv_schwelle_watt": 700,
       "temperaturfuehler": "mitte",
       "einschalten_bei_c": 42,
@@ -36,7 +43,7 @@
     },
     {
       "name": "PV_unten",
-      "prioritaet": 81,
+      "prioritaet": 78,
       "pv_schwelle_watt": 500,
       "temperaturfuehler": "unten",
       "einschalten_bei_c": 42,
@@ -46,7 +53,6 @@
   ],
   "komfort": {
     "prioritaet": 60,
-    "notfall_einschalten_bei_c": 36,
     "komfort_einschalten_bei_c": 38,
     "ausschalten_bei_c": 42,
     "min_pv_fuer_komfort_watt": 50
@@ -82,8 +88,9 @@
     "temperaturfuehler": "unten"
   },
   "adaptive_pv": {
-    "prioritaet": 55,
+    "prioritaet": 78,
     "aktiv": true,
+    "exklusiv_mit_forecast": true,
     "base_threshold_watt": 300,
     "temperaturfuehler": "unten",
     "tmax_c": 48,
@@ -106,7 +113,8 @@
     "mindest_prognose_wh": 2000,
     "benoetigte_tage": 3,
     "temperatur_offset_c": -3.0,
-    "pv_ausschalt_offset_c": -2.0
+    "pv_ausschalt_offset_c": -2.0,
+    "pv_einschalt_offset_c": -2.0
   },
   "bademodus": {
     "solltemperatur_erhoehung_c": 3.0
@@ -146,7 +154,7 @@
   },
   "einspeisung": {
     "aktiv": true,
-    "prioritaet": 83,
+    "prioritaet": 85,
     "einspeisegrenze_watt": 7500.0,
     "weiterlauf_ab_watt": 6500.0,
     "temperaturfuehler": "unten",

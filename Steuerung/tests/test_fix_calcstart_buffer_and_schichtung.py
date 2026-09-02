@@ -246,7 +246,7 @@ def test_abweichung_schichtung_in_gesamtbewertung():
     config.forecast.aktiv = False
     config.adaptive_pv.aktiv = False
     config.calculated_start.aktiv = False
-    config.komfort.notfall_einschalten_bei_c = 30.0  # Kein Notfall (oben=46 > 30)
+    config.notfallschutz.einschalten_bei_c = 30.0  # Kein Notfall (oben=46 > 30)
     config.komfort.komfort_einschalten_bei_c = 30.0  # Kein Komfort bei 36°C
     config.komfort.min_pv_fuer_komfort_watt = 999999  # Kein PV-Komfort-Heizen
 

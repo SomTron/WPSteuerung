@@ -24,6 +24,7 @@ from json_config import (
     MindestTempConfig,
     BatterieConfig,
     EinspeisungConfig,
+    NotfallschutzConfig,
 )
 
 
@@ -544,6 +545,58 @@ def evaluate_wochenende(
     )
 
 
+def evaluate_notfallschutz(
+    nf_cfg: NotfallschutzConfig,
+    temp_dict: Dict[str, Optional[float]],
+) -> RegelErgebnis:
+    """Notfallschutz (Prio 110): Reiner Schutzleiter fuer die
+    Brauchwasser-Mindesttemperatur.
+
+    Aus dem alten Komfort-Notfall ausgekoppelt. Greift ohne weitere Bedin-
+    gungen vor ALLEN Sperren (Wochenende, Nachtsperre): Sinkt die Nutz-
+    Wassertemperatur unter einschalten_bei_c, wird eingeschaltet. Im
+    Normalbetrieb ist die Regel STUMM (einschalten=None) - sie blockt
+    dadurch niemals andere Heizwuensche.
+    """
+    result = RegelErgebnis(
+        name="Notfallschutz",
+        prioritaet=nf_cfg.prioritaet,
+        aktiv=nf_cfg.aktiv,
+    )
+    if not nf_cfg.aktiv:
+        result.grund = "Notfallschutz inaktiv"
+        return result
+
+    # Fuehler-Prioritaet wie beim alten Komfort-Notfall: oben (Nutztemperatur /
+    # Schichtung) > mittig > unten.
+    temp = _parse_sensor(temp_dict, "oben")
+    sensor = "oben"
+    if temp is None:
+        temp = _parse_sensor(temp_dict, "mittig")
+        sensor = "mittig"
+    if temp is None:
+        temp = _parse_sensor(temp_dict, "unten")
+        sensor = "unten"
+    if temp is None:
+        result.aktiv = False
+        result.grund = "Keine Sensordaten verfuegbar"
+        return result
+
+    if temp <= nf_cfg.einschalten_bei_c:
+        result.einschalten = True
+        result.grund = (
+            f"NOTFALLSCHUTZ: {sensor} {temp:.1f}C <= "
+            f"{nf_cfg.einschalten_bei_c}C -> EIN"
+        )
+        return result
+
+    result.einschalten = None
+    result.grund = (
+        f"Notfallschutz: {sensor} {temp:.1f}C > {nf_cfg.einschalten_bei_c}C (stumm)"
+    )
+    return result
+
+
 def evaluate_komfort(
     komfort: KomfortConfig,
     temp_dict: Dict[str, Optional[float]],
@@ -553,14 +606,14 @@ def evaluate_komfort(
     now_hour: int,
 ) -> RegelErgebnis:
     """
-    Komfort-Regel: Haelt eine Mindesttemperatur im Boiler.
+    Komfort-Regel: Haelt zusaetzliche Waerme, sofern genug PV da ist.
 
-    - Notfall: Immer einschalten wenn Temp <= Notfall-Schwelle (auch Nachts!)
     - Komfort: Einschalten wenn Temp <= Komfort-Schwelle UND genug PV
     - Ausschalten: Temp >= Ausschalt-Schwelle
+    - Der reine Notfall (<=36C, nachts) steckt in der eigenstaendigen
+      Regel "Notfallschutz" (Prio 110).
     """
     temp = _parse_sensor(temp_dict, "unten")
-    temp_oben = _parse_sensor(temp_dict, "oben")
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
 
     result = RegelErgebnis(name="Komfort", prioritaet=komfort.prioritaet, aktiv=True)
@@ -570,35 +623,11 @@ def evaluate_komfort(
         result.grund = "Sensor 'unten' nicht verfuegbar"
         return result
 
-    # Notfall: Auch bei Nachtsperre! (obener Sensor, da in der Nacht die
-    # Schichtung relevant ist und oben die Nutztemperatur repraesentiert)
-    if temp_oben is not None and temp_oben <= komfort.notfall_einschalten_bei_c:
-        result.einschalten = True
-        result.grund = f"NOTFALL: oben {temp_oben:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
-        return result
+    # Notfall (<=36C, auch nachts) ist in die eigenstaendige Regel
+    # 'Notfallschutz' (Prio 110) ausgekoppelt - hier bleibt nur noch der
+    # PV-abhaengige Komfort sowie die Ziel-Abschaltung.
 
-    # Wenn oben-Sensor nicht verfuegbar: Fallback auf mittig
-    temp_mittig = _parse_sensor(temp_dict, "mittig")
-    if (
-        temp_oben is None
-        and temp_mittig is not None
-        and temp_mittig <= komfort.notfall_einschalten_bei_c
-    ):
-        result.einschalten = True
-        result.grund = f"NOTFALL (Fallback mittig): mittig {temp_mittig:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
-        return result
-
-    # Wenn oben UND mittig nicht verfuegbar: Fallback auf unten
-    if (
-        temp_oben is None
-        and temp_mittig is None
-        and temp <= komfort.notfall_einschalten_bei_c
-    ):
-        result.einschalten = True
-        result.grund = f"NOTFALL (Fallback unten): unten {temp:.1f}C <= {komfort.notfall_einschalten_bei_c}C -> EIN"
-        return result
-
-    # Bei Nachtsperre: Nur Notfall, kein Komfort
+    # Bei Nachtsperre: Kein Komfort-Heizen
     if nachtsperre:
         result.aktiv = False
         result.grund = "Nachtsperre (kein Komfort-Heizen)"
@@ -1314,6 +1343,7 @@ def evaluate_legionellen(
     legionellen_last_done=None,
     legionellen_started_at=None,
     kompressor_ein=False,
+    wochenende_cfg=None,
 ):
     """Bewertet, ob die Legionellenprophylaxe durchgefuehrt werden soll."""
     result = RegelErgebnis(
@@ -1365,9 +1395,57 @@ def evaluate_legionellen(
             return result
     start_h = int(legionellen_cfg.start_uhr)
     start_m = int((legionellen_cfg.start_uhr - start_h) * 60 + 0.5)
+    is_weekend = _is_weekend(now)
+    fruehestens = (
+        getattr(wochenende_cfg, "fruehestens_uhr", None)
+        if wochenende_cfg is not None
+        else None
+    )
+
+    # Prioritaeten-Kaskade (Legionellen=90 < Wochenende=100): Am Wochenende
+    # blockt die Prio-100-Wochenende-Sperre Starts vor fruehestens_uhr
+    # (z.B. 09:00). Das Startfenster wird flexibel gehalten, damit die Fahrt
+    # direkt nach der Sperre nachgeholt wird.
+    if is_weekend and fruehestens is not None:
+        fruehster_start = int(fruehestens)
+        if now.hour < fruehster_start:
+            if now.hour >= start_h:
+                # Fahrt ist eigentlich faellig, wird aber bis zur Freigabe
+                # von der Wochenende-Sperre gehalten. Fenster offen lassen,
+                # damit um fruehster_start sofort gestartet wird.
+                result.einschalten = True
+                result.grund = (
+                    f"Legionellen: Wochenende-Sperre blockt bis {fruehster_start:g}:00, "
+                    f"Fahrt wird danach nachgeholt (unten {t_unten:.1f}C)"
+                )
+            else:
+                result.aktiv = False
+                result.grund = (
+                    f"Nicht zur geplanten Startzeit {legionellen_cfg.start_uhr:g}:00"
+                )
+            return result
+        # Nach der Wochenende-Sperre: Nachhol-Fenster bis spaeteste_start_uhr
+        spatest_hr = int(getattr(legionellen_cfg, "spaeteste_start_uhr", 16))
+        if now.hour > spatest_hr:
+            result.aktiv = False
+            result.grund = f"Startfenster abgelaufen (spaeteste {spatest_hr:g}:00)"
+            return result
+        if kompressor_ein:
+            result.einschalten = None
+            result.grund = "Kompressor laeuft bereits, warte auf Abschluss"
+            return result
+        result.einschalten = True
+        result.grund = (
+            f"Legionellenprophylaxe faellig (Wochenende-Nachholung): Starte "
+            f"Erhitzung auf {legionellen_cfg.target_temp_c:.0f}C "
+            f"(unten {t_unten:.1f}C)"
+        )
+        return result
+
+    # Werktag: exakte Startstunde
     if now.hour != start_h or now.minute < start_m:
         result.aktiv = False
-        result.grund = f"Nicht zur geplanten Startzeit {legionellen_cfg.start_uhr}:00"
+        result.grund = f"Nicht zur geplanten Startzeit {legionellen_cfg.start_uhr:g}:00"
         return result
     if kompressor_ein:
         result.einschalten = None
@@ -1425,6 +1503,7 @@ def bewerte_alle_regeln(
     legionellen_last_done=None,
     legionellen_started_at=None,
     forecast_day2_wh_qm: Optional[float] = None,
+    wochenende_cfg=None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -1441,7 +1520,13 @@ def bewerte_alle_regeln(
 
     ergebnisse: List[RegelErgebnis] = []
 
-    # 0. Wochenende-Regel (hoechste Prioritaet: blockiert Einschalten am Wochenende vor fruehestens_uhr)
+    # -1. Notfallschutz (Prio 110): hoechste Regel, reiner Schutzleiter.
+    #     Greift ohne weitere Bedingungen vor allen Sperren (Wochenende,
+    #     Nachtsperre) - im Normalbetrieb stumm.
+    ergebnis = evaluate_notfallschutz(config.notfallschutz, temp_dict)
+    ergebnisse.append(ergebnis)
+
+    # 0. Wochenende-Regel (blockiert Einschalten am Wochenende vor fruehestens_uhr)
     ergebnis = evaluate_wochenende(config.wochenende, now)
     ergebnisse.append(ergebnis)
 
@@ -1457,8 +1542,26 @@ def bewerte_alle_regeln(
     )
     ergebnisse.append(ergebnis)
 
-    # 1a. PV-Regeln bewerten
+    # 1a. PV-Regeln bewerten (PV-Exklusivitaet: PV_unten/PV_mitte sind reines
+    #     Backup bei fehlendem Forecast. Sobald Forecast-Daten da sind,
+    #     steuert ausschliesslich AdaptivePV.)
+    pv_backup_aktiv = not (
+        config.adaptive_pv.aktiv
+        and getattr(config.adaptive_pv, "exklusiv_mit_forecast", False)
+        and forecast_wh_qm is not None
+    )
     for pv_regel in config.pv_regeln:
+        if not pv_backup_aktiv:
+            ergebnisse.append(
+                RegelErgebnis(
+                    name=pv_regel.name,
+                    prioritaet=pv_regel.prioritaet,
+                    aktiv=False,
+                    einschalten=None,
+                    grund="PV-Exklusivitaet: Forecast vorhanden, AdaptivePV steuert",
+                )
+            )
+            continue
         ergebnis = evaluate_pv_regel(
             pv_regel,
             temp_dict,
@@ -1585,6 +1688,7 @@ def bewerte_alle_regeln(
         legionellen_last_done=legionellen_last_done,
         legionellen_started_at=legionellen_started_at,
         kompressor_ein=kompressor_ein,
+        wochenende_cfg=config.wochenende,
     )
     ergebnisse.append(ergebnis)
 
@@ -1621,19 +1725,9 @@ def bewerte_alle_regeln(
     aktive_regeln.sort(key=lambda e: e.prioritaet, reverse=True)
     gewinner = aktive_regeln[0]
 
-    # Notfall-Pruefung: Wenn Wochenende blockiert, aber Komfort-Notfall aktiv ist,
-    # ueberschreibt der Notfall die Wochenende-Sperre.
-    if gewinner.name == "Wochenende" and gewinner.einschalten is False:
-        for e in ergebnisse:
-            if (
-                e.name == "Komfort"
-                and e.aktiv
-                and e.einschalten is True
-                and "NOTFALL" in e.grund
-            ):
-                logging.info(f"Notfall ueberschreibt Wochenende-Sperre: {e.grund}")
-                gewinner = e
-                break
+    # Der Notfallschutz (Prio 110) greift ohne Workaround vor allen Sperren -
+    # ein manueller Override ist nicht mehr noetig (frueher: Komfort-NOTFALL
+    # ueberschrieb die Wochenende-Prio-100-Sperre per Spezialfall).
 
     # Bewertung wird nur alle 5 Minuten in priority_control_logic.py geloggt (INFO, throttelt)
     # Hier nur minimales DEBUG, nicht bei jedem Durchlauf
