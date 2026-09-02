@@ -214,6 +214,88 @@ class TestLegionellenUeberhitzungBypass:
         state.priority_config.legionellen.legionellen_max_temp_c = 50.0
         assert pcl._effektive_ueberhitzung_schwelle(state) == 58.0
 
+    def test_temp_override_loest_bypass_auch_ohne_flag(self):
+        """Auch ohne legionellen_aktiv=True (z.B. Neustart/Mock) hebt ein
+        gesetzter legionellen_temp_override die Schwelle auf 65 an."""
+        state = self._state(legionellen_aktiv=False)
+        state.legionellen_temp_override = 65.0
+        assert pcl._effektive_ueberhitzung_schwelle(state) == 65.0
+
+
+# ============================================================
+# Wochentags-Gate fuer den Legionellen-Start (Freitag-Sonntag)
+# ============================================================
+class TestLegionellenWochentagsGate:
+    """Legionellen soll NUR an Freitag/Samstag/Sonntag starten (bester
+    Forecast-Tag). Heute=Donnerstag/Mittwoch darf NIE starten."""
+
+    def _cfg(self, **overrides):
+        from json_config import LegionellenConfig
+        base = dict(
+            aktiv=True, prioritaet=90, target_temp_c=60.0,
+            legionellen_max_temp_c=65.0, probezeit_minuten=15,
+            bevorzugter_tag=4,  # Freitag
+            letzter_tag=6,      # Sonntag
+            start_uhr=8.0, spaeteste_start_uhr=16,
+        )
+        base.update(overrides)
+        return LegionellenConfig(**base)
+
+    def _temps(self):
+        return {"oben": 45.0, "unten": 35.0, "mittig": 40.0}
+
+    def test_mittwoch_geblockt(self):
+        from priority_control import evaluate_legionellen
+        # 2025-06-11 = Mittwoch
+        now = datetime(2025, 6, 11, 8, 0)
+        erg = evaluate_legionellen(self._cfg(), self._temps(), now)
+        assert erg.einschalten is None
+        assert "Nur Start an" in erg.grund
+
+    def test_donnerstag_geblockt(self):
+        from priority_control import evaluate_legionellen
+        # 2025-06-12 = Donnerstag
+        now = datetime(2025, 6, 12, 8, 0)
+        erg = evaluate_legionellen(self._cfg(), self._temps(), now)
+        assert erg.einschalten is None
+
+    def test_freitag_erlaubt(self):
+        from priority_control import evaluate_legionellen
+        # 2025-06-13 = Freitag
+        now = datetime(2025, 6, 13, 8, 0)
+        erg = evaluate_legionellen(self._cfg(), self._temps(), now)
+        assert erg.einschalten is True
+        assert "Starte Erhitzung" in erg.grund
+
+    def test_geplanter_tag_samstag_erlaubt_nur_diesen(self):
+        """legeionellen_planned_tag=5 (Samstag): Start NUR am Samstag.
+        Freitag bleibt geblockt trotz erlaubtem Fenster."""
+        from priority_control import evaluate_legionellen
+        freitag = datetime(2025, 6, 13, 8, 0)  # Freitag
+        samstag = datetime(2025, 6, 14, 8, 0)  # Samstag
+        # Freitag (=4) != geplanter Tag 5 -> kein Start
+        erg_fr = evaluate_legionellen(
+            self._cfg(), self._temps(), freitag,
+            legionellen_planned_tag=5,
+        )
+        assert erg_fr.einschalten is None
+        assert "Start erst am geplanten Tag" in erg_fr.grund
+        # Samstag (=5) == geplanter Tag 5 -> Start
+        erg_sa = evaluate_legionellen(
+            self._cfg(), self._temps(), samstag,
+            legionellen_planned_tag=5,
+        )
+        assert erg_sa.einschalten is True
+
+    def test_geplanter_tag_freitag_erlaubt_freitag(self):
+        from priority_control import evaluate_legionellen
+        freitag = datetime(2025, 6, 13, 8, 0)  # Freitag
+        erg = evaluate_legionellen(
+            self._cfg(), self._temps(), freitag,
+            legionellen_planned_tag=4,
+        )
+        assert erg.einschalten is True
+
 
 class TestLegionellenUeberhitzungCheckSafety:
     def _safety_state(self, kompressor_ein):

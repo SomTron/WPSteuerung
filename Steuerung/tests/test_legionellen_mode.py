@@ -464,8 +464,9 @@ class TestLegionellenWochenendeNachholung:
         assert erg.aktiv is False
         assert "Startfenster abgelaufen" in erg.grund
 
-    def test_werktag_bleibt_exakte_startstunde(self, legionellen_config, temp_dict):
-        """Do 09:30 (start=8): Werktag unveraendert - nur exakte Startstunde."""
+    def test_donnerstag_vor_erlaubtem_fenster_geblockt(self, legionellen_config, temp_dict):
+        """Do 09:30 (start=8): Donnerstag liegt VOR dem erlaubten Fenster
+        (Freitag-Sonntag) -> kein Start (Wochentags-Gate)."""
         from priority_control import evaluate_legionellen
         # 2025-06-12 = Donnerstag
         now = datetime(2025, 6, 12, 9, 30)
@@ -473,18 +474,20 @@ class TestLegionellenWochenendeNachholung:
             self._cfg_start8(legionellen_config), temp_dict, now,
             wochenende_cfg=self._weekend_cfg(),
         )
-        assert erg.aktiv is False
-        assert "Nicht zur geplanten Startzeit" in erg.grund
+        assert erg.einschalten is None
+        assert "Nur Start an" in erg.grund
 
-    def test_werktag_startstunde_feuerung(self, legionellen_config, temp_dict):
-        """Do 08:00 (start=8): Werktag feuert normal (kein Wochenend-Einfluss)."""
+    def test_freitag_startstunde_feuerung(self, legionellen_config, temp_dict):
+        """Fr 08:00 (start=8): Freitag liegt im erlaubten Fenster -> Start wie
+        geplant (Wochentags-Gate aktiv)."""
         from priority_control import evaluate_legionellen
-        now = datetime(2025, 6, 12, 8, 0)
+        now = datetime(2025, 6, 13, 8, 0)  # Freitag
         erg = evaluate_legionellen(
             self._cfg_start8(legionellen_config), temp_dict, now,
             wochenende_cfg=self._weekend_cfg(),
         )
         assert erg.einschalten is True
+        assert "Starte Erhitzung" in erg.grund
 
     def test_integration_samstag_9_gewinner_legionellen(self, legionellen_config):
         """End-to-End: Sa 08:30 blockt die Wochenende-Sperre (100); Sa 09:00

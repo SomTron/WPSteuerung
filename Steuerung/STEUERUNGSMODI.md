@@ -457,10 +457,19 @@ Konfigurationsschlüsseln.
   `legionellen_aktiv=false`, Override gelöscht, Telegram-Erfolgsmeldung.
   Ohne Zielerreichung → Abbruch der Prophylaxe.
 - **Nachtsperre:** Regel kennt keine Nachtsperre (Startzeit 8 Uhr liegt außerhalb).
+- **Wochentags-Gate (Start nur Freitag–Sonntag):** Die Prophylaxe startet
+  **nur** an einem der erlaubten Tage (`bevorzugter_tag`..`letzter_tag`,
+  Standard **Freitag 4 – Sonntag 6**), und zwar am **geplanten besten
+  Forecast-Tag** (`state.legionellen_planned_tag`, aus `check_periodic_tasks`
+  gesetzt). An allen anderen Wochentagen (z.B. Mittwoch/Donnerstag) bleibt die
+  Regel stumm (`einschalten=None`) – es startet also nie an einem falschen Tag.
 - **Wochenende (Prio 90 < 100):** Am Sa/So blockt die Wochenende-Sperre Starts
   vor `fruehestens_uhr` (9 Uhr). Die Regel haelt das Startfenster flexibel
   offen, bis die Sperre endet, und holt die Fahrt danach nach
   (Startfenster bis `spaeteste_start_uhr`, Standard 16 Uhr).
+- **Überhitzungs-Bypass:** Während der aktiven Legionellenfahrt wird
+  `ueberhitzung_c` dynamisch auf `legionellen_max_temp_c` (65 °C) angehoben
+  (erkannt über `legionellen_aktiv` **oder** `legionellen_temp_override`).
 - **Konfig:** `legionellen.{aktiv (true), prioritaet (90), target_temp_c (60),
   legionellen_max_temp_c (65), bevorzugter_tag (4), letzter_tag (6),
   start_uhr (8), spaeteste_start_uhr (16), probezeit_minuten (30),

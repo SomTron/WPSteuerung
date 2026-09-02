@@ -289,6 +289,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         legionellen_started_at=state.legionellen_started_at,
         forecast_day2_wh_qm=getattr(state.solar, "forecast_day2", None),
         wochenende_cfg=state.priority_config.wochenende,  # fuer Wochenende-Nachholung
+        legionellen_planned_tag=getattr(state, "legionellen_planned_tag", None),
     )
 
     # Ergebnisse loggen (gethrottelt)
@@ -746,7 +747,14 @@ def _effektive_ueberhitzung_schwelle(state) -> float:
     base = getattr(sicherheit, "ueberhitzung_c", 58.0)
     if not isinstance(base, (int, float)):
         base = 58.0
-    if getattr(state, "legionellen_aktiv", False) is True:
+    # Legionellen aktiv ODER temp_override gesetzt (robust gegen MagicMocks /
+    # Neustart-Zustaende, in denen legionellen_aktiv evtl. erst im naechsten
+    # Lifecycle-Zyklus wieder True ist).
+    legionellen_betrieb = (
+        getattr(state, "legionellen_aktiv", False) is True
+        or getattr(state, "legionellen_temp_override", None) is not None
+    )
+    if legionellen_betrieb:
         lle_cfg = getattr(cfg, "legionellen", None)
         lle_max = getattr(lle_cfg, "legionellen_max_temp_c", None)
         if isinstance(lle_max, (int, float)) and float(lle_max) > float(base):

@@ -55,7 +55,13 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         # Waehrend einer aktiven Legionellenfahrt wird die Sicherheitsschwelle
         # dynamisch auf legionellen_max_temp_c angehoben, damit die Prophylaxe
         # (Ziel 60/65C) nicht vom Ueberhitzungsschutz abgebrochen wird.
-        if getattr(state, 'legionellen_aktiv', False) is True:
+        # Prueft sowohl legionellen_aktiv als auch legionellen_temp_override
+        # (robust gegen Mocks/Neustart-Zustaende).
+        legionellen_betrieb = (
+            getattr(state, 'legionellen_aktiv', False) is True
+            or getattr(state, 'legionellen_temp_override', None) is not None
+        )
+        if legionellen_betrieb:
             lle_val = getattr(
                 getattr(state.priority_config, 'legionellen', None),
                 'legionellen_max_temp_c', None,

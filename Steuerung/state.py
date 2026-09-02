@@ -112,6 +112,7 @@ class State:
         self.legionellen_target_reached_at: Optional[datetime] = None  # Zeitpunkt der Zielerreichung
         self.legionellen_wochennummer: Optional[int] = None  # In welcher Kalenderwoche wurde zuletzt gemacht?
         self.legionellen_planned_day: Optional[str] = None  # Geplanter Wochentag
+        self.legionellen_planned_tag: Optional[int] = None  # Geplanter Wochentag (0=Mo..6=So) - fuer Start-Gate
         self.legionellen_planned_time: Optional[str] = None  # Geplante Uhrzeit
         self.legionellen_planned_reason: Optional[str] = None  # Grund fuer die Wahl
         self.legionellen_telegram_start_sent: bool = False

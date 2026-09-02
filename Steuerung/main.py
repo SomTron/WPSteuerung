@@ -412,6 +412,7 @@ async def check_periodic_tasks(session, state, last_vpn_check):
 
                         from priority_control import _wochentag_name
                         state.legionellen_planned_day = _wochentag_name(bester_tag)
+                        state.legionellen_planned_tag = bester_tag  # numerisch (0=Mo..6=So) fuer Start-Gate
                         state.legionellen_planned_time = f"{legionellen_cfg.start_uhr}:00"
                         state.legionellen_planned_reason = bester_grund
 

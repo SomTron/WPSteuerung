@@ -1344,6 +1344,7 @@ def evaluate_legionellen(
     legionellen_started_at=None,
     kompressor_ein=False,
     wochenende_cfg=None,
+    legionellen_planned_tag=None,
 ):
     """Bewertet, ob die Legionellenprophylaxe durchgefuehrt werden soll."""
     result = RegelErgebnis(
@@ -1401,6 +1402,36 @@ def evaluate_legionellen(
         if wochenende_cfg is not None
         else None
     )
+    heute_wochentag = now.weekday()  # 0=Mo .. 6=So
+
+    # --- Wochentags-Gate (Nutzeranforderung) ---
+    # Start nur an einem der erlaubten Tage (bevorzugter_tag..letzter_tag,
+    # z.B. Freitag..Sonntag). Liegt bereits ein geplanter bester Forecast-Tag
+    # vor, wird nur noch an EXAKT diesem Tag gestartet. An allen anderen Tagen
+    # bleibt die Regel stumm/inaktiv (kein falscher Start am Mittwoch etc.).
+    erlaubt_tag = range(
+        int(legionellen_cfg.bevorzugter_tag),
+        int(legionellen_cfg.letzter_tag) + 1,
+    )
+    if legionellen_planned_tag is not None:
+        if heute_wochentag != int(legionellen_planned_tag):
+            result.aktiv = True
+            result.einschalten = None
+            result.grund = (
+                f"Legionellen: Start erst am geplanten Tag "
+                f"({legionellen_planned_tag}) - heute ist "
+                f"{_wochentag_name(heute_wochentag)}"
+            )
+            return result
+    elif heute_wochentag not in erlaubt_tag:
+        result.aktiv = True
+        result.einschalten = None
+        result.grund = (
+            f"Legionellen: Nur Start an {_wochentag_name(int(legionellen_cfg.bevorzugter_tag))}"
+            f"-{_wochentag_name(int(legionellen_cfg.letzter_tag))} "
+            f"(heute: {_wochentag_name(heute_wochentag)})"
+        )
+        return result
 
     # Prioritaeten-Kaskade (Legionellen=90 < Wochenende=100): Am Wochenende
     # blockt die Prio-100-Wochenende-Sperre Starts vor fruehestens_uhr
@@ -1504,6 +1535,7 @@ def bewerte_alle_regeln(
     legionellen_started_at=None,
     forecast_day2_wh_qm: Optional[float] = None,
     wochenende_cfg=None,
+    legionellen_planned_tag=None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -1689,6 +1721,7 @@ def bewerte_alle_regeln(
         legionellen_started_at=legionellen_started_at,
         kompressor_ein=kompressor_ein,
         wochenende_cfg=config.wochenende,
+        legionellen_planned_tag=legionellen_planned_tag,
     )
     ergebnisse.append(ergebnis)
 
