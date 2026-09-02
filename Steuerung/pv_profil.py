@@ -7,6 +7,7 @@ ein durchschnittliches Tagesprofil der Einspeiseleistung pro Stunde.
 Das Profil wird auf den maximalen Wert der letzten 7 Tage normalisiert
 und kann mit der heutigen Solax-Prognose skaliert werden.
 """
+import asyncio
 import csv
 import logging
 import os
@@ -136,3 +137,17 @@ def get_erwartete_pv_watt(
 def get_peak_leistung(profil: Dict[int, float]) -> float:
     """Hoechster Wert im Profil (fuer Normalisierung)."""
     return max(profil.values()) if profil else 0.0
+
+
+async def berechne_profil_async(
+    csv_path: str = HEIZUNGSDATEN_CSV,
+    tage: int = 14,
+    force_refresh: bool = False,
+) -> Dict[int, float]:
+    """Async-Wrapper fuer berechne_profil.
+
+    Fuhrt das CSV-Lesen und die Profil-Berechnung im Thread-Pool aus,
+    damit der Event-Loop auf langsamen SD-Karten nicht blockiert wird.
+    Hat den gleichen 30-Minuten-Cache wie die synchrone Variante.
+    """
+    return await asyncio.to_thread(berechne_profil, csv_path, tage, force_refresh)

@@ -1,6 +1,7 @@
 import logging
 import os
 import io
+import asyncio
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -33,30 +34,36 @@ async def get_boiler_temperature_history(session, hours, state, config):
             return
         # Header regelmäßig prüfen und ggf. korrigieren
         check_and_fix_csv_header(file_path)
+
+        def _lade_csvs_sync(pfaden, read_size_bytes):
+            """Liest Kopf + Tail aller relevanten CSV-Dateien synchron.
+            Laeuft im Thread-Pool via asyncio.to_thread, blockiert nicht den Event-Loop."""
+            teile = []
+            for pfad in pfaden:
+                groesse = os.path.getsize(pfad)
+                with open(pfad, "r", encoding="utf-8") as f:
+                    kopf = f.readline()
+                    if groesse > read_size_bytes:
+                        f.seek(groesse - read_size_bytes)
+                        f.readline()  # Angeschnittene Zeile verwerfen
+                    rest = f.readlines()
+                inhalt = kopf + "".join(rest) if rest else kopf
+                teil_df = pd.read_csv(
+                    io.StringIO(inhalt), sep=None, engine="python", on_bad_lines="skip"
+                )
+                teile.append(teil_df)
+            return teile
+
         try:
             # Optimize: nur letzte ~3MB je Datei lesen (schont SD-Karte)
             # Durchschnittliche Zeilenlaenge ~150-200 Bytes, 15000 Zeilen ca. 3MB.
             read_size = 3 * 1024 * 1024  # 3MB
+            pfaden = relevante_csv_dateien(file_path, jetzt=now)
 
-            def _lese_csv_tail(pfad: str):
-                """Liest Kopf + Tail einer CSV-Datei als DataFrame."""
-                groesse = os.path.getsize(pfad)
-                with open(pfad, "r", encoding="utf-8") as f:
-                    kopf = f.readline()
-                    if groesse > read_size:
-                        f.seek(groesse - read_size)
-                        f.readline()  # Angeschnittene Zeile verwerfen
-                    rest = f.readlines()
-                inhalt = kopf + "".join(rest) if rest else kopf
-
-                # Robust: Trennzeichen automatisch erkennen, Fehlerzeilen ueberspringen
-                teil_df = pd.read_csv(io.StringIO(inhalt), sep=None, engine="python", on_bad_lines="skip")
-                return teil_df
-
-            # Aktuelle Datei + Archiv des Vormonats (brueckt Monatsgrenzen);
-            # bei nur einer vorhandenen Datei entfaellt das Concat.
-            teile = [_lese_csv_tail(p) for p in relevante_csv_dateien(file_path, jetzt=now)]
+            # CSV-I/O in Thread-Pool auslagern (blockierendes open/read auf SD-Karte)
+            teile = await asyncio.to_thread(_lade_csvs_sync, pfaden, read_size)
             df = pd.concat(teile, ignore_index=True) if len(teile) > 1 else teile[0]
+
             # Prüfe, ob alle erwarteten Spalten vorhanden sind
             missing = [col for col in EXPECTED_CSV_HEADER if col not in df.columns]
             if missing:
@@ -166,51 +173,60 @@ async def get_boiler_temperature_history(session, hours, state, config):
             "Keine aktive Energiequelle": "blue",
             "Unbekannt": "gray"
         }
-        plt.figure(figsize=(12, 6))
-        shown_labels = set()
-        if "Kompressor" in df.columns and "PowerSource" in df.columns:
-            # Support both old format (EIN/AUS) and new format (1/0)
-            df["Kompressor"] = df["Kompressor"].astype(str).map({
-                "EIN": True, "AUS": False, 
-                "1": True, "0": False,
-                "1.0": True, "0.0": False
-            }).fillna(False)
-            for source, color in color_map.items():
-                mask = (df["PowerSource"] == source) & df["Kompressor"]
-                if mask.any():
-                    label = f"Kompressor EIN ({source})"
-                    if label not in shown_labels:
-                        plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3, label=label)
-                        shown_labels.add(label)
-                    else:
-                        plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3)
-        for col, color, linestyle in [
-            ("T_Oben", "blue", "-"),
-            ("T_Unten", "red", "-"),
-            ("T_Mittig", "purple", "-"),
-            ("T_Verd", "gray", "--")
-        ]:
-            if col in df.columns and df[col].notna().any():
-                plt.plot(df["Zeitstempel"], df[col], label=col, color=color, linestyle=linestyle, linewidth=1.2)
-        if "Einschaltpunkt" in df.columns:
-            df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").ffill()
-            plt.plot(df["Zeitstempel"], df["Einschaltpunkt"], label="Einschaltpunkt (historisch)", linestyle="--", color="green")
-        if "Ausschaltpunkt" in df.columns:
-            df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").ffill()
-            plt.plot(df["Zeitstempel"], df["Ausschaltpunkt"], label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
-        plt.xlim(time_ago, now)
-        plt.ylim(y_min, y_max)
-        plt.xlabel("Zeit")
-        plt.ylabel("Temperatur (°C)")
-        plt.title(f"Boiler-Temperaturverlauf – Letzte {hours} Stunden")
-        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-        plt.xticks(rotation=45)
-        plt.legend(loc="lower left")
-        plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+
+        def _render_chart_sync(df, time_ago, now, y_min, y_max, color_map, hours):
+            """Erzeugt den Matplotlib-Chart und gibt einen BytesIO-Buffer zurueck.
+            Laeuft im Thread-Pool via asyncio.to_thread (CPU-intensiv, blockiert sonst den Loop)."""
+            fig = plt.figure(figsize=(12, 6))
+            shown_labels = set()
+            if "Kompressor" in df.columns and "PowerSource" in df.columns:
+                df["Kompressor"] = df["Kompressor"].astype(str).map({
+                    "EIN": True, "AUS": False,
+                    "1": True, "0": False,
+                    "1.0": True, "0.0": False
+                }).fillna(False)
+                for source, color in color_map.items():
+                    mask = (df["PowerSource"] == source) & df["Kompressor"]
+                    if mask.any():
+                        label = f"Kompressor EIN ({source})"
+                        if label not in shown_labels:
+                            plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3, label=label)
+                            shown_labels.add(label)
+                        else:
+                            plt.fill_between(df["Zeitstempel"], y_min, y_max, where=mask, color=color, alpha=0.3)
+            for col, color, linestyle in [
+                ("T_Oben", "blue", "-"),
+                ("T_Unten", "red", "-"),
+                ("T_Mittig", "purple", "-"),
+                ("T_Verd", "gray", "--")
+            ]:
+                if col in df.columns and df[col].notna().any():
+                    plt.plot(df["Zeitstempel"], df[col], label=col, color=color, linestyle=linestyle, linewidth=1.2)
+            if "Einschaltpunkt" in df.columns:
+                df["Einschaltpunkt"] = pd.to_numeric(df["Einschaltpunkt"], errors="coerce").ffill()
+                plt.plot(df["Zeitstempel"], df["Einschaltpunkt"], label="Einschaltpunkt (historisch)", linestyle="--", color="green")
+            if "Ausschaltpunkt" in df.columns:
+                df["Ausschaltpunkt"] = pd.to_numeric(df["Ausschaltpunkt"], errors="coerce").ffill()
+                plt.plot(df["Zeitstempel"], df["Ausschaltpunkt"], label="Ausschaltpunkt (historisch)", linestyle="--", color="orange")
+            plt.xlim(time_ago, now)
+            plt.ylim(y_min, y_max)
+            plt.xlabel("Zeit")
+            plt.ylabel("Temperatur (°C)")
+            plt.title(f"Boiler-Temperaturverlauf \u2013 Letzte {hours} Stunden")
+            plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+            plt.xticks(rotation=45)
+            plt.legend(loc="lower left")
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+            buf.seek(0)
+            plt.close(fig)
+            return buf
+
+        # Chart-Rendering in Thread-Pool auslagern (CPU-intensiv)
+        buf = await asyncio.to_thread(_render_chart_sync, df, time_ago, now, y_min, y_max, color_map, hours)
+
         buf.seek(0)
-        plt.close()
         url = f"https://api.telegram.org/bot{state.bot_token}/sendPhoto"
         form = FormData()
         form.add_field("chat_id", state.chat_id)

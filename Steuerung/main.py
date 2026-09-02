@@ -483,115 +483,115 @@ async def run_logic_step(session, state, learning_engine=None):
             pcl.setze_neustartsperre(state, minuten=10)
 
     # 3. Sensoren & Safety (Sicherheits-Check)
+    # Hinweis: pcl.check_safety_limits delegiert intern bereits an
+    # safety_logic.check_sensors_and_safety – ein zweiter Aufruf waere redundant.
     if await pcl.check_safety_limits(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
-        # 3b. Sensoren-Check (behalten wir vom alten System)
-        if await control_logic.check_sensors_and_safety(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
-            # 4. Prioritaeten-Engine: Regel bewerten
-            result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig, learning_engine=learning_engine)
-            
-            # 5. Schaltentscheidung
-            should_on = result.get("soll_einschalten", False)
-            state.control._soll_einschalten = should_on
+        # 4. Prioritaeten-Engine: Regel bewerten
+        result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig, learning_engine=learning_engine)
+        
+        # 5. Schaltentscheidung
+        should_on = result.get("soll_einschalten", False)
+        state.control._soll_einschalten = should_on
 
-            # Gewinner-Regel fuer eindeutige AUS-Logs durchreichen
-            # (unterscheidet "Regel X sagt AUS" von "keine Regel aktiv")
-            gewinner = result.get("gewinner_ergebnis")
-            gewinner_name = gewinner.name if gewinner is not None else None
+        # Gewinner-Regel fuer eindeutige AUS-Logs durchreichen
+        # (unterscheidet "Regel X sagt AUS" von "keine Regel aktiv")
+        gewinner = result.get("gewinner_ergebnis")
+        gewinner_name = gewinner.name if gewinner is not None else None
 
-            regelfuehler = result["regelfuehler"]
-            ausschaltpunkt = state.control.aktueller_ausschaltpunkt
-            einschaltpunkt = state.control.aktueller_einschaltpunkt
+        regelfuehler = result["regelfuehler"]
+        ausschaltpunkt = state.control.aktueller_ausschaltpunkt
+        einschaltpunkt = state.control.aktueller_einschaltpunkt
 
-            if state.control.kompressor_ein:
-                # Kompressor laeuft: Ausschalten pruefen
-                await pcl.handle_compressor_off(
-                    state, session, regelfuehler, ausschaltpunkt,
-                    state.min_laufzeit, state.sensors.t_oben, set_kompressor_status,
-                    regel_name=gewinner_name
-                )
-            else:
-                # Kompressor aus: Einschalten pruefen
-                await pcl.handle_compressor_on(
-                                    state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
-                                    state.min_laufzeit, state.min_pause, state.sensors.t_oben,
-                                    set_kompressor_status
-                                )
-            
-            # 6. Sofort-Alarme pruefen
-            await check_and_send_alerts(session, state)
+        if state.control.kompressor_ein:
+            # Kompressor laeuft: Ausschalten pruefen
+            await pcl.handle_compressor_off(
+                state, session, regelfuehler, ausschaltpunkt,
+                state.min_laufzeit, state.sensors.t_oben, set_kompressor_status,
+                regel_name=gewinner_name
+            )
+        else:
+            # Kompressor aus: Einschalten pruefen
+            await pcl.handle_compressor_on(
+                state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
+                state.min_laufzeit, state.min_pause, state.sensors.t_oben,
+                set_kompressor_status
+            )
+        
+        # 6. Sofort-Alarme pruefen
+        await check_and_send_alerts(session, state)
 
-            # 7. Legionellenprophylaxe Lifecycle-Tracking
-            legionellen_cfg_lc = state.priority_config.legionellen
-            if legionellen_cfg_lc.aktiv:
-                gewinner_lc = result.get("gewinner_ergebnis")
-                if gewinner_lc is not None and gewinner_lc.name == "Legionellen":
-                    if gewinner_lc.einschalten is True and not state.legionellen_aktiv:
-                        # Start der Prophylaxe
-                        state.legionellen_aktiv = True
-                        state.legionellen_started_at = datetime.now(state.local_tz)
-                        state.legionellen_telegram_start_sent = False
-                        state.legionellen_telegram_done_sent = False
-                        state.legionellen_temp_override = legionellen_cfg_lc.legionellen_max_temp_c
+        # 7. Legionellenprophylaxe Lifecycle-Tracking
+        legionellen_cfg_lc = state.priority_config.legionellen
+        if legionellen_cfg_lc.aktiv:
+            gewinner_lc = result.get("gewinner_ergebnis")
+            if gewinner_lc is not None and gewinner_lc.name == "Legionellen":
+                if gewinner_lc.einschalten is True and not state.legionellen_aktiv:
+                    # Start der Prophylaxe
+                    state.legionellen_aktiv = True
+                    state.legionellen_started_at = datetime.now(state.local_tz)
+                    state.legionellen_telegram_start_sent = False
+                    state.legionellen_telegram_done_sent = False
+                    state.legionellen_temp_override = legionellen_cfg_lc.legionellen_max_temp_c
+                    state.legionellen_target_reached_at = None
+                    logging.info(
+                        f"Legionellenprophylaxe GESTARTET: Heize auf "
+                        f"{legionellen_cfg_lc.target_temp_c:.0f}C (max {legionellen_cfg_lc.legionellen_max_temp_c:.0f}C)"
+                    )
+                    # Telegram-Benachrichtigung
+                    try:
+                        msg = (f"🦠 *Legionellenprophylaxe gestartet!*\n"
+                               f"Heize auf {legionellen_cfg_lc.target_temp_c:.0f}°C "
+                               f"(unten: {state.sensors.t_unten:.1f}°C)")
+                        from telegram_api import send_telegram_message as _send_tg
+                        await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
+                                       state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
+                        state.legionellen_telegram_start_sent = True
+                    except Exception as e:
+                        logging.warning(f"Legionellen-Telegram-Start fehlgeschlagen: {e}")
+
+                elif gewinner_lc.einschalten is True and state.legionellen_aktiv:
+                    # Laufende Prophylaxe: Heizen bis Zieltemperatur
+                    pass
+
+                elif gewinner_lc.einschalten is False and state.legionellen_aktiv:
+                    # Prophylaxe abschliessen: Zieltemperatur erreicht
+                    t_unten_lc = getattr(state.sensors, "t_unten", None)
+                    if t_unten_lc is not None and isinstance(t_unten_lc, (int, float)) and t_unten_lc >= legionellen_cfg_lc.target_temp_c:
+                        state.legionellen_last_done = datetime.now(state.local_tz).date()
+                        aktuelle_kw = datetime.now(state.local_tz).isocalendar()[1]
+                        state.legionellen_wochennummer = aktuelle_kw
+                        state.legionellen_aktiv = False
+                        state.legionellen_temp_override = None
+                        state.legionellen_started_at = None
                         state.legionellen_target_reached_at = None
                         logging.info(
-                            f"Legionellenprophylaxe GESTARTET: Heize auf "
-                            f"{legionellen_cfg_lc.target_temp_c:.0f}C (max {legionellen_cfg_lc.legionellen_max_temp_c:.0f}C)"
+                            f"Legionellenprophylaxe ABGESCHLOSSEN: "
+                            f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht (unten: {t_unten_lc:.1f}C)"
                         )
-                        # Telegram-Benachrichtigung
                         try:
-                            msg = (f"🦠 *Legionellenprophylaxe gestartet!*\n"
-                                   f"Heize auf {legionellen_cfg_lc.target_temp_c:.0f}°C "
-                                   f"(unten: {state.sensors.t_unten:.1f}°C)")
+                            msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
+                                   f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}°C erreicht (unten: {t_unten_lc:.1f}°C)")
                             from telegram_api import send_telegram_message as _send_tg
                             await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
                                            state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
-                            state.legionellen_telegram_start_sent = True
+                            state.legionellen_telegram_done_sent = True
                         except Exception as e:
-                            logging.warning(f"Legionellen-Telegram-Start fehlgeschlagen: {e}")
-
-                    elif gewinner_lc.einschalten is True and state.legionellen_aktiv:
-                        # Laufende Prophylaxe: Heizen bis Zieltemperatur
-                        pass
-
-                    elif gewinner_lc.einschalten is False and state.legionellen_aktiv:
-                        # Prophylaxe abschliessen: Zieltemperatur erreicht
-                        t_unten_lc = getattr(state.sensors, "t_unten", None)
-                        if t_unten_lc is not None and isinstance(t_unten_lc, (int, float)) and t_unten_lc >= legionellen_cfg_lc.target_temp_c:
-                            state.legionellen_last_done = datetime.now(state.local_tz).date()
-                            aktuelle_kw = datetime.now(state.local_tz).isocalendar()[1]
-                            state.legionellen_wochennummer = aktuelle_kw
-                            state.legionellen_aktiv = False
-                            state.legionellen_temp_override = None
-                            state.legionellen_started_at = None
-                            state.legionellen_target_reached_at = None
-                            logging.info(
-                                f"Legionellenprophylaxe ABGESCHLOSSEN: "
-                                f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht (unten: {t_unten_lc:.1f}C)"
-                            )
-                            try:
-                                msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
-                                       f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}°C erreicht (unten: {t_unten_lc:.1f}°C)")
-                                from telegram_api import send_telegram_message as _send_tg
-                                await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
-                                               state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
-                                state.legionellen_telegram_done_sent = True
-                            except Exception as e:
-                                logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {e}")
-                        else:
-                            # Abgebrochen ohne Zielerreichung
-                            state.legionellen_aktiv = False
-                            state.legionellen_temp_override = None
-                            state.legionellen_started_at = None
-                            state.legionellen_target_reached_at = None
-                            logging.warning("Legionellenprophylaxe ABGEBROCHEN (Ziel nicht erreicht)")
-                else:
-                    # Keine Legionellen-Regel aktiv -> Override zuruecksetzen
-                    if state.legionellen_temp_override is not None:
+                            logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {e}")
+                    else:
+                        # Abgebrochen ohne Zielerreichung
+                        state.legionellen_aktiv = False
                         state.legionellen_temp_override = None
-                        logging.debug("Legionellen-Temp-Override zurueckgesetzt")
+                        state.legionellen_started_at = None
+                        state.legionellen_target_reached_at = None
+                        logging.warning("Legionellenprophylaxe ABGEBROCHEN (Ziel nicht erreicht)")
+            else:
+                # Keine Legionellen-Regel aktiv -> Override zuruecksetzen
+                if state.legionellen_temp_override is not None:
+                    state.legionellen_temp_override = None
+                    logging.debug("Legionellen-Temp-Override zurueckgesetzt")
 
 def build_heizungsdaten_zeile(state):
-    """Baut die CSV-Datenzeile fuer heizungsdaten.csv (19 Spalten).
+    """Baut die CSV-Datenzeile fuer heizungsdaten.csv (20 Spalten).
 
     Muss mit utils.EXPECTED_CSV_HEADER uebereinstimmen -- abgesichert
     durch tests/test_csv_konsistenz.py."""

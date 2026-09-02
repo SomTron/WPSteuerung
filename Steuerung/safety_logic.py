@@ -17,8 +17,11 @@ async def handle_critical_compressor_error(session, state, error_context: str):
     """Behandelt kritische Fehler beim Kompressor-Ausschalten."""
     msg = f"🚨 KRITISCHER FEHLER: Kompressor bleibt {error_context} eingeschaltet!"
     logging.critical(f"Kritischer Fehler: Kompressor konnte {error_context} nicht ausgeschaltet werden!")
-    asyncio.create_task(send_telegram_message(
-        session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN))
+    # Kritische Alarme awaiten statt fire-and-forget: Task-Referenz wuerde sonst
+    # vom GC eingesammelt, bevor die Nachricht zugestellt ist (stiller Fehler).
+    await send_telegram_message(
+        session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN)
+
 
 async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten):
     """Prueft auf Sensorfehler und setzt Zeitstempel bei Fehlern."""
