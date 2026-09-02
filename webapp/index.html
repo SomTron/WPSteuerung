@@ -1294,6 +1294,14 @@
                     const mm2 = Math.round((lrn.learned_morning_target_hour - mh) * 60);
                     moEl.textContent = String(mh).padStart(2, '0') + ':' + String(mm2).padStart(2, '0')
                         + ' (' + mSamples + ' Zapfungen)';
+                } else {
+                    // Noch keine Morgen-Zapfung gelernt -> aussagekraeftiger Hinweis
+                    const mDef = lrn.learned_morning_target_hour ?? 7.0;
+                    const mh = Math.floor(mDef);
+                    const mm2 = Math.round((mDef - mh) * 60);
+                    moEl.textContent = 'Default ' + String(mh).padStart(2, '0') + ':' + String(mm2).padStart(2, '0')
+                        + ' (noch <3 Morgen-Zapfungen)';
+                    moEl.style.color = 'var(--text-secondary)';
                 }
             }
 
@@ -1307,8 +1315,12 @@
                     fcEl.style.color = rFc < 0.9 ? '#ffa726' : (rFc > 1.1 ? '#66bb6a' : '');
                 } else if (nFc > 0) {
                     fcEl.textContent = 'sammelt Daten (' + nFc + '/3 Tage)';
+                    fcEl.style.color = 'var(--text-secondary)';
+                } else {
+                    // Noch keine Kalibrierungsdaten -> Hinweis statt N/A
+                    fcEl.textContent = 'noch keine Daten (ab 3 Tagen)';
+                    fcEl.style.color = 'var(--text-secondary)';
                 }
-                // n==0 -> N/A lassen
             }
 
             // Quellen-Split (Baustein A)
@@ -1491,6 +1503,26 @@
             document.getElementById('switch-night').className = 'switch' + (mode.nightsperre_active ? ' active' : '');
             document.getElementById('switch-sommer').className = 'switch' + (mode.sommer_modus_aktiv ? ' active' : '');
             document.getElementById('sommer-info').textContent = mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv';
+
+            // Legionellenprophylaxe (Planung / Status)
+            const lgInfo = document.getElementById('legionellen-info');
+            const lgDetail = document.getElementById('legionellen-detail');
+            const lg = statusData.legionellen;
+            if (lgInfo && lg) {
+                if (lg.aktiv) {
+                    lgInfo.textContent = '🔄 aktiv (Ziel ' + (lg.target_temp_c ?? '60') + '°C)';
+                    lgDetail.textContent = 'Legionellenfahrt laeuft gerade';
+                } else if (lg.planned_day) {
+                    lgInfo.textContent = '⏰ geplant: ' + lg.planned_day + ' ' + (lg.planned_time || '');
+                    lgDetail.textContent = lg.planned_reason ? ('Start am besten Forecast-Tag · ' + lg.planned_reason) : '';
+                } else if (lg.last_done) {
+                    lgInfo.textContent = '✓ erledigt: ' + lg.last_done;
+                    lgDetail.textContent = 'Diese Woche abgeschlossen';
+                } else {
+                    lgInfo.textContent = '— keine Planung';
+                    lgDetail.textContent = '';
+                }
+            }
 
             // Energie
             document.getElementById('energy-soc').textContent = energy.soc ?? 0;
@@ -1698,6 +1730,9 @@
                             <div class="switch ${mode.sommer_modus_aktiv ? 'active' : ''}" id="switch-sommer"></div>
                         <div class="info-row" style="font-size:0.8rem;color:var(--text-secondary)" id="sommer-info">${mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv'}</div>
                         </div>
+                        <!-- Legionellenprophylaxe-Planung (aus state.legionellen_planned_*) -->
+                        <div class="info-row"><span class="info-label">🦠 Legionellen</span><span class="info-value" id="legionellen-info">${(statusData.legionellen && statusData.legionellen.aktiv) ? '🔄 aktiv (Ziel ' + (statusData.legionellen.target_temp_c ?? '60') + '°C)' : (statusData.legionellen && statusData.legionellen.planned_day ? '⏰ geplant: ' + statusData.legionellen.planned_day + ' ' + (statusData.legionellen.planned_time || '') : (statusData.legionellen && statusData.legionellen.last_done ? '✓ KW ' + statusData.legionellen.last_done.split('-')[1] : '— keine Planung'))}</span></div>
+                        <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)" id="legionellen-detail">${(statusData.legionellen && statusData.legionellen.aktiv) ? '' : (statusData.legionellen && statusData.legionellen.planned_reason ? ('Start am besten Forecast-Tag · ' + statusData.legionellen.planned_reason) : '')}</div>
                     </div>
 
                     <!-- Energie & Solar -->
