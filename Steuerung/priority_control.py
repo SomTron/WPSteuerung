@@ -7,7 +7,7 @@ deren Bedingungen erfüllt sind, gewinnt.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Dict, Tuple, List
 from dataclasses import dataclass
 

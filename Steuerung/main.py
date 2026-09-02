@@ -6,7 +6,7 @@ import signal
 import uvicorn
 import aiofiles
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 # Modules
 from config_manager import ConfigManager
