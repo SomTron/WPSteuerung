@@ -550,51 +550,33 @@ async def run_logic_step(session, state, learning_engine=None):
                             logging.warning(f"Legionellen-Telegram-Start fehlgeschlagen: {e}")
 
                     elif gewinner_lc.einschalten is True and state.legionellen_aktiv:
-                        # Laufende Prophylaxe: Pruefen ob Ziel erreicht
-                        if state.legionellen_target_reached_at is None:
-                            t_unten_lc = state.sensors.t_unten
-                            if t_unten_lc is not None and t_unten_lc >= legionellen_cfg_lc.target_temp_c:
-                                state.legionellen_target_reached_at = datetime.now(state.local_tz)
-                                logging.info(
-                                    f"Legionellen: Zieltemperatur {legionellen_cfg_lc.target_temp_c:.0f}C "
-                                    f"erreicht! Starte Probezeit ({legionellen_cfg_lc.probezeit_minuten}m)"
-                                )
-                        else:
-                            # Probezeit abwarten
-                            probezeit_ende = state.legionellen_target_reached_at + timedelta(
-                                minutes=legionellen_cfg_lc.probezeit_minuten
-                            )
-                            if datetime.now(state.local_tz) >= probezeit_ende:
-                                logging.info(
-                                    f"Legionellen: Probezeit von {legionellen_cfg_lc.probezeit_minuten}m "
-                                    f"erfolgreich abgeschlossen"
-                                )
+                        # Laufende Prophylaxe: Heizen bis Zieltemperatur
+                        pass
 
                     elif gewinner_lc.einschalten is False and state.legionellen_aktiv:
-                        # Prophylaxe abschliessen
-                        if state.legionellen_target_reached_at is not None:
-                            probezeit_ende = state.legionellen_target_reached_at + timedelta(
-                                minutes=legionellen_cfg_lc.probezeit_minuten
+                        # Prophylaxe abschliessen: Zieltemperatur erreicht
+                        t_unten_lc = getattr(state.sensors, "t_unten", None)
+                        if t_unten_lc is not None and isinstance(t_unten_lc, (int, float)) and t_unten_lc >= legionellen_cfg_lc.target_temp_c:
+                            state.legionellen_last_done = datetime.now(state.local_tz).date()
+                            aktuelle_kw = datetime.now(state.local_tz).isocalendar()[1]
+                            state.legionellen_wochennummer = aktuelle_kw
+                            state.legionellen_aktiv = False
+                            state.legionellen_temp_override = None
+                            state.legionellen_started_at = None
+                            state.legionellen_target_reached_at = None
+                            logging.info(
+                                f"Legionellenprophylaxe ABGESCHLOSSEN: "
+                                f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht (unten: {t_unten_lc:.1f}C)"
                             )
-                            if datetime.now(state.local_tz) >= probezeit_ende:
-                                state.legionellen_last_done = datetime.now(state.local_tz).date()
-                                aktuelle_kw = datetime.now(state.local_tz).isocalendar()[1]
-                                state.legionellen_wochennummer = aktuelle_kw
-                                state.legionellen_aktiv = False
-                                state.legionellen_temp_override = None
-                                logging.info(
-                                    f"Legionellenprophylaxe ABGESCHLOSSEN: "
-                                    f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht"
-                                )
-                                try:
-                                    msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
-                                           f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}°C erreicht")
-                                    from telegram_api import send_telegram_message as _send_tg
-                                    await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
-                                                   state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
-                                    state.legionellen_telegram_done_sent = True
-                                except Exception as e:
-                                    logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {e}")
+                            try:
+                                msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
+                                       f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}°C erreicht (unten: {t_unten_lc:.1f}°C)")
+                                from telegram_api import send_telegram_message as _send_tg
+                                await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
+                                               state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
+                                state.legionellen_telegram_done_sent = True
+                            except Exception as e:
+                                logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {e}")
                         else:
                             # Abgebrochen ohne Zielerreichung
                             state.legionellen_aktiv = False
@@ -713,6 +695,18 @@ async def main_loop():
             try:
                 # Tageswechsel und Laufzeit
                 handle_day_transition(state, now)
+
+                # Urlaubsmodus: automatisches Beenden nach Ablauf von urlaubsmodus_ende
+                urlaub_ende = getattr(state, "urlaubsmodus_ende", None)
+                if (
+                    getattr(state, "urlaubsmodus_aktiv", False) is True
+                    and isinstance(urlaub_ende, (datetime, date))
+                    and now >= urlaub_ende
+                ):
+                    state.urlaubsmodus_aktiv = False
+                    state.urlaubsmodus_ende = None
+                    state.urlaubsmodus_start = None
+                    logging.info("Urlaubsmodus automatisch beendet (Endzeitpunkt erreicht).")
                 if state.control.kompressor_ein and state.stats.last_compressor_on_time:
                     state.stats.current_runtime = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
                 else:

@@ -94,7 +94,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
             logging.warning(f"❌ Keine gültigen Daten nach Zeitstempel-Parsing für die letzten {hours} Stunden.")
             try:
                 latest_data = pd.read_csv(file_path, usecols=["Zeitstempel"])
-                latest_data["Zeit stempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
+                latest_data["Zeitstempel"] = pd.to_datetime(latest_data["Zeitstempel"], errors='coerce')
                 latest_time = latest_data["Zeitstempel"].dropna().max() if not latest_data["Zeitstempel"].dropna().empty else "unbekannt"
                 from telegram_ui import get_keyboard
                 keyboard = get_keyboard(state)

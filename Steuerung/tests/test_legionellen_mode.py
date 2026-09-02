@@ -160,30 +160,15 @@ class TestEvaluateLegionellen:
         assert result.einschalten is True
         assert "heize weiter" in result.grund
 
-    def test_aktiv_ziel_erreicht_probezeit(self, legionellen_config, temp_dict):
-        """Ziel erreicht aber Probezeit noch nicht abgelaufen -> EIN."""
+    def test_aktiv_ziel_erreicht_schaltet_aus(self, legionellen_config, temp_dict):
+        """Ziel erreicht (z.B. >= 60 Grad unten) -> sofort AUS."""
         from priority_control import evaluate_legionellen
         now = datetime(2025, 3, 21, 11, 0, 0)
         td = {"oben": 62.0, "unten": 60.5, "mittig": 61.0}  # >= target=60
-        started = datetime(2025, 3, 21, 10, 55, 0)  # erst 5 Min her (Probezeit=15)
         result = evaluate_legionellen(
             legionellen_config, td, now,
             legionellen_aktiv=True,
-            legionellen_started_at=started,
-        )
-        assert result.einschalten is True
-        assert "Probezeit" in result.grund
-
-    def test_aktiv_ziel_erreicht_probezeit_abgelaufen(self, legionellen_config, temp_dict):
-        """Ziel erreicht UND Probezeit abgelaufen -> AUS."""
-        from priority_control import evaluate_legionellen
-        now = datetime(2025, 3, 21, 11, 15, 0)
-        td = {"oben": 62.0, "unten": 60.5, "mittig": 61.0}
-        started = datetime(2025, 3, 21, 10, 0, 0)  # 75 Min her
-        result = evaluate_legionellen(
-            legionellen_config, td, now,
-            legionellen_aktiv=True,
-            legionellen_started_at=started,
+            legionellen_started_at=datetime(2025, 3, 21, 10, 0, 0),
         )
         assert result.einschalten is False
         assert "AUS" in result.grund

@@ -1388,27 +1388,16 @@ def evaluate_legionellen(
         return result
     if legionellen_aktiv:
         if t_unten >= legionellen_cfg.target_temp_c:
-            if legionellen_started_at is not None:
-                probezeit_ende = legionellen_started_at + timedelta(
-                    minutes=legionellen_cfg.probezeit_minuten
-                )
-                if now >= probezeit_ende:
-                    result.einschalten = False
-                    result.grund = (
-                        f"Legionellen: {t_unten:.1f}C >= {legionellen_cfg.target_temp_c}C "
-                        f"erreicht und Probezeit ({legionellen_cfg.probezeit_minuten}m) abgelaufen -> AUS"
-                    )
-                    return result
-            result.einschalten = True
+            result.einschalten = False
             result.grund = (
-                f"Legionellen aktiv: {t_unten:.1f}C, Ziel {legionellen_cfg.target_temp_c}C "
-                f"erreicht, warte Probezeit ({legionellen_cfg.probezeit_minuten}m)"
+                f"Legionellen: unten {t_unten:.1f}C >= {legionellen_cfg.target_temp_c:.0f}C "
+                f"Zieltemperatur erreicht -> AUS"
             )
             return result
         else:
             result.einschalten = True
             result.grund = (
-                f"Legionellen aktiv: {t_unten:.1f}C < {legionellen_cfg.target_temp_c}C, "
+                f"Legionellen aktiv: {t_unten:.1f}C < {legionellen_cfg.target_temp_c:.0f}C, "
                 f"heize weiter"
             )
             return result

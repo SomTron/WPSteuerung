@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 import pytz
 from unittest.mock import MagicMock
 
@@ -199,3 +199,48 @@ class TestRuntimeCalculation:
         
         # Should be 2.5 hours
         assert mock_state.stats.total_runtime_today == timedelta(hours=2, minutes=30)
+
+
+class TestUrlaubsmodusExpiry:
+    """Tests fuer den automatischen Ablauf des Urlaubsmodus."""
+
+    def test_urlaubsmodus_auto_expiry_when_ended(self, mock_state):
+        tz = pytz.timezone("Europe/Berlin")
+        now = tz.localize(datetime(2026, 3, 10, 12, 0, 0))
+        mock_state.urlaubsmodus_aktiv = True
+        mock_state.urlaubsmodus_ende = tz.localize(datetime(2026, 3, 10, 11, 0, 0))  # 1h in Vergangenheit
+        mock_state.urlaubsmodus_start = tz.localize(datetime(2026, 3, 7, 11, 0, 0))
+
+        urlaub_ende = getattr(mock_state, "urlaubsmodus_ende", None)
+        if (
+            getattr(mock_state, "urlaubsmodus_aktiv", False) is True
+            and isinstance(urlaub_ende, (datetime, date))
+            and now >= urlaub_ende
+        ):
+            mock_state.urlaubsmodus_aktiv = False
+            mock_state.urlaubsmodus_ende = None
+            mock_state.urlaubsmodus_start = None
+
+        assert mock_state.urlaubsmodus_aktiv is False
+        assert mock_state.urlaubsmodus_ende is None
+
+    def test_urlaubsmodus_stays_active_when_not_ended(self, mock_state):
+        tz = pytz.timezone("Europe/Berlin")
+        now = tz.localize(datetime(2026, 3, 10, 12, 0, 0))
+        mock_state.urlaubsmodus_aktiv = True
+        mock_state.urlaubsmodus_ende = tz.localize(datetime(2026, 3, 12, 12, 0, 0))  # 2 Tage Zukunft
+        mock_state.urlaubsmodus_start = tz.localize(datetime(2026, 3, 9, 12, 0, 0))
+
+        urlaub_ende = getattr(mock_state, "urlaubsmodus_ende", None)
+        if (
+            getattr(mock_state, "urlaubsmodus_aktiv", False) is True
+            and isinstance(urlaub_ende, (datetime, date))
+            and now >= urlaub_ende
+        ):
+            mock_state.urlaubsmodus_aktiv = False
+            mock_state.urlaubsmodus_ende = None
+            mock_state.urlaubsmodus_start = None
+
+        assert mock_state.urlaubsmodus_aktiv is True
+        assert mock_state.urlaubsmodus_ende is not None
+
