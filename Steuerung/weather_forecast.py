@@ -54,7 +54,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
     """
     Fetches solar radiation forecast from Open-Meteo.
     Returns: (rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
-        Radiation in kWh/m², times as strings "HH:MM"."""
+        Radiation in kWh/mÃ‚Â², times as strings "HH:MM", hourly_today_wm2 is Dict[hour: W/mÃ‚Â²]."""
     # Use config values or defaults
     lat = config.Wetterprognose.LATITUDE if config else 46.7142
     lon = config.Wetterprognose.LONGITUDE if config else 13.6361
@@ -112,6 +112,13 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
                 now = datetime.now(tz)
                 today_str = now.strftime("%Y-%m-%d")
                 tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+
+                # Hourly forecast for today (W/mÃ‚Â² per hour)
+                hourly_today_wm2 = {}
+                for t_str, rad in zip(times, total_radiation):
+                    dt = datetime.fromisoformat(t_str.replace('Z','+00:00'))
+                    if dt.strftime("%Y-%m-%d") == today_str:
+                        hourly_today_wm2[dt.hour] = rad
                 
                 rad_today = daily_totals.get(today_str)
                 rad_tomorrow = daily_totals.get(tomorrow_str)
@@ -129,12 +136,12 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
                 rad_day2_str = f"{rad_day2:.2f}" if rad_day2 is not None else "None"
                 sr_str = sunrise_today if sunrise_today is not None else "None"
                 ss_str = sunset_today if sunset_today is not None else "None"
-                logging.info(f"Solar forecast updated: Today={rad_today_str} kWh/m² ({sr_str}-{ss_str}), Tomorrow={rad_tomorrow_str} kWh/m², Day2={rad_day2_str} kWh/m²")
+                logging.info(f"Solar forecast updated: Today={rad_today_str} kWh/mÃ‚Â² ({sr_str}-{ss_str}), Tomorrow={rad_tomorrow_str} kWh/mÃ‚Â², Day2={rad_day2_str} kWh/mÃ‚Â²")
                 
                 # Log to dedicated CSV
                 await log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=csv_path)
                 
-                return rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow
+                return rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, hourly_today_wm2
             else:
                 error_text = await response.text()
                 logging.error(f"Error fetching solar forecast: Status {response.status}, Details: {error_text}")

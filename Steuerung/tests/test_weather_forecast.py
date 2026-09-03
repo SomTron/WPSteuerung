@@ -80,8 +80,8 @@ class TestGetSolarForecastReturnValueCount:
             baue_mock_session(baue_api_payload()), None,
             csv_path=str(tmp_path / "forecast.csv"),
         )
-        assert len(result) == 7
-        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tom, ss_tom = result
+        assert len(result) == 8
+        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tom, ss_tom, hourly = result
         assert rad_today == pytest.approx(0.11)      # (100+10)/1000 kWh/m²
         assert rad_tomorrow == pytest.approx(0.22)
         assert rad_day2 == pytest.approx(0.33)
@@ -282,7 +282,7 @@ class TestMainCheckPeriodicTasks:
         state = self._baue_state()
 
         with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-            mock_forecast.return_value = (2.5, 3.0, 1.5, "06:15", "20:15", "06:16", "20:14")
+            mock_forecast.return_value = (2.5, 3.0, 1.5, "06:15", "20:15", "06:16", "20:14", {})
             with patch("main.check_vpn_status", new_callable=AsyncMock):
                 last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
                 result = await check_periodic_tasks(AsyncMock(), state, last_check)
@@ -300,7 +300,7 @@ class TestMainCheckPeriodicTasks:
         state = self._baue_state()
 
         with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-            mock_forecast.return_value = (None,) * 7
+            mock_forecast.return_value = (None,) * 8
             with patch("main.check_vpn_status", new_callable=AsyncMock):
                 last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
                 result = await check_periodic_tasks(AsyncMock(), state, last_check)

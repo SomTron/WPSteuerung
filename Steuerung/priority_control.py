@@ -1540,6 +1540,7 @@ def bewerte_alle_regeln(
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
+    forecast_hourly_wh: Optional[Dict[int, float]] = None,
     fc_ratio: float = 1.0,
     surplus_profile: Optional[Dict[str, float]] = None,
     recent_usage_events: Optional[List[Dict]] = None,
