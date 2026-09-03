@@ -444,6 +444,11 @@ class LearningEngine:
         # konsistent bleibt.
         now = self._naiv(now)
 
+        # Reset daily usage counter at midnight
+        if hasattr(self, '_last_reset_date') and self._last_reset_date != now.date():
+            self._today_usage_count = 0
+            self._last_reset_date = now.date()
+
         dt_secs = 0.0
         if self._last_update_time is not None:
             dt_secs = (now - self._last_update_time).total_seconds()
