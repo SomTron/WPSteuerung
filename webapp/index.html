@@ -1443,6 +1443,17 @@
                 const stunden = pvp.stunden;
                 el('pv-mittag').textContent = stunden['12'] != null ? stunden['12'].toFixed(0) + ' W' : 'N/A';
                 el('pv-abend').textContent = stunden['17'] != null ? stunden['17'].toFixed(0) + ' W' : 'N/A';
+                
+                // Forecast-Daten anzeigen (falls verfügbar)
+                if (pvp.forecast_stunden) {
+                    const forecastValues = Object.values(pvp.forecast_stunden);
+                    const forecastSum = forecastValues.reduce((a,b) => a+b, 0);
+                    const forecastPeak = Math.max(...forecastValues);
+                    el('pv-forecast').textContent = 
+                        `Summe: ${forecastSum.toFixed(0)} Wh/qm, Peak: ${forecastPeak.toFixed(0)} W`;
+                    el('forecast-info-row').style.display = 'flex';
+                }
+                
                 zeichnePvProfil(stunden);
             }
 
@@ -1848,11 +1859,15 @@
                     <div class="card">
                         <div class="card-header">
                             <div class="card-icon green">☀️</div>
-                            <div class="card-title">PV-Profil (gelernt)</div>
+                            <div class="card-title">PV-Profil (gelernt + Forecast)</div>
                         </div>
                         <div class="info-row"><span class="info-label">Peak-Leistung (&empty;)</span><span class="info-value" id="pv-peak">N/A</span></div>
                         <div class="info-row"><span class="info-label">Mittags-Erwartung</span><span class="info-value" id="pv-mittag">N/A</span></div>
                         <div class="info-row"><span class="info-label">Abend-Erwartung (17h)</span><span class="info-value" id="pv-abend">N/A</span></div>
+                        <div class="info-row" id="forecast-info-row" style="display:none">
+                            <span class="info-label">Forecast (stundenscharf)</span>
+                            <span class="info-value" id="pv-forecast">N/A</span>
+                        </div>
                         <canvas id="pv-profil-chart" height="90" style="margin-top:8px"></canvas>
                     </div>
 

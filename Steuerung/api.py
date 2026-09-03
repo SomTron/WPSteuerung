@@ -1,4 +1,4 @@
-try:
+﻿try:
     from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
 except ImportError:
     SOLAR_DATA_STALE_THRESHOLD_MIN = 15
@@ -126,7 +126,7 @@ class ControlCommand(BaseModel):
 
 app = FastAPI(title="WPSteuerung API", description="API for Heat Pump Control Android App", version="1.0.0")
 
-# CORS Middleware hinzufügen
+# CORS Middleware hinzufÃ¼gen
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # TODO: In Produktion spezifische Origins angeben (Sicherheitsrisiko!)
@@ -379,16 +379,64 @@ def get_status():
         logging.debug(f"Komfort-Info nicht verfuegbar: {e}")
 
     pv_profil_info: dict = {}
+    forecast_info: dict = {}
     try:
         if _pv_profil_modul is not None:
-            profil = _pv_profil_modul.berechne_profil()
+            # Forecast-Scaling berechnen (heute vs historisch)
+            forecast_today = getattr(shared_state.solar, 'forecast_today', None)
+            historisches_wh_qm = None
+            if _pv_profil_modul is not None and hasattr(_pv_profil_modul, 'berechne_forecast_scaling'):
+                # Historischer Wert: 14-Tage-Durchschnitt der CSV
+                import pandas as pd
+                import os
+                csv_path = HEIZUNGSDATEN_CSV
+                if os.path.exists(csv_path):
+                    try:
+                        df = pd.read_csv(csv_path)
+                        if 'FeedinPower' in df.columns and 'Zeitstempel' in df.columns:
+                            # Letzten 14 Tage
+                            from datetime import timedelta
+                            cutoff = datetime.now() - timedelta(days=14)
+                            df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'], errors='coerce')
+                            recent = df[df['Zeitstempel'] >= cutoff]
+                            if len(recent) > 0:
+                                # Integrierte Einspeisung pro Tag (Wh)
+                                recent['Day'] = recent['Zeitstempel'].dt.date
+                                daily_wh = recent.groupby('Day')['FeedinPower'].apply(
+                                    lambda x: x.sum() * 15 / 60  # 15 Min Intervall
+                                ).mean()
+                                historisches_wh_qm = daily_wh if not pd.isna(daily_wh) else None
+                    except Exception:
+                        pass
+            
+            # PV-Profil mit Forecast-Scaling
+            forecast_today_qm = forecast_today if isinstance(forecast_today, (int, float)) else None
+            if historisches_wh_qm and historisches_wh_qm > 0 and forecast_today_qm and forecast_today_qm > 0:
+                scaling = round(forecast_today_qm / historisches_wh_qm, 3)
+                forecast_info["scaling"] = scaling
+                forecast_info["historical_wh_qm"] = round(historisches_wh_qm, 0)
+                forecast_info["forecast_vs_historical"] = f"{round((scaling-1)*100, 1)}%"
+            
+            profil = _pv_profil_modul.berechne_profil(forecast_scaling=scaling if 'scaling' in forecast_info else None)
             peak = _pv_profil_modul.get_peak_leistung(profil)
+            
+            # Forecast-skaliertes PV-Profil (stundenscharf)
+            forecast_hourly = getattr(shared_state.solar, 'forecast_hourly_wm2', None)
+            if forecast_hourly and isinstance(forecast_hourly, dict):
+                # Skalieren mit historischem Profil, falls verfügbar
+                if 'scaling' in forecast_info:
+                    forecast_hourly = {k: round(v * scaling, 1) for k, v in forecast_hourly.items()}
+            else:
+                forecast_hourly = None
+            
             pv_profil_info = {
                 "stunden": {str(k): v for k, v in sorted(profil.items())},
                 "peak_watt": peak,
+                "forecast_stunden": forecast_hourly,
+                "forecast_available": forecast_hourly is not None,
             }
     except Exception as e:
-        logging.debug(f"PV-Profil nicht verfuegbar: {e}")
+        logging.debug(f"PV-Profil/Forecast nicht verfuegbar: {e}")
 
     return {
         "temperatures": {
@@ -422,6 +470,7 @@ def get_status():
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
         },
+        "forecast": forecast_info,
         "learning": shared_state.learning_engine.get_info() if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else {
             "heat_rates": {"winter": {"avg": 3.0, "count": 0}, "transition": {"avg": 3.0, "count": 0}, "summer": {"avg": 3.0, "count": 0}},
             "learned_target_hour": 17.0,
@@ -455,6 +504,22 @@ def get_status():
             "max_duration_hours": getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None).max_duration_hours if getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None) else None,
         },
         "pv_profil": pv_profil_info,
+        "status_indikatoren": {
+            "solar_stale": _solar_stale_status(),
+            "verdampfer_shutdowns_stunde": getattr(shared_state.control, 'verdampfer_shutdowns', []),
+        },
+        "learning_engine": {
+            "zapfungen_heute": getattr(shared_state, 'learning_engine', None) and getattr(shared_state.learning_engine, '_today_usage_count', 0) if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else 0,
+            "gelerntes_morgenfenster": getattr(shared_state, 'learning_engine', None) and getattr(shared_state.learning_engine, '_learned_morning_window', None) if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else None,
+            "gelerntes_abendfenster": getattr(shared_state, 'learning_engine', None) and getattr(shared_state.learning_engine, '_learned_evening_window', None) if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else None,
+        },
+        "debug_info": {
+            "solar_power": getattr(shared_state.solar, 'acpower', None),
+            "feedin_power": getattr(shared_state.solar, 'feedinpower', None),
+            "battery_soc": getattr(shared_state.solar, 'soc', None),
+            "kompressor_on": getattr(shared_state.control, 'kompressor_ein', False),
+            "active_rule": getattr(shared_state.control, 'active_rule_name', None),
+        },
     }
 
 
@@ -525,8 +590,38 @@ async def control_system(cmd: ControlCommand):
         if "set_kompressor" in control_funcs:
             await control_funcs["set_kompressor"](shared_state, False, force=True)
             return {"status": "success", "message": "Compressor forced OFF"}
-            
-    elif cmd.command == "set_mode":
+        return {"status": "error", "message": "Control function not available"}
+
+
+@app.get("/config/export")
+def export_config():
+    """Export the current full configuration as JSON."""
+    if not shared_state:
+        raise HTTPException(status_code=503, detail="System not initialized")
+    
+    try:
+        # Export both INI-style and JSON priority configs
+        return {
+            "config_ini": shared_state.config.dict() if hasattr(shared_state.config, 'dict') else {},
+            "priority_config": shared_state.priority_config.dict() if hasattr(shared_state.priority_config, 'dict') else {},
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error exporting config: {str(e)}")
+
+
+@app.get("/debug/csv")
+def get_debug_csv():
+    """Serve debug CSV data."""
+    pass
+
+
+@app.post("/command")
+async def handle_command(cmd: CommandRequest):
+    """Handle incoming commands."""
+    if not shared_state:
+        raise HTTPException(status_code=503, detail="System not initialized")
+
+    if cmd.command == "set_mode":
         mode = cmd.params.get("mode") if cmd.params else None
         if mode == "bademodus":
             shared_state.bademodus_aktiv = cmd.params.get("active", False) if cmd.params else False
