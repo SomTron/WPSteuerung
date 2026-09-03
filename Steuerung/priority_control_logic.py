@@ -136,8 +136,6 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     }
 
     pv_leistung = state.solar.feedinpower if state.solar.feedinpower else 0.0
-    if pv_leistung < 0:
-        pv_leistung = 0.0
 
     # --- Bademodus/Urlaubsmodus-Kopplung ---
     # Wir arbeiten mit einer Kopie der Config, um die original-Config nicht zu aendern.

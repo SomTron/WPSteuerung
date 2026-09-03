@@ -5,6 +5,7 @@ STUMM - sie feuerte nie, ohne dass irgendwo eine Warnung erschien.
 """
 import os
 import sys
+from datetime import datetime
 from types import SimpleNamespace
 import logging
 
@@ -97,6 +98,7 @@ class FakeLearningEngine:
 
 def baue_pcl_state():
     tz = pytz.timezone("Europe/Berlin")
+    now = datetime.now(tz)
     return SimpleNamespace(
         local_tz=tz,
         priority_config=WPSteuerungConfig(),
@@ -108,7 +110,7 @@ def baue_pcl_state():
             komfort_aktiv=False, alle_ergebnisse=[], _soll_einschalten=False,
         ),
         solar=SimpleNamespace(feedinpower=0.0, forecast_today=None, forecast_tomorrow=None,
-                              forecast_day2=None),
+                              forecast_day2=None, last_api_call=now),
         config=SimpleNamespace(Urlaubsmodus=SimpleNamespace(URLAUBSABSENKUNG=5.0)),
         bademodus_aktiv=False,
         urlaubsmodus_aktiv=False,

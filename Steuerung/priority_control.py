@@ -1752,6 +1752,7 @@ def bewerte_alle_regeln(
     if solar_stale:
         _stale_namen = {
             "Einspeisung",
+            "CalcStart",
             "Batterie",
             "AdaptivePV",
             "Zeitfenster",
@@ -1765,7 +1766,7 @@ def bewerte_alle_regeln(
                 e.einschalten = None
                 e.grund = "Solar-Daten veraltet -> Regel pausiert"
         logging.warning(
-            "Solar-Daten veraltet: PV/Batterie/Einspeisung/Forecast/Zeitfenster pausiert"
+            "Solar-Daten veraltet: PV/Batterie/Einspeisung/CalcStart/Forecast/Zeitfenster pausiert"
         )
 
     # Nach Prioritaet sortieren (hoeher zuerst)

@@ -557,7 +557,7 @@ class LegionellenConfig(BaseModel):
     letzter_tag: int = Field(default=6, description="Spätester Tag für die Prophylaxe (6=Sonntag)")
     start_uhr: int = Field(default=8, description="Früheste Startstunde am Tag")
     spaeteste_start_uhr: int = Field(default=16, description="Späteste Startstunde (muss bis dahin begonnen haben)")
-    probezeit_minuten: int = Field(default=30, description="Wie lange die Zieltemperatur gehalten werden muss (Minuten)")
+    max_duration_hours: int = Field(default=4, description="Maximale Laufzeit der Legionellenfahrt (Stunden)")
     erforderliche_wh_qm: float = Field(default=800.0, description="Mindest-PV-Prognose Wh/qm für den bevorzugten Tag")
     pv_prognose_schwelle_gut: float = Field(default=2000.0, description="PV-Prognose >= diesem Wert gilt als 'guter PV-Tag' (Wh/qm)")
 
@@ -575,8 +575,8 @@ class LegionellenConfig(BaseModel):
             raise ValueError("legionellen_max_temp_c muss > target_temp_c sein")
         if not (0 <= self.start_uhr <= 23):
             raise ValueError(f"start_uhr={self.start_uhr} ausserhalb 0-23")
-        if self.probezeit_minuten < 5:
-            raise ValueError(f"probezeit_minuten={self.probezeit_minuten} zu kurz (min. 5)")
+        if not (1 <= self.max_duration_hours <= 12):
+            raise ValueError(f"max_duration_hours={self.max_duration_hours} ausserhalb 1-12")
         return self
 
 

@@ -551,7 +551,21 @@ async def run_logic_step(session, state, learning_engine=None):
 
                 elif gewinner_lc.einschalten is True and state.legionellen_aktiv:
                     # Laufende Prophylaxe: Heizen bis Zieltemperatur
-                    pass
+                    # Timeout-Prüfung: Abbruch nach max_duration_hours
+                    if state.legionellen_started_at is not None:
+                        start = state.legionellen_started_at
+                        now = datetime.now(state.local_tz)
+                        duration = (now - start).total_seconds() / 3600.0
+                        if duration >= legionellen_cfg_lc.max_duration_hours:
+                            # Timeout erreicht - Prophylaxe abbrechen
+                            state.legionellen_aktiv = False
+                            state.legionellen_temp_override = None
+                            state.legionellen_started_at = None
+                            state.legionellen_target_reached_at = None
+                            logging.warning(
+                                f"Legionellenprophylaxe ABGEBROCHEN (Timeout: {duration:.1f}h >= "
+                                f"{legionellen_cfg_lc.max_duration_hours}h) - Ziel {legionellen_cfg_lc.target_temp_c:.0f}C nicht erreicht"
+                            )
 
                 elif gewinner_lc.einschalten is False and state.legionellen_aktiv:
                     # Prophylaxe abschliessen: Zieltemperatur erreicht

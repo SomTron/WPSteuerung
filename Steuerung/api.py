@@ -452,7 +452,7 @@ def get_status():
             "planned_reason": getattr(shared_state, 'legionellen_planned_reason', None),
             "last_done": str(getattr(shared_state, 'legionellen_last_done', '')) if getattr(shared_state, 'legionellen_last_done', None) else None,
             "target_temp_c": getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None).target_temp_c if getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None) else None,
-            "probezeit_minuten": getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None).probezeit_minuten if getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None) else None,
+            "max_duration_hours": getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None).max_duration_hours if getattr(getattr(shared_state, 'priority_config', None), 'legionellen', None) else None,
         },
         "pv_profil": pv_profil_info,
     }
