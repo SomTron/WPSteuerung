@@ -13,6 +13,7 @@ class MockState:
         
         # Initial values
         self.verdampfer_blocked = False
+        self.verdampfer_shutdowns = []
         self.control.kompressor_ein = False
         self.control.ausschluss_grund = None
         

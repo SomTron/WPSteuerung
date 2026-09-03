@@ -119,6 +119,7 @@ class State:
         self.legionellen_planned_day: Optional[str] = None  # Geplanter Wochentag
         self.legionellen_planned_tag: Optional[int] = None  # Geplanter Wochentag (0=Mo..6=So) - fuer Start-Gate
         self.legionellen_planned_time: Optional[str] = None  # Geplante Uhrzeit
+        self.legionellen_end_time: Optional[datetime] = None  # Zeitpunkt des letzten Legionellen-Endes
         self.legionellen_planned_reason: Optional[str] = None  # Grund fuer die Wahl
         self.legionellen_telegram_start_sent: bool = False
         self.legionellen_telegram_done_sent: bool = False
@@ -145,6 +146,7 @@ class State:
 
         # --- Safety & Error Handling ---
         self.verdampfer_blocked: bool = False
+        self.verdampfer_shutdowns: list = []  # Zeitstempel der Verdampfer-Abschaltungen
         self.last_sensor_error_time: Optional[datetime] = None
         self.last_pressure_error_time: Optional[datetime] = None
         self._last_config_check: Optional[datetime] = now # Initialize with current time

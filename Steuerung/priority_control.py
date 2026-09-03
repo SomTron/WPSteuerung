@@ -1773,6 +1773,16 @@ def bewerte_alle_regeln(
     aktive_regeln.sort(key=lambda e: e.prioritaet, reverse=True)
     gewinner = aktive_regeln[0]
 
+    # CalcStart/AdaptivePV Koordinations-Logging
+    if (
+        gewinner.name == "AdaptivePV"
+        and any(r.name == "CalcStart" and r.aktiv for r in ergebnisse)
+        and not any(r.name == "CalcStart" and r.einschalten is True for r in ergebnisse)
+    ):
+        logging.debug(
+            "CalcStart wartet auf besseres PV-Angebot -> AdaptivePV übernimmt."
+        )
+
     # Der Notfallschutz (Prio 110) greift ohne Workaround vor allen Sperren -
     # ein manueller Override ist nicht mehr noetig (frueher: Komfort-NOTFALL
     # ueberschrieb die Wochenende-Prio-100-Sperre per Spezialfall).

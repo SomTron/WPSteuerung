@@ -431,6 +431,7 @@ class LearningEngine:
         feedin_watt: Optional[float] = None,
         soc: Optional[float] = None,
         forecast_today_wh_qm: Optional[float] = None,
+        legionellen_end_time: Optional[datetime] = None,
     ):
         """
         Wird jeden Regelzyklus aufgerufen.
@@ -520,7 +521,9 @@ class LearningEngine:
 
         # Zapfung erkennen (nur bei ausgeschaltetem Kompressor)
         if not compressor_is_on:
-            self._detect_usage(now, temp_dict)
+            self._detect_usage(
+                now, temp_dict, legionellen_end_time=legionellen_end_time
+            )
 
         self._last_compressor_state = compressor_is_on
         # Komfort-Verletzung erkennen (Punkt B)
@@ -671,7 +674,9 @@ class LearningEngine:
 
     # ── Zapfung erkennen ───────────────────────────────────
 
-    def _detect_usage(self, now: datetime, temp_dict: Dict[str, Optional[float]]):
+    def _detect_usage(
+        self, now: datetime, temp_dict: Dict[str, Optional[float]], legionellen_end_time: Optional[datetime] = None
+    ):
         """
         Erkennt Warmwasser-Zapfung durch Temperaturabfall an ALLEN drei
         Fühler (unten kühlt zuerst, mitte folgt, oben zuletzt).
@@ -687,6 +692,18 @@ class LearningEngine:
         """
         if not (5 <= now.hour < 23):
             return
+
+        # Legionellen-Filter: Nach Legionellenfahrten kühlt der Boiler ab
+        # (Gradient: oben 60°C, unten 45°C). Das darf nicht als Zapfung 
+        # interpretiert werden. Filtere abkühlende Phase nach Legionellen.
+        if legionellen_end_time is not None:
+            try:
+                end_naiv = self._naiv(legionellen_end_time)
+                now_naiv = self._naiv(now)
+                if (now_naiv - end_naiv).total_seconds() / 3600.0 < 4.0:
+                    return
+            except (TypeError, ValueError):
+                pass
 
         # Temperaturwerte von aktuell und vorherigem Zyklus
         current = {

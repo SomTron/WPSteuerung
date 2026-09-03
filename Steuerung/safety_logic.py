@@ -119,6 +119,19 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     
     if too_cold or recovering:
         state.verdampfer_blocked = True
+        # Verdampfer-Abschaltung tracken (nur bei erstem Blockieren pro Zyklus)
+        if not already_blocked:
+            now = datetime.now(state.local_tz)
+            state.verdampfer_shutdowns.append(now)
+            # Altvte Einträge außerhalb der letzten Stunde bereinigen
+            cutoff = now - timedelta(hours=1)
+            state.verdampfer_shutdowns = [t for t in state.verdampfer_shutdowns if t >= cutoff]
+            # Warnung bei häufigem Vereisen (> 2 Abschaltungen/Stunde)
+            if len(state.verdampfer_shutdowns) > 2:
+                logging.warning(
+                    f"Verdampfer-Vereisung: {len(state.verdampfer_shutdowns)} Abschaltungen in der letzten Stunde. "
+                    "Mögliche Ursachen: schlechter Luftstrom, Kältemittelmangel, oder Filter verschmutzt."
+                )
         if already_blocked:
             state.control.ausschluss_grund = f"Verdampfer: Warten auf Erwärmung ({t_verd:.1f} Grad < {restart_temp} Grad)"
             state.control.blocking_reason = f"Verdampfer zu kalt ({t_verd:.1f}°C, warte auf >{restart_temp}°C)"
