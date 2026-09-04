@@ -1040,7 +1040,7 @@
 
                 function getBoilerRange() {
                     let min = Infinity, max = -Infinity;
-                    const series = [temperatureHistory.oben, temperatureHistory.mittig, temperatureHistory.unten, temperatureHistory.sollwerte];
+                    const series = [temperatureHistory.oben, temperatureHistory.mittig, temperatureHistory.unten];
                     series.forEach(arr => {
                         arr.forEach(v => {
                             if (v !== null && v !== undefined && !isNaN(v)) { min = Math.min(min, v); max = Math.max(max, v); }
