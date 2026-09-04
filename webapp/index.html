@@ -875,7 +875,7 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE}/history?hours=${hours}` + API_CACHE_BUST);
+                const response = await fetch(`${API_BASE}/history?hours=${hours}${API_CACHE_BUST}`);
                 if (!response.ok) throw new Error('History API Fehler');
                 const historyData = await response.json();
 
@@ -895,7 +895,7 @@
                 // Regel-Historie parallel laden (fuer Overlay)
                 let regelnDaten = [];
                 try {
-                    const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000` + API_CACHE_BUST);
+                    const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000${API_CACHE_BUST}`);
                     if (respR.ok) {
                         const jd = await respR.json();
                         regelnDaten = jd.data || [];
@@ -1497,8 +1497,8 @@
                 const w = canvas.width, h = canvas.height;
                 let maxV = 0;
                 for (const k in stunden) { if (stunden[k] > maxV) maxV = stunden[k]; }
-                if (forecastStunden) {
-                    for (const k in forecastStunden) { if (forecastStunden[k] > maxV) maxV = forecastStunden[k]; }
+                if (forecastStunde) {
+                    for (const k in forecastStunde) { if (forecastStunde[k] > maxV) maxV = forecastStunde[k]; }
                 }
                 if (maxV <= 0) return;
                 const bw = w / 24;
