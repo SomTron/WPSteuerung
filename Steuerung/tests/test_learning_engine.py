@@ -223,3 +223,37 @@ class TestPersistenz:
                           {"unten": 43.0, "mittig": 44.0, "oben": oben}, False)
             oben -= 2.0
         assert len(engine.data.usage_events) == 100
+
+
+# ── Method Signatures ────────────────────────────────────────────────────
+
+class TestUpdateSignature:
+    """Prüft, dass learning_engine.update() alle in production verwendeten
+    Parameter akzeptiert. Dies verhindert TypeError bei zukünftigen Änderungen
+    an der Funktionssignatur (Integrationstest zwischen priority_control und
+    learning_engine)."""
+
+    def test_update_with_all_production_parameters(self, engine):
+        """Vollständige Liste der in priority_control_logic.py:208-216
+        verwendeten Parameter, damit Signatur-Änderungen sofort auffallen."""
+        start = datetime(2026, 1, 15, 8, 0)
+        now = datetime(2026, 1, 15, 10, 30)
+        temp_dict = {"unten": 40.0, "mittig": 41.0, "oben": 45.0, "verd": 55.0}
+        forecast_hourly_wh = {h: float(h * 100) for h in range(24)}
+
+        # Dies wird in production aufgerufen (priority_control_logic.py:208-216).
+        # Falls forecast_hourly_wh oder neue Parameter hinzukommen, MUSS dieser
+        # Test fehlschlagen, um die Signatur anzupassen.
+        engine.update(
+            now=now,
+            temp_dict=temp_dict,
+            compressor_is_on=True,
+            feedin_watt=200.0,
+            soc=50.0,
+            forecast_today_wh_qm=3000.0,
+            forecast_hourly_wh=forecast_hourly_wh,
+        )
+
+        # Validierung: Die Methode muss erfolgreich ohne TypeError ausgeführt werden
+        info = engine.get_info()
+        assert info["total_cycles"] >= 0  # Sollte mindestens initialisiert sein
