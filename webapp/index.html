@@ -803,6 +803,11 @@
         <script>
                 const API_BASE = window.location.origin;
         const API_CACHE_BUST = '?v=' + Date.now();
+
+        // IMMEDIATE DEBUG TEST - sollte sofort erscheinen wenn JS lädt
+        const __debug = document.getElementById('debug-status');
+        if (__debug) __debug.textContent = '🟢 Script loaded!';
+
         let statusData = null;
         let chart = null;
         let temperatureHistory = { timestamps: [], oben: [], mittig: [], unten: [], verdampfer: [], sollwerte: [] };
