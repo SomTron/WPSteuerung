@@ -1167,14 +1167,17 @@ async def check_safety_limits(
     # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
     max_temp_warn = cfg.max_temp_c + 2.0
     if t_oben is not None and t_oben >= max_temp_warn:
-        # Hysteresis: Warnung erst wieder aktiv wenn Temp um 1°C unter Warnwert gefallen (64°C)
+        # Hysteresis: Warnung erst wieder aktiv wenn Temp um 1°C unter Warnwert gefallen
         last_warned_at = getattr(state, '_last_temp_warn_threshold', None)
-        if last_warned_at is None or t_oben < last_warned_at - 1.0:
+        # Prüfe ob last_warned_at ein gültiger numerischer Wert ist (nicht Mock in Tests)
+        is_valid_threshold = isinstance(last_warned_at, (int, float))
+        if last_warned_at is None or not is_valid_threshold or t_oben < last_warned_at - 1.0:
             state._last_temp_warn_threshold = max_temp_warn
             if check_log_throttle(state, 'log_max_temp_warn', interval_minutes=5):
                 logging.warning(
                     f'Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)'
                 )
+    return True
 
 
 
