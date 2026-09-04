@@ -875,7 +875,7 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE}/history?hours=${hours}${API_CACHE_BUST}`);
+                const response = await fetch(`${API_BASE}/history?hours=${hours}&v=${Date.now()}`);
                 if (!response.ok) throw new Error('History API Fehler');
                 const historyData = await response.json();
 
@@ -895,7 +895,7 @@
                 // Regel-Historie parallel laden (fuer Overlay)
                 let regelnDaten = [];
                 try {
-                    const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000${API_CACHE_BUST}`);
+                    const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000&v=${Date.now()}`);
                     if (respR.ok) {
                         const jd = await respR.json();
                         regelnDaten = jd.data || [];
@@ -1513,8 +1513,8 @@
                     ctx.fillRect(i * bw + 1, h - 10 - histBh, (bw - 2) / 2, histBh);
 
                     // Forecast (blau - rechts)
-                    if (forecastStunden) {
-                        const forecastV = forecastStunden[String(i)] ?? 0;
+                    if (forecastStunde) {
+                        const forecastV = forecastStunde[String(i)] ?? 0;
                         const forecastBh = (forecastV / maxV) * (h - 14);
                         const forecastGrad = ctx.createLinearGradient(0, h, 0, h - forecastBh);
                         forecastGrad.addColorStop(0, '#22b8cf');
