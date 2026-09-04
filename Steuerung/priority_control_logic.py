@@ -1167,26 +1167,15 @@ async def check_safety_limits(
     # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
     max_temp_warn = cfg.max_temp_c + 2.0
     if t_oben is not None and t_oben >= max_temp_warn:
-        # Warnung unterdrÃ¼cken wenn Legionellenprophylaxe gerade abgeschlossen wurde (innerhalb 6h)
-        is_after_legionellen = False
-        if hasattr(state, 'legionellen_last_done') and state.legionellen_last_done is not None:
-            from datetime import timedelta
-            time_since_legionellen = datetime.now(state.local_tz) - datetime.combine(
-                state.legionellen_last_done, datetime.min.time()
-            )
-            is_after_legionellen = time_since_legionellen < timedelta(hours=6)
-        if not is_after_legionellen:
-            # Hysteresis: Warnung nur wenn Temperatur seit letzter Warnung um >= 1°C gefallen ist
-            hysteresis_threshold = max_temp_warn - 1.0
-            last_warned_at = getattr(state, '_last_temp_warn_threshold', None)
-            if last_warned_at is None or t_oben < last_warned_at - 1.0:
-                state._last_temp_warn_threshold = max_temp_warn
-                if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
-                    logging.warning(
-                        f"Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)"
-                    )
+        # Hysteresis: Warnung erst wieder aktiv wenn Temp um 1°C unter Warnwert gefallen (64°C)
+        last_warned_at = getattr(state, '_last_temp_warn_threshold', None)
+        if last_warned_at is None or t_oben < last_warned_at - 1.0:
+            state._last_temp_warn_threshold = max_temp_warn
+            if check_log_throttle(state, 'log_max_temp_warn', interval_minutes=5):
+                logging.warning(
+                    f'Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)'
+                )
 
-    return True
 
 
 def get_priority_control_status(state) -> dict:
