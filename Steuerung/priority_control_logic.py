@@ -166,8 +166,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
 
     # Sommer-Modus: Solltemperatur senken bei mehrtÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¤gig guter PV-Prognose.
     # Im Sommer scheint fast jeden Tag die Sonne, daher braucht der Boiler nicht
-    # jeden Tag auf 44ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
-    # Der Offset (default -3ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
+    # jeden Tag auf 44ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
+    # Der Offset (default -3ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚°C) reduziert die Zieltemperatur der Abweichungs-Regel.
     if hasattr(state, "sommer_modus_aktiv") and state.sommer_modus_aktiv:
         # AUSNAHME Bademodus (Nutzeranforderung): Der Bademodus setzt den
         # Sommer-Offset temporaer aus, damit die Temp-Anhebung (+3K) nicht
@@ -1217,3 +1217,4 @@ def _is_nachtsperre_aktiv(cfg: WPSteuerungConfig, now: datetime) -> bool:
     if start <= ende:
         return start <= h < ende
     return h >= start or h < ende
+
