@@ -790,6 +790,7 @@
             <div class="loading">
                 <div class="spinner"></div>
                 <p style="margin-top: 20px; color: var(--text-secondary);">Lade Daten...</p>
+                <p id="debug-status" style="margin-top: 10px; font-size: 12px; color: #ff9800;"></p>
             </div>
             <div id="error-panel" style="display: none; margin-top: 20px; padding: 15px; background: #ff4444; color: white; border-radius: 8px;">
                 <strong>⚠️ Fehler beim Laden</strong>
@@ -809,28 +810,36 @@
         let isLoadingHistory = false;
 
         async function fetchStatus() {
+            // Update debug status
+            const debugEl = document.getElementById('debug-status');
+            if (debugEl) debugEl.textContent = 'API Request...';
+
             try {
                 const response = await fetch(`${API_BASE}/status`);
-                if (!response.ok) throw new Error('API Fehler');
+                if (!response.ok) throw new Error('API Fehler ' + response.status);
+                
+                if (debugEl) debugEl.textContent = 'Parsing JSON...';
                 statusData = await response.json();
-
-                // Live-Daten nur hinzufuegen wenn wir im Live-Modus sind (< 2h)
-                if (currentHistoryHours <= 2 && !isLoadingHistory) {
-                    addToHistory(statusData.temperatures);
-                }
+                
+                if (debugEl) debugEl.textContent = 'Ready: ' + Object.keys(statusData).length + ' sections';
 
                                 // Nur beim ersten Mal oder wenn die Struktur sich aendert
                 if (!document.getElementById('compressor-card')) {
+                    if (debugEl) debugEl.textContent = 'renderApp() called...';
                     renderApp();
+                    if (debugEl) debugEl.textContent = 'renderApp() done!';
                 } else {
+                    if (debugEl) debugEl.textContent = 'updateValues() called...';
                     updateValues();
                     updateSollwertLabel();
                     highlightActiveSensor();
+                    if (debugEl) debugEl.textContent = 'updateValues() done!';
                 }
 
                 updateHeader();
                 updateConnectionStatus(true);
             } catch (error) {
+                if (debugEl) debugEl.textContent = 'ERROR: ' + error.message;
                 console.error('Fehler beim Abrufen der Daten:', error);
                 updateConnectionStatus(false);
                 // Zeige Fehler auf der Seite an (für Handy ohne Console)
