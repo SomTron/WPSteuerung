@@ -1165,11 +1165,25 @@ async def check_safety_limits(
         return False
 
     # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
-    max_temp_warn = cfg.max_temp_c + 2.0
+    # Während Legionellenbetrieb auf 65°C erhöhen, dann bis Temp um 1°C unter normal gefallen
+    # (49°C wenn normal 50°C) auf 65°C belassen, danach normale Grenzwerte
+    normal_max_temp_warn = cfg.max_temp_c + 2.0  # Normal 50°C
+    if hasattr(state.control, 'active_rule_name') and state.control.active_rule_name == 'Legionellen':
+        max_temp_warn = 65.0  # Während Legionellenbetrieb
+    else:
+        # Nach Legionellenbetrieb: Warnung erst wieder bei normaler Temp wenn vorher Legionellen
+        last_was_legionellen = getattr(state, '_last_was_legionellen', False)
+        if last_was_legionellen and t_oben >= normal_max_temp_warn:
+            max_temp_warn = 65.0  # Noch erhöht bis Temp unter normal - 1°C fällt
+        else:
+            max_temp_warn = normal_max_temp_warn
+        # Reset wenn unter normal - 1°C gefallen
+        if t_oben < normal_max_temp_warn - 1.0:
+            state._last_was_legionellen = False
+
     if t_oben is not None and t_oben >= max_temp_warn:
-        # Hysteresis: Warnung erst wieder aktiv wenn Temp um 1°C unter Warnwert gefallen
+        # Hysteresis: Warnung erst wieder aktiv wenn Temp um 1°C unter aktuellen Warnwert gefallen
         last_warned_at = getattr(state, '_last_temp_warn_threshold', None)
-        # Prüfe ob last_warned_at ein gültiger numerischer Wert ist (nicht Mock in Tests)
         is_valid_threshold = isinstance(last_warned_at, (int, float))
         if last_warned_at is None or not is_valid_threshold or t_oben < last_warned_at - 1.0:
             state._last_temp_warn_threshold = max_temp_warn

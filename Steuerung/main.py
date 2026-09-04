@@ -580,6 +580,7 @@ async def run_logic_step(session, state, learning_engine=None):
                         state.legionellen_started_at = None
                         state.legionellen_target_reached_at = None
                         state.legionellen_end_time = datetime.now(state.local_tz)
+                        state._last_was_legionellen = True  # Track for temp warning hysteresis
                         logging.info(
                             f"Legionellenprophylaxe ABGESCHLOSSEN: "
                             f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht (unten: {t_unten_lc:.1f}C)"
