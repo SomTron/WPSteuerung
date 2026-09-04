@@ -1489,7 +1489,7 @@
             }
 
             // PV-Profil-Minichart (gelernt vs Forecast)
-            function zeichnePvProfil(stunden, forecastStundenn null) {
+            function zeichnePvProfil(stunden, forecastStunde = null) {
                 const canvas = document.getElementById('pv-profil-chart');
                 if (!canvas) return;
                 const ctx = canvas.getContext('2d');
