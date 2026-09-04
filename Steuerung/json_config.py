@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, model_validator
 class WPConfig(BaseModel):
     """Wärmepumpen-Grundkonfiguration."""
     leistung_watt: int = Field(default=600, description="Nennleistung der WP in Watt")
+    pv_array_size_qm: float = Field(default=10.0, description="Größe der PV-Anlage in m² für Forecast-Überschuss-Berechnung")
     typ: str = Field(default="binaer_ein_aus", description="Steuerungstyp: binaer_ein_aus oder modulierend")
 
 

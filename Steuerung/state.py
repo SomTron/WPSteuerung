@@ -28,6 +28,7 @@ class SolarState:
         self.forecast_today: Optional[float] = None
         self.forecast_tomorrow: Optional[float] = None
         self.forecast_day2: Optional[float] = None  # Übermorgen-Prognose (Sommer-Modus)
+        self.forecast_hourly_wm2: Optional[Dict[int, float]] = None  # Stündliche Strahlung (W/m²)
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
 
@@ -124,6 +125,14 @@ class State:
         self.legionellen_telegram_start_sent: bool = False
         self.legionellen_telegram_done_sent: bool = False
         self.legionellen_temp_override: Optional[float] = None  # Uebersteuert max_temp_c waehrend aktiver Prophylaxe
+
+        # Learning Engine tracking
+        self.learning_engine: Optional[object] = None  # Placeholder for learning engine instance
+        self._today_usage_count: int = 0  # Zapfungen heute
+        self._learned_morning_window: Optional[dict] = None  # Gelerntes Morgenfenster
+        self._learned_evening_window: Optional[dict] = None  # Gelerntes Abendfenster
+
+        # System/Internal
         
         # System/Internal
         self.gpio_lock = asyncio.Lock()

@@ -164,10 +164,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C"
         )
 
-    # Sommer-Modus: Solltemperatur senken bei mehrtÃ¤gig guter PV-Prognose.
+    # Sommer-Modus: Solltemperatur senken bei mehrtÃƒÆ’Ã‚Â¤gig guter PV-Prognose.
     # Im Sommer scheint fast jeden Tag die Sonne, daher braucht der Boiler nicht
-    # jeden Tag auf 44Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
-    # Der Offset (default -3Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
+    # jeden Tag auf 44Ãƒâ€šÃ‚Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
+    # Der Offset (default -3Ãƒâ€šÃ‚Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
     if hasattr(state, "sommer_modus_aktiv") and state.sommer_modus_aktiv:
         # AUSNAHME Bademodus (Nutzeranforderung): Der Bademodus setzt den
         # Sommer-Offset temporaer aus, damit die Temp-Anhebung (+3K) nicht
@@ -195,6 +195,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_today_wh = float(forecast_today_wh)
         except (TypeError, ValueError):
             forecast_today_wh = None
+    # Stundenscharfe Forecast-Daten in Watt (W/m² -> W)
+    hourly_forecast_watt = None
+    hourly_mw2 = getattr(state.solar, "forecast_hourly_wm2", None)
+    if hourly_mw2 is not None:
+        pv_flaeche = float(getattr(effektive_config.wp, "pv_array_size_qm", 10.0))
+        hourly_forecast_watt = {h: w * pv_flaeche for h, w in hourly_mw2.items()}
 
     # Alle Regeln bewerten (mit effektiver Config)
     # Learning Engine aktualisieren (Heizzyklen + Zapfprofil + Solar-Tracking)
@@ -206,6 +212,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             feedin_watt=pv_leistung,
             soc=getattr(state.solar, "soc", None),
             forecast_today_wh_qm=forecast_today_wh,
+            forecast_hourly_wh=hourly_forecast_watt,
         )
         gelernte_rate_unten = learning_engine.get_learned_heating_rate(
             datetime.now(state.local_tz).month, "unten"
@@ -220,8 +227,11 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         gelerntes_abendfenster = _get_fenster() if callable(_get_fenster) else None
         _ratio_getter = getattr(learning_engine, "get_forecast_ratio", None)
         fc_ratio = _ratio_getter() if callable(_ratio_getter) else 1.0
-        _profil_getter = getattr(learning_engine, "get_surplus_profile", None)
-        surplus_profil = _profil_getter() if callable(_profil_getter) else None
+        _profil_getter = getattr(learning_engine, "get_surplus_profile_with_forecast", None)
+        surplus_profil = _profil_getter(
+            forecast_today_wh_qm=forecast_today_wh,
+            forecast_hourly_wh=hourly_forecast_watt,
+        ) if callable(_profil_getter) else None
         _usage_getter = getattr(learning_engine, "get_recent_usage_events", None)
         recent_usage_events = _usage_getter(hours=2) if callable(_usage_getter) else []
     else:
@@ -268,6 +278,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         now=datetime.now(state.local_tz),
         forecast_wh_qm=forecast_wh_qm,
         forecast_today_wh_qm=forecast_today_wh,
+        forecast_hourly_wh=hourly_forecast_watt,
         soc=getattr(state.solar, "soc", None),
         battery_power=getattr(state.solar, "batpower", None),
         learned_evening_window=gelerntes_abendfenster,
@@ -968,10 +979,10 @@ async def handle_compressor_on(
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = datetime.now(state.local_tz)
 
-    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gültige
+    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gÃƒÂ¼ltige
     # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
     # eine evtl. alte Grenze aus einem vorherigen Lauf entfernen - sie darf
-    # einen neuen Lauf nicht unnötig begrenzen.
+    # einen neuen Lauf nicht unnÃƒÂ¶tig begrenzen.
     hat_grenze = getattr(state.control, "schichtung_oben_max", None) is not None
     if not state.control.kompressor_ein and not hat_grenze:
         state.control.schichtung_oben_max = None
@@ -1135,7 +1146,7 @@ async def check_safety_limits(
     Das harte Boiler-Maximum (max_temp_c am Bezugsfuehler boiler_max_fuehler,
     Standard unten) wird separat in handle_compressor_off/-on erzwungen und
     bricht dort die Mindestlaufzeit. Hier bleibt es bei der Warnung fuer
-    t_oben: Die obere Schichtung darf das Limit naturgemaeß uebersteigen,
+    t_oben: Die obere Schichtung darf das Limit naturgemaeÃƒÅ¸ uebersteigen,
     solange der Bezugsfuehler darunter liegt.
     """
     cfg = state.priority_config.sicherheit

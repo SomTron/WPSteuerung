@@ -69,8 +69,16 @@ def berechne_profil(
     csv_path: str = HEIZUNGSDATEN_CSV,
     tage: int = 14,
     force_refresh: bool = False,
+    forecast_scaling: Optional[float] = None,
 ) -> Dict[int, float]:
     """Berechnet das durchschnittliche PV-Profil (feedinpower) pro Stunde.
+
+    Args:
+        csv_path: Pfad zur CSV-Datei
+        tage: Anzahl der Tage zurueck fuer die Berechnung
+        force_refresh: Fuerz Neuberechnung (ignoriert Cache)
+        forecast_scaling: Optionaler Skalierungsfaktor basierend auf Forecast
+                         (z.B. 1.2 fuer 20% mehr PV als historisch, 0.8 fuer 20% weniger)
 
     Returns:
         Dict[stunde=0..23, durchschnittliche_einspeisung_in_watt]
@@ -78,8 +86,9 @@ def berechne_profil(
     """
     global _cache
     jetzt = datetime.now()
-    if not force_refresh and csv_path in _cache:
-        cache_time, cache_profil = _cache[csv_path]
+    cache_key = f"{csv_path}_{forecast_scaling}"
+    if not force_refresh and cache_key in _cache:
+        cache_time, cache_profil = _cache[cache_key]
         if (jetzt - cache_time).total_seconds() < CACHE_TTL_SEKUNDEN:
             return cache_profil
 
@@ -109,7 +118,12 @@ def berechne_profil(
         else:
             profil[h] = 0.0
 
-    _cache[csv_path] = (jetzt, profil)
+    # Forecast-Skalierung anwenden (wenn Forecast verfügbar)
+    if forecast_scaling is not None and forecast_scaling > 0:
+        for h in profil:
+            profil[h] = round(profil[h] * forecast_scaling, 1)
+
+    _cache[cache_key] = (jetzt, profil)
     return profil
 
 
@@ -143,6 +157,7 @@ async def berechne_profil_async(
     csv_path: str = HEIZUNGSDATEN_CSV,
     tage: int = 14,
     force_refresh: bool = False,
+    forecast_scaling: Optional[float] = None,
 ) -> Dict[int, float]:
     """Async-Wrapper fuer berechne_profil.
 
@@ -150,4 +165,29 @@ async def berechne_profil_async(
     damit der Event-Loop auf langsamen SD-Karten nicht blockiert wird.
     Hat den gleichen 30-Minuten-Cache wie die synchrone Variante.
     """
-    return await asyncio.to_thread(berechne_profil, csv_path, tage, force_refresh)
+    return await asyncio.to_thread(berechne_profil, csv_path, tage, force_refresh, forecast_scaling)
+
+
+def berechne_forecast_scaling(
+    forecast_today_wh_qm: Optional[float],
+    historisches_wh_qm: Optional[float] = None,
+) -> Optional[float]:
+    """Berechnet den Skalierungsfaktor basierend auf der heutigen PV-Prognose.
+
+    Args:
+        forecast_today_wh_qm: Prognostizierter PV-Ertrag (Wh/m²)
+        historisches_wh_qm: Historischer durchschnittlicher PV-Ertrag (Wh/m²)
+
+    Returns:
+        Skalierungsfaktor (z.B. 1.2 = 20% mehr als historisch)
+        None wenn keine Prognose verfügbar ist
+    """
+    if forecast_today_wh_qm is None or forecast_today_wh_qm <= 0:
+        return None
+    
+    if historisches_wh_qm is not None and historisches_wh_qm > 0:
+        return round(forecast_today_wh_qm / historisches_wh_qm, 3)
+    
+    # Wenn kein historischer Wert, nutze Standardannahme (z.B. 1800 Wh/m² für guten Tag)
+    standard_wh_qm = 1800.0
+    return round(forecast_today_wh_qm / standard_wh_qm, 3)

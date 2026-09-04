@@ -91,6 +91,8 @@ class LearningData:
     # EWMA von (taeglicher Netzeinschuss Wh / Prognose Wh/m2), geklemmt 0.3-2.0
     forecast_ratio: float = 1.0
     forecast_ratio_samples: int = 0
+    # Stundenscharfe Deviation: {stunde: {forecast, actual, deviation}}
+    forecast_hourly_deviations: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
     # ── Verbrauchsbewusstsein: Stundensurplus-Profil ──
     # {"8": {"avg": 350.0, "n": 12}, ...}: gemitelte Netzeinspeisung je Stunde,
@@ -359,6 +361,12 @@ class LearningEngine:
             return 1.0
         return self.data.forecast_ratio
 
+    def get_forecast_hourly_deviations(self) -> Dict:
+        """Stundenscharfe Forecast-Abweichungen {stunde: {forecast, actual, deviation}}.
+
+        deviation = actual - forecast (positiv = Forecast zu niedrig, negativ = zu hoch)."""
+        return dict(self.data.forecast_hourly_deviations)
+
     def get_surplus_profile(self):
         """Stundensurplus-Profil {stunde: watt} oder None (noch unbrauchbar).
 
@@ -405,6 +413,7 @@ class LearningEngine:
             # Baustein A+B + Surplus-Profil
             "forecast_ratio": self.get_forecast_ratio(),
             "forecast_ratio_samples": self.data.forecast_ratio_samples,
+            "forecast_hourly_deviations": self.get_forecast_hourly_deviations(),
             "quellen": self.get_quellen_statistik(),
             "surplus_stunden": sorted(self.get_surplus_profile().keys())
                 if self.get_surplus_profile() else [],

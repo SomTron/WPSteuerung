@@ -616,7 +616,7 @@ def get_debug_csv():
 
 
 @app.post("/command")
-async def handle_command(cmd: CommandRequest):
+async def handle_command(cmd: ControlCommand):
     """Handle incoming commands."""
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")

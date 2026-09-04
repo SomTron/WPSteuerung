@@ -41,8 +41,8 @@ sensor_manager = None
 hardware_manager = None
 stop_event = threading.Event()
 
-# Referenzen auf Hintergrund-Tasks halten (ohne Referenz können sie vom
-# Garbage Collector eingesammelt werden, während sie noch laufen!)
+# Referenzen auf Hintergrund-Tasks halten (ohne Referenz kÃ¶nnen sie vom
+# Garbage Collector eingesammelt werden, wÃ¤hrend sie noch laufen!)
 background_tasks = []
 
 def _log_task_exception(task):
@@ -58,8 +58,8 @@ def _log_task_exception(task):
 
 def handle_exit(signum, frame):
     # Wichtig: Hier bewusst KEIN sys.exit()!
-    # SystemExit würde den finally-Block in main_loop überspringen
-    # (GPIO-Cleanup und session.close() würden nie laufen).
+    # SystemExit wÃ¼rde den finally-Block in main_loop Ã¼berspringen
+    # (GPIO-Cleanup und session.close() wÃ¼rden nie laufen).
     # Wir setzen nur das Stop-Event; der Loop beendet sich kontrolliert selbst.
     logging.info(f"Signal {signum} empfangen. Beende Programm...")
     stop_event.set()
@@ -82,7 +82,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         # Statistiken aktualisieren
         state.stats.last_compressor_on_time = now
         
-        # Startwerte für Verifizierung speichern
+        # Startwerte fÃ¼r Verifizierung speichern
         state.kompressor_verification_start_time = now
         state.kompressor_verification_start_t_verd = state.sensors.t_verd
         state.kompressor_verification_start_t_unten = state.sensors.t_unten
@@ -142,7 +142,7 @@ async def setup_application():
     
     # 3. Logging setup
     setup_logging(enable_full_log=True, telegram_config=state.config.Telegram)
-    logging.info("Starten der Wärmepumpensteuerung (Refactored)...")
+    logging.info("Starten der WÃ¤rmepumpensteuerung (Refactored)...")
 
     # 4. Hardware & Sensors init
     try:
@@ -227,18 +227,18 @@ async def setup_application():
     return session
 
 def handle_day_transition(state, now):
-    """Führt Aktionen beim Tageswechsel durch."""
+    """FÃ¼hrt Aktionen beim Tageswechsel durch."""
     current_date = now.date()
     if state.stats.last_day is None:
         state.stats.last_day = current_date
     elif state.stats.last_day != current_date:
-        logging.info(f"Tageswechsel erkannt ({state.stats.last_day} -> {current_date}). Setze Statistiken zurück.")
+        logging.info(f"Tageswechsel erkannt ({state.stats.last_day} -> {current_date}). Setze Statistiken zurÃ¼ck.")
 
         # Endstand des alten Tages sichern (inkl. Anteil nach Mitternacht),
         # BEVOR der Tageszaehler zurueckgesetzt wird.
         alter_tag_gesamt = state.stats.total_runtime_today
 
-        # Falls der Kompressor über Mitternacht läuft: Restzeit des alten Tages dazurechnen
+        # Falls der Kompressor Ã¼ber Mitternacht lÃ¤uft: Restzeit des alten Tages dazurechnen
         if state.control.kompressor_ein and state.stats.last_compressor_on_time:
             # Ende des alten Tages (23:59:59.999...)
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -247,7 +247,7 @@ def handle_day_transition(state, now):
                 alter_tag_gesamt += elapsed_old_day
                 logging.info(f"Laufzeitanteil alter Tag: {elapsed_old_day}")
 
-            # Startzeit für neuen Tag auf Mitternacht setzen
+            # Startzeit fÃ¼r neuen Tag auf Mitternacht setzen
             state.stats.last_compressor_on_time = midnight
 
         # Vortags-Wert fuer Statistik/Anzeige erhalten (statt verwerfen),
@@ -306,7 +306,7 @@ async def update_system_data(session, state):
         state.solar.soc = state.solar.last_api_data.get("soc", 0)
 
 async def check_periodic_tasks(session, state, last_vpn_check):
-    """Führt zeitgesteuerte Hintergrundaufgaben aus."""
+    """FÃ¼hrt zeitgesteuerte Hintergrundaufgaben aus."""
     now_dt = datetime.now()
     now_local = datetime.now(state.local_tz)
     
@@ -317,9 +317,10 @@ async def check_periodic_tasks(session, state, last_vpn_check):
     
     # 2. Solar Forecast (alle FORECAST_UPDATE_INTERVAL_HOURS)
     if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= FORECAST_UPDATE_INTERVAL_HOURS * 3600:
-        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow = await get_solar_forecast(session, state.config)
+        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow, hourly_today_wm2 = await get_solar_forecast(session, state.config)
         if rad_today is not None:
             state.solar.forecast_today = rad_today
+            state.solar.forecast_hourly_wm2 = hourly_today_wm2
             state.solar.forecast_tomorrow = rad_tomorrow
             state.solar.forecast_day2 = rad_day2
             state.solar.sunrise_today = sr_today
@@ -419,12 +420,12 @@ async def check_periodic_tasks(session, state, last_vpn_check):
     return last_vpn_check
 
 async def check_and_send_alerts(session, state):
-    """Prüft auf Änderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
+    """PrÃ¼ft auf Ã„nderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
     current_blocking = state.control.blocking_reason
     
     # Normalisierung: Dynamische Teile (Zeiten, Temperaturen) entfernen
     # Beispiel: "Min. Pause (noch 1m 10s)" -> "Min. Pause"
-    # Beispiel: "Verdampfer zu kalt (5.0°C < 6°C)" -> "Verdampfer zu kalt"
+    # Beispiel: "Verdampfer zu kalt (5.0Â°C < 6Â°C)" -> "Verdampfer zu kalt"
     # Beispiel: "Sensorfehler: T_Oben invalid" -> "Sensorfehler"
     import re
     def normalize(text):
@@ -446,11 +447,11 @@ async def check_and_send_alerts(session, state):
             is_zieltemp = "Zieltemp" in current_type
             
             if not is_solar and not is_zieltemp:
-                emoji = "⚠️"
-                if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
-                    emoji = "🚨"
+                emoji = "âš ï¸"
+                if any(x in current_type for x in ["Fehler", "Sicherheit", "ðŸš¨"]):
+                    emoji = "ðŸš¨"
                 elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
-                    emoji = "⏳"
+                    emoji = "â³"
                 
                 # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
                 msg = f"{emoji} *Kompressor blockiert:* {escape_markdown(current_blocking)}"
@@ -461,7 +462,7 @@ async def check_and_send_alerts(session, state):
         
         state.control.last_alert_type = current_type
     
-    # Der technische Statuswechsel wird weiterhin für andere Zwecke geloggt/gespeichert
+    # Der technische Statuswechsel wird weiterhin fÃ¼r andere Zwecke geloggt/gespeichert
     state.control.last_blocking_reason = current_blocking
 
 async def run_logic_step(session, state, learning_engine=None):
@@ -484,7 +485,7 @@ async def run_logic_step(session, state, learning_engine=None):
 
     # 3. Sensoren & Safety (Sicherheits-Check)
     # Hinweis: pcl.check_safety_limits delegiert intern bereits an
-    # safety_logic.check_sensors_and_safety – ein zweiter Aufruf waere redundant.
+    # safety_logic.check_sensors_and_safety â€“ ein zweiter Aufruf waere redundant.
     if await pcl.check_safety_limits(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
         # 4. Prioritaeten-Engine: Regel bewerten
         result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig, learning_engine=learning_engine)
@@ -539,9 +540,9 @@ async def run_logic_step(session, state, learning_engine=None):
                     )
                     # Telegram-Benachrichtigung
                     try:
-                        msg = (f"🦠 *Legionellenprophylaxe gestartet!*\n"
-                               f"Heize auf {legionellen_cfg_lc.target_temp_c:.0f}°C "
-                               f"(unten: {state.sensors.t_unten:.1f}°C)")
+                        msg = (f"ðŸ¦  *Legionellenprophylaxe gestartet!*\n"
+                               f"Heize auf {legionellen_cfg_lc.target_temp_c:.0f}Â°C "
+                               f"(unten: {state.sensors.t_unten:.1f}Â°C)")
                         from telegram_api import send_telegram_message as _send_tg
                         await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
                                        state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
@@ -551,7 +552,7 @@ async def run_logic_step(session, state, learning_engine=None):
 
                 elif gewinner_lc.einschalten is True and state.legionellen_aktiv:
                     # Laufende Prophylaxe: Heizen bis Zieltemperatur
-                    # Timeout-Prüfung: Abbruch nach max_duration_hours
+                    # Timeout-PrÃ¼fung: Abbruch nach max_duration_hours
                     if state.legionellen_started_at is not None:
                         start = state.legionellen_started_at
                         now = datetime.now(state.local_tz)
@@ -584,8 +585,8 @@ async def run_logic_step(session, state, learning_engine=None):
                             f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht (unten: {t_unten_lc:.1f}C)"
                         )
                         try:
-                            msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
-                                   f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}°C erreicht (unten: {t_unten_lc:.1f}°C)")
+                            msg = (f"âœ… *Legionellenprophylaxe abgeschlossen!*\n"
+                                   f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}Â°C erreicht (unten: {t_unten_lc:.1f}Â°C)")
                             from telegram_api import send_telegram_message as _send_tg
                             await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
                                            state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
@@ -643,14 +644,14 @@ async def log_system_state(state):
     # 1. Temperatur- und Entscheidungs-Logging (gethrottelt alle 5 Min)
     if check_log_throttle(state, '_last_temp_log', interval_minutes=5.0):
         logging.info(
-            f"Sensoren: Oben={state.sensors.t_oben or 0:.1f}°C | Mittig={state.sensors.t_mittig or 0:.1f}°C | "
-            f"Unten={state.sensors.t_unten or 0:.1f}°C | Verd={state.sensors.t_verd or 0:.1f}°C"
+            f"Sensoren: Oben={state.sensors.t_oben or 0:.1f}Â°C | Mittig={state.sensors.t_mittig or 0:.1f}Â°C | "
+            f"Unten={state.sensors.t_unten or 0:.1f}Â°C | Verd={state.sensors.t_verd or 0:.1f}Â°C"
         )
         komp_status = "EIN" if state.control.kompressor_ein else "AUS"
         log_line = (
             f"Status: {komp_status} | "
-            f"EP={state.control.aktueller_einschaltpunkt:.1f}°C | "
-            f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C"
+            f"EP={state.control.aktueller_einschaltpunkt:.1f}Â°C | "
+            f"AP={state.control.aktueller_ausschaltpunkt:.1f}Â°C"
         )
         if state.control.blocking_reason:
             log_line += f" | Blocking: {state.control.blocking_reason}"
