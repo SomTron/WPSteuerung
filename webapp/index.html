@@ -790,6 +790,11 @@
                 <div class="spinner"></div>
                 <p style="margin-top: 20px; color: var(--text-secondary);">Lade Daten...</p>
             </div>
+            <div id="error-panel" style="display: none; margin-top: 20px; padding: 15px; background: #ff4444; color: white; border-radius: 8px;">
+                <strong>⚠️ Fehler beim Laden</strong>
+                <p id="error-message" style="margin-top: 10px; font-size: 14px;"></p>
+                <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: white; color: #ff4444; border: none; border-radius: 4px; cursor: pointer;">Neu laden</button>
+            </div>
         </div>
     </div>
 
@@ -827,6 +832,13 @@
             } catch (error) {
                 console.error('Fehler beim Abrufen der Daten:', error);
                 updateConnectionStatus(false);
+                // Zeige Fehler auf der Seite an (für Handy ohne Console)
+                const errorPanel = document.getElementById('error-panel');
+                const errorMsg = document.getElementById('error-message');
+                if (errorPanel && errorMsg) {
+                    errorMsg.textContent = error.message || 'Unbekannter Fehler';
+                    errorPanel.style.display = 'block';
+                }
             }
         }
 
@@ -1992,8 +2004,17 @@
 
         // Auto-refresh every 5 seconds (after DOM ready)
         document.addEventListener('DOMContentLoaded', () => {
-            // Initial load
-            fetchStatus().then(() => {
+            // Initial load mit Fehlerbehandlung
+            fetchStatus().catch(error => {
+                console.error('Initial fetch failed:', error);
+                // Zeige Fehler auf der Seite an
+                const errorPanel = document.getElementById('error-panel');
+                const errorMsg = document.getElementById('error-message');
+                if (errorPanel && errorMsg) {
+                    errorMsg.textContent = 'Initial load failed: ' + (error.message || 'Unbekannter Fehler');
+                    errorPanel.style.display = 'block';
+                }
+            }).then(() => {
                 // Nach dem ersten Fetch Historie laden
                 loadHistory(currentHistoryHours);
             });
