@@ -441,6 +441,7 @@ class LearningEngine:
         soc: Optional[float] = None,
         forecast_today_wh_qm: Optional[float] = None,
         legionellen_end_time: Optional[datetime] = None,
+        forecast_hourly_wh: Optional[Dict[int, float]] = None,
     ):
         """
         Wird jeden Regelzyklus aufgerufen.
