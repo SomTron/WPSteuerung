@@ -644,14 +644,14 @@ async def log_system_state(state):
     # 1. Temperatur- und Entscheidungs-Logging (gethrottelt alle 5 Min)
     if check_log_throttle(state, '_last_temp_log', interval_minutes=5.0):
         logging.info(
-            f"Sensoren: Oben={state.sensors.t_oben or 0:.1f}Â°C | Mittig={state.sensors.t_mittig or 0:.1f}Â°C | "
-            f"Unten={state.sensors.t_unten or 0:.1f}Â°C | Verd={state.sensors.t_verd or 0:.1f}Â°C"
+            f"Sensoren: Oben={state.sensors.t_oben or 0:.1f}°C | Mittig={state.sensors.t_mittig or 0:.1f}°C | "
+            f"Unten={state.sensors.t_unten or 0:.1f}°C | Verd={state.sensors.t_verd or 0:.1f}°C"
         )
         komp_status = "EIN" if state.control.kompressor_ein else "AUS"
         log_line = (
             f"Status: {komp_status} | "
-            f"EP={state.control.aktueller_einschaltpunkt:.1f}Â°C | "
-            f"AP={state.control.aktueller_ausschaltpunkt:.1f}Â°C"
+            f"EP={state.control.aktueller_einschaltpunkt:.1f}°C | "
+            f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C"
         )
         if state.control.blocking_reason:
             log_line += f" | Blocking: {state.control.blocking_reason}"

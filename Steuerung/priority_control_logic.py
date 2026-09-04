@@ -1169,7 +1169,7 @@ async def check_safety_limits(
     if t_oben is not None and t_oben >= max_temp_warn:
         if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
             logging.warning(
-                f"Temperatur ueber Normalbereich: {t_oben:.1f}C >= {max_temp_warn}C (kein Abschalten)"
+                f"Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)"
             )
 
     return True
