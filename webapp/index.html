@@ -1990,13 +1990,15 @@
             }
         }
 
-        // Auto-refresh every 5 seconds
-        setInterval(fetchStatus, 5000);
+        // Auto-refresh every 5 seconds (after DOM ready)
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initial load
+            fetchStatus().then(() => {
+                // Nach dem ersten Fetch Historie laden
+                loadHistory(currentHistoryHours);
+            });
 
-        // Initial load
-        fetchStatus().then(() => {
-            // Nach dem ersten Fetch Historie laden
-            loadHistory(currentHistoryHours);
+            setInterval(fetchStatus, 5000);
         });
 
         // Register service worker for PWA
