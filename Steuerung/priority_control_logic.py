@@ -1176,10 +1176,15 @@ async def check_safety_limits(
             )
             is_after_legionellen = time_since_legionellen < timedelta(hours=6)
         if not is_after_legionellen:
-            if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
-                logging.warning(
-                    f"Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)"
-                )
+            # Hysteresis: Warnung nur wenn Temperatur seit letzter Warnung um >= 1°C gefallen ist
+            hysteresis_threshold = max_temp_warn - 1.0
+            last_warned_at = getattr(state, '_last_temp_warn_threshold', None)
+            if last_warned_at is None or t_oben < last_warned_at - 1.0:
+                state._last_temp_warn_threshold = max_temp_warn
+                if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
+                    logging.warning(
+                        f"Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)"
+                    )
 
     return True
 
