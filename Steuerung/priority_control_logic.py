@@ -1,4 +1,4 @@
-"""
+﻿"""
 Prioritaetenbasierte Steuerungslogik (Pareto-optimiert).
 
 Ersetzt die modusbasierte Logik durch eine Regelengine mit Prioritaeten.
@@ -164,10 +164,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C"
         )
 
-    # Sommer-Modus: Solltemperatur senken bei mehrtÃƒÆ’Ã‚Â¤gig guter PV-Prognose.
+    # Sommer-Modus: Solltemperatur senken bei mehrtÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¤gig guter PV-Prognose.
     # Im Sommer scheint fast jeden Tag die Sonne, daher braucht der Boiler nicht
-    # jeden Tag auf 44Ãƒâ€šÃ‚Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
-    # Der Offset (default -3Ãƒâ€šÃ‚Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
+    # jeden Tag auf 44ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
+    # Der Offset (default -3ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°C) reduziert die Zieltemperatur der Abweichungs-Regel.
     if hasattr(state, "sommer_modus_aktiv") and state.sommer_modus_aktiv:
         # AUSNAHME Bademodus (Nutzeranforderung): Der Bademodus setzt den
         # Sommer-Offset temporaer aus, damit die Temp-Anhebung (+3K) nicht
@@ -195,7 +195,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_today_wh = float(forecast_today_wh)
         except (TypeError, ValueError):
             forecast_today_wh = None
-    # Stundenscharfe Forecast-Daten in Watt (W/m² -> W)
+    # Stundenscharfe Forecast-Daten in Watt (W/mÂ² -> W)
     hourly_forecast_watt = None
     hourly_mw2 = getattr(state.solar, "forecast_hourly_wm2", None)
     if hourly_mw2 is not None:
@@ -979,10 +979,10 @@ async def handle_compressor_on(
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = datetime.now(state.local_tz)
 
-    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gÃƒÂ¼ltige
+    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gÃƒÆ’Ã‚Â¼ltige
     # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
     # eine evtl. alte Grenze aus einem vorherigen Lauf entfernen - sie darf
-    # einen neuen Lauf nicht unnÃƒÂ¶tig begrenzen.
+    # einen neuen Lauf nicht unnÃƒÆ’Ã‚Â¶tig begrenzen.
     hat_grenze = getattr(state.control, "schichtung_oben_max", None) is not None
     if not state.control.kompressor_ein and not hat_grenze:
         state.control.schichtung_oben_max = None
@@ -1146,7 +1146,7 @@ async def check_safety_limits(
     Das harte Boiler-Maximum (max_temp_c am Bezugsfuehler boiler_max_fuehler,
     Standard unten) wird separat in handle_compressor_off/-on erzwungen und
     bricht dort die Mindestlaufzeit. Hier bleibt es bei der Warnung fuer
-    t_oben: Die obere Schichtung darf das Limit naturgemaeÃƒÅ¸ uebersteigen,
+    t_oben: Die obere Schichtung darf das Limit naturgemaeÃƒÆ’Ã…Â¸ uebersteigen,
     solange der Bezugsfuehler darunter liegt.
     """
     cfg = state.priority_config.sicherheit
@@ -1167,10 +1167,19 @@ async def check_safety_limits(
     # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
     max_temp_warn = cfg.max_temp_c + 2.0
     if t_oben is not None and t_oben >= max_temp_warn:
-        if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
-            logging.warning(
-                f"Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)"
+        # Warnung unterdrÃ¼cken wenn Legionellenprophylaxe gerade abgeschlossen wurde (innerhalb 6h)
+        is_after_legionellen = False
+        if hasattr(state, 'legionellen_last_done') and state.legionellen_last_done is not None:
+            from datetime import timedelta
+            time_since_legionellen = datetime.now(state.local_tz) - datetime.combine(
+                state.legionellen_last_done, datetime.min.time()
             )
+            is_after_legionellen = time_since_legionellen < timedelta(hours=6)
+        if not is_after_legionellen:
+            if check_log_throttle(state, "log_max_temp_warn", interval_minutes=5):
+                logging.warning(
+                    f"Temperatur ueber Normalbereich: {t_oben:.1f}°C >= {max_temp_warn}°C (kein Abschalten)"
+                )
 
     return True
 
