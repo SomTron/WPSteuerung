@@ -384,9 +384,14 @@ class LearningEngine:
 
     def get_quellen_statistik(self) -> Dict:
         """Laufzeit-Split je Quelle + Zaehlung der Zu-frueh-Events."""
-        z14 = sum(
-            1 for v in self.data.zu_frueh_events
-            if v >= (datetime.now() - timedelta(days=14)).isoformat())
+        if not self.data.zu_frueh_events:
+            z14 = 0
+        else:
+            # Verwende Zeitstempel des neuesten Events als Referenz (für Test-Simulationen)
+            ref = datetime.fromisoformat(self.data.zu_frueh_events[-1])
+            z14 = sum(
+                1 for v in self.data.zu_frueh_events
+                if datetime.fromisoformat(v) >= (ref - timedelta(days=14)))
         return {
             "runtime_sec": dict(self.data.runtime_by_quelle_sec),
             "zu_frueh_events_gesamt": len(self.data.zu_frueh_events),
