@@ -11,7 +11,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 
 | Ziel | Umsetzung |
 |---|---|
-| **Nie wärmer als 48 °C** | `ausschalten_bei_c` / `tmax_c = 48` in allen Heiz-Regeln + Sicherheitsabschaltung (`sicherheit.max_temp_c`) |
+| **Nie wärmer als 48 °C (normal) / 60 °C (Legionellen)** | `sicherheit.max_temp_c = 48` im Normalbetrieb; während Legionellenprophylaxe temporär auf `legionellen_max_temp_c = 60` angehoben |
 | **Nachts so wenig wie möglich laufen** | Nachtsperre 19–8 Uhr: keine Einschaltungen außer expliziten Garantien |
 | **Strom-Priorität: PV direkt > Batterie > Netz** | PV-Regeln + AdaptivePV reagieren auf echte Netzeinspeisung; Batterie-Regel nutzt nur SOC-Überschuss ohne Netzkauf; sonst läuft nichts |
 | **Boiler als PV-Buffer** | Bei Überschuss heizen bis 48 °C; bei schlechter Prognose morgen → heute vorheizen; bei guter Prognose → heute sparen |
@@ -26,7 +26,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 |---|---|---|---|
 | 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre) | `notfallschutz` |
 | 100 | Wochenende | Wochenend-Vorheizen ab `fruehestens_uhr` | `wochenende` |
-| 90 | Legionellen | Legionellenprophylaxe 1×/Woche (60 °C, 30 min Probezeit); Wochenend-Nachholung | `legionellen` |
+| 90 | Legionellen | Legionellenprophylaxe 1×/Woche (60 °C, 30 min Probezeit); **temporär hebt Boiler-Limit von 48 auf 60 °C** | `legionellen` |
 | 85 | **Einspeisung** | PV-Shaping am Netzlimit (7500 W) – gratis Strom nutzen | `einspeisung` |
 | 82 | CalcStart | Berechneter Start für gelernte Zapf-Zeit (17:00) | `calculated_start` |
 | 78 | **AdaptivePV** | Exklusive PV-Schwelle, sobald Forecast vorhanden | `adaptive_pv` |
