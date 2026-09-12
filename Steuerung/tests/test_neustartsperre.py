@@ -57,7 +57,7 @@ async def test_aktive_sperre_blockiert_mit_lesbarem_grund():
     result = await pcl.handle_compressor_on(
         state, None, regelfuehler=36.0, einschaltpunkt=38.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=60), min_pause=timedelta(minutes=30),
-        t_oben=40.0, set_kompressor_status_func=mock_set,
+        t_oben=40.0, t_mittig=40.0, set_kompressor_status_func=mock_set,
     )
 
     assert result is False
@@ -74,7 +74,7 @@ async def test_abgelaufene_sperre_blockiert_nicht():
     result = await pcl.handle_compressor_on(
         state, None, regelfuehler=36.0, einschaltpunkt=38.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=60), min_pause=timedelta(minutes=30),
-        t_oben=40.0, set_kompressor_status_func=mock_set,
+        t_oben=40.0, t_mittig=40.0, set_kompressor_status_func=mock_set,
     )
 
     assert result is True
@@ -90,7 +90,7 @@ async def test_erfolgreicher_start_räumt_sperre_weg():
     await pcl.handle_compressor_on(
         state, None, regelfuehler=36.0, einschaltpunkt=38.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=60), min_pause=timedelta(minutes=30),
-        t_oben=40.0, set_kompressor_status_func=mock_set,
+        t_oben=40.0, t_mittig=40.0, set_kompressor_status_func=mock_set,
     )
 
     assert state.control.restart_lockout_until is None
@@ -106,7 +106,7 @@ async def test_fehlendes_feld_blockiert_nicht():
     result = await pcl.handle_compressor_on(
         state, None, regelfuehler=36.0, einschaltpunkt=38.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=60), min_pause=timedelta(minutes=30),
-        t_oben=40.0, set_kompressor_status_func=mock_set,
+        t_oben=40.0, t_mittig=40.0, set_kompressor_status_func=mock_set,
     )
 
     assert result is True

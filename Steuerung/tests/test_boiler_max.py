@@ -137,7 +137,7 @@ async def test_on_blockiert_in_der_kuehlphase():
     erg = await pcl.handle_compressor_on(
         state, None, regelfuehler=45.0, einschaltpunkt=45.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
-        t_oben=state.sensors.t_oben,
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler([]),
     )
     assert erg is False
@@ -154,7 +154,7 @@ async def test_on_freigabe_nach_abkuehlung_hebt_flag_auf():
     erg = await pcl.handle_compressor_on(
         state, None, regelfuehler=45.0, einschaltpunkt=45.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
-        t_oben=state.sensors.t_oben,
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler([]),
     )
     assert erg is True
@@ -171,7 +171,7 @@ async def test_userfall_oben_warm_unten_kalt_darf_einschalten():
     erg = await pcl.handle_compressor_on(
         state, None, regelfuehler=30.0, einschaltpunkt=45.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
-        t_oben=state.sensors.t_oben,
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler(calls),
     )
     assert erg is True
@@ -192,7 +192,7 @@ async def test_on_blockiert_in_der_limitnaehe_ohne_vorheriges_limit():
     erg = await pcl.handle_compressor_on(
         state, None, regelfuehler=47.9, einschaltpunkt=42.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
-        t_oben=state.sensors.t_oben,
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler(calls),
     )
     assert erg is False
@@ -212,7 +212,7 @@ async def test_on_erlaubt_mit_zwei_kelvin_luft():
     erg = await pcl.handle_compressor_on(
         state, None, regelfuehler=45.9, einschaltpunkt=42.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
-        t_oben=state.sensors.t_oben,
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler(calls),
     )
     assert erg is True
