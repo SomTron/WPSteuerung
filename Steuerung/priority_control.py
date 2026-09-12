@@ -729,11 +729,10 @@ def evaluate_abweichung(
     """
     result = RegelErgebnis(name="Abweichung", prioritaet=abw.prioritaet, aktiv=True)
 
-    # Oben Fühler verwenden (ignoriere die Konfiguration)
-    temp = _parse_sensor(temp_dict, "oben")
+    temp = _parse_sensor(temp_dict, abw.temperaturfuehler)
     if temp is None:
         result.aktiv = False
-        result.grund = "Sensor 'oben' nicht verfuegbar"
+        result.grund = f"Sensor '{abw.temperaturfuehler}' nicht verfuegbar"
         return result
 
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
@@ -743,7 +742,7 @@ def evaluate_abweichung(
     if abweichung <= abw.ausschalten_bei_abweichung_k:
         result.einschalten = False
         result.grund = (
-            f"Soll {abw.solltemperatur_c}C - oben {temp:.1f}C = "
+            f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
             f"{abweichung:.1f}K <= +{abw.ausschalten_bei_abweichung_k}K -> AUS"
         )
         return result
@@ -754,12 +753,44 @@ def evaluate_abweichung(
     if nachtsperre and not bademodus_aktiv:
         result.aktiv = False
         result.grund = (
-            f"Nachtsperre (kein Einschalten, oben={temp:.1f}C)"
+            f"Nachtsperre (kein Einschalten, {abw.temperaturfuehler}={temp:.1f}C)"
         )
         return result
 
     # Einschalten: Zu kalt
     if abweichung >= abw.einschalten_bei_abweichung_k:
+        # 2-Zonen-Schichtungs-Check: Wenn der konfigurierte Fuehler nicht "oben" ist
+        # (z.B. unten/mittig), pruefe ob oben noch warm genug ist.
+        if abw.temperaturfuehler != "oben" and abw.schichtung_min_oben_c > 0:
+            temp_oben = _parse_sensor(temp_dict, "oben")
+            if temp_oben is not None and temp_oben >= abw.schichtung_min_oben_c:
+                erlaube = getattr(abw, "schichtung_erlaube_start", False)
+                steig = max(getattr(abw, "schichtung_max_steig_k", 1.0), 0.1)
+                if erlaube:
+                    # Warmstart: einschalten erlaubt, aber oben darf nur um
+                    # schichtung_max_steig_k (Standard 1 K) steigen.
+                    result.einschalten = True
+                    result.regel_dict = {
+                        "schichtung_oben_max": temp_oben + steig,
+                        "schichtung_oben_start": temp_oben,
+                        "schichtung_max_steig_k": steig,
+                    }
+                    result.grund = (
+                        f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                        f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                        f"oben {temp_oben:.1f}C warm, Schichtungs-Start erlaubt "
+                        f"(Obergrenze oben {temp_oben + steig:.1f}C) -> EIN"
+                    )
+                    return result
+                else:
+                    result.einschalten = None
+                    result.grund = (
+                        f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                        f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                        f"oben {temp_oben:.1f}C warm, Schichtungs-Start erlaubt "
+                        f"(Obergrenze oben {temp_oben + steig:.1f}C) -> EIN"
+                    )
+                    return result
         # Quellen-Gate mit Tiefenschutz: Im Normalfall auf PV/Batterie warten
         # statt mit Netzstrom zu heizen. Erst wenn der Fuehler unter
         # (Soll - netz_notfall_offset_k) faellt, erlaubt der Tiefschutz Netz.
@@ -786,7 +817,7 @@ def evaluate_abweichung(
 
         result.einschalten = True
         result.grund = (
-            f"Soll {abw.solltemperatur_c}C - oben {temp:.1f}C = "
+            f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
             f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K -> EIN"
         )
         return result
@@ -794,7 +825,7 @@ def evaluate_abweichung(
     # In der Hysterese: Keine Aktion (Kompressor laeuft weiter/bleibt aus)
     result.einschalten = None
     result.grund = (
-        f"In Hysterese: Soll {abw.solltemperatur_c}C - oben {temp:.1f}C = "
+        f"In Hysterese: Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
         f"{abweichung:.1f}K (zwischen {abw.ausschalten_bei_abweichung_k}K und {abw.einschalten_bei_abweichung_k}K)"
     )
     return result

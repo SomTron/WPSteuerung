@@ -1016,10 +1016,10 @@ async def handle_compressor_on(
         getattr(_sicher_cfg, "boiler_max_ein_abstand_k", BOILER_MAX_EIN_ABSTAND_K)
     )
     t_nahe, nahe_limit, _kuehl_schwelle, fuehler_nahe = _boiler_max_info(state)
-    t_mittig = state.sensors.t_mittig
+    t_mittig = getattr(getattr(state, "sensors", None), "t_mittig", None)
     # Nur blockieren wenn SOWOHL unten ALS AUCH mittig nahe am Limit sind
     # Wenn nur unten nahe am Limit aber mittig noch kalt ist -> nicht blockieren
-    mittig_close = t_mittig is not None and t_mittig >= nahe_limit - ein_abstand
+    mittig_close = t_mittig is not None and t_mittig >= nahe_limit - ein_abstand if t_mittig is not None else False
     unten_close = t_nahe is not None and t_nahe >= nahe_limit - ein_abstand
     if unten_close and mittig_close:
         state.control.blocking_reason = (
