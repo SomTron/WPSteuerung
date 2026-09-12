@@ -215,6 +215,7 @@ while true; do
     printf "11) 🔍  Query Logs by Time (enter datetime)\n"
     printf "12) ⏱️  Query Logs by Duration (last N hours)\n"
     printf "13) 📊  Service-Details (systemctl status)\n"
+    printf "14) ☁️  Upload Log to Catbox\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -385,6 +386,31 @@ while true; do
             systemctl status wpsteuerung --no-pager -l 2>/dev/null \
                 || journalctl -u wpsteuerung -n 50 --no-pager 2>/dev/null \
                 || printf "${RED}Service 'wpsteuerung' nicht gefunden.${NC}\n"
+            wait_for_key
+            ;;
+        14)
+            if [ -f "$LOG_FILE" ]; then
+                TMP_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/wp-manager.$$")
+                mkdir -p "$TMP_DIR"
+                printf "${CYAN}Bereite heizungssteuerung.log für Upload vor (%s)...${NC}\n" "$(du -h "$LOG_FILE" | cut -f1)"
+                cp "$LOG_FILE" "$TMP_DIR/heizungssteuerung_upload.log"
+                gzip -f "$TMP_DIR/heizungssteuerung_upload.log"
+                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\n"
+                UPLOAD_URL=$(curl -fsS -F "reqtype=fileupload" \
+                    -F "fileToUpload=@$TMP_DIR/heizungssteuerung_upload.log.gz" \
+                    https://catbox.moe/user/api.php)
+                CURL_RC=$?
+                if [ $CURL_RC -eq 0 ] && [ -n "$UPLOAD_URL" ] && printf '%s' "$UPLOAD_URL" | grep -q '^https://'; then
+                    printf "${GREEN}✓ Upload erfolgreich! (${YELLOW}%s komprimiert${GREEN})${NC}\n" "$(du -h "$TMP_DIR/heizungssteuerung_upload.log.gz" | cut -f1)"
+                    printf "URL: ${BLUE}%s${NC}\n" "$UPLOAD_URL"
+                else
+                    printf "${RED}✗ Fehler beim Upload (curl RC=%s)!${NC}\n" "$CURL_RC"
+                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: %s${NC}\n" "$UPLOAD_URL"
+                fi
+                rm -rf "$TMP_DIR"
+            else
+                printf "${RED}Fehler: $LOG_FILE nicht gefunden!${NC}\n"
+            fi
             wait_for_key
             ;;
         0) exit 0 ;;
