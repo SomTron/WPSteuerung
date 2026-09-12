@@ -515,6 +515,7 @@ async def run_logic_step(session, state, learning_engine=None):
             await pcl.handle_compressor_on(
                 state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
                 state.min_laufzeit, state.min_pause, state.sensors.t_oben,
+                state.sensors.t_mittig,
                 set_kompressor_status
             )
         

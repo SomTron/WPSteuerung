@@ -1,4 +1,5 @@
-﻿"""
+# -*- coding: utf-8 -*-
+"""
 Prioritaetenbasierte Steuerungslogik (Pareto-optimiert).
 
 Ersetzt die modusbasierte Logik durch eine Regelengine mit Prioritaeten.
@@ -1015,12 +1016,23 @@ async def handle_compressor_on(
         getattr(_sicher_cfg, "boiler_max_ein_abstand_k", BOILER_MAX_EIN_ABSTAND_K)
     )
     t_nahe, nahe_limit, _kuehl_schwelle, fuehler_nahe = _boiler_max_info(state)
-    if t_nahe is not None and t_nahe >= nahe_limit - ein_abstand:
+    t_mittig = state.sensors.t_mittig
+    # Nur blockieren wenn SOWOHL unten ALS AUCH mittig nahe am Limit sind
+    # Wenn nur unten nahe am Limit aber mittig noch kalt ist -> nicht blockieren
+    mittig_close = t_mittig is not None and t_mittig >= nahe_limit - ein_abstand
+    unten_close = t_nahe is not None and t_nahe >= nahe_limit - ein_abstand
+    if unten_close and mittig_close:
         state.control.blocking_reason = (
-            f"Boiler-Max-Naehe ({fuehler_nahe} {t_nahe:.1f}C, "
+            f"Boiler-Max-Naehe (unten {t_nahe:.1f}C, mittig {t_mittig:.1f}C, "
             f"Einschalten erst < {nahe_limit - ein_abstand:.1f}C)"
         )
         return False
+    elif unten_close and not mittig_close:
+        # Unten nahe am Limit aber mittig noch kalt -> nicht blockieren
+        pass
+    elif mittig_close and not unten_close:
+        # Mittig nahe am Limit aber unten noch kalt -> nicht blockieren
+        pass
     # Taktschutz (Punkt D): Bei zu vielen Wechseln zusaetzliche Pause
     _ts_cfg = getattr(state, "priority_config", None)
     takt_pause = _taktschutz_blockiert(state, _ts_cfg)
@@ -1223,4 +1235,5 @@ def _is_nachtsperre_aktiv(cfg: WPSteuerungConfig, now: datetime) -> bool:
     if start <= ende:
         return start <= h < ende
     return h >= start or h < ende
+
 
