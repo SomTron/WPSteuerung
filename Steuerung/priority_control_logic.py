@@ -975,6 +975,7 @@ async def handle_compressor_on(
     min_laufzeit,
     min_pause,
     t_oben,
+    t_mittig,
     set_kompressor_status_func: Callable,
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""
