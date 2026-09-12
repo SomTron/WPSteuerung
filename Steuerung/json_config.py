@@ -557,8 +557,8 @@ class LegionellenConfig(BaseModel):
     bevorzugter_tag: int = Field(default=4, description="Bevorzugter Wochentag (0=Montag..6=Sonntag, 4=Freitag)")
     letzter_tag: int = Field(default=6, description="Spätester Tag für die Prophylaxe (6=Sonntag)")
     start_uhr: int = Field(default=8, description="Früheste Startstunde am Tag")
-    spaeteste_start_uhr: int = Field(default=16, description="Späteste Startstunde (muss bis dahin begonnen haben)")
-    max_duration_hours: int = Field(default=4, description="Maximale Laufzeit der Legionellenfahrt (Stunden)")
+    spaeteste_start_uhr: int = Field(default=12, description="Späteste Startstunde (muss bis dahin begonnen haben)")
+    max_duration_hours: int = Field(default=8, description="Maximale Laufzeit der Legionellenfahrt (Stunden)")
     erforderliche_wh_qm: float = Field(default=800.0, description="Mindest-PV-Prognose Wh/qm für den bevorzugten Tag")
     pv_prognose_schwelle_gut: float = Field(default=2000.0, description="PV-Prognose >= diesem Wert gilt als 'guter PV-Tag' (Wh/qm)")
 
