@@ -214,10 +214,23 @@ tagsueber quellenblind und heizte bei Durchkuehlung mit Netzstrom. Jetzt:
 
 - Normalfall: EIN nur mit echter PV-Einspeisung (>= 50 W) oder voller Batterie
   ohne Netzkauf - sonst wartet die Regel (stumm, kein AUS)
-- **Tiefenschutz**: Faellt der Fuehler unter
-  `solltemperatur_c - netz_notfall_offset_k` (default 8 K), wird Netzstrom
-  erlaubt - der Boiler kuehlt nie ganz durch, nur weil keine Sonne scheint
+- **Tiefenschutz**: `solltemperatur_c - netz_notfall_offset_k` (default 8 K)
+  wird die Waermepumpe trotz Netzstrom erlaubt - der Boiler kuehlt nie ganz
+  durch, nur weil keine Sonne scheint
 - Mit `quelle_warten: false` stellt man das alte quellenblinde Verhalten her
+
+**PV-Warten-Overlay bei guter Tagesprognose** (`pv_warten_*`, default aktiv):
+Bekämpft die Mehrfach messbare „ZU FRUEH“-Phänomene (morgens mit Netzstrom
+heizen, kurze Zeit später steht PV-Überschuss bereit). Wenn heute eine sehr
+gute Tagesprognose vorliegt, verzichtet die Abweichungs-Regel morgens (bis
+`pv_warten_bis_uhr`, default 12 Uhr, exklusiv = ab 13 Uhr wieder normal) auf
+den Netzstart - auch unter der Tiefenschutz-Schwelle. Absicherungen:
+
+- Effektive Prognose = `forecast_today_wh_qm × fc_ratio`, erst ab
+  `pv_warten_forecast_schwelle_wh_qm` (default 2.500 Wh/m²) wird gewartet
+- `pv_warten_aktiv: false` schaltet das Overlay komplett ab
+- Unter `pv_warten_unten_min_c` (default 20 °C) gilt als „echt kalt“
+  und es wird sofort (Netz) geheizt
 
 ---
 
@@ -405,7 +418,7 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
 ```jsonc
 {
   "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 2.0, "nachtsperre_start": 19, "nachtsperre_ende": 8 },
-  "abweichung":   { "solltemperatur_c": 40, "schichtung_min_oben_c": 42 },
+  "abweichung":   { "solltemperatur_c": 40, "schichtung_min_oben_c": 42, "pv_warten_aktiv": true, "pv_warten_forecast_schwelle_wh_qm": 2500, "pv_warten_bis_uhr": 12, "pv_warten_unten_min_c": 20 },
   "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500 },
   "batterie":     { "min_soc_prozent": 90, "max_netzbezug_watt": -50 },
   "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen+nachtsperre_ueberschreiben */ ] },

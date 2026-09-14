@@ -332,6 +332,26 @@ class AbweichungConfig(BaseModel):
         default=8.0,
         description="Tiefenschutz: Netz erlaubt wenn Fuehler <= Soll - Offset (K)",
     )
+    # --- PV-Warten-Overlay (Netzstromverzicht bei guter Tagesprognose) ---
+    # Statt morgens mit Netzstrom vorzuheizen, wartet die Abweichungs-Regel bei
+    # guter Tagesprognose auf die erwartete PV-Sonne (bekaempft die 7x gemessenen
+    # "ZU FRUEH"-Events: Netz-Heizen, kurz darauf kommt PV-Ueberschuss).
+    pv_warten_aktiv: bool = Field(
+        default=True,
+        description="True = PV-Warten-Overlay aktiv (bei guter Tagesprognose)",
+    )
+    pv_warten_forecast_schwelle_wh_qm: float = Field(
+        default=2500.0,
+        description="Abweichung wartet erst ab dieser effektiven Tagesprognose (Wh/m2)",
+    )
+    pv_warten_bis_uhr: int = Field(
+        default=12,
+        description="Netz spielt wieder normal ab 13 Uhr (Stunde exklusiv)",
+    )
+    pv_warten_unten_min_c: float = Field(
+        default=20.0,
+        description="Echt-Kalt-Schutz: unter dieser Fuehler-Temperatur sofort netzheizen",
+    )
 
     @model_validator(mode="after")
     def _plausibel(self):

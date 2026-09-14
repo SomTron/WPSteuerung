@@ -74,7 +74,11 @@
     "einschalten_bei_abweichung_k": 4.9,
     "ausschalten_bei_abweichung_k": 0.7,
     "schichtung_erlaube_start": true,
-    "schichtung_max_steig_k": 1.0
+    "schichtung_max_steig_k": 1.0,
+    "pv_warten_aktiv": true,
+    "pv_warten_forecast_schwelle_wh_qm": 2500,
+    "pv_warten_bis_uhr": 12,
+    "pv_warten_unten_min_c": 20
   },
   "forecast": {
     "prioritaet": 57,

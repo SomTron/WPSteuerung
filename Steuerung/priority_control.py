@@ -718,6 +718,8 @@ def evaluate_abweichung(
     feedin_watt: float = 0.0,
     soc: Optional[float] = None,
     bademodus_aktiv: bool = False,
+    forecast_today_wh_qm: Optional[float] = None,
+    fc_ratio: float = 1.0,
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: Haelt Temperatur nahe am Sollwert.
@@ -759,6 +761,38 @@ def evaluate_abweichung(
 
     # Einschalten: Zu kalt
     if abweichung >= abw.einschalten_bei_abweichung_k:
+        # PV-Warten-Overlay (Empfehlung 3.3): Bei sehr guter Tagesprognose
+        # morgens NICHT mit Netzstrom vorheizen, sondern auf die erwartete
+        # PV-Sonne warten. Steht vor dem Schichtungs-Check, damit auch der
+        # "oben warm, unten kalt"-Warmstart nicht aus dem Netz bedient wird.
+        # Schutz: Unter pv_warten_unten_min_c (echt kalt) wird sofort geheizt,
+        # ab pv_warten_bis_uhr spielt die Regel wieder normal; ist die Sonne
+        # zum Wartezeitpunkt schon aktiv, wird normal entschieden.
+        if (
+            getattr(abw, "pv_warten_aktiv", True)
+            and now_hour < getattr(abw, "pv_warten_bis_uhr", 12)
+            and temp >= getattr(abw, "pv_warten_unten_min_c", 20.0)
+            and forecast_today_wh_qm is not None
+            and _forecast_effektiv_wh_qm(forecast_today_wh_qm, fc_ratio)
+            >= getattr(abw, "pv_warten_forecast_schwelle_wh_qm", 2500.0)
+            and not _energiequelle_ok(
+                feedin_watt,
+                soc,
+                getattr(abw, "pv_einspeisung_min_watt", 50.0),
+                getattr(abw, "soc_min_prozent", 90.0),
+                getattr(abw, "max_netzbezug_watt", -50.0),
+            )
+        ):
+            eff = _forecast_effektiv_wh_qm(forecast_today_wh_qm, fc_ratio)
+            result.einschalten = None
+            result.grund = (
+                f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                f"heute gute PV-Prognose ({eff:.0f} Wh/m2, PV {feedin_watt:.0f}W) "
+                f"-> warte auf PV (Netz ab {getattr(abw, 'pv_warten_bis_uhr', 12)}:00 "
+                f"oder Notfall unter {getattr(abw, 'pv_warten_unten_min_c', 20.0):.0f}C)"
+            )
+            return result
         # 2-Zonen-Schichtungs-Check: Wenn der konfigurierte Fuehler nicht "oben" ist
         # (z.B. unten/mittig), pruefe ob oben noch warm genug ist.
         if abw.temperaturfuehler != "oben" and abw.schichtung_min_oben_c > 0:
@@ -829,6 +863,25 @@ def evaluate_abweichung(
         f"{abweichung:.1f}K (zwischen {abw.ausschalten_bei_abweichung_k}K und {abw.einschalten_bei_abweichung_k}K)"
     )
     return result
+
+
+def _forecast_effektiv_wh_qm(forecast_today, fc_ratio: float = 1.0) -> float:
+    """Normiert die Tages-Prognose auf Wh/m2 und wendet die Kalibrierung an.
+
+    `state.solar.forecast_today` kann je nach Quelle in kWh/m2 (5,34) oder
+    Wh/m2 (5340) vorliegen - Werte unter 100 (typischer kWh-Bereich 0..15)
+    werden als kWh interpretiert und auf Wh umgerechnet, damit die
+    2.500-Wh-Schwelle des PV-Warten-Overlays in beiden Welten funktioniert.
+    """
+    if forecast_today is None:
+        return 0.0
+    try:
+        wert = float(forecast_today)
+    except (TypeError, ValueError):
+        return 0.0
+    if 0 < wert < 100:
+        wert *= 1000.0  # kWh/m2 -> Wh/m2
+    return wert * fc_ratio
 
 
 def _energiequelle_ok(
@@ -1661,6 +1714,8 @@ def bewerte_alle_regeln(
         feedin_watt=pv_leistung,
         soc=soc,
         bademodus_aktiv=bademodus_aktiv,
+        forecast_today_wh_qm=forecast_today_wh_qm,
+        fc_ratio=fc_ratio,
     )
     ergebnisse.append(ergebnis)
 
