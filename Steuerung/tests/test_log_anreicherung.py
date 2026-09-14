@@ -154,6 +154,40 @@ async def test_statuszeile_enthaelt_pv_einspeis_soc_alter(monkeypatch, caplog,
     assert "Regel: Einspeisung" in zeile
 
 
+@pytest.mark.asyncio
+async def test_statuszeile_markiert_stale_daten(monkeypatch, caplog, tmp_path):
+    """Empfehlung 3.5: Bei veralteten Solax-Daten (> 30 min) erscheint 'STALE'."""
+    import main
+
+    state = SimpleNamespace(
+        local_tz=TZ,
+        sensors=SimpleNamespace(t_oben=48.0, t_mittig=43.0, t_unten=46.0,
+                                t_verd=12.0),
+        control=SimpleNamespace(
+            kompressor_ein=False,
+            aktueller_einschaltpunkt=42.0, aktueller_ausschaltpunkt=48.0,
+            blocking_reason=None, active_rule_name=None,
+            previous_modus="Keine Regel aktiv"),
+        solar=SimpleNamespace(
+            acpower=None, feedinpower=None, soc=None,
+            last_api_call=datetime.now(TZ) - timedelta(minutes=45)),
+    )
+    monkeypatch.setattr(main, "check_log_throttle", lambda *a, **k: True)
+    monkeypatch.setattr(main, "hardware_manager",
+                        SimpleNamespace(write_lcd=lambda *a, **k: None))
+    monkeypatch.setattr(main, "HEIZUNGSDATEN_CSV", str(tmp_path / "heiz.csv"))
+    monkeypatch.setattr(main, "build_heizungsdaten_zeile", lambda s: ["1", "2"])
+    monkeypatch.setattr(main, "write_last_state_snapshot", lambda s: None)
+
+    with caplog.at_level(logging.INFO):
+        await main.log_system_state(state)
+
+    meldungen = [r.message for r in caplog.records if r.message.startswith("Status:")]
+    assert meldungen
+    assert "STALE" in meldungen[0]
+    assert "Alter=2700s" in meldungen[0]
+
+
 # ---------------- 5) Sensor-Degradation ---------------- #
 def test_sensor_degradation_warnt_auf_logarithmischen_schwellen(caplog):
     from sensors import SensorManager

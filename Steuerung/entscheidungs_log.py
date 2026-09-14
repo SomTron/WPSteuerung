@@ -91,8 +91,13 @@ def schreibe_eintrag(
     soc: Optional[float] = None,
     t_unten: Optional[float] = None,
     t_oben: Optional[float] = None,
+    stale_s: Optional[int] = None,
 ) -> bool:
     """Haengt einen Zyklus-Eintrag ans JSONL-Log (nur bei Aenderung/Herzschlag).
+
+    stale_s: Alter der Solax-Daten in Sekunden (None = unbekannt/frisch).
+             Ermoeglicht spaetere Analysen, Entscheidungen auf veralteten
+             PV-Daten zu erkennen (Empfehlung 3.5).
 
     Rueckgabe: True, wenn geschrieben wurde; False bei unterdruecktem Duplikat.
     """
@@ -107,6 +112,7 @@ def schreibe_eintrag(
         "soc": round(float(soc), 1) if soc is not None else None,
         "t_unten": round(float(t_unten), 2) if t_unten is not None else None,
         "t_oben": round(float(t_oben), 2) if t_oben is not None else None,
+        "stale_s": stale_s,
     }
     try:
         global _cache_pfad, _cache_zeile

@@ -94,6 +94,8 @@ def _code_klassifiziere(warnung: str) -> str:
         return "WARN_BOILERMAX"
     if "Boiler-Max-Naehe" in warnung:
         return "WARN_BOILERMAX_NAEHE"
+    if "Solar-Daten veraltet" in warnung:
+        return "WARN_SOLAR_STALE"
     if "ZU FRUEH" in warnung:
         return "WARN_ZU_FRUEH"
     if "Taktschutz" in warnung:
@@ -484,6 +486,14 @@ def analysiere(parsed):
         level[e[1][1]] += 1
     out["level"] = level
     out["stat_ereignis_codes"] = Counter(e[1][0] for e in ereignisse)
+
+    # --- Stale-Daten-Phasen (Empfehlung 3.5): Zeitraeume, in denen auf
+    # veralteten Solax-Daten entschieden wurde (WARN "Solar-Daten veraltet",
+    # wird waehrend der Stillstand-Phase alle 5 min getaktet). ---
+    stale_events = [e for e in ereignisse if e[1][0] == "WARN_SOLAR_STALE"]
+    stale_pro_tag = Counter(e[0].strftime("%Y-%m-%d") for e in stale_events)
+    out["stale_pro_tag"] = stale_pro_tag
+    out["stale_gesamt"] = len(stale_events)
     return out
 
 
@@ -660,6 +670,18 @@ def erzeuge_bericht(parsed, out, outdir, stats_roh):
             c2, n2 = codes[i + mid]
             row += f" {c2} | {n2} |"
         ap(row)
+
+    ap("\n### 7b. Stale-Daten-Phasen (Entscheidungen auf veralteten PV-Daten)\n")
+    gesamt_stale = out.get("stale_gesamt", 0)
+    ap(f"- Warnungen 'Solar-Daten veraltet' (waehrend Ausfall alle 5 min): "
+       f"**{gesamt_stale}**")
+    if out.get("stale_pro_tag"):
+        ap("| Tag | Stale-Warnungen |")
+        ap("|---|---|")
+        for tag, n in sorted(out["stale_pro_tag"].items()):
+            ap(f"| {tag} | {n} |")
+    else:
+        ap("- Keine Stale-Phasen im analysierten Zeitraum.")
 
     ap("\n## 8. Regel-Einschalt-Haeufigkeit (alle Bewertungen)\n")
     ap("| Regel | EIN | AUS |")

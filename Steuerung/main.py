@@ -724,6 +724,12 @@ async def log_system_state(state):
             except (TypeError, ValueError):
                 alter_s = None
         alter_txt = "n/a" if alter_s is None else f"{alter_s}s"
+        # Stale-Daten-Marker (Empfehlung 3.5): Kennzeichnet Entscheidungen, die
+        # auf veralteten Solax-Daten beruhen - fuer die spätere Analyse sofort
+        # erkennbar, ob eine Ausschaltung einer Stillstand-Phase geschuldet war.
+        stale_flag = ""
+        if alter_s is not None and alter_s > SOLAR_DATA_STALE_THRESHOLD_MIN * 60:
+            stale_flag = " | STALE"
 
         log_line = (
             f"Status: {komp_status} | "
@@ -732,7 +738,7 @@ async def log_system_state(state):
             f"PV={_fmt_w(getattr(state.solar, 'acpower', None))} | "
             f"Einspeis={_fmt_w(getattr(state.solar, 'feedinpower', None))} | "
             f"SOC={_fmt_soc(getattr(state.solar, 'soc', None))} | "
-            f"Alter={alter_txt}"
+            f"Alter={alter_txt}{stale_flag}"
         )
         if state.control.blocking_reason:
             log_line += f" | Blocking: {state.control.blocking_reason}"

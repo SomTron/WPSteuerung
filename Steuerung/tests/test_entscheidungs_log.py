@@ -60,6 +60,28 @@ def test_schreibe_und_lese(tmp_path):
         assert eintrag["feedin_w"] == 500.0
 
 
+def test_schreibe_feld_stale_s(tmp_path):
+    """Empfehlung 3.5: stale_s wird als Feld mitgeschrieben (rueckwaertskomp.)."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="Abweichung",
+            gewinner_grund="Netz-Tiefenschutz",
+            soll_einschalten=True,
+            kompressor_laeuft=True,
+            stale_s=921,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            zeilen = f.readlines()
+        eintrag = json.loads(zeilen[0])
+        assert eintrag["stale_s"] == 921
+        # Ohne Angabe bleibt das Feld None (Alt-Datensaetze unveraendert gelesen)
+        el.schreibe_eintrag("Keine", "", False, False)
+        with open(log_datei, encoding="utf-8") as f:
+            e2 = json.loads(f.readlines()[-1])
+        assert e2["stale_s"] is None
+
+
 def test_historie_filtert_nach_stunden(tmp_path):
     """Nur Eintraege innerhalb des Stunden-Fensters zurueck."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)

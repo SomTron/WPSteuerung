@@ -328,8 +328,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # Volle Bewertung nur bei Aenderung einer EIN/AUS-Entscheidung oder als
     # staendlicher Snapshot (alle 60 min). Details: entscheidungs_log.jsonl.
     if _soll_priority_loggen(state, alle_ergebnisse):
+        stale_marker = "[STALE] " if _solar_daten_veraltet(state) else ""
         logging.info(
-            f"Regel-Bewertung ({len(alle_ergebnisse)} Regeln):\n{formatiere_ergebnisse(alle_ergebnisse)}"
+            f"Regel-Bewertung {stale_marker}({len(alle_ergebnisse)} Regeln):\n{formatiere_ergebnisse(alle_ergebnisse)}"
         )
 
     # Gewinner-Regel in State speichern fuer Anzeige
@@ -491,6 +492,17 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # Entscheidungs-Historie (JSONL) fuer Webapp/KPIs - darf nie blockieren
     if entscheidungs_log is not None:
         try:
+            # Alter der Solax-Daten (STALE-Kennzeichnung fuer Analysen, 3.5)
+            stale_s = None
+            _last_call = getattr(state.solar, "last_api_call", None)
+            if _last_call is not None:
+                try:
+                    stale_s = int(max(
+                        (datetime.now(state.local_tz) - _last_call).total_seconds(),
+                        0,
+                    ))
+                except (TypeError, ValueError):
+                    stale_s = None
             entscheidungs_log.schreibe_eintrag(
                 gewinner_name=gewinner.name if gewinner else None,
                 gewinner_grund=gewinner.grund if gewinner else "",
@@ -501,6 +513,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 soc=getattr(state.solar, "soc", None),
                 t_unten=t_unten,
                 t_oben=getattr(state.sensors, "t_oben", None),
+                stale_s=stale_s,
             )
         except Exception as e:  # pragma: no cover
             logging.debug(f"Entscheidungslog-Fehler: {e}")
