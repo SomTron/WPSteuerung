@@ -78,7 +78,8 @@ from datetime import datetime, timedelta
 import sys
 sys.path.insert(0, '$TARGET_DIR')
 from log_query import query_logs, tail_log
-target = datetime.now() - timedelta(hours=${hours})
+#timezone-awareive für Vergleich mit Log-Zeitstempeln
+target = datetime.now().replace(tzinfo=None) - timedelta(hours=${hours})
 result, meta = query_logs(after=target, lines=${maxlines})
 for line in result:
     sys.stdout.write(line)

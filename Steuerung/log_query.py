@@ -105,8 +105,8 @@ def query_logs(
             if before is not None and line_ts is not None and line_ts >= before:
                 break
 
-            # Nach Filter: wenn after gesetzt, nur Zeilen NACH after
-            if after is not None and line_ts is not None and line_ts <= after:
+            # Nach Filter: wenn after gesetzt, nur Zeilen NACH oder AB after
+            if after is not None and line_ts is not None and line_ts < after:
                 continue
 
             # Level-Filter
