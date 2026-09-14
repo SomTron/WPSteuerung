@@ -755,6 +755,47 @@ def _boiler_max_info(state):
     return temp, limit, wiederein, fuehler
 
 
+def _fmt_float(wert, einheit="", nachkomma=0) -> str:
+    """Formatiert einen Optional-float robust (None -> 'n/a')."""
+    if wert is None:
+        return "n/a"
+    try:
+        return f"{float(wert):.{nachkomma}f}{einheit}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _boiler_max_kontext(state) -> str:
+    """Kontext fuer BOILERMAX-Warnungen (Empfehlung "WARNINGS anreichern").
+
+    Fuegt der Warnung die aktive Regel, die aktuelle PV-Einspeisung, den
+    Batterie-SOC sowie die zuletzt gemessene unten-Heizrate (aus der
+    Learning-Engine, letzter abgeschlossener Zyklus) hinzu, damit die
+    Abschaltung aus dem Log heraus vollstaendig nachvollziehbar ist.
+    """
+    aktive_regel = (
+        getattr(state.control, "_lauf_start_regel", None)
+        or getattr(state.control, "active_rule_name", None)
+        or "unbekannt"
+    )
+    solar = getattr(state, "solar", None)
+    feedin = getattr(solar, "feedinpower", None) if solar is not None else None
+    soc = getattr(solar, "soc", None) if solar is not None else None
+    rate = None
+    engine = getattr(state, "learning_engine", None)
+    zyklen = getattr(getattr(engine, "data", None), "cycles", None)
+    if zyklen:
+        letzter = zyklen[-1]
+        if isinstance(letzter, dict):
+            rate = letzter.get("rate_unten_c_h")
+    return (
+        f"Regel={aktive_regel} | "
+        f"PV={_fmt_float(feedin, 'W')} | "
+        f"SOC={_fmt_float(soc, '%')} | "
+        f"Rate(letzter Lauf)={_fmt_float(rate, 'C/h', 1)}"
+    )
+
+
 def _ist_pv_gesteuerter_lauf(name) -> bool:
     """True, wenn der laufende Kompressor-Lauf von einer PV-/Einspeisung-
     Regel gestartet wurde (fuer die PV-Mindestlaufzeit-Entkopplung)."""
@@ -838,7 +879,8 @@ async def handle_compressor_off(
             )
             logging.warning(
                 f"BOILERMAX AUS: {fuehler} {t_max:.1f}C >= {limit:.1f}C - "
-                f"Mindestlaufzeit gebrochen, Freigabe erst <= {wiederein:.1f}C"
+                f"Mindestlaufzeit gebrochen, Freigabe erst <= {wiederein:.1f}C "
+                f"[{_boiler_max_kontext(state)}]"
             )
             return True
         await handle_critical_compressor_error(session, state, "bei Boiler-Maximum")

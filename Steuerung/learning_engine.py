@@ -17,6 +17,10 @@ from dataclasses import dataclass, field, asdict
 
 LEARNING_DATA_FILE = "learning_data.json"
 
+# Geschaetzter Strompreis fuer die Ableitung der "verpassten Ersparnis" aus
+# verschenkten PV-Wh nach einem ZU-FRUEH-Event (Empfehlung "WARNINGS anreichern").
+ZU_FRUEH_STROMPREIS_EUR_KWH = 0.35
+
 
 @dataclass
 class HeatingCycle:
@@ -126,7 +130,7 @@ class LearningEngine:
         self._cycle_feedin_ws: float = 0.0   # Zeitintegral Einspeisung [Ws]
         self._cycle_soc_sum_ws: float = 0.0
         self._cycle_secs: float = 0.0
-        self._pending_zu_frueh: List[str] = []   # nur im RAM
+        self._pending_zu_frueh: List[Dict] = []   # nur im RAM: {"ende": iso, "verpasste_wh": Wh}
         self._day_surplus_wh: float = 0.0
         self._surplus_tag: str = ""
         self._kalibriert_datum: str = ""
@@ -503,25 +507,37 @@ class LearningEngine:
 
         # "Zu frueh"-Erkennung: Kamen nach einem Nicht-PV-Zyklus binnen
         # 45 min doch noch >800 W Einspeisung, war der Start verfrueht.
+        # Waehrend des offenen Fensters wird die verschenkte PV-Energie
+        # (Netzeinspeisung in Wh) integriert und zusammen mit der daraus
+        # abgeleiteten Ersparnis in die Warnung geschrieben. Hinweis: Sind
+        # mehrere Nicht-PV-Zyklen gleichzeitig offen, wird das gemeinsame
+        # Surplus je Pending gezaehlt (vernachlaessigbar in der Praxis).
         if self._pending_zu_frueh:
             noch_offen = []
-            for ende_iso in self._pending_zu_frueh:
+            for pend in self._pending_zu_frueh:
                 try:
-                    ende = datetime.fromisoformat(ende_iso)
-                except ValueError:
+                    ende = datetime.fromisoformat(pend["ende"])
+                except (ValueError, KeyError, TypeError):
                     continue
                 # JSON-Timestamps sind naive; now ist bereits naiv (wurde in update() reduziert)
+                if feedin_watt is not None and dt_secs > 0:
+                    pend["verpasste_wh"] += max(feedin_watt, 0.0) * dt_secs / 3600.0
                 if (now - ende).total_seconds() < 45 * 60:
-                    noch_offen.append(ende_iso)
+                    noch_offen.append(pend)
                     continue
                 if feedin_watt is not None and feedin_watt >= 800:
                     self.data.zu_frueh_events.append(
                         now.isoformat(timespec="seconds"))
                     del self.data.zu_frueh_events[:-100]
+                    verpasst = pend.get("verpasste_wh", 0.0)
+                    ersparnis = verpasst / 1000.0 * ZU_FRUEH_STROMPREIS_EUR_KWH
                     logging.warning(
                         f"Learning: ZU FRUEH geheizt - 45 min nach "
-                        f"Nicht-PV-Zyklus ({ende_iso}) kommen "
-                        f"{feedin_watt:.0f}W Einspeisung")
+                        f"Nicht-PV-Zyklus ({pend['ende']}) kommen "
+                        f"{feedin_watt:.0f}W Einspeisung "
+                        f"(verpasste ~{verpasst:.0f}Wh, "
+                        f"~{ersparnis:.2f} EUR PV-Verlust @ "
+                        f"{ZU_FRUEH_STROMPREIS_EUR_KWH:.2f} EUR/kWh)")
             self._pending_zu_frueh = noch_offen
 
         # Heizzyklus erkennen
@@ -661,7 +677,8 @@ class LearningEngine:
             self.data.runtime_by_quelle_sec.get(quelle, 0.0)
             + self._cycle_secs, 1)
         if quelle != "pv":
-            self._pending_zu_frueh.append(end.isoformat())
+            self._pending_zu_frueh.append(
+                {"ende": end.isoformat(), "verpasste_wh": 0.0})
         self._cycle_feedin_ws = 0.0
         self._cycle_soc_sum_ws = 0.0
         self._cycle_secs = 0.0

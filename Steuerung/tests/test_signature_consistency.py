@@ -1,6 +1,5 @@
 """Tests for function signature consistency between modules."""
 import inspect
-import re
 from pathlib import Path
 
 

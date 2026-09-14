@@ -1,0 +1,677 @@
+﻿ts;code;level;detail
+2026-09-08 06:19:25;FORECAST;2026-09-08;5.34/2.10
+2026-09-08 08:00:15;CYCLE_START_WE;Abweichung;
+2026-09-08 08:47:00;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-08 08:58:45;CYCLE_START_WE;Abweichung;
+2026-09-08 09:00:19;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-08 09:15:01;CYCLE_END_WE;Komfort;
+2026-09-08 09:20:37;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-08 09:21:59;CYCLE_START_WE;AdaptivePV;
+2026-09-08 09:32:13;WARN_ZU_FRUEH;WARNING;Learning: ZU FRUEH geheizt - 45 min nach Nicht-PV-Zyklus (2026-09-08T08:47:10.782423) kommen 2940W Einspeisung
+2026-09-08 09:59:24;WARN_ZU_FRUEH;WARNING;Learning: ZU FRUEH geheizt - 45 min nach Nicht-PV-Zyklus (2026-09-08T09:14:10.805462) kommen 3857W Einspeisung
+2026-09-08 10:39:51;CYCLE_END_WE;Batterie;
+2026-09-08 10:47:25;CYCLE_END_WE;Komfort;
+2026-09-08 11:08:24;CYCLE_START_WE;AdaptivePV;
+2026-09-08 11:19:46;CYCLE_START_WE;Einspeisung;
+2026-09-08 11:40:14;CYCLE_START_WE;AdaptivePV;
+2026-09-08 11:50:27;CYCLE_START_WE;Einspeisung;
+2026-09-08 12:16:03;CYCLE_START_WE;AdaptivePV;
+2026-09-08 12:19:36;FORECAST;2026-09-08;5.31/3.38
+2026-09-08 12:20:17;CYCLE_END_WE;Einspeisung;
+2026-09-08 13:22:40;CYCLE_END_WE;Batterie;
+2026-09-08 13:24:53;CYCLE_END_WE;Komfort;
+2026-09-08 13:27:48;CYCLE_START_WE;Einspeisung;
+2026-09-08 13:54:49;CYCLE_END_WE;Batterie;
+2026-09-08 14:06:23;CYCLE_END_WE;Komfort;
+2026-09-08 14:08:50;CYCLE_START_WE;Einspeisung;
+2026-09-08 14:30:42;WARN_BOILERMAX;WARNING;BOILERMAX AUS: unten 49.0C >= 49.0C - Mindestlaufzeit gebrochen, Freigabe erst <= 47.0C
+2026-09-08 15:20:39;CYCLE_END_WE;Komfort;
+2026-09-08 15:58:48;CYCLE_START_WE;AdaptivePV;
+2026-09-08 15:59:16;CYCLE_START_WE;Einspeisung;
+2026-09-08 16:01:45;CYCLE_START_WE;AdaptivePV;
+2026-09-08 16:07:31;CYCLE_END_WE;Einspeisung;
+2026-09-08 16:29:59;CYCLE_END_WE;Batterie;
+2026-09-08 16:48:54;CYCLE_END_WE;Komfort;
+2026-09-08 17:48:15;CYCLE_START_WE;AdaptivePV;
+2026-09-08 17:57:26;CYCLE_END_WE;Einspeisung;
+2026-09-08 18:19:34;CYCLE_END_WE;Batterie;
+2026-09-08 18:19:47;FORECAST;2026-09-08;5.30/2.46
+2026-09-08 18:40:06;CYCLE_END_WE;Komfort;
+2026-09-08 19:00:15;CYCLE_END_WE;Abweichung;
+2026-09-08 19:16:01;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 00:19:54;FORECAST;2026-09-09;2.83/0.64
+2026-09-09 06:20:01;FORECAST;2026-09-09;3.34/0.57
+2026-09-09 08:00:18;CYCLE_START_WE;Abweichung;
+2026-09-09 08:26:00;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 08:26:00;WARN_LCD;WARNING;LCD Schreibfehler (Versuch 1/3): [Errno 5] Input/output error
+2026-09-09 08:43:11;CYCLE_START_WE;Abweichung;
+2026-09-09 08:44:15;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 08:57:39;CYCLE_END_WE;Komfort;
+2026-09-09 09:10:35;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 10:14:19;CYCLE_START_WE;Abweichung;
+2026-09-09 10:15:00;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 10:21:54;CYCLE_END_WE;Komfort;
+2026-09-09 11:14:53;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 11:20:39;CYCLE_START_WE;Forecast;
+2026-09-09 11:23:59;CYCLE_END_WE;Komfort;
+2026-09-09 11:52:40;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 12:20:04;FORECAST;2026-09-09;2.37/0.58
+2026-09-09 13:10:55;CYCLE_START_WE;Abweichung;
+2026-09-09 13:11:22;CYCLE_START_WE;Batterie;
+2026-09-09 13:23:35;CYCLE_START_WE;AdaptivePV;
+2026-09-09 13:33:52;CYCLE_START_WE;Batterie;
+2026-09-09 13:44:57;CYCLE_END_WE;Komfort;
+2026-09-09 14:24:39;WARN_ZU_FRUEH;WARNING;Learning: ZU FRUEH geheizt - 45 min nach Nicht-PV-Zyklus (2026-09-09T13:39:38.875970) kommen 1852W Einspeisung
+2026-09-09 14:26:44;ERR_SENSOR;ERROR;Sensor 28-445bd44686f4: Zu wenige Zeilen in w1_slave (0)
+2026-09-09 14:26:56;CYCLE_START_WE;AdaptivePV;
+2026-09-09 14:42:18;CYCLE_END_WE;Batterie;
+2026-09-09 15:02:21;CYCLE_END_WE;Komfort;
+2026-09-09 15:06:08;CYCLE_START_WE;Einspeisung;
+2026-09-09 15:16:21;CYCLE_END_WE;Komfort;
+2026-09-09 16:01:23;CYCLE_START_WE;AdaptivePV;
+2026-09-09 16:02:32;CYCLE_START_WE;Einspeisung;
+2026-09-09 16:12:50;CYCLE_START_WE;AdaptivePV;
+2026-09-09 16:15:16;CYCLE_END_WE;Einspeisung;
+2026-09-09 16:22:13;CYCLE_END_WE;Batterie;
+2026-09-09 16:46:31;CYCLE_END_WE;Komfort;
+2026-09-09 18:04:24;CYCLE_START_WE;AdaptivePV;
+2026-09-09 18:10:54;CYCLE_START_WE;Batterie;
+2026-09-09 18:16:14;CYCLE_END_WE;Einspeisung;
+2026-09-09 18:20:01;CYCLE_END_WE;Batterie;
+2026-09-09 18:20:16;FORECAST;2026-09-09;2.02/0.61
+2026-09-09 18:46:08;CYCLE_END_WE;Komfort;
+2026-09-09 19:00:10;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-09 21:36:08;WARN_CALCSTART_NACHSPERRE;WARNING;CalcStart-Hinweis: CalcStart-Vorheizen wird um 19:00 Uhr von der Nachtsperre abgeschnitten (Zielzeit 19.21:00 wird nicht voll erreicht)
+2026-09-09 21:36:35;WARN_CALCSTART_NACHSPERRE;WARNING;CalcStart-Hinweis: CalcStart-Vorheizen wird um 19:00 Uhr von der Nachtsperre abgeschnitten (Zielzeit 19.57:00 wird nicht voll erreicht)
+2026-09-10 00:20:22;FORECAST;2026-09-10;0.59/0.66
+2026-09-10 03:12:23;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-10 03:12:28;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-10 03:12:33;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-10 06:20:32;FORECAST;2026-09-10;0.61/1.72
+2026-09-10 08:00:20;CYCLE_START_WE;Abweichung;
+2026-09-10 08:34:31;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 08:48:45;CYCLE_START_WE;Abweichung;
+2026-09-10 08:50:07;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 09:02:38;CYCLE_END_WE;Komfort;
+2026-09-10 09:20:03;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 10:50:53;CYCLE_START_WE;Abweichung;
+2026-09-10 10:51:57;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 10:58:53;CYCLE_END_WE;Komfort;
+2026-09-10 12:05:30;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 12:05:57;CYCLE_END_WE;Komfort;
+2026-09-10 12:06:10;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 12:20:39;FORECAST;2026-09-10;0.72/2.27
+2026-09-10 15:22:16;CYCLE_START_WE;AdaptivePV;
+2026-09-10 15:37:35;CYCLE_START_WE;Batterie;
+2026-09-10 16:21:48;CYCLE_END_WE;Komfort;
+2026-09-10 18:20:50;FORECAST;2026-09-10;1.17/1.94
+2026-09-10 19:00:14;CYCLE_END_WE;Abweichung;
+2026-09-10 19:20:40;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 19:21:07;CYCLE_END_WE;Abweichung;
+2026-09-10 19:21:48;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-10 19:23:09;CYCLE_END_WE;Abweichung;
+2026-09-10 19:23:23;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-11 00:21:01;FORECAST;2026-09-11;2.15/5.09
+2026-09-11 03:12:36;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-11 03:12:41;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-11 03:12:46;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-11 03:12:51;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-11 06:21:05;FORECAST;2026-09-11;2.33/5.13
+2026-09-11 08:00:23;CYCLE_START_WE;Legionellen;
+2026-09-11 09:08:03;SONSTIGES;ERROR;Kompressor-Verifizierung fehlgeschlagen (2x): ⚠️ Wärmepumpe läuft möglicherweise NICHT:
+2026-09-11 12:00:13;SONSTIGES;WARNING;Legionellenprophylaxe ABGEBROCHEN (Timeout: 4.0h >= 4h) - Ziel 60C nicht erreicht
+2026-09-11 12:00:26;WARN_BOILERMAX;WARNING;BOILERMAX AUS: unten 57.1C >= 49.0C - Mindestlaufzeit gebrochen, Freigabe erst <= 47.0C
+2026-09-11 12:00:40;WARN_TEMP_NORMALBEREICH;WARNING;Temperatur ueber Normalbereich: 57.3°C >= 51.0°C (kein Abschalten)
+2026-09-11 12:00:40;CYCLE_END_WE;Einspeisung;
+2026-09-11 12:21:12;FORECAST;2026-09-11;3.03/5.17
+2026-09-11 18:21:14;FORECAST;2026-09-11;3.00/5.14
+2026-09-11 19:00:13;CYCLE_END_WE;Abweichung;
+2026-09-11 20:34:01;WARN_CALCSTART_NACHSPERRE;WARNING;CalcStart-Hinweis: CalcStart-Vorheizen wird um 19:00 Uhr von der Nachtsperre abgeschnitten (Zielzeit 19.72:00 wird nicht voll erreicht)
+2026-09-11 20:34:15;WARN_CALCSTART_NACHSPERRE;WARNING;CalcStart-Hinweis: CalcStart-Vorheizen wird um 19:00 Uhr von der Nachtsperre abgeschnitten (Zielzeit 19.85:00 wird nicht voll erreicht)
+2026-09-11 20:34:52;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-12 00:00:26;CYCLE_END_WE;Wochenende;
+2026-09-12 00:21:23;FORECAST;2026-09-12;5.25/5.15
+2026-09-12 03:13:34;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-12 03:17:26;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 06:21:27;FORECAST;2026-09-12;5.18/4.97
+2026-09-12 09:00:17;CYCLE_START_WE;Abweichung;
+2026-09-12 09:15:52;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-12 09:27:13;CYCLE_START_WE;Abweichung;
+2026-09-12 09:27:40;CYCLE_START_WE;Batterie;
+2026-09-12 09:29:40;CYCLE_START_WE;AdaptivePV;
+2026-09-12 10:01:09;WARN_ZU_FRUEH;WARNING;Learning: ZU FRUEH geheizt - 45 min nach Nicht-PV-Zyklus (2026-09-12T09:16:05.879725) kommen 2343W Einspeisung
+2026-09-12 10:03:21;CYCLE_END_WE;Einspeisung;
+2026-09-12 10:13:21;CYCLE_END_WE;Batterie;
+2026-09-12 10:29:23;CYCLE_END_WE;Komfort;
+2026-09-12 10:57:27;CYCLE_START_WE;AdaptivePV;
+2026-09-12 11:07:14;CYCLE_END_WE;Einspeisung;
+2026-09-12 11:18:50;CYCLE_END_WE;Batterie;
+2026-09-12 11:25:57;CYCLE_END_WE;Komfort;
+2026-09-12 11:36:38;CYCLE_START_WE;AdaptivePV;
+2026-09-12 11:37:05;CYCLE_START_WE;Einspeisung;
+2026-09-12 11:42:53;CYCLE_START_WE;AdaptivePV;
+2026-09-12 11:47:45;CYCLE_END_WE;Einspeisung;
+2026-09-12 11:54:02;CYCLE_END_WE;Batterie;
+2026-09-12 11:56:00;CYCLE_END_WE;Komfort;
+2026-09-12 11:56:27;WARN_TAKTSCHUTZ;WARNING;Taktschutz aktiv: 10 Wechsel/h >= 8, zusaetzliche Pause 15 min (Meldung 1x pro Episode)
+2026-09-12 11:57:35;CYCLE_START_WE;AdaptivePV;
+2026-09-12 11:58:16;CYCLE_START_WE;Einspeisung;
+2026-09-12 12:21:37;FORECAST;2026-09-12;5.13/4.41
+2026-09-12 12:34:06;CYCLE_END_WE;Komfort;
+2026-09-12 12:44:20;CYCLE_START_WE;AdaptivePV;
+2026-09-12 12:44:48;CYCLE_START_WE;Einspeisung;
+2026-09-12 13:04:10;CYCLE_END_WE;Batterie;
+2026-09-12 13:04:51;CYCLE_START_WE;Einspeisung;
+2026-09-12 13:30:29;CYCLE_START_WE;AdaptivePV;
+2026-09-12 13:35:37;CYCLE_START_WE;Einspeisung;
+2026-09-12 14:17:44;WARN_BOILERMAX;WARNING;BOILERMAX AUS: unten 49.1C >= 49.0C - Mindestlaufzeit gebrochen, Freigabe erst <= 47.0C
+2026-09-12 15:02:32;WARN_BOILERMAX;WARNING;BOILERMAX AUS: unten 49.0C >= 49.0C - Mindestlaufzeit gebrochen, Freigabe erst <= 47.0C
+2026-09-12 15:28:25;CYCLE_END_WE;Batterie;
+2026-09-12 15:44:25;CYCLE_END_WE;Komfort;
+2026-09-12 16:21:21;CYCLE_START_WE;AdaptivePV;
+2026-09-12 16:30:04;CYCLE_END_WE;Einspeisung;
+2026-09-12 16:31:25;WARN_LCD;WARNING;LCD Schreibfehler (Versuch 1/3): [Errno 121] Remote I/O error
+2026-09-12 16:58:45;CYCLE_END_WE;Batterie;
+2026-09-12 17:19:26;CYCLE_END_WE;Komfort;
+2026-09-12 17:45:28;CYCLE_START_WE;AdaptivePV;
+2026-09-12 17:51:44;CYCLE_START_WE;Batterie;
+2026-09-12 17:57:17;CYCLE_END_WE;Einspeisung;
+2026-09-12 17:59:32;CYCLE_END_WE;Batterie;
+2026-09-12 17:59:59;CYCLE_END_WE;Komfort;
+2026-09-12 18:01:04;CYCLE_START_WE;AdaptivePV;
+2026-09-12 18:06:30;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:06:55;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:07:04;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:07:04;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:07:11;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:07:11;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:07:28;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:07:35;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:07:38;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:07:43;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:07:43;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:08:00;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:08:08;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:08:11;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:08:15;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:08:15;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:08:32;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:08:40;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:08:44;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:08:47;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:08:47;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:09:04;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:09:12;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:09:17;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:09:20;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:09:20;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:09:36;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:09:44;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:09:50;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:09:52;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:09:52;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:10:09;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:10:16;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:10:24;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:10:24;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:10:24;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:10:41;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:10:49;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:10:57;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:10:57;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:10:58;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:11:13;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:11:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:11:29;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:11:29;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:11:31;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:11:45;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:11:53;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:12:01;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:12:01;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:12:04;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:12:17;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:12:25;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:12:33;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:12:33;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:12:38;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:12:56;ERR_TELEGRAM_SENDEN;ERROR;Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch 3/3): Cannot connect to host api.telegram.org:443 ssl:default [Timeout while contacting DNS
+2026-09-12 18:13:12;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:13:13;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:13:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:13:29;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:13:29;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:13:29;CYCLE_END_WE;Einspeisung;
+2026-09-12 18:13:45;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:13:45;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:13:53;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:14:01;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:14:01;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:14:19;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:14:25;ERR_TELEGRAM_SENDEN;ERROR;Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch 3/3): Cannot connect to host api.telegram.org:443 ssl:default [Timeout while contacting DNS
+2026-09-12 18:14:41;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:14:49;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:14:52;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:14:57;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:14:57;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:15:14;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:15:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:15:25;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:15:28;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:15:28;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:15:44;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:15:53;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:15:57;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:16:00;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:16:00;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:16:20;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:16:29;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:16:31;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:16:42;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:16:42;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:16:59;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:17:00;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:17:11;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:17:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:17:21;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:17:28;ERR_HEALTHCHECK;ERROR;Healthcheck-Ping Fehler: Cannot connect to host hc-ping.com:443 ssl:default [Timeout while contacting DNS servers] → https://hc-ping.com/a0bb32d9-6bf1
+2026-09-12 18:17:30;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:17:41;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:17:51;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:18:00;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:18:02;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:18:02;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:18:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:18:31;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:18:31;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:18:42;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:18:42;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:19:01;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:19:01;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:19:11;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:19:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:19:21;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:19:31;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:19:40;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:19:51;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:20:02;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:20:02;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:20:02;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:20:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:20:31;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:20:32;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:20:41;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:20:41;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:21:00;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:21:02;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:21:11;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:21:22;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:21:22;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:21:32;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:21:41;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:21:52;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:22:02;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:22:03;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:22:03;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:22:08;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:22:08;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:22:28;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:22:32;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:22:38;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:22:49;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:22:49;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:22:54;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:22:54;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:23:02;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:23:14;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:23:25;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:23:32;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:23:36;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:23:36;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:23:41;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:23:41;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:23:59;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:24:02;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:24:10;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:24:20;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:24:20;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:24:25;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:24:25;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:24:32;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:24:44;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:24:54;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:25:01;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:25:04;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:25:04;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:25:10;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:25:10;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:25:28;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:25:32;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:25:39;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:25:50;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:25:50;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:25:55;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:25:55;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:26:03;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:26:14;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:26:25;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:26:33;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:26:35;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:26:35;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:26:40;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:26:40;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:26:59;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:27:03;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:27:10;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:27:20;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:27:20;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:27:24;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:27:24;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:27:34;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:27:43;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:27:54;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:28:04;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:28:05;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:28:05;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:28:10;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:28:10;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:28:28;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:28:35;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:28:38;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:28:49;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:28:49;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:28:54;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: Cannot connect to host api.open-meteo.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:28:54;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:31:22;ERR_HEALTHCHECK;ERROR;Healthcheck-Ping Fehler:  → https://hc-ping.com/a0bb32d9-6bf1-4e1f-859a-4ee95bf48d20/start
+2026-09-12 18:31:35;ERR_HEALTHCHECK;ERROR;Healthcheck-Ping Fehler:  → https://hc-ping.com/a0bb32d9-6bf1-4e1f-859a-4ee95bf48d20
+2026-09-12 18:32:06;ERR_TELEGRAM_SENDEN;ERROR;Netzwerkfehler beim Senden der Telegram-Nachricht (Versuch 3/3): 
+2026-09-12 18:32:31;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:32:35;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:32:59;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:33:25;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:33:25;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:33:36;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:33:36;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:34:04;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:34:09;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:34:37;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:35:05;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:35:05;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:35:16;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:35:16;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:35:33;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:35:53;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:36:21;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:36:51;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:36:51;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:36:57;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:37:01;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:37:01;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:37:38;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:38:05;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:38:26;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:38:34;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:38:34;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:38:44;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:38:44;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:39:22;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:39:52;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:40:00;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:40:20;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:40:20;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:40:30;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:40:30;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:41:08;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:41:29;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:41:35;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:42:00;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:42:00;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:42:10;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:42:10;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:42:47;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:42:58;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:43:16;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:43:43;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:43:43;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:43:54;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:43:54;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:44:25;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:44:29;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:44:57;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:45:26;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:45:26;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:45:37;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:45:37;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:45:57;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:46:13;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:46:40;ERR_HEALTHCHECK;ERROR;Healthcheck-Ping Fehler:  → https://hc-ping.com/a0bb32d9-6bf1-4e1f-859a-4ee95bf48d20
+2026-09-12 18:46:41;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:47:09;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:47:09;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:47:19;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:47:19;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:47:22;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:47:54;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:48:24;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:48:51;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:48:52;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:48:52;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:49:03;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:49:03;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:49:38;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:50:06;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:50:22;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:50:35;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:50:35;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:50:45;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:50:45;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:51:19;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:51:48;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:51:54;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:52:16;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:52:16;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:52:27;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:52:27;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:53:03;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:53:22;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:53:28;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:53:55;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:53:55;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:54:06;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:54:06;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:54:42;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:54:46;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:55:11;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 2/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:55:40;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 3/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:55:40;ERR_FALLBACK_DATEN;ERROR;Maximale Wiederholungen erreicht, verwende Fallback-Daten.
+2026-09-12 18:55:51;ERR_FORECAST;ERROR;Unexpected error in get_solar_forecast: 
+2026-09-12 18:55:51;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 18:56:09;ERR_NETZWERK_ALLE_VERSUCHE;WARNING;Alle Versuche fehlgeschlagen (Netzwerkfehler).
+2026-09-12 18:56:24;ERR_SOLAX_API;ERROR;Fehler bei der API-Anfrage (Versuch 1/3): Cannot connect to host global.solaxcloud.com:443 ssl:default [Timeout while contacting DNS servers]
+2026-09-12 18:56:39;FORECAST;2026-09-12;5.17/4.49
+2026-09-12 18:56:39;WARN_TEMP_NORMALBEREICH;WARNING;Temperatur ueber Normalbereich: 51.2°C >= 51.0°C (kein Abschalten)
+2026-09-12 18:56:52;CYCLE_START_WE;AdaptivePV;
+2026-09-12 18:59:15;FORECAST;2026-09-12;5.17/4.49
+2026-09-12 18:59:15;WARN_TEMP_NORMALBEREICH;WARNING;Temperatur ueber Normalbereich: 51.2°C >= 51.0°C (kein Abschalten)
+2026-09-12 18:59:28;CYCLE_START_WE;AdaptivePV;
+2026-09-12 19:00:20;CYCLE_END_WE;Abweichung;
+2026-09-12 19:03:27;FORECAST;2026-09-12;5.17/4.49
+2026-09-12 19:03:27;WARN_TEMP_NORMALBEREICH;WARNING;Temperatur ueber Normalbereich: 51.2°C >= 51.0°C (kein Abschalten)
+2026-09-12 19:03:27;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:03:40;CYCLE_END_WE;Abweichung;
+2026-09-12 19:03:40;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:03:53;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:04:07;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:04:17;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:04:30;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:04:43;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:04:56;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:05:10;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:05:23;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:05:36;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:05:49;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:06:03;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:06:15;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:06:28;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:06:42;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:06:55;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:07:08;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:07:22;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:07:35;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:07:48;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:08:01;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-12 19:08:01;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:08:14;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:08:27;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:08:41;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:08:54;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:09:07;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:09:21;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:09:34;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:09:47;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:10:00;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:10:14;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:10:27;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:10:40;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:10:53;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:11:05;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:11:18;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:11:31;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:11:44;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:11:58;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:12:11;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:12:24;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:12:37;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:12:51;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:13:03;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:13:16;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:13:30;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:13:43;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:13:56;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:14:09;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:14:23;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:14:36;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:14:49;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:15:02;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:15:15;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:15:28;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:15:41;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:15:54;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:16:07;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:16:21;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:16:34;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:16:47;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:17:00;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:17:13;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:17:26;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:17:39;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:17:52;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:18:06;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:18:19;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:18:32;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:18:46;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:18:58;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:19:11;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:19:25;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:19:38;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:19:51;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:20:05;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:20:18;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:20:31;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:20:44;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:20:58;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:21:11;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:21:24;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:21:37;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:21:49;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:22:02;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:22:15;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:22:28;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:22:42;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:22:55;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:23:08;ERR_LOOP_DURCHLAUF;ERROR;Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+2026-09-12 19:23:42;FORECAST;2026-09-12;5.17/4.49
+2026-09-12 19:23:42;WARN_TEMP_NORMALBEREICH;WARNING;Temperatur ueber Normalbereich: 51.2°C >= 51.0°C (kein Abschalten)
+2026-09-12 19:23:42;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-12 20:12:10;FORECAST;2026-09-12;5.17/4.49
+2026-09-12 20:12:10;WARN_TEMP_NORMALBEREICH;WARNING;Temperatur ueber Normalbereich: 51.1°C >= 51.0°C (kein Abschalten)
+2026-09-12 20:12:10;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-13 00:00:17;CYCLE_END_WE;Wochenende;
+2026-09-13 02:12:18;FORECAST;2026-09-13;4.66/3.19
+2026-09-13 03:12:57;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-13 03:13:02;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-13 03:13:07;ERR_TELEGRAM_UPDATES;ERROR;"Fehler beim Abrufen von Telegram-Updates: Status 502, Details: {""ok"":false,""error_code"":502,""description"":""Bad Gateway""}"
+2026-09-13 08:12:21;FORECAST;2026-09-13;4.65/3.27
+2026-09-13 09:00:14;CYCLE_START_WE;Abweichung;
+2026-09-13 09:57:36;CYCLE_START_WE;AdaptivePV;
+2026-09-13 10:02:32;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-13 10:12:59;CYCLE_START_WE;AdaptivePV;
+2026-09-13 10:47:47;WARN_ZU_FRUEH;WARNING;Learning: ZU FRUEH geheizt - 45 min nach Nicht-PV-Zyklus (2026-09-13T10:02:45.939616) kommen 3277W Einspeisung
+2026-09-13 11:04:13;CYCLE_START_WE;Einspeisung;
+2026-09-13 11:09:22;CYCLE_START_WE;AdaptivePV;
+2026-09-13 11:14:27;CYCLE_START_WE;Einspeisung;
+2026-09-13 11:23:51;CYCLE_END_WE;Batterie;
+2026-09-13 11:41:00;CYCLE_END_WE;Komfort;
+2026-09-13 11:53:58;CYCLE_START_WE;AdaptivePV;
+2026-09-13 11:54:25;CYCLE_START_WE;Einspeisung;
+2026-09-13 12:05:46;CYCLE_START_WE;AdaptivePV;
+2026-09-13 12:11:49;CYCLE_END_WE;Einspeisung;
+2026-09-13 12:15:49;CYCLE_END_WE;Batterie;
+2026-09-13 12:22:56;CYCLE_END_WE;Komfort;
+2026-09-13 12:24:58;CYCLE_START_WE;AdaptivePV;
+2026-09-13 12:24:58;WARN_TAKTSCHUTZ;WARNING;Taktschutz aktiv: 8 Wechsel/h >= 8, zusaetzliche Pause 15 min (Meldung 1x pro Episode)
+2026-09-13 12:51:03;CYCLE_END_WE;Einspeisung;
+2026-09-13 14:12:22;FORECAST;2026-09-13;4.65/4.32
+2026-09-13 14:54:58;CYCLE_END_WE;Komfort;
+2026-09-13 15:00:06;CYCLE_START_WE;Einspeisung;
+2026-09-13 15:15:28;CYCLE_START_WE;AdaptivePV;
+2026-09-13 15:18:21;CYCLE_END_WE;Einspeisung;
+2026-09-13 15:45:48;CYCLE_END_WE;Batterie;
+2026-09-13 16:07:42;CYCLE_END_WE;Komfort;
+2026-09-13 17:18:33;CYCLE_START_WE;AdaptivePV;
+2026-09-13 17:28:51;CYCLE_END_WE;Batterie;
+2026-09-13 17:31:45;CYCLE_END_WE;Komfort;
+2026-09-13 17:54:32;CYCLE_START_WE;AdaptivePV;
+2026-09-13 18:05:41;CYCLE_END_WE;Einspeisung;
+2026-09-13 18:06:21;CYCLE_END_WE;Batterie;
+2026-09-13 18:07:02;CYCLE_END_WE;Komfort;
+2026-09-13 18:07:29;CYCLE_START_WE;AdaptivePV;
+2026-09-13 18:07:29;WARN_TAKTSCHUTZ;WARNING;Taktschutz aktiv: 8 Wechsel/h >= 8, zusaetzliche Pause 15 min (Meldung 1x pro Episode)
+2026-09-13 18:20:11;CYCLE_START_WE;Batterie;
+2026-09-13 19:00:03;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-13 20:12:28;FORECAST;2026-09-13;4.60/3.87
+2026-09-14 02:12:42;FORECAST;2026-09-14;3.36/5.02
+2026-09-14 08:00:04;SONSTIGES;WARNING;KOMFORT-VERLETZUNG: t_oben 37.6C < 40.0C um 2026-09-14T08:00:04
+2026-09-14 08:00:17;SONSTIGES;WARNING;KOMFORT-VERLETZUNG: t_oben 37.6C < 40.0C um 2026-09-14T08:00:17
+2026-09-14 08:00:17;CYCLE_START_WE;Abweichung;
+2026-09-14 08:12:44;FORECAST;2026-09-14;3.76/4.96
+2026-09-14 08:41:16;CYCLE_START_WE;Komfort;
+2026-09-14 08:46:20;CYCLE_START_WE;Abweichung;
+2026-09-14 09:33:41;CYCLE_START_WE;Notfallschutz;
+2026-09-14 09:50:07;CYCLE_START_WE;Abweichung;
+2026-09-14 10:00:48;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-14 10:01:01;SONSTIGES;WARNING;KOMFORT-VERLETZUNG: t_oben 36.8C < 40.0C um 2026-09-14T10:01:01
+2026-09-14 10:06:10;CYCLE_START_WE;Abweichung;
+2026-09-14 10:10:10;CYCLE_END_WE;Keine Regel aktiv;
+2026-09-14 10:34:01;CYCLE_START_WE;AdaptivePV;
+2026-09-14 10:46:14;WARN_ZU_FRUEH;WARNING;Learning: ZU FRUEH geheizt - 45 min nach Nicht-PV-Zyklus (2026-09-14T10:01:01.770866) kommen 4789W Einspeisung
+2026-09-14 11:04:44;CYCLE_START_WE;Einspeisung;
+2026-09-14 11:06:42;WARN_ZU_FRUEH;WARNING;Learning: ZU FRUEH geheizt - 45 min nach Nicht-PV-Zyklus (2026-09-14T10:21:32.035548) kommen 7568W Einspeisung
+2026-09-14 11:09:49;CYCLE_START_WE;AdaptivePV;
+2026-09-14 11:14:58;CYCLE_START_WE;Einspeisung;
+2026-09-14 11:20:06;CYCLE_START_WE;Batterie;
+2026-09-14 11:25:11;CYCLE_START_WE;AdaptivePV;
+2026-09-14 11:30:19;CYCLE_START_WE;Batterie;
+2026-09-14 11:35:28;CYCLE_START_WE;AdaptivePV;
+2026-09-14 11:55:56;CYCLE_START_WE;Batterie;
+2026-09-14 12:01:05;CYCLE_START_WE;Einspeisung;
+2026-09-14 12:06:14;CYCLE_START_WE;AdaptivePV;
+2026-09-14 12:16:28;CYCLE_START_WE;Batterie;
+2026-09-14 12:21:36;CYCLE_START_WE;AdaptivePV;
+2026-09-14 12:26:42;CYCLE_START_WE;Einspeisung;
+2026-09-14 13:49:05;CYCLE_END_WE;Batterie;
+2026-09-14 14:07:53;CYCLE_END_WE;Komfort;
+2026-09-14 14:12:49;FORECAST;2026-09-14;4.21/5.04
+2026-09-14 14:24:28;CYCLE_START_WE;Einspeisung;
+2026-09-14 14:43:26;FORECAST;2026-09-14;4.21/5.04
+2026-09-14 14:43:39;CYCLE_START_WE;Einspeisung;
