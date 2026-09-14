@@ -8,6 +8,9 @@ Infos
 # Ignoriere Runtime-Dateien (Logs)
 *.log
 
+# Haltbarer Zustands-Schnappschuss (Laufzeit, nie committen)
+last_state.txt
+
 # Laufzeit-Datei des Services (wird fortlaufend neu geschrieben - nervt sonst
 # bei jedem Deploy mit "lokale Aenderungen verwerfen?")
 Steuerung/sonnen_prognose.csv

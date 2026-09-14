@@ -12,8 +12,12 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET_DIR="$(dirname "$SCRIPT_DIR")/Steuerung"
-LOG_FILE="$TARGET_DIR/heizungssteuerung.log"
-ERROR_LOG_FILE="$TARGET_DIR/error.log"
+# Log-Pfade: produktiv unter /var/log/wps (log2ram-tmpfs), Fallback auf
+# das Steuerungsverzeichnis (alte Installation / Entwicklung).
+LOG_FILE="${WPS_LOG_FILE:-/var/log/wps/heizungssteuerung.log}"
+ERROR_LOG_FILE="${WPS_ERROR_LOG_FILE:-/var/log/wps/error.log}"
+[ -f "$LOG_FILE" ] || LOG_FILE="$TARGET_DIR/heizungssteuerung.log"
+[ -f "$ERROR_LOG_FILE" ] || ERROR_LOG_FILE="$TARGET_DIR/error.log"
 
 # Farben (leer, wenn Ausgabe kein Terminal ist, z.B. bei Piping)
 if [ -t 1 ]; then

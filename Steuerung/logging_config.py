@@ -1,5 +1,6 @@
 import logging
 import sys
+import os
 import asyncio
 import aiohttp
 from logging.handlers import RotatingFileHandler
@@ -79,10 +80,41 @@ class TelegramHandler(logging.Handler):
             self.task.cancel()
         super().close()
 
-def setup_logging(enable_full_log=True, telegram_config=None, session=None):
+def _resolve_log_dir(explicit=None):
+    """Ermittelt das Log-Verzeichnis.
+
+    Default auf dem Raspberry Pi (POSIX mit /var/log): /var/log/wps
+    (wird durch log2ram im RAM gehalten und stündlich auf die SD synct).
+    Auf anderen Systemen (Entwicklung/Windows): aktuelles Arbeitsverzeichnis.
+    Ueberschreibbar per Parameter oder Umgebungsvariable WPS_LOG_DIR.
+    """
+    if explicit:
+        candidate = str(explicit)
+    else:
+        candidate = os.environ.get("WPS_LOG_DIR") or ""
+        if not candidate:
+            if os.name == "posix" and os.path.isdir("/var/log"):
+                candidate = "/var/log/wps"
+            else:
+                candidate = os.getcwd()
+    try:
+        os.makedirs(candidate, exist_ok=True)
+        return candidate
+    except OSError as e:
+        logging.warning(
+            f"Log-Verzeichnis {candidate} nicht nutzbar ({e}), "
+            "verwende Arbeitsverzeichnis als Fallback."
+        )
+        candidate = os.getcwd()
+        os.makedirs(candidate, exist_ok=True)
+        return candidate
+
+
+def setup_logging(enable_full_log=True, telegram_config=None, session=None, log_dir=None):
     """
     Richtet das Logging ein.
     telegram_config: Objekt mit BOT_TOKEN und CHAT_ID oder None
+    log_dir: Log-Verzeichnis (Default: /var/log/wps auf dem Pi, sonst CWD).
     """
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
@@ -101,18 +133,23 @@ def setup_logging(enable_full_log=True, telegram_config=None, session=None):
         datefmt="%Y-%m-%d %H:%M:%S %z"
     )
 
-    # Error Log
+    log_dir = _resolve_log_dir(log_dir)
+
+    # Error Log (WARN+): bleibt klein (2x5 MB), damit der log2ram-RAM-Vorrat
+    # (/var/log/wps, SIZE=128M) nicht durch das 70-MB-DEBUG-Volumen gesprengt wird.
     error_handler = RotatingFileHandler(
-        "error.log", maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        os.path.join(log_dir, "error.log"), maxBytes=5*1024*1024, backupCount=2, encoding="utf-8"
     )
     error_handler.setLevel(logging.WARNING)
     error_handler.setFormatter(formatter)
     root_logger.addHandler(error_handler)
 
-    # Full Log
+    # Full Log (DEBUG): auf 2x25 MB begrenzt (vorher 100 MB) - wichtig fuer
+    # log2ram, dessen tmpfs-Groesse begrenzt ist und nur stündlich synct.
     if enable_full_log:
         file_handler = RotatingFileHandler(
-            "heizungssteuerung.log", maxBytes=100*1024*1024, backupCount=5, encoding="utf-8"
+            os.path.join(log_dir, "heizungssteuerung.log"),
+            maxBytes=25*1024*1024, backupCount=2, encoding="utf-8",
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)

@@ -32,7 +32,13 @@ def _parse_ts(line: str) -> Optional[datetime]:
 
 
 def _find_default_log_path() -> str:
-    """Ermittelt den Pfad zur Log-Datei (relativ zu diesem Modul)."""
+    """Ermittelt den Pfad zur Log-Datei.
+
+    Bevorzugt werden die log2ram-gefuehrten Logs unter /var/log/wps
+    (Raspberry Pi, produktiv), sonst das Modul-Verzeichnis (Entwicklung).
+    """
+    if os.path.isfile("/var/log/wps/heizungssteuerung.log"):
+        return "/var/log/wps/heizungssteuerung.log"
     script_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(script_dir, "heizungssteuerung.log")
 

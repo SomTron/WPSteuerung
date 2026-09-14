@@ -641,6 +641,41 @@ def build_heizungsdaten_zeile(state):
     ]
 
 
+# Haltbarer Zustands-Schnappschuss direkt auf der SD (kein tmpfs/log2ram!).
+# Ueberlebt einen harten Watchdog-/Strom-Reset und zeigt nach einem Hänger
+# den letzten guten Systemzustand samt exakter Loop-Zeit, auch wenn bis zu
+# 1 h RAM-Logs (log2ram) verloren gingen.
+LAST_STATE_FILE = os.path.join(os.getcwd(), "last_state.txt")
+
+
+def _fmt_temp(v):
+    return f"{v:.1f}" if isinstance(v, (int, float)) else "-"
+
+
+def write_last_state_snapshot(state):
+    """Schreibt one Zeile (Overwrite) mit dem aktuellen Systemzustand."""
+    try:
+        now = datetime.now(state.local_tz)
+        komp = "EIN" if state.control.kompressor_ein else "AUS"
+        rule = getattr(state.control, "active_rule_name", "") or "-"
+        blocking = getattr(state.control, "blocking_reason", "") or "-"
+        line = (
+            f"{now:%Y-%m-%d %H:%M:%S} | Komp={komp} | Regel={rule} | "
+            f"Blocking={blocking} | "
+            f"T_oben={_fmt_temp(getattr(state.sensors, 't_oben', None))} | "
+            f"T_mittig={_fmt_temp(getattr(state.sensors, 't_mittig', None))} | "
+            f"T_unten={_fmt_temp(getattr(state.sensors, 't_unten', None))} | "
+            f"T_verd={_fmt_temp(getattr(state.sensors, 't_verd', None))} | "
+            f"PV={state.solar.feedinpower or 0.0:.0f}W | "
+            f"SOC={state.solar.soc or 0.0:.0f}%\n"
+        )
+        with open(LAST_STATE_FILE, "w", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        # Diagnose-Datei ist optional - niemals den Haupt-Loop belasten.
+        pass
+
+
 async def log_system_state(state):
     """Schreibt CSV-Log, aktualisiert LCD und loggt Temperaturen + Entscheidungen."""
     # 1. Temperatur- und Entscheidungs-Logging (gethrottelt alle 5 Min)
@@ -692,6 +727,9 @@ async def log_system_state(state):
             await f.write(",".join(csv_line) + "\n")
     except Exception as e:
         logging.error(f"Fehler beim Schreiben der CSV: {e}")
+
+    # 5. Haltbarer Zustands-Schnappschuss auf der SD (ueberlebt harten Reset)
+    write_last_state_snapshot(state)
 
 async def main_loop():
     session = await setup_application()
