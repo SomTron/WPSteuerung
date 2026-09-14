@@ -65,6 +65,9 @@ class ControlState:
         # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).
         # Ersetzt den alten Hack, last_compressor_off_time in die Zukunft zu setzen.
         self.restart_lockout_until: Optional[datetime] = None
+        # Fortlaufende Zyklus-ID je Kompressor-Lauf (fuer eindeutige Event-Kodierung
+        # in den Logs - Empfehlung "Log-Anreicherung"). Wird bei jedem EIN erhoeht.
+        self.zyklus_id: int = 0
 
 class StatsState:
     def __init__(self, now):

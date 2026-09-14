@@ -123,6 +123,28 @@ def _gelerntes_morgenfenster(learning_engine):
         return None
 
 
+def _soll_priority_loggen(state, alle_ergebnisse) -> bool:
+    """Kompakt-Log-Entscheidung (Empfehlung "Logvolumen reduzieren").
+
+    Die volle 15-Zeilen-Bewertung erscheint nur noch, wenn sich eine
+    EIN/AUS-Entscheidung einer Regel geaendert hat ODER als staendlicher
+    Snapshot alle 60 Minuten. Dazwischen bleibt das Log ruhig - viele
+    Einzelheiten stehen strukturiert in entscheidungs_log.jsonl.
+    """
+    signatur = tuple(
+        sorted((r.name, r.einschalten) for r in alle_ergebnisse
+               if r.einschalten is not None)
+    )
+    letzte_signatur = getattr(state, "_last_priority_signatur", None)
+    if signatur != letzte_signatur:
+        state._last_priority_signatur = signatur
+        # Throttle-Zeitpunkt mitziehen, damit der Snapshot-Zweig (60 min)
+        # nicht unmittelbar danach ein zweites Mal loggen wuerde.
+        state._last_priority_log = datetime.now(state.local_tz)
+        return True
+    return check_log_throttle(state, "_last_priority_log", interval_minutes=60.0)
+
+
 async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
     """
     Bestimmt den Betriebsmodus basierend auf den Prioritaeten-Regeln.
@@ -302,8 +324,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         legionellen_planned_tag=getattr(state, "legionellen_planned_tag", None),
     )
 
-    # Ergebnisse loggen (gethrottelt)
-    if check_log_throttle(state, "_last_priority_log", interval_minutes=5.0):
+    # Ergebnisse loggen - KOMPAKT-MODUS (Empfehlung "Logvolumen reduzieren"):
+    # Volle Bewertung nur bei Aenderung einer EIN/AUS-Entscheidung oder als
+    # staendlicher Snapshot (alle 60 min). Details: entscheidungs_log.jsonl.
+    if _soll_priority_loggen(state, alle_ergebnisse):
         logging.info(
             f"Regel-Bewertung ({len(alle_ergebnisse)} Regeln):\n{formatiere_ergebnisse(alle_ergebnisse)}"
         )
@@ -755,6 +779,14 @@ def _boiler_max_info(state):
     return temp, limit, wiederein, fuehler
 
 
+def _zyklus_id(state) -> str:
+    """Lesbarer Zyklus-ID-String fuer Event-Kodierung (robust gegen Mock-State)."""
+    try:
+        return str(getattr(state.control, "zyklus_id", "?"))
+    except Exception:
+        return "?"
+
+
 def _fmt_float(wert, einheit="", nachkomma=0) -> str:
     """Formatiert einen Optional-float robust (None -> 'n/a')."""
     if wert is None:
@@ -878,9 +910,10 @@ async def handle_compressor_off(
                 f"Boiler-Maximum ({fuehler} {t_max:.1f}C >= {limit:.1f}C)"
             )
             logging.warning(
-                f"BOILERMAX AUS: {fuehler} {t_max:.1f}C >= {limit:.1f}C - "
+                f"BOILERMAX AUS (cycle={_zyklus_id(state)}) - "
+                f"{fuehler} {t_max:.1f}C >= {limit:.1f}C - "
                 f"Mindestlaufzeit gebrochen, Freigabe erst <= {wiederein:.1f}C "
-                f"[{_boiler_max_kontext(state)}]"
+                f"reason=boiler_max [{_boiler_max_kontext(state)}]"
             )
             return True
         await handle_critical_compressor_error(session, state, "bei Boiler-Maximum")
@@ -908,7 +941,8 @@ async def handle_compressor_off(
                 f"Schichtungs-Obergrenze ({t_oben:.1f}C >= {float(schichtung_max):.1f}C{steig_txt})"
             )
             logging.info(
-                f"SCHICHTUNG AUS: oben {t_oben:.1f}C >= {float(schichtung_max):.1f}C{steig_txt}"
+                f"SCHICHTUNG AUS (cycle={_zyklus_id(state)}) reason=schichtung: "
+                f"oben {t_oben:.1f}C >= {float(schichtung_max):.1f}C{steig_txt}"
             )
             # Obergrenze zuruecksetzen, damit der naechste normale Lauf nicht
             # durch eine alte Grenze begrenzt wird.
@@ -958,7 +992,10 @@ async def handle_compressor_off(
             ):
                 state.control.blocking_reason = None
                 state.control._lauf_start_regel = None  # Fahrt beendet
-                logging.info(f"{kontext}: Kompressor AUS. Laufzeit: {elapsed}")
+                logging.info(
+                    f"{kontext}: Kompressor AUS (cycle={_zyklus_id(state)}) "
+                    f"reason=regel_aus. Laufzeit: {elapsed}"
+                )
                 return True
         else:
             remaining_min = int((min_laufzeit_eff - elapsed).total_seconds() // 60)
@@ -990,7 +1027,8 @@ async def handle_compressor_off(
             ):
                 state.control.blocking_reason = None
                 logging.info(
-                    f"Regel AUS: Regelfuehler ({regelfuehler:.1f}) >= Ziel ({ausschaltpunkt:.1f}). "
+                    f"Regel AUS (cycle={_zyklus_id(state)}) reason=regel_aus: "
+                    f"Regelfuehler ({regelfuehler:.1f}) >= Ziel ({ausschaltpunkt:.1f}). "
                     f"Laufzeit: {elapsed}"
                 )
                 return True
@@ -1002,8 +1040,9 @@ async def handle_compressor_off(
             )
             if check_log_throttle(state, "log_min_laufzeit_off", interval_minutes=5):
                 logging.info(
-                    f"Abschaltwunsch unterdrueckt: Mindestlaufzeit noch nicht erreicht. "
-                    f"Laufzeit: {elapsed}"
+                    f"Abschaltwunsch unterdrueckt (cycle={_zyklus_id(state)}) "
+                    f"reason=mindestlaufzeit: "
+                    f"Mindestlaufzeit noch nicht erreicht. Laufzeit: {elapsed}"
                 )
     return False
 

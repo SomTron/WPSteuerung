@@ -79,15 +79,16 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         hardware_manager.set_compressor_state(True)
         state.control.kompressor_ein = True
         
-        # Statistiken aktualisieren
+        # Statistiken aktualisieren + Zyklus-ID je Kompressor-Lauf inkrementieren
         state.stats.last_compressor_on_time = now
+        state.control.zyklus_id = getattr(state.control, 'zyklus_id', 0) + 1
         
         # Startwerte fÃ¼r Verifizierung speichern
         state.kompressor_verification_start_time = now
         state.kompressor_verification_start_t_verd = state.sensors.t_verd
         state.kompressor_verification_start_t_unten = state.sensors.t_unten
         state.kompressor_verification_last_check = None
-        logging.info(f"Kompressor EIN - Verifizierung gestartet (t_verd={state.sensors.t_verd}, t_unten={state.sensors.t_unten})")
+        logging.info(f"Kompressor EIN (cycle={getattr(state.control, 'zyklus_id', '?')}) - Verifizierung gestartet (t_verd={state.sensors.t_verd}, t_unten={state.sensors.t_unten})")
         
         return True
     else:
@@ -104,9 +105,11 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
             elapsed = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
             state.stats.total_runtime_today += elapsed
             state.stats.last_completed_cycle = now
-            logging.info(f"Kompressor AUS. Laufzeit: {elapsed}")
+            zyklus = getattr(state.control, 'zyklus_id', '?')
+            logging.info(f"Kompressor AUS (cycle={zyklus}). Laufzeit: {elapsed}")
         else:
-            logging.info("Kompressor AUS")
+            zyklus = getattr(state.control, 'zyklus_id', '?')
+            logging.info(f"Kompressor AUS (cycle={zyklus})")
             
         return True
 
@@ -142,7 +145,7 @@ async def setup_application():
     
     # 3. Logging setup
     setup_logging(enable_full_log=True, telegram_config=state.config.Telegram)
-    logging.info("Starten der WÃ¤rmepumpensteuerung (Refactored)...")
+    logging.info("Starten der Wärmepumpensteuerung (Refactored)...")
 
     # 4. Hardware & Sensors init
     try:
@@ -447,11 +450,11 @@ async def check_and_send_alerts(session, state):
             is_zieltemp = "Zieltemp" in current_type
             
             if not is_solar and not is_zieltemp:
-                emoji = "âš ï¸"
-                if any(x in current_type for x in ["Fehler", "Sicherheit", "ðŸš¨"]):
-                    emoji = "ðŸš¨"
+                emoji = "⚠"
+                if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
+                    emoji = "🚨"
                 elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
-                    emoji = "â³"
+                    emoji = "⏳"
                 
                 # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
                 msg = f"{emoji} *Kompressor blockiert:* {escape_markdown(current_blocking)}"
@@ -685,10 +688,44 @@ async def log_system_state(state):
             f"Unten={state.sensors.t_unten or 0:.1f}°C | Verd={state.sensors.t_verd or 0:.1f}°C"
         )
         komp_status = "EIN" if state.control.kompressor_ein else "AUS"
+        # Kontext-Anreicherung (Empfehlung "Log-Analyse"): PV-Leistung,
+        # Einspeisung, SOC und Datenalter der letzten Solax-Daten direkt in
+        # die Status-Zeile schreiben, damit Entscheidungen aus dem Log heraus
+        # ohne Nachrecherche nachvollziehbar sind.
+        def _fmt_w(w):
+            if w is None:
+                return "n/a"
+            try:
+                return f"{float(w):.0f}W"
+            except (TypeError, ValueError):
+                return "n/a"
+
+        def _fmt_soc(w):
+            if w is None:
+                return "n/a"
+            try:
+                return f"{float(w):.0f}%"
+            except (TypeError, ValueError):
+                return "n/a"
+
+        solar_now = datetime.now(state.local_tz)
+        last_call = getattr(state.solar, 'last_api_call', None)
+        alter_s = None
+        if last_call is not None:
+            try:
+                alter_s = round(max((solar_now - last_call).total_seconds(), 0))
+            except (TypeError, ValueError):
+                alter_s = None
+        alter_txt = "n/a" if alter_s is None else f"{alter_s}s"
+
         log_line = (
             f"Status: {komp_status} | "
             f"EP={state.control.aktueller_einschaltpunkt:.1f}°C | "
-            f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C"
+            f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C | "
+            f"PV={_fmt_w(getattr(state.solar, 'acpower', None))} | "
+            f"Einspeis={_fmt_w(getattr(state.solar, 'feedinpower', None))} | "
+            f"SOC={_fmt_soc(getattr(state.solar, 'soc', None))} | "
+            f"Alter={alter_txt}"
         )
         if state.control.blocking_reason:
             log_line += f" | Blocking: {state.control.blocking_reason}"

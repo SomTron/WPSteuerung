@@ -2,6 +2,8 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.8: Neue Optionen 15 (Entscheidungs-Log anzeigen) und 16 (Upload
+#       entscheidungs_log.jsonl) - Detailansicht der Regelentscheidungen.
 # v1.7: Option 10 Raeumt blockierende lokale Aenderungen vorher weg (mit Ruefrage,
 #       wie im Deploy-Skript) - Pull scheiterte sonst an Runtime-Dateien.
 # v1.6: Farb-Fix (%b statt %s bei Service/VPN-Status - zeigte vorher rohe \033-Codes),
@@ -221,6 +223,8 @@ while true; do
     printf "12) ⏱️  Query Logs by Duration (last N hours)\n"
     printf "13) 📊  Service-Details (systemctl status)\n"
     printf "14) ☁️  Upload Log to Catbox\n"
+    printf "15) 📖  Entscheidungs-Log anzeigen (letzte Entscheidungen)\n"
+    printf "16) ☁️  Upload entscheidungs_log.jsonl to Catbox\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -415,6 +419,72 @@ while true; do
                 rm -rf "$TMP_DIR"
             else
                 printf "${RED}Fehler: $LOG_FILE nicht gefunden!${NC}\n"
+            fi
+            wait_for_key
+            ;;
+        15)
+            ENT_LOG_FILE="${WPS_ENT_LOG_FILE:-$TARGET_DIR/entscheidungs_log.jsonl}"
+            if [ ! -f "$ENT_LOG_FILE" ]; then
+                printf "${RED}entscheidungs_log.jsonl nicht gefunden: %s${NC}\\n" "$ENT_LOG_FILE"
+                wait_for_key
+            else
+                printf "${CYAN}Wie viele Entscheidungen anzeigen? (Default 30):${NC} "
+                read ent_lines
+                ent_lines="${ent_lines:-30}"
+                if ! is_number "$ent_lines"; then
+                    printf "${RED}'%s' ist keine Zahl – verwende Standardwert 30.${NC}\\n" "$ent_lines"
+                    ent_lines=30
+                    sleep 1
+                fi
+                python3 -c "
+import sys
+sys.path.insert(0, '$TARGET_DIR')
+from entscheidungs_log import historie, kpis
+rows = historie(72, limit=${ent_lines})
+print('Letzte %d Entscheidungen (72 h):' % len(rows))
+print('-' * 70)
+for e in rows:
+    laeuft = 'EIN' if e.get('kompressor_laeuft') else 'AUS'
+    soll = 'EIN' if e.get('soll_einschalten') else 'AUS'
+    f = e.get('feedin_w')
+    f_txt = ('%.0fW' % f) if isinstance(f, (int, float)) else '-'
+    print('%s | %s | soll=%s | WP=%s | feedin=%s | SOC=%s | unten=%sC | %s' % (
+        e.get('ts', '?'), e.get('gewinner', '-'), soll, laeuft, f_txt,
+        e.get('soc'), e.get('t_unten'), str(e.get('grund', ''))[:60]))
+print('-' * 70)
+try:
+    k = kpis()
+    print('KPIs heute: %s' % k.get('heute'))
+    print('KPIs 7 Tage: %s' % k.get('sieben_tage'))
+except Exception as ex:
+    print('KPI-Abfrage fehlgeschlagen: %s' % ex)
+" 2>&1 | more
+                wait_for_key
+            fi
+            ;;
+        16)
+            ENT_LOG_FILE="${WPS_ENT_LOG_FILE:-$TARGET_DIR/entscheidungs_log.jsonl}"
+            if [ -f "$ENT_LOG_FILE" ]; then
+                TMP_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/wp-manager.$$")
+                mkdir -p "$TMP_DIR"
+                printf "${CYAN}Bereite entscheidungs_log.jsonl fuer Upload vor (%s)...${NC}\\n" "$(du -h "$ENT_LOG_FILE" | cut -f1)"
+                cp "$ENT_LOG_FILE" "$TMP_DIR/entscheidungs_log_upload.jsonl"
+                gzip -f "$TMP_DIR/entscheidungs_log_upload.jsonl"
+                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\\n"
+                UPLOAD_URL=$(curl -fsS -F "reqtype=fileupload" \
+                    -F "fileToUpload=@$TMP_DIR/entscheidungs_log_upload.jsonl.gz" \
+                    https://catbox.moe/user/api.php)
+                CURL_RC=$?
+                if [ $CURL_RC -eq 0 ] && [ -n "$UPLOAD_URL" ] && printf '%s' "$UPLOAD_URL" | grep -q '^https://'; then
+                    printf "${GREEN}✓ Upload erfolgreich! (${YELLOW}%s komprimiert${GREEN})${NC}\\n" "$(du -h "$TMP_DIR/entscheidungs_log_upload.jsonl.gz" | cut -f1)"
+                    printf "URL: ${BLUE}%s${NC}\\n" "$UPLOAD_URL"
+                else
+                    printf "${RED}✗ Fehler beim Upload (curl RC=%s)!${NC}\\n" "$CURL_RC"
+                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: %s${NC}\\n" "$UPLOAD_URL"
+                fi
+                rm -rf "$TMP_DIR"
+            else
+                printf "${RED}Fehler: entscheidungs_log.jsonl nicht gefunden!${NC}\\n"
             fi
             wait_for_key
             ;;
