@@ -597,8 +597,8 @@ async def run_logic_step(session, state, learning_engine=None):
                             f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht (unten: {t_unten_lc:.1f}C)"
                         )
                         try:
-                            msg = (f"âœ… *Legionellenprophylaxe abgeschlossen!*\n"
-                                   f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}Â°C erreicht (unten: {t_unten_lc:.1f}Â°C)")
+                            msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
+                                   f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}°C erreicht (unten: {t_unten_lc:.1f}°C)")
                             from telegram_api import send_telegram_message as _send_tg
                             await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
                                            state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
@@ -781,8 +781,43 @@ async def log_system_state(state):
     # 5. Haltbarer Zustands-Schnappschuss auf der SD (ueberlebt harten Reset)
     write_last_state_snapshot(state)
 
+def _git_revision() -> str:
+    """Git-Identitaet des laufenden Standes (fuer das Startup-Log).
+
+    Liefert 'kurzer-Hash [Branch] Betreff' oder 'unbekannt', falls kein
+    Git-Repo verfuegbar ist. So ist spaeter jedem Log eindeutig zuzuordnen,
+    mit welcher GitHub-Version die Steuerung gelaufen ist.
+    """
+    try:
+        import subprocess as _sp
+        _base = os.path.dirname(os.path.abspath(__file__))
+
+        def _git(*args):
+            return _sp.run(
+                ["git", "-C", _base, *args],
+                capture_output=True, text=True, timeout=5,
+                check=False,
+            ).stdout.strip()
+
+        kurz = _git("rev-parse", "--short", "HEAD")
+        branch = _git("branch", "--show-current")
+        if not branch:
+            branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+        subj = _git("log", "-1", "--format=%s")
+        if kurz:
+            return f"{kurz} [{branch or 'detached'}] {subj[:80]}"
+    except Exception:
+        pass
+    return "unbekannt"
+
+
 async def main_loop():
     session = await setup_application()
+
+    # Versionsmarker: Welche Repo-Version dieses Log erzeugt hat (GitHub-Rev).
+    # Damit laesst sich bei spaeteren Analysen der genaue Steuerungsstand
+    # jedes Logs rekonstruieren.
+    logging.info(f"Start WPSteuerung | GitHub-Rev: {_git_revision()}")
     
     # Send Startup Message
     if state.bot_token and state.chat_id:

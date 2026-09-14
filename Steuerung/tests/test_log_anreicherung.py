@@ -188,6 +188,18 @@ async def test_statuszeile_markiert_stale_daten(monkeypatch, caplog, tmp_path):
     assert "Alter=2700s" in meldungen[0]
 
 
+# ---------------- 6) Versionsmarker (GitHub-Rev) ---------------- #
+def test_git_revision_liefert_string():
+    """Start-Up-Log nimmt die aktuelle GitHub-Revision (Robust-Fallback)."""
+    import main
+    rev = main._git_revision()
+    assert isinstance(rev, str) and len(rev) > 0
+    # Lokales Repo hat einen kurzen Hash -> Format 'a1b2c3d [branch] Betreff'
+    if rev != "unbekannt":
+        import re as _re
+        assert _re.match(r"^[0-9a-f]{7,}", rev)
+
+
 # ---------------- 5) Sensor-Degradation ---------------- #
 def test_sensor_degradation_warnt_auf_logarithmischen_schwellen(caplog):
     from sensors import SensorManager

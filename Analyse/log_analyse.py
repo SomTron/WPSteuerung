@@ -140,6 +140,7 @@ def parse_log(pfad):
     snapshots, zyklen, ereignisse = [], [], []
     forecast_pro_tag = {}
     gelernter_zyklus = []
+    git_version = None
     stats = Counter()
     block = None
     last_sensoren = {}
@@ -194,6 +195,12 @@ def parse_log(pfad):
             msg = m.group(4)
             stats["zeilen_erkannt"] += 1
             stats["level_" + level] += 1
+
+            # Versionsmarker: Startzeile nennt die GitHub-Revision des Standes
+            if git_version is None and "GitHub-Rev:" in msg:
+                m_gv = re.search(r"GitHub-Rev:\s*(.*)", msg)
+                if m_gv:
+                    git_version = m_gv.group(1).strip()
 
             if msg.startswith("Regel-Bewertung"):
                 _finalisiere_block()
@@ -379,7 +386,7 @@ def parse_log(pfad):
 
     return {"snapshots": snapshots, "zyklen": zyklen, "ereignisse": ereignisse,
             "forecast_pro_tag": forecast_pro_tag, "gelernter_zyklus": gelernter_zyklus,
-            "stats": stats}
+            "stats": stats, "git_version": git_version}
 
 
 # ------------------------------------------------------- Auswertungen ---- #
@@ -584,6 +591,8 @@ def erzeuge_bericht(parsed, out, outdir, stats_roh):
     ap = l.append
     ap("# Verbesserter Log-Analysereport\n")
     ap(f"**Quelle:** `{os.path.basename(LOG_PFAD)}`  ")
+    if parsed.get("git_version"):
+        ap(f"**Git-Version (Start):** `{parsed['git_version']}`  ")
     ap(f"**Ausgabe:** `{outdir}`\n")
 
     ap("## 1. Log-Volumen & Verarbeitung\n")
