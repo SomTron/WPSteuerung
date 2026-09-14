@@ -2,6 +2,8 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.9: Neue Optionen 17 (zyklen.csv anzeigen) und 18 (Upload der
+#       Analyse-Zylen-CSV) - Kompressor-Zyklen direkt vom PI abrufen/teilen.
 # v1.8: Neue Optionen 15 (Entscheidungs-Log anzeigen) und 16 (Upload
 #       entscheidungs_log.jsonl) - Detailansicht der Regelentscheidungen.
 # v1.7: Option 10 Raeumt blockierende lokale Aenderungen vorher weg (mit Ruefrage,
@@ -93,6 +95,14 @@ if not result:
     print('Keine Logs in den letzten ${hours} Stunde(n) gefunden.')
 " 2>&1 | more
     wait_for_key
+}
+
+
+# Findet die neueste zyklen.csv aus einem Analyse-Lauf (Analyse/log_analyse.py).
+# Pfad: <repo>/logs/analyse_*/zyklen.csv. Ausgabe: Pfad oder leer.
+finde_zyklen_csv() {
+    ROOT_DIR="$(dirname "$SCRIPT_DIR")/logs"
+    ls -1t "$ROOT_DIR"/analyse_*/zyklen.csv 2>/dev/null | head -n1
 }
 
 
@@ -225,6 +235,8 @@ while true; do
     printf "14) ☁️  Upload Log to Catbox\n"
     printf "15) 📖  Entscheidungs-Log anzeigen (letzte Entscheidungen)\n"
     printf "16) ☁️  Upload entscheidungs_log.jsonl to Catbox\n"
+    printf "17) 📊  Zyklen-Analyse anzeigen (zyklen.csv)\n"
+    printf "18) ☁️  Upload zyklen.csv to Catbox\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -485,6 +497,61 @@ except Exception as ex:
                 rm -rf "$TMP_DIR"
             else
                 printf "${RED}Fehler: entscheidungs_log.jsonl nicht gefunden!${NC}\\n"
+            fi
+            wait_for_key
+            ;;
+        17)
+            ZYKLEN_CSV=$(finde_zyklen_csv)
+            if [ -z "$ZYKLEN_CSV" ]; then
+                printf "${RED}Keine zyklen.csv gefunden - fuehre zuerst Analyse/log_analyse.py\\n"
+                printf "                aus (erzeugt logs/analyse_*/zyklen.csv).${NC}\\n"
+                wait_for_key
+            else
+                printf "${CYAN}Wie viele Zyklen anzeigen? (Default 20):${NC} "
+                read zyk_n
+                zyk_n="${zyk_n:-20}"
+                if ! is_number "$zyk_n"; then
+                    printf "${RED}'%s' ist keine Zahl – verwende Standardwert 20.${NC}\\n" "$zyk_n"
+                    zyk_n=20
+                    sleep 1
+                fi
+                printf "${CYAN}Neueste Analyse: %s${NC}\\n" "$ZYKLEN_CSV"
+                # BOM (UTF-8-Signatur) bleibt als Spalte 1 sichtbar
+                if command -v column >/dev/null 2>&1; then
+                    {
+                        echo
+                        head -n1 "$ZYKLEN_CSV"
+                        tail -n "$zyk_n" "$ZYKLEN_CSV"
+                    } | column -s ';' -t
+                else
+                    tail -n "$zyk_n" "$ZYKLEN_CSV"
+                fi
+                wait_for_key
+            fi
+            ;;
+        18)
+            ZYKLEN_CSV=$(finde_zyklen_csv)
+            if [ -n "$ZYKLEN_CSV" ]; then
+                TMP_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/wp-manager.$$")
+                mkdir -p "$TMP_DIR"
+                printf "${CYAN}Bereite zyklen.csv fuer Upload vor (%s)...${NC}\\n" "$(du -h "$ZYKLEN_CSV" | cut -f1)"
+                cp "$ZYKLEN_CSV" "$TMP_DIR/zyklen_upload.csv"
+                gzip -f "$TMP_DIR/zyklen_upload.csv"
+                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\\n"
+                UPLOAD_URL=$(curl -fsS -F "reqtype=fileupload" \
+                    -F "fileToUpload=@$TMP_DIR/zyklen_upload.csv.gz" \
+                    https://catbox.moe/user/api.php)
+                CURL_RC=$?
+                if [ $CURL_RC -eq 0 ] && [ -n "$UPLOAD_URL" ] && printf '%s' "$UPLOAD_URL" | grep -q '^https://'; then
+                    printf "${GREEN}✓ Upload erfolgreich! (${YELLOW}%s komprimiert${GREEN})${NC}\\n" "$(du -h "$TMP_DIR/zyklen_upload.csv.gz" | cut -f1)"
+                    printf "URL: ${BLUE}%s${NC}\\n" "$UPLOAD_URL"
+                else
+                    printf "${RED}✗ Fehler beim Upload (curl RC=%s)!${NC}\\n" "$CURL_RC"
+                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: %s${NC}\\n" "$UPLOAD_URL"
+                fi
+                rm -rf "$TMP_DIR"
+            else
+                printf "${RED}Fehler: keine zyklen.csv gefunden (Analyse-Lauf fehlt).${NC}\\n"
             fi
             wait_for_key
             ;;
