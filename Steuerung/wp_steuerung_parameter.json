@@ -8,7 +8,8 @@
     "interval_minuten": 15,
     "mindestlaufzeit_minuten": 60,
     "mindestpausenzeit_minuten": 30,
-    "pv_min_laufzeit_minuten": 10
+    "pv_min_laufzeit_minuten": 10,
+    "pv_weiterlauf_abschalt_delay_min": 3.0
   },
   "sicherheit": {
     "nachtsperre_start": 19,
@@ -103,7 +104,9 @@
     "t_aggressiv_kalt_c": 35,
     "t_normal_kalt_c": 38,
     "fc_schwelle_gut_wh": 4000,
-    "fc_schwelle_schlecht_wh": 1000
+    "fc_schwelle_schlecht_wh": 1000,
+    "sparen_hysterese_k": 1.0,
+    "hysterese_forecast_schwelle_wh_qm": 2500
   },
   "calculated_start": {
     "prioritaet": 82,

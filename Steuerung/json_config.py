@@ -30,6 +30,13 @@ class ZyklusConfig(BaseModel):
                      "PV-Einbruch die WP abschalten, statt die volle Mindestlaufzeit "
                      "(Netzstrom) zu erzwingen (10-15 min)."),
     )
+    pv_weiterlauf_abschalt_delay_min: float = Field(
+        default=3.0,
+        description=("Weiterlauf-Band (Empfehlung 3.2): Kurze PV-Einbrueche "
+                     "(Wolke, <Delay) beenden einen laufenden PV-Zyklus nicht "
+                     "sofort - verhindert 10-Minuten-Takte an der Obergrenze. "
+                     "0 = deaktiviert."),
+    )
 
 
 class SicherheitConfig(BaseModel):
@@ -467,6 +474,17 @@ class AdaptivePVConfig(BaseModel):
     t_normal_kalt_c: float = Field(default=38.0, description="Schwelle x0.7 wenn Temp unter Wert (Grad C)")
     fc_schwelle_gut_wh: float = Field(default=4000.0, description="Prognose >= Wert (Wh/qm): Schwelle x1.5 (konservativer)")
     fc_schwelle_schlecht_wh: float = Field(default=1000.0, description="Prognose <= Wert (Wh/qm): Schwelle x0.5 (PV jetzt nutzen)")
+    # Hysterese-Sparen (Empfehlung 3.2): Bei sehr guter HEUTE-Prognose wird die
+    # Einschaltgrenze (einschalten_bis_c) um sparen_hysterese_k gesenkt -> die
+    # WP startet tiefer und laeuft laenger (kuehle bis 44 statt bis 45 C).
+    sparen_hysterese_k: float = Field(
+        default=1.0,
+        description="Senkung der EIN-Grenze bei guter Tagesprognose (K), 0 = aus",
+    )
+    hysterese_forecast_schwelle_wh_qm: float = Field(
+        default=2500.0,
+        description="Ab dieser HEUTE-Prognose wird gespart (Wh/m2)",
+    )
 
 
 class CalculatedStartConfig(BaseModel):

@@ -1073,6 +1073,7 @@ def evaluate_adaptive_pv(
     nachtsperre_start: int = 19,
     nachtsperre_ende: int = 8,
     fc_ratio: float = 1.0,
+    forecast_today_wh_qm: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Adaptive-PV-Regel: PV-Schwelle passt sich dynamisch an.
@@ -1114,6 +1115,15 @@ def evaluate_adaptive_pv(
     einschalten_bis_c = getattr(adaptive_cfg, "einschalten_bis_c", None)
     if einschalten_bis_c is None:
         einschalten_bis_c = adaptive_cfg.tmax_c - 3.0
+
+    # Hysterese-Sparen (Empfehlung 3.2): Bei sehr guter HEUTE-Prognose wird die
+    # Einschaltgrenze gesenkt -> die WP startet tiefer und laeuft laenger.
+    sparen_k = float(getattr(adaptive_cfg, "sparen_hysterese_k", 0.0) or 0.0)
+    if sparen_k > 0 and forecast_today_wh_qm is not None:
+        fc_schwelle = float(
+            getattr(adaptive_cfg, "hysterese_forecast_schwelle_wh_qm", 2500.0))
+        if _forecast_effektiv_wh_qm(forecast_today_wh_qm, 1.0) >= fc_schwelle:
+            einschalten_bis_c = einschalten_bis_c - sparen_k
 
     if temp >= einschalten_bis_c and not kompressor_ein:
         result.einschalten = None
@@ -1743,6 +1753,7 @@ def bewerte_alle_regeln(
         nachtsperre_start,
         nachtsperre_ende,
         fc_ratio=fc_ratio,
+        forecast_today_wh_qm=forecast_today_wh_qm,
     )
     ergebnisse.append(ergebnis)
 

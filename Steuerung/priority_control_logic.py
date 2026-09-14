@@ -8,6 +8,7 @@ Die Regel hoechster Prioritaet bestimmt das Schaltverhalten.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Callable
 
@@ -121,6 +122,78 @@ def _gelerntes_morgenfenster(learning_engine):
     except Exception as e:  # pragma: no cover - Lernen darf nie blockieren
         logging.debug(f"Morgenfenster nicht ermittelbar: {e}")
         return None
+
+
+PV_WEITERLAUF_REGELN = ("AdaptivePV", "PV_mitte", "PV_unten", "Einspeisung")
+
+
+def _ist_pv_unterbrechung(grund) -> bool:
+    """True, wenn ein AUS-Grund einer PV-Regel auf zu wenig PV zurueckgeht.
+
+    Muster aus dem Log: 'AdaptivePV: PV 0W < 105W'. Temperatur-bedingte
+    AUS-Gruende ('>= ...C -> AUS') zaehlen nicht dazu.
+    """
+    if not grund:
+        return False
+    return bool(
+        re.search(r"PV [\d.]+W < [\d.]+W", grund)
+        or "kein PV-Ueberschuss" in grund
+        or "kein Überschuss" in grund
+    )
+
+
+def _pv_weiterlauf_block(state, gewinner, should_on: bool) -> bool:
+    """Unterdrueckt ein PV-bedingtes AUS waehrend kurzer PV-Einbrueche.
+
+    Empfehlung 3.2: Will eine PV-Regel trotz laufendem Kompressor wegen
+    'PV zu wenig' abschalten, wird das AUS fuer
+    pv_weiterlauf_abschalt_delay_min Minuten zurueckgehalten (Wolke). Erst
+    danach greift der AUS-Wunsch. Nicht-PV-bedingte AUS-Gruende bleiben
+    unveraendert.
+    """
+
+    def _reset():
+        try:
+            state.control._pv_abschaltwunsch_seit = None
+        except Exception:
+            pass
+
+    if not (getattr(state.control, "kompressor_ein", False) and not should_on):
+        _reset()
+        return should_on
+    if gewinner is None or getattr(gewinner, "name", "") not in PV_WEITERLAUF_REGELN:
+        _reset()
+        return should_on
+    if not _ist_pv_unterbrechung(getattr(gewinner, "grund", "")):
+        _reset()
+        return should_on
+    try:
+        _zykl = getattr(getattr(state, "priority_config", None), "zyklus", None)
+        delay_min = float(getattr(_zykl, "pv_weiterlauf_abschalt_delay_min", 0.0))
+    except (TypeError, ValueError):
+        delay_min = 0.0
+    if delay_min <= 0:
+        _reset()
+        return should_on
+    jetzt = datetime.now(state.local_tz)
+    seit = getattr(state.control, "_pv_abschaltwunsch_seit", None)
+    if seit is None:
+        state.control._pv_abschaltwunsch_seit = jetzt
+        if check_log_throttle(state, "log_pv_weiterlauf", 5):
+            logging.info(
+                f"PV-Weiterlauf (cycle={_zyklus_id(state)}): kurzer "
+                f"PV-Einbruch, Kompressor laeuft bis zu {delay_min:.0f} min weiter"
+            )
+        return True
+    try:
+        vergangen = safe_timedelta(jetzt, seit, state.local_tz)
+    except Exception:
+        state.control._pv_abschaltwunsch_seit = jetzt
+        return True
+    if vergangen < timedelta(minutes=delay_min):
+        return True
+    _reset()
+    return should_on
 
 
 def _soll_priority_loggen(state, alle_ergebnisse) -> bool:
@@ -390,6 +463,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
 
     # Ergebnis aufbereiten
     should_on = gewinner is not None and gewinner.einschalten is True
+
+    # PV-Weiterlauf-Band (Empfehlung 3.2): Kurze Wolken/PV-Einbrueche beenden
+    # einen laufenden PV-Zyklus nicht sofort (verhindert 10-Minuten-Takte).
+    should_on = _pv_weiterlauf_block(state, gewinner, should_on)
 
     # Regelfuehler dynamisch aus der aktiven Regel ermitteln, nicht hartcodiert t_unten
     regelfuehler = t_unten  # Fallback
