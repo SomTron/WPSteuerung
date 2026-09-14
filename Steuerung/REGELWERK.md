@@ -319,6 +319,36 @@ Kuehlschwellen-Flag) und hebt sich automatisch auf, sobald wieder >= 2 K Luft
 zum Limit bestehen. Sonderfall bleibt erlaubt: oben warm (48,7 C) / unten kalt
 (30 C) -> EIN, weil nur der Bezugsfuehler zaehlt.
 
+**Vorausschauende Vermeidung (seit der Log-Analyse, Config `sicherheit`):**
+Die statische Ein-Sperre ist um zwei dynamische Schutzschichten ergaenzt:
+- **EIN-Antizipation** (`start_vorhersage_aktiv`): Vor jedem Start wird
+  `Hub/Rate` gegen die Mindestlaufzeit gerechnet. Reicht der freie Hub bis zum
+  Ausschaltpunkt nicht, um Mindestlaufzeit + `start_vorhersage_puffer_min` zu
+  fuellen, wird **nicht** eingeschaltet (`reason=start_vorhersage`) - die
+  beobachteten 6-10-Minuten-Kurzlaeufe am Limit entfallen, statt in den
+  erzwungenen Laufzeit-Bruch/Kuehlphase zu laufen.
+- **AUS-Vorhersage** (`overshoot_vorhersage_aktiv`, `overshoot_rate_schwelle_c_h`,
+  `overshoot_reserve_k`): Hat die Regel den Abschaltpunkt erreicht und wuerde
+  die Mindestlaufzeit den Fuehler mit der aktuellen Rate ueber die Obergrenze
+  treiben, wird **vorher** abgeschaltet (`reason=overshoot_vorhersage`) - statt
+  bei 49 C den Bruch zu erleben.
+
+Die Rate stammt aus der Live-Messung (`state.control._rate_messung`), der
+gelernten Rate der Lern-Engine oder `rate_fallback_c_h`. Der Telegram-Alarm
+„Boiler-Max-Naehe“ wird auf 1x/Tag gedrosselt (frueher bis zu 38x/Woche).
+
+### 4.6 Taktungs-Reduktion: PV-Weiterlauf-Band & Hysterese-Sparen (3.2)
+
+- **PV-Weiterlauf-Band** (`zyklus.pv_weiterlauf_abschalt_delay_min`, default
+  3 min): Will eine PV-Regel waehrend eines laufenden Zyklus wegen „PV zu
+  wenig“ abschalten, wird das AUS fuer die Delay-Minuten zurueckgehalten
+  (Wolke). Erst danach greift der AUS-Wunsch. Temperatur-bedingte AUS bleiben
+  sofort wirksam.
+- **AdaptivePV-Hysterese-Sparen** (`adaptive_pv.sparen_hysterese_k`, default
+  1 K; `adaptive_pv.hysterese_forecast_schwelle_wh_qm`, default 2500 Wh/m²):
+  Bei sehr guter HEUTE-Prognose wird die EIN-Grenze gesenkt (45→44 C) - die WP
+  startet tiefer und laeuft laenger statt oben-nahe zu takten.
+
 ---
 
 ## 5. Selbstlernen (`learning_engine.py`, Persistenz: `learning_data.json`)
@@ -420,7 +450,9 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
   "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 2.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "rate_fallback_c_h": 12.0, "overshoot_vorhersage_aktiv": true, "overshoot_rate_schwelle_c_h": 12.0, "overshoot_reserve_k": 0.8 },
   "abweichung":   { "solltemperatur_c": 40, "schichtung_min_oben_c": 42, "pv_warten_aktiv": true, "pv_warten_forecast_schwelle_wh_qm": 2500, "pv_warten_bis_uhr": 12, "pv_warten_unten_min_c": 20 },
   "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500 },
+  "zyklus":       { "mindestlaufzeit_minuten": 60, "pv_min_laufzeit_minuten": 10, "pv_weiterlauf_abschalt_delay_min": 3.0 },
   "batterie":     { "min_soc_prozent": 90, "max_netzbezug_watt": -50 },
+  "adaptive_pv":  { "tmax_c": 48, "einschalten_bis_c": 45, "sparen_hysterese_k": 1.0, "hysterese_forecast_schwelle_wh_qm": 2500 },
   "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen+nachtsperre_ueberschreiben */ ] },
   "sommer_modus": { "temperatur_offset_c": -3.0, "pv_ausschalt_offset_c": -2.0 }
 }

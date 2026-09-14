@@ -17,8 +17,39 @@ Eine umfassende Open-Source-Lösung zur Steuerung und Optimierung von Wärmepump
     - Berücksichtigung von Mindestlaufzeiten und Mindestpausen.
     - Überwachung des Druckschalters (GPIO).
     - Lokale LCD-Anzeige (20x4 I2C) für schnellen Status-Check vor Ort.
+    - **Vorausschauender Overshoot-Schutz**: EIN-Antizipation (Hub/Rate vs. Mindestlaufzeit) und Abschalt-Prognose vor der Obergrenze verhindern Kurzläufe und die alte „Boiler-Max“-Kühlphase.
 - **📅 Betriebsmodi**: Normal, Nachtabsenkung, PV-Boost, Bademodus (erhöhter Bedarf) und Urlaubsmodus (Energiesparen).
-- **📊 Daten-Logging**: Kontinuierliches Logging aller Messwerte in CSV-Dateien für Langzeitanalysen.
+- **🧠 Selbstlernend**: Heizraten (saisonal), Zapf-Zeiten, Forecast-Kalibrierung und Stunden-Surplus-Profil; „ZU-FRUEH“-Erkennung bewertet verpasste PV-Wh.
+- **☀️ PV-optimiert**: PV-Warten der Abweichungs-Regel bei guter Tagesprognose (kein Netz-Heizen am Morgen), PV-Weiterlauf-Band gegen Kurzzyklen, Hysterese-Sparen.
+- **📊 Daten-Logging**: Kontinuierliches Logging aller Messwerte in CSV-Dateien für Langzeitanalysen. Jeder Neustart schreibt die **GitHub-Revision** (Commit) ins Log.
+- **🕵️ Log-Analyse**: `Analyse/log_analyse.py` erzeugt aus dem Log einen Analysereport (Tages-KPIs, Zyklen, Overshoot, Morgen-Netzbezug, Stale-Phasen) plus CSV-Dateien.
+
+---
+
+## 🕵️ Log-Analyse & Versionierung
+
+Jede Logdatei beginnt beim Neustart mit einer Versionszeile:
+```
+INFO - Start WPSteuerung | GitHub-Rev: a1b2c3d [branch] Commit-Betreff
+```
+Damit ist später eindeutig rekonstruierbar, mit welcher Code-Version ein Log erzeugt wurde.
+
+**Analysescript** (`Analyse/log_analyse.py`, nur Standardbibliothek):
+```bash
+python3 Analyse/log_analyse.py
+# erzeugt logs/analyse_*:
+#   analyse_bericht.md       - Report (Tages-KPIs, Zyklen, Stale, Regeln)
+#   zyklen.csv               - alle Kompressor-Zyklen (Quelle, Dauer, Endgrund)
+#   entscheidungen_kontext.csv - jede Regelbewertung mit PV/SOC/Einspeisung
+#   morgen_netzbezug.csv     - morgendlicher Netzbezug vs. Tagesprognose
+#   ereignisse.csv           - Warnungen/Fehler mit stabilen Codes
+```
+
+**Log-Anreicherungen** (seit der Log-Review):
+- **Kompakt-Log**: Die volle 15-Zeilen-Regelbewertung erscheint nur noch bei Entscheidungs-Wechsel oder als 60-Min-Snapshot.
+- **Status-Zeile** mit PV, Einspeisung, SOC und Datenalter; veraltete Daten werden als `| STALE` markiert.
+- **Eindeutige Abschalt-Codes**: `Kompressor AUS (cycle=7) reason=regel_aus …`
+- **Sensor-Degradation**: steigende Lesefehler-Rate warnt frühzeitig (Verkabelung/Sensor).
 
 ---
 

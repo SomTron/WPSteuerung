@@ -474,6 +474,13 @@ Konfigurationsschlüsseln.
   legionellen_max_temp_c (65), bevorzugter_tag (4), letzter_tag (6),
   start_uhr (8), spaeteste_start_uhr (16), probezeit_minuten (30),
   erforderliche_wh_qm (800), pv_prognose_schwelle_gut (2000)}`.
+- **Kompressor-Verifizierung im Legionellenmodus (seit 3.4):** Der untere
+  Fuehler saettigt am oberen Boilerende (Nettorate ~0,5 °C/h < der 0,2-K-
+  Schwelle). Solange `legionellen_temp_override` gesetzt ist, genuegt daher
+  der **Verdampfer-Abfall** als Betriebsbeweis (Konstante
+  `LEGIONELLEN_VERIFY_NUR_VERDAMPFER`) – der Fehlalarm vom 11.09.2026
+  (10-min-Neustartsperre) entfaellt. Echte Kompressor-Stillstaende (kein
+  Verdampfer-Abfall) werden weiterhin erkannt.
 
 ---
 
@@ -884,3 +891,31 @@ die Prioritäten-Engine.
 - `wp_steuerung_parameter.json` – alle Regelparameter (JSON-Config).
 - `config.ini.example` – INI-Basiskonfiguration (Urlaubsmodus, Sensoren, Solax).
 - `tests/` – Unit-/Integrationstests der einzelnen Regeln.
+
+---
+
+## 8. Logging & Analyse
+
+### 8.1 Log-Marker (fuer spaetere Analyse)
+- **GitHub-Revision:** Jeder Neustart schreibt
+  `Start WPSteuerung | GitHub-Rev: <kurz-hash> [branch] Betreff` – Logdateien
+  sind damit eindeutig einer Code-Version zuordenbar.
+- **Kompakt-Log:** Die 15-Zeilen-Regelbewertung erscheint nur bei
+  Verdikt-Wechsel oder als 60-Min-Snapshot.
+- **Status-Kontext:** `PV=…W | Einspeis=…W | SOC=…% | Alter=…s`; veraltete
+  Solax-Daten werden mit `| STALE` gekennzeichnet.
+- **Event-Codes:** `Kompressor EIN (cycle=7)`, `… AUS (cycle=7) reason=…`
+  (`regel_aus | boiler_max | overshoot_vorhersage | start_vorhersage |
+  schichtung | mindestlaufzeit`).
+- **Sensor-Degradation:** Steigende w1-Lesefehler-Rate warnt auf
+  Zweierpotenz-Schwellen (1, 2, 4, 8, …).
+
+### 8.2 Analyse-Skript (`Analyse/log_analyse.py`)
+Erzeugt aus dem Upload-Log einen Report + CSVs unter `logs/analyse_*/`:
+`analyse_bericht.md`, `zyklen.csv`, `entscheidungen_kontext.csv`,
+`morgen_netzbezug.csv`, `ereignisse.csv`, `tagesuebersicht.csv`.
+
+### 8.3 wp-manager (Optionen)
+- **12/13** Logs nach Zeit/Dauer, **14** Upload `heizungssteuerung.log` (Catbox),
+- **15** Entscheidungs-Log anzeigen (inkl. KPIs), **16** Upload `entscheidungs_log.jsonl`,
+- **17** Zyklen-Analyse anzeigen, **18** Upload `zyklen.csv`.
