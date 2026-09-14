@@ -787,6 +787,40 @@ def _zyklus_id(state) -> str:
         return "?"
 
 
+def _rate_fuer_entscheidung(state, t_unten):
+    """Aktuelle unten-Heizrate (°C/h) fuer EIN/AUS-Vorhersagen (3.1).
+
+    Misst live ueber state.control._rate_messung (mind. ~2 min Abstand),
+    faellt auf die gelernte Rate des letzten Zyklus (Learning-Engine) und
+    zuletzt auf rate_fallback_c_h zurueck. Bei Abkuehlung/None wird nur der
+    Messpunkt aktualisiert und der naechsthoehere Fallback verwendet.
+    """
+    jetzt = datetime.now(state.local_tz)
+    messung = getattr(state.control, "_rate_messung", None)
+    rate = None
+    if isinstance(t_unten, (int, float)):
+        if messung is not None and isinstance(messung, dict):
+            try:
+                dt_h = (jetzt - messung["ts"]).total_seconds() / 3600.0
+                if 0.03 <= dt_h <= 2.0:
+                    diff = t_unten - messung["unten"]
+                    if diff > 0.05:
+                        rate = diff / dt_h
+            except (KeyError, TypeError):
+                pass
+        state.control._rate_messung = {"ts": jetzt, "unten": t_unten}
+    if rate is None or rate <= 0:
+        engine = getattr(state, "learning_engine", None)
+        zyklen = getattr(getattr(engine, "data", None), "cycles", None)
+        if zyklen and isinstance(zyklen[-1], dict):
+            rate = zyklen[-1].get("rate_unten_c_h")
+    _cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+    fallback = float(getattr(_cfg, "rate_fallback_c_h", 12.0)) if _cfg is not None else 12.0
+    if not isinstance(rate, (int, float)) or rate <= 0:
+        rate = fallback
+    return float(rate)
+
+
 def _fmt_float(wert, einheit="", nachkomma=0) -> str:
     """Formatiert einen Optional-float robust (None -> 'n/a')."""
     if wert is None:
@@ -918,6 +952,59 @@ async def handle_compressor_off(
             return True
         await handle_critical_compressor_error(session, state, "bei Boiler-Maximum")
         return False
+
+    # AUS-Vorhersage (Empfehlung 3.1): Verhindert, dass die Mindestlaufzeit
+    # den Kompressor ueber die Obergrenze treibt. Falls der Fuehler mit der
+    # aktuellen Rate bis zum Laufzeit-Ende die Obergrenze erreicht, wird VOR
+    # der 48.0-C-Grenze abgeschaltet - statt den Bruch bei 49C zu erleben.
+    _sic_cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+    if (
+        _sic_cfg is not None
+        and getattr(_sic_cfg, "overshoot_vorhersage_aktiv", True)
+        and t_max is not None
+        and state.stats.last_compressor_on_time is not None
+        # Nur relevant, wenn die Regel den Abschaltpunkt erreicht hat und die
+        # Mindestlaufzeit den Nachlauf erzwungen wuerde (48 -> 49C).
+        and regelfuehler is not None
+        and regelfuehler >= ausschaltpunkt
+    ):
+        rate_var = _rate_fuer_entscheidung(state, float(t_max))
+        rate_schwelle = float(getattr(_sic_cfg, "overshoot_rate_schwelle_c_h", 12.0))
+        reserve_k = float(getattr(_sic_cfg, "overshoot_reserve_k", 0.8))
+        minz = min_laufzeit
+        if _ist_pv_gesteuerter_lauf(
+            getattr(state.control, "_lauf_start_regel", None)
+        ):
+            _zykl_cfg = getattr(getattr(state, "priority_config", None), "zyklus", None)
+            pv_min = getattr(_zykl_cfg, "pv_min_laufzeit_minuten", 10)
+            if not isinstance(pv_min, (int, float)):
+                pv_min = 10
+            minz = timedelta(minutes=max(int(pv_min), 0))
+        elapsed_var = safe_timedelta(
+            datetime.now(state.local_tz),
+            state.stats.last_compressor_on_time,
+            state.local_tz,
+        )
+        rest_min = max((minz - elapsed_var).total_seconds(), 0) / 60.0
+        if rate_var >= rate_schwelle and rest_min > 0:
+            t_prognose = t_max + rate_var * (rest_min / 60.0)
+            if t_prognose >= limit - reserve_k:
+                if await set_kompressor_status_func(
+                    state, False, force=True, t_boiler_oben=t_oben
+                ):
+                    state.control.blocking_reason = (
+                        f"Overshoot-Vorhersage ({fuehler} {t_max:.1f}C + "
+                        f"{rest_min:.0f}min x {rate_var:.0f}C/h "
+                        f"-> {t_prognose:.1f}C >= {limit:.1f}C)"
+                    )
+                    logging.warning(
+                        f"OVERSHOOT-VORHERSAGE AUS (cycle={_zyklus_id(state)}) "
+                        f"reason=overshoot_vorhersage: {fuehler} {t_max:.1f}C steigt "
+                        f"mit {rate_var:.0f}C/h auf ~{t_prognose:.1f}C "
+                        f"(Limit {limit:.1f}C, Reserve {reserve_k:.1f}K) "
+                        f"[{_boiler_max_kontext(state)}]"
+                    )
+                    return True
 
     # Schichtungs-Warmstart-Obergrenze (Task: nach Legionellenmodus oben heiss,
     # unten/mitte kalt -> einschalten erlaubt, aber oben darf nicht weiter
@@ -1115,6 +1202,37 @@ async def handle_compressor_on(
     elif mittig_close and not unten_close:
         # Mittig nahe am Limit aber unten noch kalt -> nicht blockieren
         pass
+
+    # Start-Antizipation (Empfehlung 3.1): Nur einschalten, wenn der freie
+    # Hub bis zum Ausschaltpunkt reicht, um die Mindestlaufzeit inkl. Reserve
+    # zu fuellen. Sonst entsteht ein Kurzlauf, der die Obergrenze erreicht und
+    # in den erzwungenen Laufzeit-Bruch/Luehlphase laeuft.
+    _sic_cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+    if (
+        getattr(_sic_cfg, "start_vorhersage_aktiv", True)
+        and isinstance(regelfuehler, (int, float))
+        and min_laufzeit is not None
+    ):
+        rate_var = _rate_fuer_entscheidung(state, float(regelfuehler))
+        _ausschalt = float(ausschaltpunkt or 0.0)
+        hub_k = _ausschalt - float(regelfuehler)
+        if hub_k > 0:
+            erwartet_min = hub_k / max(rate_var, 1.0) * 60.0
+            puffer_min = float(getattr(_sic_cfg, "start_vorhersage_puffer_min", 1.0))
+            minz_min = float(min_laufzeit.total_seconds() / 60.0)
+            if erwartet_min + puffer_min < minz_min:
+                state.control.blocking_reason = (
+                    f"Start-Antizipation: hub zur Obergrenze nur {hub_k:.1f}K "
+                    f"(Rate {rate_var:.0f}C/h -> {erwartet_min:.0f}min < "
+                    f"{minz_min:.0f}min Mindestlaufzeit + {puffer_min:.0f}min Reserve)"
+                )
+                if check_log_throttle(state, "log_start_vorhersage_block", 10):
+                    logging.info(
+                        f"Start blockiert reason=start_vorhersage "
+                        f"(cycle={_zyklus_id(state)}): {state.control.blocking_reason}"
+                    )
+                return False
+
     # Taktschutz (Punkt D): Bei zu vielen Wechseln zusaetzliche Pause
     _ts_cfg = getattr(state, "priority_config", None)
     takt_pause = _taktschutz_blockiert(state, _ts_cfg)

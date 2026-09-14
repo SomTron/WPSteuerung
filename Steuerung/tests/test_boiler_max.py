@@ -204,10 +204,16 @@ async def test_on_blockiert_in_der_limitnaehe_ohne_vorheriges_limit():
 
 @pytest.mark.asyncio
 async def test_on_erlaubt_mit_zwei_kelvin_luft():
-    """unten 45.9C (< 48 - 2K) -> EIN weiterhin erlaubt (PV-Heizen bleibt moeglich)."""
+    """unten 45.9C (< 48 - 2K): EIN weiterhin erlaubt, sobald der freie Hub
+    mit der realen (langsamen) Rate die Mindestlaufzeit fuellt. Hier 6 C/h
+    -> 2.1K/6*60min = 21min >= 15min Mindestlaufzeit."""
     state = baue_state(t_unten=45.9)
     state.control.kompressor_ein = False
     state.control._soll_einschalten = True
+    state.control._rate_messung = {
+        "ts": datetime.now(TZ) - timedelta(minutes=6),
+        "unten": 45.3,  # +0.6K in 0.1h = 6 C/h
+    }
     calls = []
     erg = await pcl.handle_compressor_on(
         state, None, regelfuehler=45.9, einschaltpunkt=42.0, ausschaltpunkt=48.0,
@@ -217,6 +223,30 @@ async def test_on_erlaubt_mit_zwei_kelvin_luft():
     )
     assert erg is True
     assert calls and calls[0][0] is True
+
+
+@pytest.mark.asyncio
+async def test_on_blockiert_wenn_hub_nicht_fuer_mindestlaufzeit_reicht():
+    """Empfehlung 3.1: unten 45.9 mit schneller Rate (24 C/h) -> Hub reicht
+    nur ~5min < 15min Mindestlaufzeit -> Start wird abgelehnt, statt in den
+    erzwungenen Laufzeit-Bruch/Kuehlphase zu laufen."""
+    state = baue_state(t_unten=45.9)
+    state.control.kompressor_ein = False
+    state.control._soll_einschalten = True
+    state.control._rate_messung = {
+        "ts": datetime.now(TZ) - timedelta(minutes=6),
+        "unten": 43.5,  # +2.4K in 0.1h = 24 C/h
+    }
+    calls = []
+    erg = await pcl.handle_compressor_on(
+        state, None, regelfuehler=45.9, einschaltpunkt=42.0, ausschaltpunkt=48.0,
+        min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
+        set_kompressor_status_func=_set_status_sammler(calls),
+    )
+    assert erg is False
+    assert calls == []
+    assert "Start-Antizipation" in (state.control.blocking_reason or "")
 
 
 # ---------- Konfiguration ----------

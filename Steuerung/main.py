@@ -450,18 +450,25 @@ async def check_and_send_alerts(session, state):
             is_zieltemp = "Zieltemp" in current_type
             
             if not is_solar and not is_zieltemp:
-                emoji = "⚠"
-                if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
-                    emoji = "🚨"
-                elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
-                    emoji = "⏳"
-                
-                # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
-                msg = f"{emoji} *Kompressor blockiert:* {escape_markdown(current_blocking)}"
-                logging.info(f"Sende Einmal-Alarm: {current_type} (Voll: {current_blocking})")
-                await control_logic.send_telegram_message(
-                    session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN, parse_mode="Markdown"
-                )
+                # Boiler-Max-Naehe: pro Tag nur 1x senden (sonst Telegram-Spam
+                # bei vollem Boiler an sonnigen Tagen - Empfehlung 3.1).
+                sende_erlaubt = True
+                if "Boiler-Max-Naehe" in current_type:
+                    sende_erlaubt = check_log_throttle(
+                        state, "log_boiler_naehe_alert", interval_minutes=24 * 60)
+                if sende_erlaubt:
+                    emoji = "⚠"
+                    if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
+                        emoji = "🚨"
+                    elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
+                        emoji = "⏳"
+                    
+                    # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
+                    msg = f"{emoji} *Kompressor blockiert:* {escape_markdown(current_blocking)}"
+                    logging.info(f"Sende Einmal-Alarm: {current_type} (Voll: {current_blocking})")
+                    await control_logic.send_telegram_message(
+                        session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN, parse_mode="Markdown"
+                    )
         
         state.control.last_alert_type = current_type
     

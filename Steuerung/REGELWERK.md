@@ -417,7 +417,7 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
 
 ```jsonc
 {
-  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 2.0, "nachtsperre_start": 19, "nachtsperre_ende": 8 },
+  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 2.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "rate_fallback_c_h": 12.0, "overshoot_vorhersage_aktiv": true, "overshoot_rate_schwelle_c_h": 12.0, "overshoot_reserve_k": 0.8 },
   "abweichung":   { "solltemperatur_c": 40, "schichtung_min_oben_c": 42, "pv_warten_aktiv": true, "pv_warten_forecast_schwelle_wh_qm": 2500, "pv_warten_bis_uhr": 12, "pv_warten_unten_min_c": 20 },
   "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500 },
   "batterie":     { "min_soc_prozent": 90, "max_netzbezug_watt": -50 },

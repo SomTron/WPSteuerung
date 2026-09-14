@@ -44,6 +44,38 @@ class SicherheitConfig(BaseModel):
     boiler_max_hysterese_k: float = Field(default=2.0, description="Nach einem Maximum-Abschalten erst wieder einschalten, wenn der Bezugsfuehler <= max_temp_c - Hysterese ist")
     boiler_max_ein_abstand_k: float = Field(default=2.0, description="Kein Einschalten, wenn der Bezugsfuehler bereits naeher als dieser Abstand an max_temp_c heranreicht (verhindert Kurzlaufe am Limit)")
 
+    # --- Vorausschauende Overshoot-Vermeidung (Empfehlung 3.1) ---
+    # EIN-Antizipation: Nur einschalten, wenn der freie Hub bis zum
+    # Ausschaltpunkt reicht, um die Mindestlaufzeit inkl. Reserve zu fuellen.
+    # Verhindert die gemessenen 6-10-Minuten-Kurzschlaeufe am Limit, die sonst
+    # zwangslaeufig in einen Laufzeit-Bruch + Kuehlphase laufen.
+    start_vorhersage_aktiv: bool = Field(
+        default=True,
+        description="EIN-Antizipation aktiv (Hub/Rate vs. Mindestlaufzeit)",
+    )
+    start_vorhersage_puffer_min: float = Field(
+        default=1.0,
+        description="Reserve auf die erwartete Laufzeit (min)",
+    )
+    rate_fallback_c_h: float = Field(
+        default=12.0,
+        description="Fallback-Heizrate wenn keine Messung vorliegt (°C/h)",
+    )
+    # AUS-Vorhersage: Abschaltung BEVOR die Mindestlaufzeit den Fuehler ueber
+    # die Obergrenze treiben kann (Rate prognostiziert den Nachlauf).
+    overshoot_vorhersage_aktiv: bool = Field(
+        default=True,
+        description="AUS-Vorhersage aktiv (prognostizierter Nachlauf bis Limit)",
+    )
+    overshoot_rate_schwelle_c_h: float = Field(
+        default=12.0,
+        description="Erst ab dieser Heizrate wird der Nachlauf vorausberechnet (°C/h)",
+    )
+    overshoot_reserve_k: float = Field(
+        default=0.8,
+        description="Sicherheitsabstand zur Obergrenze fuer die Abschaltprognose (K)",
+    )
+
     @model_validator(mode="after")
     def _pruefe_sicherheit(self):
         if self.boiler_max_fuehler not in ("unten", "mittig", "oben"):
