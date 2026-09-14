@@ -69,8 +69,8 @@ LEGACY_HINWEISE = {
         "MIN_SOC": "heute wp_steuerung_parameter.json: batterie.min_soc_prozent",
     },
     "Wetterprognose": {
-        "PANEL_EFFICIENCY": "Prognose liefert Solax - Anlagenparameter werden nicht genutzt",
-        "PANEL_GROUPS": "Prognose liefert Solax - Anlagenparameter werden nicht genutzt",
+        "PANEL_EFFICIENCY": "Strahlungsprognose aus Open-Meteo (LAT/LON/TILT), PV-Live aus SolaxCloud - Panel-Effizienz ungenutzt",
+        "PANEL_GROUPS": "Strahlungsprognose aus Open-Meteo (LAT/LON/TILT), PV-Live aus SolaxCloud - Panel-Gruppen ungenutzt",
     },
 }
 
