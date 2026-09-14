@@ -386,7 +386,6 @@ def parse_log(pfad):
 def analysiere(parsed):
     snapshots, zyklen, ereignisse = parsed["snapshots"], parsed["zyklen"], parsed["ereignisse"]
     forecast_pro_tag = parsed["forecast_pro_tag"]
-    gelernter = parsed["gelernter_zyklus"]
     out = {}
 
     # --- Tages-KPIs ---

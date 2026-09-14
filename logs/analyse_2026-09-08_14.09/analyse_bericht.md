@@ -120,6 +120,11 @@
 | ERR_TELEGRAM_UPDATES | 11 | ERR_SENSOR | 1 |
 | WARN_ZU_FRUEH | 7 |
 
+### 7b. Stale-Daten-Phasen (Entscheidungen auf veralteten PV-Daten)
+
+- Warnungen 'Solar-Daten veraltet' (waehrend Ausfall alle 5 min): **0**
+- Keine Stale-Phasen im analysierten Zeitraum.
+
 ## 8. Regel-Einschalt-Haeufigkeit (alle Bewertungen)
 
 | Regel | EIN | AUS |
