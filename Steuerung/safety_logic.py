@@ -11,6 +11,7 @@ from constants import (
     COMPRESSOR_VERD_DELTA_MIN, COMPRESSOR_VERD_START_TEMP_COLD,
     COMPRESSOR_VERD_DELTA_COLD_MIN, COMPRESSOR_VERD_COLD_MAX,
     COMPRESSOR_UNTEN_DELTA_MIN,
+    LEGIONELLEN_VERIFY_NUR_VERDAMPFER,
 )
 
 async def handle_critical_compressor_error(session, state, error_context: str):
@@ -165,13 +166,21 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
     verd_delta = state.kompressor_verification_start_t_verd - current_t_verd
     unten_delta = abs(current_t_unten - state.kompressor_verification_start_t_unten)
 
+    # Legionellenmodus (Incident 11.09): unten saettigt mit ~0.5 C/h und
+    # erfuellt die 0.2-K-Schwelle nie -> nur der Verdampfer zaehlt als
+    # Betriebsbeweis, solange state.legionellen_temp_override gesetzt ist.
+    # (isinstance-Check: der Override ist eine Zahl; schuetzt vor MagicMock-True)
+    legionellen_aktiv = isinstance(
+        getattr(state, "legionellen_temp_override", None), (int, float))
+    nur_verdampfer = bool(legionellen_aktiv and LEGIONELLEN_VERIFY_NUR_VERDAMPFER)
+
     verd_ok = verd_delta >= COMPRESSOR_VERD_DELTA_MIN
     if not verd_ok and state.kompressor_verification_start_t_verd < COMPRESSOR_VERD_START_TEMP_COLD:
         if verd_delta >= COMPRESSOR_VERD_DELTA_COLD_MIN and current_t_verd < COMPRESSOR_VERD_COLD_MAX:
             verd_ok = True
 
-    unten_ok = unten_delta >= COMPRESSOR_UNTEN_DELTA_MIN
-    
+    unten_ok = True if nur_verdampfer else unten_delta >= COMPRESSOR_UNTEN_DELTA_MIN
+
     if verd_ok and unten_ok:
         state.kompressor_verification_failed = False
         state.kompressor_verification_error_count = 0
@@ -183,7 +192,7 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
     error_parts = []
     if not verd_ok:
         error_parts.append(f"Verdampfer: nur {verd_delta:.1f}°C Abfall (Soll: >{COMPRESSOR_VERD_DELTA_MIN}°C)")
-    if not unten_ok:
+    if not nur_verdampfer and not unten_ok:
         error_parts.append(f"Unterer Fühler: nur {unten_delta:.1f}°C Änderung (Soll: >{COMPRESSOR_UNTEN_DELTA_MIN}°C)")
     
     error_msg = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)

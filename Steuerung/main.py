@@ -551,9 +551,9 @@ async def run_logic_step(session, state, learning_engine=None):
                     )
                     # Telegram-Benachrichtigung
                     try:
-                        msg = (f"ðŸ¦  *Legionellenprophylaxe gestartet!*\n"
-                               f"Heize auf {legionellen_cfg_lc.target_temp_c:.0f}Â°C "
-                               f"(unten: {state.sensors.t_unten:.1f}Â°C)")
+                        msg = (f"🦠 *Legionellenprophylaxe gestartet!*\n"
+                               f"Heize auf {legionellen_cfg_lc.target_temp_c:.0f}°C "
+                               f"(unten: {state.sensors.t_unten:.1f}°C)")
                         from telegram_api import send_telegram_message as _send_tg
                         await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
                                        state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")

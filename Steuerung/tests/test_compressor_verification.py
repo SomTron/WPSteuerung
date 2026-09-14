@@ -143,3 +143,77 @@ async def test_verification_failure(mock_state):
          
          assert is_running is False
          assert "Verdampfer: nur 0.0°C Abfall" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_legionellen_erfolg_ohne_unten_delta(mock_state):
+    """Empfehlung 3.4: Im Legionellenmodus genuegt der Verdampfer-Abfall.
+    (unten saettigt bei ~47 C, Incident 11.09 -> KEIN Fehlalarm mehr.)"""
+    mock_state.legionellen_temp_override = 60.0
+    now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
+    mock_state.kompressor_verification_start_time = now - timedelta(minutes=15)
+    mock_state.kompressor_verification_start_t_verd = 20.0
+    mock_state.kompressor_verification_start_t_unten = 47.25
+
+    with pytest.MonkeyPatch.context() as m:
+        class MockDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now
+        m.setattr("safety_logic.datetime", MockDateTime)
+
+        # Verdampfer faellt sauber um 2.0K, unten steigt nur 0.1K (Saettigung)
+        is_running, error_msg = await verify_compressor_running(
+            mock_state, None, current_t_verd=18.0, current_t_unten=47.3
+        )
+        assert is_running is True
+        assert error_msg is None
+
+
+@pytest.mark.asyncio
+async def test_legionellen_echter_stillstand_wird_weiter_erkannt(mock_state):
+    """Auch im Legionellenmodus bleibt ein echter Kompressorstillstand sichtbar:
+    ohne Verdampfer-Abfall -> Fehler (unten-Hinweis unterdrueckt, saettigt)."""
+    mock_state.legionellen_temp_override = 60.0
+    now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
+    mock_state.kompressor_verification_start_time = now - timedelta(minutes=15)
+    mock_state.kompressor_verification_start_t_verd = 20.0
+    mock_state.kompressor_verification_start_t_unten = 47.25
+
+    with pytest.MonkeyPatch.context() as m:
+        class MockDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now
+        m.setattr("safety_logic.datetime", MockDateTime)
+
+        # kein Abfall am Verdampfer
+        is_running, error_msg = await verify_compressor_running(
+            mock_state, None, current_t_verd=20.0, current_t_unten=47.3
+        )
+        assert is_running is False
+        assert "Verdampfer" in error_msg
+        assert "Unterer Fühler" not in error_msg
+
+
+@pytest.mark.asyncio
+async def test_normalmodus_braucht_unten_delta_weiterhin(mock_state):
+    """Regression: Ohne Legionellen zaehlt der untere Fuehler weiterhin mit."""
+    now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
+    mock_state.kompressor_verification_start_time = now - timedelta(minutes=15)
+    mock_state.kompressor_verification_start_t_verd = 20.0
+    mock_state.kompressor_verification_start_t_unten = 47.25
+
+    with pytest.MonkeyPatch.context() as m:
+        class MockDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now
+        m.setattr("safety_logic.datetime", MockDateTime)
+
+        # Verdampfer ok, aber unten-Delta 0.1 < 0.2 -> Fehler ("Unterer Fühler")
+        is_running, error_msg = await verify_compressor_running(
+            mock_state, None, current_t_verd=18.0, current_t_unten=47.3
+        )
+        assert is_running is False
+        assert "Unterer Fühler" in error_msg

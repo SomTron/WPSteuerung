@@ -39,6 +39,12 @@ COMPRESSOR_VERD_COLD_MAX: float = 12.0
 COMPRESSOR_UNTEN_DELTA_MIN: float = 0.2
 COMPRESSOR_VERIFICATION_ERROR_THRESHOLD: int = 2
 
+# Verifizierung im Legionellenmodus: Der untere Fuehler saettigt am oberen
+# Boilerende (Nettorate < 0.2 K/10 min, Incident 11.09) und wuerde Fehlalarm
+# erzeugen, obwohl der Verdampfer den Kompressor einwandfrei bestaetigt.
+# Im Legionellenmodus genuegt daher der Verdampfer-Abfall als Beweis.
+LEGIONELLEN_VERIFY_NUR_VERDAMPFER: bool = True
+
 # --- Solar Data Freshness ---
 SOLAR_DATA_MAX_AGE_HOURS: int = 12
 SOLAR_DATA_MAX_AGE_MIN: int = 15
