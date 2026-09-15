@@ -142,6 +142,8 @@ class State:
         # Letzter Prognose-VERSUCH (auch Fehlversuch) - Retry-Throttle gegen
         # API-/Log-Spam, wenn Open-Meteo nicht erreichbar ist.
         self.last_forecast_attempt: Optional[datetime] = None
+        # Startup-Diagnose: Info ueber den vorigen Lauf (unsauber beendet?)
+        self.letzter_lauf: dict = {}
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None
         self.last_solar_window_status: bool = False

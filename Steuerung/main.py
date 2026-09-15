@@ -18,6 +18,7 @@ from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
 import priority_control_logic as pcl
+import startup_diagnose
 from telegram_handler import telegram_task
 from telegram_ui import send_welcome_message, escape_markdown
 from telegram_api import start_healthcheck_task, create_robust_aiohttp_session
@@ -32,7 +33,7 @@ from logic_utils import (
     evaluate_sommer_modus,
     SOMMER_AKTIVIERT, SOMMER_DEAKTIVIERT_PROGNOSE, SOMMER_DEAKTIVIERT_DATEN,
 )
-from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, FORECAST_RETRY_INTERVAL_MIN, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN
+from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, FORECAST_RETRY_INTERVAL_MIN, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN, MEMORY_LOG_INTERVAL_SEC
 
 # Global objects
 config_manager = ConfigManager()
@@ -146,6 +147,12 @@ async def setup_application():
     # 3. Logging setup
     setup_logging(enable_full_log=True, telegram_config=state.config.Telegram)
     logging.info("Starten der Wärmepumpensteuerung (Refactored)...")
+
+    # 3b. Startup-Diagnose: Wurde der VORIGE Lauf unsauber beendet (z. B.
+    # OOM-Kill)? Muss VOR markiere_lauf_start() passieren, sonst ist die
+    # Information ueberschrieben. Meldung erfolgt im main_loop (Session/TG).
+    state.letzter_lauf = startup_diagnose.pruefe_lauf_start_grund()
+    startup_diagnose.markiere_lauf_start()
 
     # 4. Hardware & Sensors init
     try:
@@ -824,6 +831,64 @@ def _git_revision() -> str:
     return "unbekannt"
 
 
+async def _melde_unsauberen_lauf(session, state):
+    """Meldet einen nicht sauber beendeten Vorlauf (OOM-Kill, Crash, Reset).
+
+    Ohne diese Meldung sieht ein OOM-Kill im Steuerungs-Log wie ein voellig
+    normaler Neustart aus (Incident 15.09.: der Kernel killte den Prozess mit
+    SIGKILL, sichtbar nur im Kernel-Journal).
+    """
+    info = getattr(state, "letzter_lauf", None) or {}
+    if not info.get("unsauber"):
+        return
+
+    start = info.get("vorheriger_start") or "unbekannt"
+    ende = info.get("vorheriges_ende") or "kein sauberes Ende verzeichnet"
+    logging.warning(
+        f"Letzter Lauf wurde NICHT sauber beendet (Start: {start}, Ende: {ende})."
+    )
+
+    oom = info.get("oom_hinweis")
+    if oom:
+        logging.warning(f"Kernel-Log: {oom} -> Verdacht: OOM-Kill.")
+        grund = "OOM-Kill (Speicher)"
+    else:
+        logging.warning(
+            "Kein OOM-Hinweis im Kernel-Log lesbar -> Ursache unklar "
+            "(Crash, harter Reset oder Stromausfall)."
+        )
+        grund = "unklar (Crash/Reset/Strom?)"
+
+    if not (state.bot_token and state.chat_id):
+        return
+    try:
+        speicher = startup_diagnose.formatiere_speicher(startup_diagnose.speicher_werte())
+        from telegram_api import send_telegram_message as _send_tg
+
+        await _send_tg(
+            session,
+            state.chat_id,
+            f"⚠️ Steuerung wurde unsauber beendet – Verdacht: {grund}.\n"
+            f"Start {start}, Ende {ende}.\nSpeicher jetzt: {speicher}",
+            state.bot_token,
+        )
+    except Exception as e:
+        logging.debug(f"Telegram-Warnung (unsauberer Lauf) nicht gesendet: {e}")
+
+
+def _logge_speicher(state, letzter_log):
+    """Loggt stuendlich RSS/verfuegbaren Speicher (OOM-Nachvollziehbarkeit)."""
+    jetzt = datetime.now(state.local_tz)
+    if letzter_log is not None and (jetzt - letzter_log).total_seconds() < MEMORY_LOG_INTERVAL_SEC:
+        return letzter_log
+    try:
+        werte = startup_diagnose.speicher_werte()
+        logging.info(f"Speicher: {startup_diagnose.formatiere_speicher(werte)}")
+    except Exception:
+        pass
+    return jetzt
+
+
 async def main_loop():
     session = await setup_application()
 
@@ -839,6 +904,11 @@ async def main_loop():
             logging.info("Startup message sent.")
         except Exception as e:
             logging.error(f"Failed to send startup message: {e}")
+
+    # Diagnose: unsauber beendeten Vorlauf melden (OOM-Kill/Crash/Reset) und
+    # die Speicher-Baseline direkt mitschreiben - so ist ein OOM nie "still".
+    await _melde_unsauberen_lauf(session, state)
+    letzter_speicher_log = _logge_speicher(state, None)
 
     last_vpn_check = datetime.now() - timedelta(minutes=1)
     
@@ -869,6 +939,7 @@ async def main_loop():
                 # Daten-Update & Periodische Tasks
                 await update_system_data(session, state)
                 last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
+                letzter_speicher_log = _logge_speicher(state, letzter_speicher_log)
 
                 # Logik & Logging
                 await run_logic_step(session, state, learning_engine=state.learning_engine)
@@ -890,6 +961,9 @@ async def main_loop():
         logging.critical(f"Unbehandelter Fehler in Main Loop: {e}", exc_info=True)
     finally:
         logging.info("Shutting down...")
+        # Sauberes Ende markieren, damit der naechste Start einen kontrollierten
+        # Stopp von einem OOM-Kill/Crash unterscheiden kann.
+        startup_diagnose.markiere_sauberes_ende()
         # Hintergrund-Tasks kontrolliert beenden, BEVOR die Session geschlossen wird
         for task in background_tasks:
             task.cancel()

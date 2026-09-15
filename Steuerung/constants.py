@@ -32,6 +32,10 @@ FORECAST_RETRY_INTERVAL_MIN: int = 15
 HEALTHCHECK_PING_INTERVAL_MIN: float = 1.0
 VPN_CHECK_INTERVAL_SEC: int = 60
 WEATHER_UPDATE_INTERVAL_MIN: int = 60
+# Wie oft RSS/verfuegbarer RAM ins Log geschrieben werden. Macht OOM-Faelle
+# (Kernel-Kill, status=9/KILL) im Steuerungs-Log nachvollziehbar - vorher
+# waren sie nur im Kernel-Journal sichtbar.
+MEMORY_LOG_INTERVAL_SEC: int = 3600
 
 # --- Compressor Verification ---
 COMPRESSOR_VERIFICATION_DELAY_MIN: int = 10

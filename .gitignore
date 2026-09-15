@@ -11,6 +11,9 @@ Infos
 # Haltbarer Zustands-Schnappschuss (Laufzeit, nie committen)
 last_state.txt
 
+# Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
+letzter_lauf.json
+
 # Laufzeit-Datei des Services (wird fortlaufend neu geschrieben - nervt sonst
 # bei jedem Deploy mit "lokale Aenderungen verwerfen?")
 Steuerung/sonnen_prognose.csv
