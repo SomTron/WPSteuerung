@@ -98,18 +98,41 @@ def oom_hinweis_aus_text(text: Optional[str]) -> Optional[str]:
     return None
 
 
-def kernel_log_lesen() -> Optional[str]:
-    """Kernel-Log lesen (best effort): dmesg, sonst journalctl -k.
+def _normalisiere_zeitstempel(zeit: Optional[str]) -> Optional[str]:
+    """'2026-09-15T12:02:08' -> '2026-09-15 12:02:08' (journalctl-Format).
 
-    Ohne Berechtigung/Root liefern beide nichts -> None (kein Fehler).
+    Gibt None zurueck, wenn der Wert nicht plausibel wie ein Datum aussieht.
+    """
+    if not zeit or not isinstance(zeit, str):
+        return None
+    text = zeit.strip().replace("T", " ")
+    if len(text) >= 16 and text[:4].isdigit() and text[4] == "-":
+        return text[:19]
+    return None
+
+
+def kernel_log_lesen(seit: Optional[str] = None) -> Optional[str]:
+    """Kernel-Log lesen (best effort): bevorzugt journalctl mit Zeitfenster.
+
+    Mit `seit` wird nur der Zeitraum ab dem letzten Start betrachtet - sonst
+    wuerde ein ALTER OOM-Eintrag aus dem Ringpuffer faelschlich dem aktuellen
+    unsauberen Ende zugeordnet (dmesg liefert den kompletten Ringpuffer).
+    Fallbacks: journalctl -k ohne Fenster, dann dmesg (ungenauer).
+
+    Ohne Berechtigung/Root liefern alle nichts -> None (kein Fehler).
     """
     import shutil
     import subprocess
 
-    befehle = (
-        ["dmesg"],
-        ["journalctl", "-k", "-n", "500", "--no-pager"],
-    )
+    befehle = []
+    fenster = _normalisiere_zeitstempel(seit)
+    if fenster:
+        befehle.append(
+            ["journalctl", "-k", "--since", fenster, "--no-pager", "-n", "500"]
+        )
+    befehle.append(["journalctl", "-k", "--no-pager", "-n", "500"])
+    befehle.append(["dmesg"])
+
     for befehl in befehle:
         if shutil.which(befehl[0]) is None:
             continue
@@ -127,12 +150,16 @@ def kernel_log_lesen() -> Optional[str]:
 def pruefe_lauf_start_grund() -> dict:
     """Kombiniert: Wurde der vorige Lauf unsauber beendet - und war es OOM?
 
-    Liest das Kernel-Log nur, wenn tatsaechlich ein unsauberes Ende vorliegt.
+    Liest das Kernel-Log nur, wenn tatsaechlich ein unsauberes Ende vorliegt,
+    und dann nur den Zeitraum ab dem vorherigen Start (kein Fehlalarm durch
+    alte OOM-Eintraege im Ringpuffer).
     """
     letzter = pruefe_letzten_lauf()
     hinweis = None
     if letzter["unsauber"]:
-        hinweis = oom_hinweis_aus_text(kernel_log_lesen())
+        hinweis = oom_hinweis_aus_text(
+            kernel_log_lesen(letzter.get("vorheriger_start"))
+        )
     return {**letzter, "oom_hinweis": hinweis}
 
 

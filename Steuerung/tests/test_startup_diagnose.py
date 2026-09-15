@@ -69,10 +69,10 @@ def test_normales_kernel_log_ergibt_keinen_oom_hinweis():
 
 def test_kernel_log_wird_nur_bei_unsauberem_ende_gelesen(tmp_path, monkeypatch):
     p = tmp_path / "letzter_lauf.json"
-    aufrufe = {"n": 0}
+    aufrufe = []
 
-    def fake_kernel_log():
-        aufrufe["n"] += 1
+    def fake_kernel_log(seit=None):
+        aufrufe.append(seit)
         return "Out of memory: Killed process 571 (python)"
 
     monkeypatch.setattr(sd, "kernel_log_lesen", fake_kernel_log)
@@ -84,14 +84,53 @@ def test_kernel_log_wird_nur_bei_unsauberem_ende_gelesen(tmp_path, monkeypatch):
     info = sd.pruefe_lauf_start_grund()
     assert info["unsauber"] is False
     assert info["oom_hinweis"] is None
-    assert aufrufe["n"] == 0
+    assert aufrufe == []
 
-    # harter Abbruch (z. B. OOM-Kill) -> Kernel-Log wird gelesen
+    # harter Abbruch (z. B. OOM-Kill) -> Kernel-Log ab dem letzten Start lesen
     sd.markiere_lauf_start(str(p))
     info = sd.pruefe_lauf_start_grund()
     assert info["unsauber"] is True
     assert info["oom_hinweis"] and "Killed process" in info["oom_hinweis"]
-    assert aufrufe["n"] == 1
+    assert len(aufrufe) == 1
+    assert aufrufe[0] == info["vorheriger_start"]
+
+
+# --- Zeitfenster (kein Fehlalarm durch alte OOM-Eintraege) --------------------
+
+def test_normalisiere_zeitstempel():
+    assert sd._normalisiere_zeitstempel("2026-09-15T12:02:08") == "2026-09-15 12:02:08"
+    assert sd._normalisiere_zeitstempel("2026-09-15 12:02:08") == "2026-09-15 12:02:08"
+    assert sd._normalisiere_zeitstempel(None) is None
+    assert sd._normalisiere_zeitstempel("") is None
+    assert sd._normalisiere_zeitstempel("kaputt") is None
+
+
+def test_journalctl_bekommt_das_zeitfenster(monkeypatch):
+    """Der Kernel-Log-Abruf darf nicht den ganzen Ringpuffer auswerten."""
+    befehle = []
+
+    class FakeErgebnis:
+        returncode = 0
+        stdout = "Sep 15 12:08:17 kernel: Out of memory: Killed process 571 (python)\n"
+
+    def fake_run(befehl, **kwargs):
+        befehle.append(befehl)
+        return FakeErgebnis()
+
+    import shutil
+    import subprocess
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    text = sd.kernel_log_lesen("2026-09-15T12:02:08")
+
+    assert "Killed process" in text
+    assert befehle, "kein Kernel-Log-Befehl ausgefuehrt"
+    erster = befehle[0]
+    assert erster[0] == "journalctl"
+    assert "--since" in erster
+    assert "2026-09-15 12:02:08" in erster
 
 
 # --- Speicherwerte ------------------------------------------------------------
