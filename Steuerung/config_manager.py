@@ -2,6 +2,8 @@ import configparser
 import logging
 from pydantic import BaseModel, Field, ValidationError
 
+from constants import API_SERVER_HOST, API_SERVER_PORT
+
 class HeizungssteuerungConfig(BaseModel):
     MIN_LAUFZEIT: int = Field(default=15, description="Minimale Laufzeit in Minuten")
     MIN_PAUSE: int = Field(default=20, description="Minimale Pause in Minuten")
@@ -18,8 +20,8 @@ class HeizungssteuerungConfig(BaseModel):
     AUSSCHALTPUNKT: int = Field(default=45)
     UEBERGANGSMODUS_MORGENS_ENDE: str = Field(default="10:00")
     UEBERGANGSMODUS_ABENDS_START: str = Field(default="17:00")
-    API_HOST: str = Field(default="0.0.0.0")
-    API_PORT: int = Field(default=8000)
+    API_HOST: str = Field(default=API_SERVER_HOST)
+    API_PORT: int = Field(default=API_SERVER_PORT)
 
 class HealthcheckConfig(BaseModel):
     HEALTHCHECK_URL: str = Field(default="")

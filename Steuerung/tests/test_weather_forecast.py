@@ -308,3 +308,35 @@ class TestMainCheckPeriodicTasks:
 
                 assert result is not None
                 assert state.solar.forecast_today is None
+
+    @pytest.mark.asyncio
+    async def test_fehlversuch_wird_erst_nach_retry_intervall_wiederholt(self):
+        """Regression: Bei Netzausfall (Open-Meteo nicht erreichbar) wurde die
+        API im 10-s-Loop-Takt endlos angefragt -> API-/Log-Spam im Pi-Log.
+        Jetzt gilt ein Retry-Throttle (FORECAST_RETRY_INTERVAL_MIN)."""
+        from main import check_periodic_tasks
+        from constants import FORECAST_RETRY_INTERVAL_MIN
+        state = self._baue_state()
+
+        with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
+            mock_forecast.return_value = (None,) * 8
+            with patch("main.check_vpn_status", new_callable=AsyncMock):
+                last_check = datetime.now() - timedelta(hours=2)
+
+                # 1) Erster Fehlversuch -> anfragen, aber NICHT als Erfolg verbuchen
+                await check_periodic_tasks(AsyncMock(), state, last_check)
+                assert mock_forecast.await_count == 1
+                assert state.last_forecast_update is None
+                assert state.last_forecast_attempt is not None
+
+                # 2) Direkt danach (naechster 10-s-Loop) -> kein zweiter Abruf
+                await check_periodic_tasks(AsyncMock(), state, last_check)
+                assert mock_forecast.await_count == 1
+
+                # 3) Nach Ablauf des Retry-Intervalls -> wieder erlaubt
+                state.last_forecast_attempt = (
+                    datetime.now(state.local_tz)
+                    - timedelta(minutes=FORECAST_RETRY_INTERVAL_MIN + 1)
+                )
+                await check_periodic_tasks(AsyncMock(), state, last_check)
+                assert mock_forecast.await_count == 2

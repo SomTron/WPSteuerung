@@ -23,7 +23,6 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any
-import logging
 import os
 from datetime import datetime
 import re
@@ -389,6 +388,9 @@ def get_status():
         logging.warning(f"Learning-Engine-Info nicht verfuegbar: {e}")
         learning_info = {}
 
+    # Einmal ermitteln und in 'energy' + 'status_indikatoren' wiederverwenden
+    solar_stale = _solar_stale_status()
+
     pv_profil_info: dict = {}
     forecast_info: dict = {}
     try:
@@ -476,7 +478,7 @@ def get_status():
             "ac_power": getattr(shared_state.solar, 'acpower', None),
             "forecast_today": getattr(shared_state.solar, 'forecast_today', None),
             "forecast_tomorrow": getattr(shared_state.solar, 'forecast_tomorrow', None),
-            "solar_stale": _solar_stale_status(),
+            "solar_stale": solar_stale,
             "forecast_day2": getattr(shared_state.solar, 'forecast_day2', None),
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
@@ -506,7 +508,7 @@ def get_status():
         },
         "pv_profil": pv_profil_info,
         "status_indikatoren": {
-            "solar_stale": _solar_stale_status(),
+            "solar_stale": solar_stale,
             "verdampfer_shutdowns_stunde": getattr(shared_state.control, 'verdampfer_shutdowns', []),
         },
         "learning_engine": {
@@ -586,12 +588,13 @@ async def control_system(cmd: ControlCommand):
         if "set_kompressor" in control_funcs:
             await control_funcs["set_kompressor"](shared_state, True, force=True)
             return {"status": "success", "message": "Compressor forced ON"}
-            
+        raise HTTPException(status_code=503, detail="Control function not available")
+
     elif cmd.command == "force_off":
         if "set_kompressor" in control_funcs:
             await control_funcs["set_kompressor"](shared_state, False, force=True)
             return {"status": "success", "message": "Compressor forced OFF"}
-        return {"status": "error", "message": "Control function not available"}
+        raise HTTPException(status_code=503, detail="Control function not available")
 
 
 @app.get("/config/export")
@@ -603,17 +606,11 @@ def export_config():
     try:
         # Export both INI-style and JSON priority configs
         return {
-            "config_ini": shared_state.config.dict() if hasattr(shared_state.config, 'dict') else {},
-            "priority_config": shared_state.priority_config.dict() if hasattr(shared_state.priority_config, 'dict') else {},
+            "config_ini": shared_state.config.model_dump() if hasattr(shared_state.config, 'model_dump') else {},
+            "priority_config": shared_state.priority_config.model_dump() if hasattr(shared_state.priority_config, 'model_dump') else {},
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error exporting config: {str(e)}")
-
-
-@app.get("/debug/csv")
-def get_debug_csv():
-    """Serve debug CSV data."""
-    pass
 
 
 @app.post("/command")

@@ -25,6 +25,10 @@ MAIN_LOOP_INTERVAL_SEC: int = 10
 SOLAR_UPDATE_INTERVAL_SEC: int = 300
 FORECAST_UPDATE_INTERVAL_MIN: int = 60
 FORECAST_UPDATE_INTERVAL_HOURS: int = 6
+# Nach einem FEHLGESCHLAGENEN Prognose-Abruf (Netz/DNS weg) erst nach dieser
+# Zeit erneut fragen. Ohne Throttle wuerde der 10-s-Loop die Open-Meteo-API
+# dauerhaft anfragen und das Log fluten (beobachtet im Pi-Log 12.09.).
+FORECAST_RETRY_INTERVAL_MIN: int = 15
 HEALTHCHECK_PING_INTERVAL_MIN: float = 1.0
 VPN_CHECK_INTERVAL_SEC: int = 60
 WEATHER_UPDATE_INTERVAL_MIN: int = 60
@@ -73,8 +77,11 @@ RELAY_ON_STATE: int = 1
 RELAY_OFF_STATE: int = 0
 
 # --- Network / API ---
+# ACHTUNG: Das sind die DEFAULT-Werte. Tatsaechlich verwendet wird
+# AppConfig.Heizungssteuerung.API_HOST/API_PORT (config_manager.py importiert
+# diese Konstanten als Default) - Port hier NICHT separat pflegen.
 API_SERVER_HOST: str = "0.0.0.0"
-API_SERVER_PORT: int = 8080
+API_SERVER_PORT: int = 8000
 REQUEST_TIMEOUT_SEC: int = 10
 HEALTHCHECK_REQUEST_TIMEOUT_SEC: int = 5
 

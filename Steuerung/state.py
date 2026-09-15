@@ -136,11 +136,12 @@ class State:
         self._learned_evening_window: Optional[dict] = None  # Gelerntes Abendfenster
 
         # System/Internal
-        
-        # System/Internal
         self.gpio_lock = asyncio.Lock()
         self.session = None
         self.last_forecast_update: Optional[datetime] = None
+        # Letzter Prognose-VERSUCH (auch Fehlversuch) - Retry-Throttle gegen
+        # API-/Log-Spam, wenn Open-Meteo nicht erreichbar ist.
+        self.last_forecast_attempt: Optional[datetime] = None
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None
         self.last_solar_window_status: bool = False

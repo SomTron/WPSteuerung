@@ -32,7 +32,7 @@ from logic_utils import (
     evaluate_sommer_modus,
     SOMMER_AKTIVIERT, SOMMER_DEAKTIVIERT_PROGNOSE, SOMMER_DEAKTIVIERT_DATEN,
 )
-from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN
+from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, FORECAST_RETRY_INTERVAL_MIN, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN
 
 # Global objects
 config_manager = ConfigManager()
@@ -320,6 +320,19 @@ async def check_periodic_tasks(session, state, last_vpn_check):
     
     # 2. Solar Forecast (alle FORECAST_UPDATE_INTERVAL_HOURS)
     if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= FORECAST_UPDATE_INTERVAL_HOURS * 3600:
+        # Retry-Throttle: Ein Fehlversuch (Netz/DNS weg) darf NICHT im
+        # 10-s-Loop-Takt wiederholt werden - sonst API-/Log-Spam. Erst nach
+        # FORECAST_RETRY_INTERVAL_MIN erneut fragen.
+        letzter_versuch = getattr(state, "last_forecast_attempt", None)
+        versuch_faellig = (
+            letzter_versuch is None
+            or (now_local - letzter_versuch).total_seconds() >= FORECAST_RETRY_INTERVAL_MIN * 60
+        )
+    else:
+        versuch_faellig = False
+
+    if versuch_faellig:
+        state.last_forecast_attempt = now_local
         rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow, hourly_today_wm2 = await get_solar_forecast(session, state.config)
         if rad_today is not None:
             state.solar.forecast_today = rad_today

@@ -10,6 +10,8 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+import pytest  # noqa: E402
+
 import api  # noqa: E402
 
 
@@ -105,3 +107,31 @@ def test_status_liefert_dict_keine_primitiven():
     for schluessel in ("temperatures", "compressor", "mode", "energy",
                        "system", "setpoints", "priority"):
         assert schluessel in d, f"Key {schluessel} fehlt in /status"
+
+
+def test_keine_doppelt_registrierten_routen():
+    """Regression: /debug/csv war zweimal definiert - die erste Definition
+    (Platzhalter mit 'pass') gewann das Routing und lieferte 'null', der echte
+    Endpoint war toter Code."""
+    from collections import Counter
+
+    pfade = [getattr(route, "path", None) for route in api.app.routes]
+    doppelt = {p: c for p, c in Counter(pfade).items() if p and c > 1}
+    assert not doppelt, f"Doppelt registrierte Routen: {doppelt}"
+
+
+@pytest.mark.asyncio
+async def test_control_ohne_set_kompressor_liefert_503():
+    """Fehlt die Steuerfunktion, muss /control einen Fehler liefern statt
+    still mit HTTP 200 und 'null' zu antworten."""
+    from fastapi import HTTPException
+
+    original_state, original_funcs = api.shared_state, api.control_funcs
+    try:
+        api.shared_state = object()
+        api.control_funcs = {"etwas_anderes": None}  # truthy, aber ohne set_kompressor
+        with pytest.raises(HTTPException) as exc:
+            await api.control_system(api.ControlCommand(command="force_on"))
+        assert exc.value.status_code == 503
+    finally:
+        api.shared_state, api.control_funcs = original_state, original_funcs
