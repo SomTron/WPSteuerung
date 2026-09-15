@@ -661,8 +661,16 @@ async def handle_command(cmd: ControlCommand):
 
 @app.get("/debug/csv")
 def debug_csv():
-    """Debug: Zeigt CSV-Status und Daten an."""
+    """Debug: Zeigt CSV-Status und Daten an.
+
+    Liest bewusst NUR Kopf + Tail (kein Voll-Read): auf dem Pi (512 MB) kann
+    ein pd.read_csv() ueber die gewachsene heizungsdaten.csv den OOM-Killer
+    ausloesen - der Debug-Endpoint soll das nicht provozieren. 'rows' wird
+    weiterhin exakt gezaehlt (zeilenweise, ohne pandas).
+    """
     import os as _os
+    from collections import deque
+
     csv_path = HEIZUNGSDATEN_CSV
     result = {
         "csv_path": csv_path,
@@ -672,11 +680,27 @@ def debug_csv():
         result["size_bytes"] = _os.path.getsize(csv_path)
         try:
             import pandas as _pd
-            df = _pd.read_csv(csv_path)
-            result["rows"] = len(df)
+
+            anzahl = 0
+            _tail = deque(maxlen=1000)
+            _erste_datenzeile = ""
+            with open(csv_path, "r", encoding="utf-8") as _f:
+                _header = _f.readline()
+                for _zeile in _f:
+                    if anzahl == 0:
+                        _erste_datenzeile = _zeile
+                    _tail.append(_zeile)
+                    anzahl += 1
+
+            df = _pd.read_csv(io.StringIO(_header + "".join(_tail)))
+            result["rows"] = anzahl
             result["columns"] = list(df.columns)
-            result["first_timestamp"] = str(df.iloc[0]["Zeitstempel"]) if len(df) > 0 else None
-            result["last_timestamp"] = str(df.iloc[-1]["Zeitstempel"]) if len(df) > 0 else None
+            _erste_feld = _erste_datenzeile.split(",")[0].strip()
+            result["first_timestamp"] = _erste_feld or None
+            result["last_timestamp"] = (
+                str(df.iloc[-1]["Zeitstempel"])
+                if len(df) > 0 and "Zeitstempel" in df.columns else None
+            )
             result["column_types"] = {str(k): str(v) for k, v in df.dtypes.items()}
         except Exception as e:
             result["read_error"] = str(e)

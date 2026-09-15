@@ -13,10 +13,43 @@ from utils import (check_and_fix_csv_header, EXPECTED_CSV_HEADER,
                    HEIZUNGSDATEN_CSV, relevante_csv_dateien)
 from constants import DEFAULT_TIMEZONE
 
-# Headless-Backend fuer den RPi: MUSS vor dem pyplot-Import gesetzt werden
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+# matplotlib wird NICHT mehr beim Start importiert: Backend, Font-Cache und
+# pyplot kosten auf dem Pi Zero 2 W ~25-40 MB RSS, gebraucht wird es aber nur,
+# wenn tatsaechlich ein Diagramm per Telegram angefordert wird. Als Modul-
+# Import war das dauerhafte Grundlast auf einem 512-MB-Geraet (OOM-Gefahr).
+_PLT = None
+
+
+def _pyplot():
+    """pyplot traege laden (Agg = headless). Backend MUSS vor dem Import gesetzt sein."""
+    global _PLT
+    if _PLT is None:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        _PLT = plt
+    return _PLT
+
+
+def _lade_csv_tails(pfaden, read_size_bytes):
+    """Liest Kopf + Tail jeder CSV (max. read_size_bytes je Datei) und gibt
+    DataFrames zurueck - begrenzt den RAM auf dem Pi. Laeuft im Thread-Pool."""
+    teile = []
+    for pfad in pfaden:
+        groesse = os.path.getsize(pfad)
+        with open(pfad, "r", encoding="utf-8") as f:
+            kopf = f.readline()
+            if groesse > read_size_bytes:
+                f.seek(groesse - read_size_bytes)
+                f.readline()  # Angeschnittene Zeile verwerfen
+            rest = f.readlines()
+        inhalt = kopf + "".join(rest) if rest else kopf
+        teil_df = pd.read_csv(
+            io.StringIO(inhalt), sep=None, engine="python", on_bad_lines="skip"
+        )
+        teile.append(teil_df)
+    return teile
 
 async def get_boiler_temperature_history(session, hours, state, config):
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
@@ -35,25 +68,6 @@ async def get_boiler_temperature_history(session, hours, state, config):
         # Header regelmäßig prüfen und ggf. korrigieren
         check_and_fix_csv_header(file_path)
 
-        def _lade_csvs_sync(pfaden, read_size_bytes):
-            """Liest Kopf + Tail aller relevanten CSV-Dateien synchron.
-            Laeuft im Thread-Pool via asyncio.to_thread, blockiert nicht den Event-Loop."""
-            teile = []
-            for pfad in pfaden:
-                groesse = os.path.getsize(pfad)
-                with open(pfad, "r", encoding="utf-8") as f:
-                    kopf = f.readline()
-                    if groesse > read_size_bytes:
-                        f.seek(groesse - read_size_bytes)
-                        f.readline()  # Angeschnittene Zeile verwerfen
-                    rest = f.readlines()
-                inhalt = kopf + "".join(rest) if rest else kopf
-                teil_df = pd.read_csv(
-                    io.StringIO(inhalt), sep=None, engine="python", on_bad_lines="skip"
-                )
-                teile.append(teil_df)
-            return teile
-
         try:
             # Optimize: nur letzte ~3MB je Datei lesen (schont SD-Karte)
             # Durchschnittliche Zeilenlaenge ~150-200 Bytes, 15000 Zeilen ca. 3MB.
@@ -61,7 +75,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
             pfaden = relevante_csv_dateien(file_path, jetzt=now)
 
             # CSV-I/O in Thread-Pool auslagern (blockierendes open/read auf SD-Karte)
-            teile = await asyncio.to_thread(_lade_csvs_sync, pfaden, read_size)
+            teile = await asyncio.to_thread(_lade_csv_tails, pfaden, read_size)
             df = pd.concat(teile, ignore_index=True) if len(teile) > 1 else teile[0]
 
             # Prüfe, ob alle erwarteten Spalten vorhanden sind
@@ -177,6 +191,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
         def _render_chart_sync(df, time_ago, now, y_min, y_max, color_map, hours):
             """Erzeugt den Matplotlib-Chart und gibt einen BytesIO-Buffer zurueck.
             Laeuft im Thread-Pool via asyncio.to_thread (CPU-intensiv, blockiert sonst den Loop)."""
+            plt = _pyplot()  # matplotlib erst hier laden (RAM!)
             fig = plt.figure(figsize=(12, 6))
             shown_labels = set()
             if "Kompressor" in df.columns and "PowerSource" in df.columns:
@@ -258,13 +273,21 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         if not os.path.exists(file_path):
              await send_telegram_message(session, state.chat_id, "Laufzeit-Daten nicht verfügbar (CSV fehlt).", state.bot_token)
              return
-        teile = [pd.read_csv(p) for p in relevante_csv_dateien(HEIZUNGSDATEN_CSV)]
-        df = pd.concat(teile, ignore_index=True)
+        # Nur Kopf + letzte ~3 MB je Datei lesen: ein Voll-Read ALLER Monats-
+        # archive konnte auf dem Pi (512 MB) den OOM-Killer ausloesen - und
+        # gebraucht werden ohnehin nur die letzten Zeilen (tail(1000)).
+        pfaden = relevante_csv_dateien(HEIZUNGSDATEN_CSV)
+        teile = await asyncio.to_thread(_lade_csv_tails, pfaden, 3 * 1024 * 1024)
+        if not teile:
+            await send_telegram_message(session, state.chat_id, "Laufzeit-Daten nicht verfügbar.", state.bot_token)
+            return
+        df = pd.concat(teile, ignore_index=True) if len(teile) > 1 else teile[0]
         df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
         df = df.tail(1000)
         df["Date"] = df["Zeitstempel"].dt.date
         df["Kompressor"] = df["Kompressor"].astype(str).map({"EIN": True, "AUS": False, "1": True, "0": False}).fillna(False)
         runtime_by_date = df[df["Kompressor"]].groupby("Date").size() * (10 / 60)
+        plt = _pyplot()
         plt.figure(figsize=(10, 5))
         runtime_by_date.plot(kind="bar")
         plt.xlabel("Datum")
