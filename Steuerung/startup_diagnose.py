@@ -16,6 +16,7 @@ darf den Start niemals verhindern.
 import json
 import logging
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
@@ -86,6 +87,48 @@ def pruefe_letzten_lauf(pfad: Optional[str] = None) -> dict:
         "vorheriger_start": daten.get("start_zeit"),
         "vorheriges_ende": daten.get("ende_zeit"),
     }
+
+
+def lauf_ist_aktiv(pfad: Optional[str] = None) -> bool:
+    """True, wenn die in der Statusdatei vermerkte PID noch laeuft.
+
+    Wichtig fuer Anzeigen wie `wp-manager.sh` (Option 19): Solange die Steuerung
+    laeuft, steht in der Datei 'sauber_beendet: false' - das Ende wird erst im
+    finally gesetzt. Ohne diese Pruefung wuerde ein gesunder, laufender Prozess
+    als "unsauber beendet" gemeldet.
+
+    Es wird bewusst kein Signal gesendet (os.kill(pid, 0) beendet unter Windows
+    den Prozess!), sondern nur die Prozessliste geprueft.
+    """
+    daten = _lese_status(pfad) or {}
+    pid = daten.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.path.isdir("/proc"):                 # Linux (Produktivsystem)
+        return os.path.isdir(f"/proc/{pid}")
+    if sys.platform == "win32":                # Entwicklungsrechner/Tests
+        return _windows_prozess_existiert(pid)
+    return False
+
+
+def _windows_prozess_existiert(pid: int) -> bool:
+    """Prozess-Existenz unter Windows pruefen - OHNE ihn zu beenden.
+
+    os.kill(pid, 0) waere hier gefaehrlich: unter Windows beendet jeder
+    Signalwert ausser CTRL_C/CTRL_BREAK den Prozess (TerminateProcess).
+    """
+    try:
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return False
+    except Exception:
+        return False
 
 
 def oom_hinweis_aus_text(text: Optional[str]) -> Optional[str]:

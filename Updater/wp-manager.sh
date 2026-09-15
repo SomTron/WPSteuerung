@@ -2,6 +2,9 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.10: Neue Option 19 (Lauf-Status/letzte Abstuerze aus letzter_lauf.json) und
+#       Status-Zeile "Letzter Lauf" im Kopf - macht OOM-Kills/Crashes sichtbar,
+#       die vorher nur im Kernel-Journal standen. Banner-Version nachgezogen.
 # v1.9: Neue Optionen 17 (zyklen.csv anzeigen) und 18 (Upload der
 #       Analyse-Zylen-CSV) - Kompressor-Zyklen direkt vom PI abrufen/teilen.
 # v1.8: Neue Optionen 15 (Entscheidungs-Log anzeigen) und 16 (Upload
@@ -150,6 +153,24 @@ while true; do
         VPN_INFO=""
     fi
 
+    # ---- Startup-Diagnose: letzter Lauf sauber beendet? ----
+    # Wichtig: Solange die Steuerung laeuft, steht in letzter_lauf.json
+    # "sauber_beendet": false (wird erst im finally gesetzt). Deshalb wird die
+    # PID aus der Datei mit der laufenden Service-PID verglichen - nur wenn sie
+    # ABWEICHT, wurde der vorige Lauf wirklich abgebrochen (z. B. OOM-Kill).
+    LAUF_JSON="$TARGET_DIR/letzter_lauf.json"
+    LAUF_STATUS="${DIM}keine Info (Option 19)${NC}"
+    if [ -f "$LAUF_JSON" ]; then
+        LAUF_PID=$(grep -o '"pid"[[:space:]]*:[[:space:]]*[0-9]*' "$LAUF_JSON" 2>/dev/null | grep -o '[0-9]*')
+        if grep -q '"sauber_beendet"[[:space:]]*:[[:space:]]*true' "$LAUF_JSON" 2>/dev/null; then
+            LAUF_STATUS="${GREEN}✓ sauber beendet${NC}"
+        elif [ -n "$LAUF_PID" ] && [ "$LAUF_PID" = "$SVC_PID" ]; then
+            LAUF_STATUS="${GREEN}✓ läuft (aktiv)${NC}"
+        else
+            LAUF_STATUS="${RED}⚠ unsauber beendet -> Option 19${NC}"
+        fi
+    fi
+
     # ---- System-Infos ----
     HOST_UP=$(uptime -p 2>/dev/null | sed 's/^up //')
     DISK_LINE=$(df -P "$TARGET_DIR" 2>/dev/null | awk 'NR==2 {print $4 "|" $5}')
@@ -176,7 +197,7 @@ while true; do
 
     clear
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.7                  ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager v1.10                 ${NC}\n"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Branch:   ${YELLOW}%s${NC}" "$CUR_BRANCH"
@@ -205,6 +226,7 @@ while true; do
         printf "          ${DIM}läuft seit %s${NC}\n" "$SVC_SINCE"
     fi
     printf "VPN:      %b%s\n" "$VPN_STATUS" "$VPN_INFO"
+    printf "Lauf:     %b\n" "$LAUF_STATUS"
     SYS_LINE="System:   ${HOST_UP:-unbekannt}"
     [ -n "$CPU_TEMP" ] && SYS_LINE="$SYS_LINE | CPU $CPU_TEMP"
     if [ -n "$DISK_AVAIL" ]; then
@@ -237,6 +259,7 @@ while true; do
     printf "16) ☁️  Upload entscheidungs_log.jsonl to Catbox\n"
     printf "17) 📊  Zyklen-Analyse anzeigen (zyklen.csv)\n"
     printf "18) ☁️  Upload zyklen.csv to Catbox\n"
+    printf "19) 🩺  Lauf-Status / letzte Abstuerze (letzter_lauf.json)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -553,6 +576,61 @@ except Exception as ex:
             else
                 printf "${RED}Fehler: keine zyklen.csv gefunden (Analyse-Lauf fehlt).${NC}\\n"
             fi
+            wait_for_key
+            ;;
+        19)
+            LAUF_JSON="$TARGET_DIR/letzter_lauf.json"
+            printf "${CYAN}=== Lauf-Status / letzte Abstuerze ===${NC}\\n"
+            if [ -f "$LAUF_JSON" ]; then
+                printf "${DIM}Datei: %s${NC}\\n" "$LAUF_JSON"
+                cat "$LAUF_JSON"
+                printf "\\n\\n"
+            else
+                printf "${YELLOW}letzter_lauf.json existiert noch nicht.${NC}\\n"
+                printf "${DIM}(wird beim naechsten Start der Steuerung angelegt)${NC}\\n\\n"
+            fi
+
+            printf "${CYAN}--- Bewertung (startup_diagnose) ---${NC}\\n"
+            python3 -c "
+import sys
+sys.path.insert(0, '$TARGET_DIR')
+try:
+    import startup_diagnose as sd
+except Exception as ex:
+    print('startup_diagnose nicht verfuegbar: %s' % ex)
+    raise SystemExit(0)
+
+info = sd.pruefe_lauf_start_grund()
+if sd.lauf_ist_aktiv():
+    print('OK: Die Steuerung laeuft gerade - die Statusdatei gehoert zum aktiven Prozess.')
+elif info.get('erster_start'):
+    print('Kein Vorlauf verzeichnet (erster Start seit Einfuehrung der Diagnose).')
+elif info.get('unsauber'):
+    print('WARNUNG: Letzter Lauf wurde NICHT sauber beendet.')
+    print('  Vorheriger Start:      %s' % (info.get('vorheriger_start') or '?'))
+    print('  Letztes sauberes Ende: %s' % (info.get('vorheriges_ende') or 'kein Eintrag'))
+    if info.get('oom_hinweis'):
+        print('  Kernel-Log: %s' % info['oom_hinweis'])
+        print('  => Verdacht: OOM-Kill (Speicher).')
+    else:
+        print('  Kein OOM-Hinweis im Kernel-Log lesbar -> Crash / harter Reset / Strom?')
+else:
+    print('OK: Letzter Lauf wurde sauber beendet.')
+print()
+print('Speicher jetzt: %s' % sd.formatiere_speicher(sd.speicher_werte()))
+" 2>&1 | more
+
+            printf "\\n${CYAN}--- Service / System ---${NC}\\n"
+            printf "Neustarts durch systemd: %s\\n" "$(systemctl show wpsteuerung -p NRestarts --value 2>/dev/null)"
+            free -m 2>/dev/null | awk 'NR==1 || NR==2'
+            if command -v vcgencmd >/dev/null 2>&1; then
+                printf "Throttling (Strom/Temp): %s  ${DIM}(0x0 = unauffaellig)${NC}\\n" "$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
+            fi
+            OOM_COUNT=$(dmesg 2>/dev/null | grep -c "Out of memory")
+            [ -z "$OOM_COUNT" ] && OOM_COUNT="n/a"
+            printf "OOM-Ereignisse im Kernel-Ringpuffer: %s\\n" "$OOM_COUNT"
+            printf "${DIM}Hinweis: Der Ringpuffer ist begrenzt - 0 bedeutet nicht,\\n"
+            printf "dass es nie einen OOM gab (siehe Journal/Historie).${NC}\\n"
             wait_for_key
             ;;
         0) exit 0 ;;

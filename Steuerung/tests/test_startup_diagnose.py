@@ -5,6 +5,7 @@ Hintergrund (15.09.): Ein OOM-Kill sah im Steuerungs-Log wie ein normaler
 Neustart aus. Diese Tests sichern, dass ein unsauberes Ende erkannt und als
 OOM gemeldet wird - ohne root, ohne Linux (/proc wird injiziert).
 """
+import json
 import os
 import sys
 
@@ -131,6 +132,32 @@ def test_journalctl_bekommt_das_zeitfenster(monkeypatch):
     assert erster[0] == "journalctl"
     assert "--since" in erster
     assert "2026-09-15 12:02:08" in erster
+
+
+# --- Liveness (fuer wp-manager Option 19) -------------------------------------
+
+def test_lauf_ist_aktiv_erkennt_eigenen_prozess(tmp_path):
+    """Solange die Steuerung laeuft, darf sie NICHT als 'unsauber' gelten."""
+    p = tmp_path / "letzter_lauf.json"
+    sd.markiere_lauf_start(str(p))          # schreibt die eigene PID, false
+    assert sd.lauf_ist_aktiv(str(p)) is True
+    # ... und pruefe_letzten_lauf() allein sagt trotzdem 'unsauber' (Startzustand)
+    assert sd.pruefe_letzten_lauf(str(p))["unsauber"] is True
+
+
+def test_lauf_ist_aktiv_verneint_toten_prozess(tmp_path):
+    p = tmp_path / "letzter_lauf.json"
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump({"sauber_beendet": False, "start_zeit": "2026-09-15T12:02:08",
+                   "pid": 999999}, f)       # praktisch unmoeglich als echte PID
+    assert sd.lauf_ist_aktiv(str(p)) is False
+
+
+def test_lauf_ist_aktiv_ohne_datei_oder_pid(tmp_path):
+    assert sd.lauf_ist_aktiv(str(tmp_path / "fehlt.json")) is False
+    p = tmp_path / "ohne_pid.json"
+    p.write_text('{"sauber_beendet": false}', encoding="utf-8")
+    assert sd.lauf_ist_aktiv(str(p)) is False
 
 
 # --- Speicherwerte ------------------------------------------------------------
