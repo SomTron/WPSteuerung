@@ -704,8 +704,37 @@ def erzeuge_bericht(parsed, out, outdir, stats_roh):
     return md
 
 
-def main():
+def _parse_args(argv=None):
+    """CLI-Argumente (optional).
+
+    Defaults sind die obigen Konstanten (Arbeitsplatz Windows). Auf dem Pi
+    laesst sich damit direkt das echte Log auswerten, z. B.:
+        python3 Analyse/log_analyse.py \\
+            --log /var/log/wps/heizungssteuerung.log --out logs/analyse_pi
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Analyse der WPSteuerung-Logs")
+    parser.add_argument("--log", default=LOG_PFAD,
+                        help="Pfad zur heizungssteuerung*.log (Default: siehe Kopf)")
+    parser.add_argument("--out", default=AUSGABE_DIR,
+                        help="Ausgabe-Verzeichnis fuer Bericht + CSVs")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    global LOG_PFAD, AUSGABE_DIR
+
+    args = _parse_args(argv)
+    LOG_PFAD = args.log
+    AUSGABE_DIR = args.out
+
     print(f"Parsee {LOG_PFAD} ...")
+    if not os.path.exists(LOG_PFAD):
+        print(f"FEHLER: Logdatei nicht gefunden: {LOG_PFAD}")
+        print("Hinweis: --log <pfad> angeben (z. B. /var/log/wps/heizungssteuerung.log)")
+        return 1
+
     parsed = parse_log(LOG_PFAD)
     out = analysiere(parsed)
     os.makedirs(AUSGABE_DIR, exist_ok=True)
@@ -713,7 +742,8 @@ def main():
     bericht = erzeuge_bericht(parsed, out, AUSGABE_DIR, parsed["stats"])
     print(bericht)
     print(f"\n-> Fertig: {AUSGABE_DIR}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
