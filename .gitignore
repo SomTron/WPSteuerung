@@ -14,6 +14,10 @@ last_state.txt
 # Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
 letzter_lauf.json
 
+# Diagnose-/Analyse-Artefakte (lokal ausgewertet, nie committen - teils >10 MB)
+logs/wp_diag_*/
+logs/analyse_*/
+
 # Laufzeit-Datei des Services (wird fortlaufend neu geschrieben - nervt sonst
 # bei jedem Deploy mit "lokale Aenderungen verwerfen?")
 Steuerung/sonnen_prognose.csv
