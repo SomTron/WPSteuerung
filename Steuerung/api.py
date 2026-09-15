@@ -26,7 +26,6 @@ from typing import Optional, Dict, Any
 import os
 from datetime import datetime, timedelta
 import re
-import io
 
 from utils import HEIZUNGSDATEN_CSV
 
@@ -179,16 +178,88 @@ def _solar_stale_status() -> bool:
 # pd.read_csv() ueber ALLE 20 Spalten pro Aufruf kostet auf dem Pi spuerbar
 # RAM/CPU (Benchmark: 25.9 MB vs 7.5 MB Peak bei 126k Zeilen). Der 14-Tage-
 # Mittelwert aendert sich langsam -> 30-Minuten-Cache wie in pv_profil.py.
+# Zusaetzlich bewusst OHNE pandas: ein pandas-Import kostet dauerhaft ~70 MB
+# RSS und hat am 15.09. mit zum OOM-Kill (status=9/KILL) auf dem Pi gefuehrt.
 _HIST_WH_QM_CACHE: dict = {"zeit": None, "wert": None}
 HIST_WH_QM_TTL_SEC: int = 1800
 
 
-def _historisches_wh_qm(csv_path: str):
-    """14-Tage-Mittel der taeglichen Einspeisung (Wh) aus der CSV - gecacht.
+def _parse_zeitstempel(raw):
+    """CSV-Zeitstempel robust parsen: ISO-Text ODER Excel-Seriennummer.
 
-    Liest nur 'Zeitstempel' und 'FeedinPower' (statt aller Spalten) und
-    rechnet hoechstens einmal pro HIST_WH_QM_TTL_SEC.
+    Die heizungsdaten.csv enthaelt historisch beide Varianten (Excel-Export),
+    deshalb zuerst der numerische Versuch (Tage seit 1899-12-30).
     """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return datetime(1899, 12, 30) + timedelta(days=float(text))
+    except (ValueError, TypeError):
+        pass
+    try:
+        return datetime.fromisoformat(text)
+    except (ValueError, TypeError):
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _to_float(val):
+    """CSV-Wert sicher in float umwandeln (None bei leer/ungueltig)."""
+    if val is None:
+        return None
+    text = str(val).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _berechne_hist_wh_qm(csv_path: str):
+    """14-Tage-Mittel der taeglichen Einspeisung (Wh) - ohne Cache, ohne pandas.
+
+    Liest nur Kopf + die letzten ~25k Zeilen (14 Tage bei 1-Min-Takt reichen)
+    und summiert FeedinPower je Kalendertag.
+    """
+    if not os.path.exists(csv_path):
+        return None
+    import csv
+    from collections import deque
+
+    grenze = datetime.now() - timedelta(days=14)
+    with open(csv_path, "r", encoding="utf-8") as f:
+        kopf = f.readline()
+        zeilen = deque(f, maxlen=25000)
+    reader = csv.DictReader([kopf] + list(zeilen))
+
+    summen: dict = {}
+    for row in reader:
+        ts = _parse_zeitstempel(row.get("Zeitstempel"))
+        if ts is None or ts < grenze:
+            continue
+        feedin = _to_float(row.get("FeedinPower"))
+        if feedin is None:
+            continue
+        tag = ts.date()
+        summen[tag] = summen.get(tag, 0.0) + feedin
+    if not summen:
+        return None
+    # Integrierte Einspeisung pro Tag (Wh) bei 15-Min-Intervallen, dann Mittel
+    tages_werte = [w * 15 / 60 for w in summen.values()]
+    return sum(tages_werte) / len(tages_werte)
+
+
+def _historisches_wh_qm(csv_path: str):
+    """Gecachter 14-Tage-Mittelwert (hoechstens 1x pro HIST_WH_QM_TTL_SEC)."""
     jetzt = datetime.now()
     zeit = _HIST_WH_QM_CACHE["zeit"]
     if zeit is not None and (jetzt - zeit).total_seconds() < HIST_WH_QM_TTL_SEC:
@@ -196,21 +267,7 @@ def _historisches_wh_qm(csv_path: str):
 
     wert = None
     try:
-        import pandas as pd
-
-        if os.path.exists(csv_path):
-            df = pd.read_csv(csv_path, usecols=["Zeitstempel", "FeedinPower"])
-            cutoff = jetzt - timedelta(days=14)
-            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
-            recent = df[df["Zeitstempel"] >= cutoff]
-            if len(recent) > 0:
-                recent = recent.assign(Day=recent["Zeitstempel"].dt.date)
-                # Integrierte Einspeisung pro Tag (Wh), 15-Min-Intervall
-                daily_wh = recent.groupby("Day")["FeedinPower"].apply(
-                    lambda x: x.sum() * 15 / 60
-                ).mean()
-                if not pd.isna(daily_wh):
-                    wert = float(daily_wh)
+        wert = _berechne_hist_wh_qm(csv_path)
     except Exception as e:
         logging.debug(f"Historisches PV-Mittel nicht berechenbar: {e}")
         wert = None
@@ -659,17 +716,31 @@ async def handle_command(cmd: ControlCommand):
 
 
 
+def _csv_spaltentypen(kopf, daten):
+    """Einfache Typ-Heuristik fuer /debug/csv (ersetzt die pandas-dtype-Ausgabe)."""
+    typen = {}
+    for i, name in enumerate(kopf):
+        werte = [z[i] for z in daten if i < len(z) and str(z[i]).strip() != ""]
+        if not werte:
+            typen[name] = "leer"
+        elif all(_to_float(w) is not None for w in werte):
+            typen[name] = "float"
+        else:
+            typen[name] = "text"
+    return typen
+
+
 @app.get("/debug/csv")
 def debug_csv():
     """Debug: Zeigt CSV-Status und Daten an.
 
-    Liest bewusst NUR Kopf + Tail (kein Voll-Read): auf dem Pi (512 MB) kann
-    ein pd.read_csv() ueber die gewachsene heizungsdaten.csv den OOM-Killer
-    ausloesen - der Debug-Endpoint soll das nicht provozieren. 'rows' wird
-    weiterhin exakt gezaehlt (zeilenweise, ohne pandas).
+    Bewusst OHNE pandas und nur mit Kopf + Tail: ein pd.read_csv() ueber die
+    gewachsene heizungsdaten.csv hat am 15.09. zum OOM-Kill (status=9/KILL)
+    auf dem Pi beigetragen. 'rows' wird weiterhin exakt gezaehlt (zeilenweise).
     """
     import os as _os
     from collections import deque
+    import csv
 
     csv_path = HEIZUNGSDATEN_CSV
     result = {
@@ -679,8 +750,6 @@ def debug_csv():
     if result["csv_exists"]:
         result["size_bytes"] = _os.path.getsize(csv_path)
         try:
-            import pandas as _pd
-
             anzahl = 0
             _tail = deque(maxlen=1000)
             _erste_datenzeile = ""
@@ -692,16 +761,19 @@ def debug_csv():
                     _tail.append(_zeile)
                     anzahl += 1
 
-            df = _pd.read_csv(io.StringIO(_header + "".join(_tail)))
+            reader = csv.reader([_header] + list(_tail))
+            kopf = next(reader, [])
+            daten = list(reader)
             result["rows"] = anzahl
-            result["columns"] = list(df.columns)
+            result["columns"] = kopf
             _erste_feld = _erste_datenzeile.split(",")[0].strip()
             result["first_timestamp"] = _erste_feld or None
-            result["last_timestamp"] = (
-                str(df.iloc[-1]["Zeitstempel"])
-                if len(df) > 0 and "Zeitstempel" in df.columns else None
-            )
-            result["column_types"] = {str(k): str(v) for k, v in df.dtypes.items()}
+            _letzte = daten[-1] if daten else []
+            if "Zeitstempel" in kopf and _letzte:
+                result["last_timestamp"] = _letzte[kopf.index("Zeitstempel")].strip() or None
+            else:
+                result["last_timestamp"] = None
+            result["column_types"] = _csv_spaltentypen(kopf, daten)
         except Exception as e:
             result["read_error"] = str(e)
     return result
@@ -709,60 +781,42 @@ def debug_csv():
 @app.get("/history")
 def get_history(hours: int = Query(default=24, ge=1, le=168)):
     """Get historical data from CSV. Hours must be between 1 and 168 (7 days)."""
-    import os
-    import pandas as pd
-    
+    import csv
+    from collections import deque
+
     csv_path = HEIZUNGSDATEN_CSV
     if not os.path.exists(csv_path):
         raise HTTPException(status_code=404, detail="No historical data available")
-    
+
     try:
         # Nur die letzten ~25k Zeilen lesen (126k komplett parsen = timeout auf Pi)
-        from collections import deque
+        # und OHNE pandas auswerten: ein pandas-Import bindet ~70 MB RSS dauerhaft
+        # und hat am 15.09. mit zum OOM-Kill auf dem Pi gefuehrt.
         MAX_ROWS = 25000
         with open(csv_path, "r", encoding="utf-8") as _f:
             _header = _f.readline()
             _tail = deque(_f, maxlen=MAX_ROWS)
-        _lines = [_header] + list(_tail)
-        df = pd.read_csv(io.StringIO("".join(_lines)))
-        # Gemischte Formate vektorisiert (KEIN apply/Lambda!)
-        _ts_raw = df['Zeitstempel']
-        _ts_num = pd.to_numeric(_ts_raw, errors='coerce')
-        _is_num = _ts_num.notna()
-        if _is_num.any():
-            df.loc[_is_num, 'Zeitstempel'] = pd.to_datetime(
-                _ts_num[_is_num], unit='D', origin='1899-12-30')
-        if (~_is_num).any():
-            df.loc[~_is_num, 'Zeitstempel'] = pd.to_datetime(
-                _ts_raw[~_is_num].astype(str).str.strip(), errors='coerce')
-        df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'], errors='coerce')
-        cutoff = datetime.now() - pd.Timedelta(hours=hours)
-        df = df[df['Zeitstempel'] >= cutoff]
-        
+        reader = csv.DictReader([_header] + list(_tail))
+        cutoff = datetime.now() - timedelta(hours=hours)
+
         # Convert to JSON-friendly format
         data = []
-        for _, row in df.iterrows():
-            entry = {
-                "timestamp": row['Zeitstempel'].strftime("%Y-%m-%d %H:%M:%S"),
-                "t_oben": row['T_Oben'] if pd.notna(row.get('T_Oben')) else None,
-                "t_mittig": row['T_Mittig'] if pd.notna(row.get('T_Mittig')) else None,
-                "t_unten": row['T_Unten'] if pd.notna(row.get('T_Unten')) else None,
-                "t_verd": row['T_Verd'] if pd.notna(row.get('T_Verd')) else None,
-                "kompressor": row.get('Kompressor', ''),
-            }
-            # Sollwerte aus CSV (falls vorhanden)
-            if 'Einschaltpunkt' in df.columns:
-                val = row.get('Einschaltpunkt')
-                entry["einschaltpunkt"] = float(val) if pd.notna(val) and str(val).strip() != '' else None
-            else:
-                entry["einschaltpunkt"] = None
-            if 'Ausschaltpunkt' in df.columns:
-                val = row.get('Ausschaltpunkt')
-                entry["ausschaltpunkt"] = float(val) if pd.notna(val) and str(val).strip() != '' else None
-            else:
-                entry["ausschaltpunkt"] = None
-            data.append(entry)
-        
+        for row in reader:
+            ts = _parse_zeitstempel(row.get("Zeitstempel"))
+            if ts is None or ts < cutoff:
+                continue
+            data.append({
+                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "t_oben": _to_float(row.get("T_Oben")),
+                "t_mittig": _to_float(row.get("T_Mittig")),
+                "t_unten": _to_float(row.get("T_Unten")),
+                "t_verd": _to_float(row.get("T_Verd")),
+                "kompressor": row.get("Kompressor") or "",
+                # Sollwerte aus CSV (None, wenn Spalte fehlt/leer)
+                "einschaltpunkt": _to_float(row.get("Einschaltpunkt")),
+                "ausschaltpunkt": _to_float(row.get("Ausschaltpunkt")),
+            })
+
         return {"data": data, "count": len(data)}
     except Exception as e:
         logging.error(f"Error reading history: {str(e)}")

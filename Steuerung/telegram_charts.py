@@ -4,7 +4,6 @@ import io
 import asyncio
 from datetime import datetime, timedelta
 
-import pandas as pd
 import pytz
 from aiohttp import FormData
 
@@ -32,9 +31,27 @@ def _pyplot():
     return _PLT
 
 
+# pandas wird ebenfalls NICHT mehr beim Start importiert: gemessen ~70 MB RSS
+# (Basis 14 MB -> 85 MB). Gebraucht wird es nur fuer die Telegram-Diagramme;
+# als Modul-Import war es dauerhafte Grundlast und hat am 15.09. mit zum
+# OOM-Kill (status=9/KILL) auf dem Pi gefuehrt.
+_PD = None
+
+
+def _pandas():
+    """pandas traege laden - erst wenn wirklich ein Diagramm gebaut wird."""
+    global _PD
+    if _PD is None:
+        import pandas as pd
+
+        _PD = pd
+    return _PD
+
+
 def _lade_csv_tails(pfaden, read_size_bytes):
     """Liest Kopf + Tail jeder CSV (max. read_size_bytes je Datei) und gibt
     DataFrames zurueck - begrenzt den RAM auf dem Pi. Laeuft im Thread-Pool."""
+    pd = _pandas()
     teile = []
     for pfad in pfaden:
         groesse = os.path.getsize(pfad)
@@ -53,6 +70,7 @@ def _lade_csv_tails(pfaden, read_size_bytes):
 
 async def get_boiler_temperature_history(session, hours, state, config):
     """Erstellt und sendet ein Diagramm mit Temperaturverlauf, historischen Sollwerten, Grenzwerten und Kompressorstatus."""
+    pd = _pandas()  # pandas erst hier laden (RAM!)
     try:
         local_tz = pytz.timezone(DEFAULT_TIMEZONE)
         now = datetime.now(local_tz)
@@ -276,6 +294,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
         # Nur Kopf + letzte ~3 MB je Datei lesen: ein Voll-Read ALLER Monats-
         # archive konnte auf dem Pi (512 MB) den OOM-Killer ausloesen - und
         # gebraucht werden ohnehin nur die letzten Zeilen (tail(1000)).
+        pd = _pandas()  # pandas erst hier laden (RAM!)
         pfaden = relevante_csv_dateien(HEIZUNGSDATEN_CSV)
         teile = await asyncio.to_thread(_lade_csv_tails, pfaden, 3 * 1024 * 1024)
         if not teile:

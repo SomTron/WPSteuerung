@@ -1,15 +1,15 @@
 """Tests fuer den /status-Hotspot: historisches 14-Tage-PV-Mittel (Wh).
 
-Hintergrund: /status wird vom Dashboard alle 5 s abgefragt. Vorher las jeder
-Aufruf die KOMPLETTE heizungsdaten.csv mit pd.read_csv() (alle 20 Spalten,
->120k Zeilen) - auf dem Pi ein unnoetiger RAM-/CPU-Spike. Jetzt: nur die zwei
-benoetigten Spalten + 30-Minuten-Cache.
+Hintergrund: /status wird vom Dashboard alle 5 s abgefragt und las frueher bei
+jedem Aufruf die KOMPLETTE heizungsdaten.csv mit pd.read_csv() (alle 20
+Spalten, >120k Zeilen) - auf dem Pi ein RAM-Spike, der am 15.09. zum OOM-Kill
+fuehrte (journal: status=9/KILL). Jetzt: stdlib csv, nur Kopf + Tail-Teil,
+nur die zwei benoetigten Spalten und ein 30-Minuten-Cache.
 """
 import os
 import sys
 from datetime import datetime, timedelta
 
-import pandas as pd
 import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -40,27 +40,24 @@ def _csv_schreiben(pfad, tage=3, feedin=1000.0):
         f.write("\n".join(zeilen) + "\n")
 
 
-def test_liest_nur_zwei_spalten_und_liefert_mittel(tmp_path, monkeypatch):
+def test_berechnet_mittel_ohne_pandas(tmp_path):
+    """Korrektes Ergebnis - und zwar ohne pandas (stdlib csv)."""
     p = tmp_path / "hist.csv"
     _csv_schreiben(str(p))
 
-    gesehen = {}
-    echt = pd.read_csv
-
-    def spion(*args, **kwargs):
-        gesehen.update(kwargs)
-        gesehen["args"] = args
-        return echt(*args, **kwargs)
-
-    monkeypatch.setattr(pd, "read_csv", spion)
-
     wert = api._historisches_wh_qm(str(p))
 
-    assert gesehen.get("usecols") == ["Zeitstempel", "FeedinPower"], (
-        "Es muessen nur Zeitstempel/FeedinPower gelesen werden (RAM auf dem Pi!)"
-    )
     # 4x 1000 W * 15/60 h = 1000 Wh pro Tag
     assert wert == pytest.approx(1000.0)
+
+
+def test_excel_seriennummer_wird_erkannt():
+    """Die CSV kann Excel-Seriennummern enthalten (Datum als Zahl)."""
+    # 45000 Tage seit 1899-12-30
+    assert api._parse_zeitstempel("45000") is not None
+    assert api._parse_zeitstempel("2026-09-15 12:00:00") == datetime(2026, 9, 15, 12, 0, 0)
+    assert api._parse_zeitstempel("") is None
+    assert api._parse_zeitstempel("keinDatum") is None
 
 
 def test_zweiter_aufruf_kommt_aus_dem_cache(tmp_path, monkeypatch):
@@ -68,13 +65,13 @@ def test_zweiter_aufruf_kommt_aus_dem_cache(tmp_path, monkeypatch):
     _csv_schreiben(str(p))
 
     aufrufe = {"n": 0}
-    echt = pd.read_csv
+    echt = api._berechne_hist_wh_qm
 
-    def spion(*args, **kwargs):
+    def spion(csv_path):
         aufrufe["n"] += 1
-        return echt(*args, **kwargs)
+        return echt(csv_path)
 
-    monkeypatch.setattr(pd, "read_csv", spion)
+    monkeypatch.setattr(api, "_berechne_hist_wh_qm", spion)
 
     erst = api._historisches_wh_qm(str(p))
     zweit = api._historisches_wh_qm(str(p))
