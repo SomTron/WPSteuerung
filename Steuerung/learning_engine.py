@@ -256,6 +256,25 @@ class LearningEngine:
         """Zeitzonen-Info entfernen fuer sicheren Vergleich mit JSON-Timestamps."""
         return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
+    @classmethod
+    def _parse_ts(cls, wert) -> Optional[datetime]:
+        """ISO-Zeitstempel robust parsen und auf naiv normalisieren.
+
+        Die Lern-Datei enthaelt historisch GEMISCHTE Formate: aeltere Eintraege
+        wurden mit Offset geschrieben ('2026-08-27T17:18:44+02:00'), neuere ohne.
+        Ein direkter Vergleich warf
+        'TypeError: can't compare offset-naive and offset-aware datetimes' und
+        liess die Learning-Info in /status ins Leere laufen (Incident 15.09.:
+        'Learning-Engine-Info nicht verfuegbar: can't compare ...').
+        Unlesbare Werte ergeben None statt einer Exception.
+        """
+        if not isinstance(wert, str):
+            return None
+        try:
+            return cls._naiv(datetime.fromisoformat(wert))
+        except (ValueError, TypeError):
+            return None
+
     def get_learned_morning_window(
         self,
         vorlauf_h: float = 1.0,
@@ -346,8 +365,13 @@ class LearningEngine:
         """Gibt Anzahl Komfort-Verletzungen der letzten tage zurueck."""
         if not self.data.komfort_verletzungen:
             return 0
-        grenze = (datetime.now() - timedelta(days=tage)).isoformat()
-        return sum(1 for v in self.data.komfort_verletzungen if v >= grenze)
+        # Datumsvergleich statt String-Vergleich: die Eintraege koennen
+        # historisch mit/ohne Zeitzonen-Offset vorliegen (s. _parse_ts).
+        grenze = self._naiv(datetime.now() - timedelta(days=tage))
+        return sum(
+            1 for v in self.data.komfort_verletzungen
+            if (ts := self._parse_ts(v)) is not None and ts >= grenze
+        )
 
     def get_komfort_bonus_vorlauf(self, schwellwert=2, tage=7) -> float:
         """Gibt zusaetzlichen Vorlauf fuer das Morgenfenster (0 oder 0.5 h),
@@ -388,14 +412,17 @@ class LearningEngine:
 
     def get_quellen_statistik(self) -> Dict:
         """Laufzeit-Split je Quelle + Zaehlung der Zu-frueh-Events."""
-        if not self.data.zu_frueh_events:
-            z14 = 0
-        else:
-            # Verwende Zeitstempel des neuesten Events als Referenz (für Test-Simulationen)
-            ref = datetime.fromisoformat(self.data.zu_frueh_events[-1])
-            z14 = sum(
-                1 for v in self.data.zu_frueh_events
-                if datetime.fromisoformat(v) >= (ref - timedelta(days=14)))
+        z14 = 0
+        if self.data.zu_frueh_events:
+            # Neuester Event als Referenz (fuer Test-Simulationen); Vergleich
+            # robust ueber _parse_ts, da Eintraege gemischte Formate haben.
+            ref = self._parse_ts(self.data.zu_frueh_events[-1])
+            if ref is not None:
+                grenze = ref - timedelta(days=14)
+                z14 = sum(
+                    1 for v in self.data.zu_frueh_events
+                    if (ts := self._parse_ts(v)) is not None and ts >= grenze
+                )
         return {
             "runtime_sec": dict(self.data.runtime_by_quelle_sec),
             "zu_frueh_events_gesamt": len(self.data.zu_frueh_events),
@@ -855,5 +882,5 @@ class LearningEngine:
         grenze = self._naiv(now - timedelta(hours=hours))
         return [
             e for e in self.data.usage_events
-            if self._naiv(datetime.fromisoformat(e["timestamp"])) >= grenze
+            if (ts := self._parse_ts(e.get("timestamp"))) is not None and ts >= grenze
         ]
