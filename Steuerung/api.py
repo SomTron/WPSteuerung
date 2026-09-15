@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import io
 
@@ -172,6 +172,52 @@ def _solar_stale_status() -> bool:
         return (jetzt - last_api_call).total_seconds() / 60.0 > SOLAR_DATA_STALE_THRESHOLD_MIN
     except Exception:
         return False
+
+
+# Cache fuer das historische 14-Tage-Mittel der Einspeisung (Wh/qm).
+# Grund: /status wird vom Dashboard alle 5 s abgefragt; ein vollstaendiger
+# pd.read_csv() ueber ALLE 20 Spalten pro Aufruf kostet auf dem Pi spuerbar
+# RAM/CPU (Benchmark: 25.9 MB vs 7.5 MB Peak bei 126k Zeilen). Der 14-Tage-
+# Mittelwert aendert sich langsam -> 30-Minuten-Cache wie in pv_profil.py.
+_HIST_WH_QM_CACHE: dict = {"zeit": None, "wert": None}
+HIST_WH_QM_TTL_SEC: int = 1800
+
+
+def _historisches_wh_qm(csv_path: str):
+    """14-Tage-Mittel der taeglichen Einspeisung (Wh) aus der CSV - gecacht.
+
+    Liest nur 'Zeitstempel' und 'FeedinPower' (statt aller Spalten) und
+    rechnet hoechstens einmal pro HIST_WH_QM_TTL_SEC.
+    """
+    jetzt = datetime.now()
+    zeit = _HIST_WH_QM_CACHE["zeit"]
+    if zeit is not None and (jetzt - zeit).total_seconds() < HIST_WH_QM_TTL_SEC:
+        return _HIST_WH_QM_CACHE["wert"]
+
+    wert = None
+    try:
+        import pandas as pd
+
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path, usecols=["Zeitstempel", "FeedinPower"])
+            cutoff = jetzt - timedelta(days=14)
+            df["Zeitstempel"] = pd.to_datetime(df["Zeitstempel"], errors="coerce")
+            recent = df[df["Zeitstempel"] >= cutoff]
+            if len(recent) > 0:
+                recent = recent.assign(Day=recent["Zeitstempel"].dt.date)
+                # Integrierte Einspeisung pro Tag (Wh), 15-Min-Intervall
+                daily_wh = recent.groupby("Day")["FeedinPower"].apply(
+                    lambda x: x.sum() * 15 / 60
+                ).mean()
+                if not pd.isna(daily_wh):
+                    wert = float(daily_wh)
+    except Exception as e:
+        logging.debug(f"Historisches PV-Mittel nicht berechenbar: {e}")
+        wert = None
+
+    _HIST_WH_QM_CACHE["zeit"] = jetzt
+    _HIST_WH_QM_CACHE["wert"] = wert
+    return wert
 
 
 @app.get("/status")
@@ -400,27 +446,8 @@ def get_status():
             historisches_wh_qm = None
             if _pv_profil_modul is not None and hasattr(_pv_profil_modul, 'berechne_forecast_scaling'):
                 # Historischer Wert: 14-Tage-Durchschnitt der CSV
-                import pandas as pd
-                import os
-                csv_path = HEIZUNGSDATEN_CSV
-                if os.path.exists(csv_path):
-                    try:
-                        df = pd.read_csv(csv_path)
-                        if 'FeedinPower' in df.columns and 'Zeitstempel' in df.columns:
-                            # Letzten 14 Tage
-                            from datetime import timedelta
-                            cutoff = datetime.now() - timedelta(days=14)
-                            df['Zeitstempel'] = pd.to_datetime(df['Zeitstempel'], errors='coerce')
-                            recent = df[df['Zeitstempel'] >= cutoff]
-                            if len(recent) > 0:
-                                # Integrierte Einspeisung pro Tag (Wh)
-                                recent['Day'] = recent['Zeitstempel'].dt.date
-                                daily_wh = recent.groupby('Day')['FeedinPower'].apply(
-                                    lambda x: x.sum() * 15 / 60  # 15 Min Intervall
-                                ).mean()
-                                historisches_wh_qm = daily_wh if not pd.isna(daily_wh) else None
-                    except Exception:
-                        pass
+                # (gecacht + nur 2 Spalten -> schont RAM/CPU beim 5-s-Polling)
+                historisches_wh_qm = _historisches_wh_qm(HEIZUNGSDATEN_CSV)
             
             # PV-Profil mit Forecast-Scaling
             forecast_today_qm = forecast_today if isinstance(forecast_today, (int, float)) else None

@@ -1,12 +1,23 @@
 [Unit]
 Description=WP Steuerung - Heat Pump Control
 After=network.target
+# Eine Heizungssteuerung darf nach Abstuerzen NICHT aufgeben: ohne diese Zeilen
+# stoppt systemd nach 5 Fehlstarts in 10 s ("start request repeated too
+# quickly") - die Anlage bliebe dann unbemerkt aus (beobachtete lange Luecke
+# im Log 15.09. 10:59 -> 12:02).
+StartLimitIntervalSec=0
+StartLimitBurst=0
 
 [Service]
 Type=simple
 User=patrik
 WorkingDirectory=/home/patrik/WPSteuerung/Steuerung
 ExecStart=/home/patrik/WPSteuerung/.venv/bin/python main.py
+# Diagnose: Ein Absturz VOR dem Logging-Setup (Config/State/Hardware) taucht
+# sonst nirgends auf. PYTHONUNBUFFERED schreibt sofort, PYTHONFAULTHANDLER
+# loggt auch native Crashes (z. B. Segfault) mit Traceback in den Journal.
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONFAULTHANDLER=1
 Restart=always
 RestartSec=10
 
