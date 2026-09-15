@@ -3,8 +3,9 @@
 Tests fuer weather_forecast.py.
 
 Abgedeckt:
-1. Vertrag: get_solar_forecast() liefert IMMER genau 7 Werte
-   (Historischer Bug: 'not enough values to unpack (expected 7, got 6)').
+1. Vertrag: get_solar_forecast() liefert IMMER genau 8 Werte - auch an den
+   Fehlerpfaden (Historischer Bug 1: 6 statt 7; Regression 2: Erfolgsfall 8,
+   Fehlerfall nur 7 -> main.py-Unpack 'expected 8, got 7' crashte im Pi-Log).
 2. Test-Isolation: CSV-Writes gehen NUR in injizierte temporaere Pfade.
    (Regression: Vorher schrieben Tests in die Produktions-sonnen_prognose.csv!)
 3. Header-Migration: alte 7-Spalten-Dateien werden einmalig auf 8 Spalten
@@ -71,10 +72,10 @@ def baue_api_payload():
 # --- 1) Rueckgabewert-Vertrag -------------------------------------------------
 
 class TestGetSolarForecastReturnValueCount:
-    """Hauptgrund: Bug wo get_solar_forecast() 6 statt 7 Werte zurueckgab."""
+    """Vertrag: IMMER genau 8 Werte (Erfolg UND Fehlerpfade)."""
 
     @pytest.mark.asyncio
-    async def test_success_liefert_7_werte(self, tmp_path):
+    async def test_success_liefert_8_werte(self, tmp_path):
         from weather_forecast import get_solar_forecast
         result = await get_solar_forecast(
             baue_mock_session(baue_api_payload()), None,
@@ -90,17 +91,17 @@ class TestGetSolarForecastReturnValueCount:
         assert isinstance(sr_today, str) and ":" in sr_today
 
     @pytest.mark.asyncio
-    async def test_api_error_liefert_7x_none(self, tmp_path):
+    async def test_api_error_liefert_8x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         result = await get_solar_forecast(
             baue_mock_session(None, status=500), None,
             csv_path=str(tmp_path / "forecast.csv"),
         )
-        assert len(result) == 7
+        assert len(result) == 8
         assert all(v is None for v in result)
 
     @pytest.mark.asyncio
-    async def test_leere_stunden_daten_liefert_7x_none(self, tmp_path):
+    async def test_leere_stunden_daten_liefert_8x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         payload = {"hourly": {"time": [], "direct_radiation": [], "diffuse_radiation": []},
                    "daily": {"time": [], "sunrise": [], "sunset": []}}
@@ -108,27 +109,27 @@ class TestGetSolarForecastReturnValueCount:
             baue_mock_session(payload), None,
             csv_path=str(tmp_path / "forecast.csv"),
         )
-        assert len(result) == 7
+        assert len(result) == 8
         assert all(v is None for v in result)
 
     @pytest.mark.asyncio
-    async def test_netzwerkfehler_liefert_7x_none(self, tmp_path):
+    async def test_netzwerkfehler_liefert_8x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         session = MagicMock()
         session.get.side_effect = Exception("Connection refused")
         result = await get_solar_forecast(session, None,
                                           csv_path=str(tmp_path / "forecast.csv"))
-        assert len(result) == 7
+        assert len(result) == 8
         assert all(v is None for v in result)
 
     @pytest.mark.asyncio
-    async def test_timeout_liefert_7x_none(self, tmp_path):
+    async def test_timeout_liefert_8x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         session = MagicMock()
         session.get.side_effect = TimeoutError("API timeout")
         result = await get_solar_forecast(session, None,
                                           csv_path=str(tmp_path / "forecast.csv"))
-        assert len(result) == 7
+        assert len(result) == 8
         assert all(v is None for v in result)
 
 

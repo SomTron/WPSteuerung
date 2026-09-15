@@ -53,8 +53,9 @@ async def _ensure_forecast_csv_header(csv_file):
 async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_path=None):
     """
     Fetches solar radiation forecast from Open-Meteo.
-    Returns: (rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow)
-        Radiation in kWh/m², times as strings "HH:MM", hourly_today_wm2 is Dict[hour: W/m²]."""
+    Returns: (rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, hourly_today_wm2)
+        Radiation in kWh/m², times as strings "HH:MM", hourly_today_wm2 is Dict[hour: W/m²].
+    Vertrag: IMMER genau 8 Werte liefern (Fehlerpfade inklusive)."""
     # Use config values or defaults
     lat = config.Wetterprognose.LATITUDE if config else 46.7142
     lon = config.Wetterprognose.LONGITUDE if config else 13.6361
@@ -84,7 +85,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
                 
                 if not times or not direct or not diffuse:
                     logging.warning("Open-Meteo API returned empty hourly data.")
-                    return None, None, None, None, None, None, None
+                    return None, None, None, None, None, None, None, None
                 
                 total_radiation = [dir + diff for dir, diff in zip(direct, diffuse)]
                 daily_totals = {}
@@ -145,10 +146,10 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
             else:
                 error_text = await response.text()
                 logging.error(f"Error fetching solar forecast: Status {response.status}, Details: {error_text}")
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None
     except Exception as e:
         logging.error(f"Unexpected error in get_solar_forecast: {e}")
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
 async def log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=None):
     """Logs the forecast results to a separate CSV file.

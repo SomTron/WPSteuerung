@@ -378,6 +378,17 @@ def get_status():
     except Exception as e:
         logging.debug(f"Komfort-Info nicht verfuegbar: {e}")
 
+    learning_info: dict = {}
+    try:
+        le = getattr(shared_state, "learning_engine", None)
+        if le is not None:
+            learning_info = le.get_info()
+    except Exception as e:
+        # Ein Fehler im Lernmodul darf nie den kompletten /status in einen
+        # HTTP 500 zwingen (sonst zeigt die WebApp dauerhaft nur "500").
+        logging.warning(f"Learning-Engine-Info nicht verfuegbar: {e}")
+        learning_info = {}
+
     pv_profil_info: dict = {}
     forecast_info: dict = {}
     try:
@@ -471,17 +482,7 @@ def get_status():
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
         },
         "forecast": forecast_info,
-        "learning": shared_state.learning_engine.get_info() if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else {
-            "heat_rates": {"winter": {"avg": 3.0, "count": 0}, "transition": {"avg": 3.0, "count": 0}, "summer": {"avg": 3.0, "count": 0}},
-            "learned_target_hour": 17.0,
-            "target_hour_samples": 0,
-            "total_cycles": 0,
-            "total_usage_events": 0,
-            "learned_evening_window": None,
-            "learned_morning_target_hour": 7.0,
-            "morning_target_hour_samples": 0,
-            "learned_morning_window": None,
-        },
+        "learning": learning_info,
                 "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund or "",
             "last_update": datetime.now().strftime("%H:%M:%S"),
