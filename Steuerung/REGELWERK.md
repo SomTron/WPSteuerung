@@ -201,22 +201,42 @@ unter 50 °C bleibt. Klassisches „nutz den Tag"-Backup.
 
 ### 3.10 Abweichung — Prio 47
 
-Grundregel: unterer Fühler vs. Solltemperatur (40 °C).
+Grundregel: **unterer Fühler** vs. Solltemperatur (Deployment 44 °C). Der untere
+Fühler ist der kälteste Punkt und der Frühindikator für „Boiler entladen"
+(Zapfung bringt Kaltwasser unten ein); „oben" bleibt durch die Schichtung lange
+warm. Regelfühler ist konfigurierbar (`temperaturfuehler`).
 
-- EIN, wenn `soll − temp ≥ einschalten_bei_abweichung_k` (+3 K)
-- AUS, wenn `soll − temp ≤ ausschalten_bei_abweichung_k` (+0.5 K)
-- **Schichtungsschutz:** Wenn oben schon ≥ 42 °C ist, aber unten kalt, wird NICHT
-  eingeschaltet (vermeidet sinnlose Netzstrom-Läufe bei geschichtetem Boiler)
+- EIN, wenn `soll − temp ≥ einschalten_bei_abweichung_k` (Deployment +4,9 K)
+- AUS, wenn `soll − temp ≤ ausschalten_bei_abweichung_k` (Deployment +0,7 K)
+- **Schichtungsschutz:** Ist `oben ≥ schichtung_min_oben_c` (Default 42 °C),
+  entscheidet `schichtung_erlaube_start`:
+  - `false` (Deployment): es wird **NICHT** geheizt – die Regel wartet. Verhindert
+    die sinnlosen Morgen-Netzläufe bei geschichtetem Boiler (oben heiß, unten kalt).
+  - `true`: Warmstart mit Deckel – oben darf nur um `schichtung_max_steig_k`
+    (Default 1 K) steigen.
+  ⚠️ Dieser Zweig liegt **vor** dem Quellen-Gate: bei `true` kann also auch ohne
+  PV/Batterie geheizt werden.
 - Bademodus erhöht den Soll (+3 K), Urlaubsmodus senkt ihn (−5 K)
+
+**Messbefund (15.09., 3 Wochen Entscheidungslog) – Begründung der Deployment-Werte:**
+410 von 435 Abweichungs-Entscheidungen fielen in 8–9 Uhr (direkt nach der
+Nachtsperre); **237** davon bei `oben ≥ 42 °C` und **alle ohne PV/Batterie-Quelle**
+(385 von 393 Lauf-Einträgen netzgespeist). Neun Läufe heizten den unteren Bereich
+mit 0 W Einspeisung über 47–62 min bis ≥ 40 °C. Deshalb `schichtung_erlaube_start:
+false`. Gegenprobe: An Tagen mit auch kaltem Oberteil (35–40 °C) bleibt der
+normale Pfad aktiv – dort ist Heizen richtig.
 
 **Quellen-Gate mit Tiefenschutz** (`quelle_warten`, default true): Die Regel war
 tagsueber quellenblind und heizte bei Durchkuehlung mit Netzstrom. Jetzt:
 
 - Normalfall: EIN nur mit echter PV-Einspeisung (>= 50 W) oder voller Batterie
   ohne Netzkauf - sonst wartet die Regel (stumm, kein AUS)
-- **Tiefenschutz**: `solltemperatur_c - netz_notfall_offset_k` (default 8 K)
+- **Tiefenschutz**: `solltemperatur_c - netz_notfall_offset_k` (Default 8 K, **Deployment 12 K**)
   wird die Waermepumpe trotz Netzstrom erlaubt - der Boiler kuehlt nie ganz
-  durch, nur weil keine Sonne scheint
+  durch, nur weil keine Sonne scheint. Begründung für 12 K: nach der Nachtsperre liegt „unten"
+  regelmäßig bei ≈ 33 °C, wodurch die 8-K-Schwelle (36 °C) **jeden Morgen**
+  auslöste – eine „Notfall“-Grenze, die im Normalbetrieb greift, ist keine
+  Notfall-Grenze.
 - Mit `quelle_warten: false` stellt man das alte quellenblinde Verhalten her
 
 **PV-Warten-Overlay bei guter Tagesprognose** (`pv_warten_*`, default aktiv):
@@ -227,7 +247,9 @@ gute Tagesprognose vorliegt, verzichtet die Abweichungs-Regel morgens (bis
 den Netzstart - auch unter der Tiefenschutz-Schwelle. Absicherungen:
 
 - Effektive Prognose = `forecast_today_wh_qm × fc_ratio`, erst ab
-  `pv_warten_forecast_schwelle_wh_qm` (default 2.500 Wh/m²) wird gewartet
+  `pv_warten_forecast_schwelle_wh_qm` wird gewartet. Default 2.500 Wh/m²,
+  **Deployment 1.200 Wh/m²**: auch mäßige Sonnentage sollen erst PV abwarten,
+  statt morgens Netzstrom zu verbrauchen.
 - `pv_warten_aktiv: false` schaltet das Overlay komplett ab
 - Unter `pv_warten_unten_min_c` (default 20 °C) gilt als „echt kalt“
   und es wird sofort (Netz) geheizt

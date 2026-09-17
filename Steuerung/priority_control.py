@@ -722,12 +722,31 @@ def evaluate_abweichung(
     fc_ratio: float = 1.0,
 ) -> RegelErgebnis:
     """
-    Abweichungs-Regel: Haelt Temperatur nahe am Sollwert.
+    Abweichungs-Regel: haelt den Boiler auf Solltemperatur (Komfort-Boden).
     
-    VEREINFACHTE LOGIK (Nur obere Schicht):
-    - Verwendet ausschliesslich den oberen Fuehler ("oben")
-    - Einschalten nur wenn oben < 40°C (Solltemperatur)
-    - Dies verhindert die Schichtungs-Falle (oben heiss, unten kalt)
+    Regelfuehler ist `abw.temperaturfuehler` (Deployment: "unten"): Der untere
+    Fuehler ist der kalteste Punkt und der Fruehindikator fuer "Boiler
+    entladen" (Zapfung bringt Kaltwasser unten ein). "oben" bleibt durch die
+    Schichtung lange warm und waere als Regelfuehler blind dafuer.
+
+    Schutz vor der Schichtungs-Falle ("oben heiss, unten kalt"):
+    Ist `oben >= schichtung_min_oben_c` (Default 42 C), entscheidet
+    `schichtung_erlaube_start`:
+      * false (Deployment) -> es wird NICHT geheizt, die Regel wartet
+      * true  -> Warmstart mit Deckel: oben darf max. `schichtung_max_steig_k`
+                 (Default 1 K) steigen
+    ACHTUNG: Dieser Zweig liegt VOR dem Quellen-Gate - bei `true` kann also
+    auch ohne PV/Batterie geheizt werden.
+
+    Danach Quellen-Gate (nur wenn der Schichtungs-Zweig nicht gegriffen hat):
+      * `quelle_warten` (Default true): EIN nur mit PV-Einspeisung oder voller
+        Batterie, sonst wartet die Regel (stumm, kein AUS)
+      * Tiefschutz: unter `solltemperatur_c - netz_notfall_offset_k` ist
+        Netzstrom erlaubt, damit der Boiler nicht durchkuehlt
+      * `pv_warten_*`: bei guter Tagesprognose vor `pv_warten_bis_uhr` auf die
+        Sonne warten; unter `pv_warten_unten_min_c` gilt "echt kalt" -> sofort
+
+    AUS erfolgt ueber den Regelfuehler: `soll - temp <= ausschalten_bei_abweichung_k`
     """
     result = RegelErgebnis(name="Abweichung", prioritaet=abw.prioritaet, aktiv=True)
 
@@ -821,8 +840,8 @@ def evaluate_abweichung(
                     result.grund = (
                         f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
                         f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
-                        f"oben {temp_oben:.1f}C warm, Schichtungs-Start erlaubt "
-                        f"(Obergrenze oben {temp_oben + steig:.1f}C) -> EIN"
+                        f"oben {temp_oben:.1f}C >= {abw.schichtung_min_oben_c:.1f}C -> "
+                        f"kein Start (Schichtungsschutz, schichtung_erlaube_start=false)"
                     )
                     return result
         # Quellen-Gate mit Tiefenschutz: Im Normalfall auf PV/Batterie warten
