@@ -14,12 +14,69 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field, asdict
 
+from utils import to_naive
+
 
 LEARNING_DATA_FILE = "learning_data.json"
 
 # Geschaetzter Strompreis fuer die Ableitung der "verpassten Ersparnis" aus
 # verschenkten PV-Wh nach einem ZU-FRUEH-Event (Empfehlung "WARNINGS anreichern").
 ZU_FRUEH_STROMPREIS_EUR_KWH = 0.35
+
+
+@dataclass
+class LearningConfig:
+    """Sämtliche konfigurierbaren Lernparameter.
+
+    Wird als Unterfeld von LearningData persistiert, damit Aenderungen
+    auch nach einem Neustart erhalten bleiben. Defaults sind die
+    empirisch ermittelten Produktionswerte.
+    """
+    # ── Heizrate ──
+    heating_rate_ewma_alpha: float = 0.10
+    heating_rate_min_samples: int = 3
+
+    # ── Zielzeit (Zapfverhalten) ──
+    target_hour_ewma_alpha: float = 0.15
+    target_hour_min_samples: int = 3
+    max_usage_events: int = 100
+    max_usage_per_half_day: int = 2
+
+    # ── Gelernte Fenster ──
+    window_vorlauf_evening_h: float = 1.5
+    window_nachlauf_evening_h: float = 0.75
+    window_vorlauf_morning_h: float = 1.5
+    window_nachlauf_morning_h: float = 0.75
+    window_days: int = 14
+    window_min_samples: int = 4
+
+    # ── Komfort-Verletzungen ──
+    comfort_grenz_c: float = 40.0
+    comfort_max_pro_tag: int = 3
+    comfort_max_entries: int = 200
+    comfort_bonus_schwellwert: int = 2
+    comfort_bonus_vorlauf_h: float = 0.5
+
+    # ── Quellen-Attribution / Zu-frueh ──
+    zu_frueh_fenster_min: int = 45
+    zu_frueh_threshold_w: float = 800.0
+    zu_frueh_max_entries: int = 100
+
+    # ── Surplus-Profil ──
+    surplus_ewma_alpha: float = 0.08
+    surplus_min_samples_pro_stunde: int = 5
+    surplus_min_brauchbare_stunden: int = 4
+
+    # ── Forecast-Kalibrierung ──
+    forecast_ewma_alpha: float = 0.3
+    forecast_min_samples: int = 3
+    forecast_ratio_min: float = 0.3
+    forecast_ratio_max: float = 2.0
+    forecast_kalibrierung_ab_stunde: int = 20
+
+    # ── Allgemein ──
+    max_cycles: int = 50
+    config_version: int = 1
 
 
 @dataclass
@@ -103,6 +160,9 @@ class LearningData:
     # nur gesampelt bei AUSgeschaltetem Kompressor (= Haushaltsmuster pur).
     surplus_by_hour: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
+    # ── Konfigurierbare Lernparameter (persistiert) ──
+    config: LearningConfig = field(default_factory=LearningConfig)
+
 
 def _get_season(month: int) -> str:
     """Bestimmt die Jahreszeit."""
@@ -125,7 +185,7 @@ class LearningEngine:
         self._cycle_start_temps: Optional[Dict[str, float]] = None
         self._last_temps: Optional[Dict[str, Optional[float]]] = None
         self._last_temp_time: Optional[datetime] = None
-        self._komfort_grenz_c: float = 40.0
+        self._komfort_grenz_c: float = self.data.config.comfort_grenz_c
         # Solar-Tracking (Attribution/Kalibrierung/Surplus-Profil)
         self._cycle_feedin_ws: float = 0.0   # Zeitintegral Einspeisung [Ws]
         self._cycle_soc_sum_ws: float = 0.0
@@ -187,6 +247,7 @@ class LearningEngine:
                     forecast_ratio=raw.get("forecast_ratio", 1.0),
                     forecast_ratio_samples=raw.get("forecast_ratio_samples", 0),
                     surplus_by_hour=raw.get("surplus_by_hour", {}),
+                    config=LearningConfig(**raw.get("config", {})),
                 )
         except Exception as e:
             logging.warning(f"Konnte Lern-Daten nicht laden: {e}")
@@ -234,27 +295,22 @@ class LearningEngine:
         """
         season = _get_season(month)
         hr = self.data.heat_rates.get(season, {"avg": 3.0, "count": 0})
-        if hr["count"] < 3:
+        if hr["count"] < self.data.config.heating_rate_min_samples:
             return 3.0 if sensor == "unten" else 2.0
         factor = 1.0 if sensor == "unten" else 0.67
         return round(hr["avg"] * factor, 2)
 
     def get_learned_target_hour(self) -> float:
-        """Gelernte optimale ABEND-Zielzeit (Default 17:00 bei <3 Samples)."""
-        if self.data.target_hour_samples < 3:
+        """Gelernte optimale ABEND-Zielzeit (Default 17:00 bei < config.target_hour_min_samples Samples)."""
+        if self.data.target_hour_samples < self.data.config.target_hour_min_samples:
             return 17.0
         return self.data.learned_target_hour
 
     def get_learned_morning_target_hour(self) -> float:
-        """Gelernte MORGEN-Zielzeit (Default 07:00 bei <3 Samples)."""
-        if self.data.morning_target_hour_samples < 3:
+        """Gelernte MORGEN-Zielzeit (Default 07:00 bei < config.target_hour_min_samples Samples)."""
+        if self.data.morning_target_hour_samples < self.data.config.target_hour_min_samples:
             return 7.0
         return self.data.learned_morning_target_hour
-
-    @staticmethod
-    def _naiv(dt: datetime) -> datetime:
-        """Zeitzonen-Info entfernen fuer sicheren Vergleich mit JSON-Timestamps."""
-        return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
     @classmethod
     def _parse_ts(cls, wert) -> Optional[datetime]:
@@ -271,7 +327,7 @@ class LearningEngine:
         if not isinstance(wert, str):
             return None
         try:
-            return cls._naiv(datetime.fromisoformat(wert))
+            return to_naive(datetime.fromisoformat(wert))
         except (ValueError, TypeError):
             return None
 
@@ -291,7 +347,7 @@ class LearningEngine:
         """
         if now is None:
             now = datetime.now()
-        grenze = self._naiv(now - timedelta(days=tage))
+        grenze = to_naive(now - timedelta(days=tage))
         stunden = []
         for e in self.data.usage_events:
             ts = self._parse_ts(e.get("timestamp"))
@@ -327,7 +383,7 @@ class LearningEngine:
             """
             if now is None:
                 now = datetime.now()
-            grenze = self._naiv(now - timedelta(days=tage))
+            grenze = to_naive(now - timedelta(days=tage))
             stunden = []
             for e in self.data.usage_events:
                 ts = self._parse_ts(e.get("timestamp"))
@@ -348,14 +404,19 @@ class LearningEngine:
         if t_oben is None or t_oben >= grenz_c or nachtsperre_aktiv:
             return
         heute = now.strftime("%Y-%m-%d")
-        heute_count = sum(1 for v in self.data.komfort_verletzungen if v.startswith(heute))
-        if heute_count >= max_pro_tag:
+        heute_mitternacht = to_naive(
+            now.replace(hour=0, minute=0, second=0, microsecond=0))
+        heute_count = sum(
+            1 for v in self.data.komfort_verletzungen
+            if (ts := self._parse_ts(v)) is not None and ts >= heute_mitternacht
+        )
+        if heute_count >= self.data.config.comfort_max_pro_tag:
             return
         ts = now.isoformat(timespec="seconds")
         self.data.komfort_verletzungen.append(ts)
-        # Auf letzte ~200 Eintraege begrenzen
-        if len(self.data.komfort_verletzungen) > 200:
-            self.data.komfort_verletzungen = self.data.komfort_verletzungen[-200:]
+        # Auf letzte config.comfort_max_entries Eintraege begrenzen
+        if len(self.data.komfort_verletzungen) > self.data.config.comfort_max_entries:
+            self.data.komfort_verletzungen = self.data.komfort_verletzungen[-self.data.config.comfort_max_entries:]
         self._save()
         logging.warning(f"KOMFORT-VERLETZUNG: t_oben {t_oben:.1f}C < {grenz_c}C um {ts}")
 
@@ -365,7 +426,7 @@ class LearningEngine:
             return 0
         # Datumsvergleich statt String-Vergleich: die Eintraege koennen
         # historisch mit/ohne Zeitzonen-Offset vorliegen (s. _parse_ts).
-        grenze = self._naiv(datetime.now() - timedelta(days=tage))
+        grenze = to_naive(datetime.now() - timedelta(days=tage))
         return sum(
             1 for v in self.data.komfort_verletzungen
             if (ts := self._parse_ts(v)) is not None and ts >= grenze
@@ -486,12 +547,7 @@ class LearningEngine:
         # now immer auf naive-UTC reduzieren, damit interne Speicherung
         # (JSON naive-Timestamps) mit Produktions-now (timezone-aware)
         # konsistent bleibt.
-        now = self._naiv(now)
-
-        # Reset daily usage counter at midnight
-        if hasattr(self, '_last_reset_date') and self._last_reset_date != now.date():
-            self._today_usage_count = 0
-            self._last_reset_date = now.date()
+        now = to_naive(now)
 
         dt_secs = 0.0
         if self._last_update_time is not None:
@@ -517,9 +573,10 @@ class LearningEngine:
             key = str(now.hour)
             alt_e = self.data.surplus_by_hour.get(
                 key, {"avg": float(feedin_watt), "n": 0})
+            alpha_surplus = self.data.config.surplus_ewma_alpha
             self.data.surplus_by_hour[key] = {
-                "avg": round(alt_e["avg"] * (1.0 - 0.08)
-                             + float(feedin_watt) * 0.08, 1),
+                "avg": round(alt_e["avg"] * (1.0 - alpha_surplus)
+                             + float(feedin_watt) * alpha_surplus, 1),
                 "n": alt_e["n"] + 1}
 
         # Zyklus-Akkumulation fuer die Quellen-Attribution
@@ -547,13 +604,14 @@ class LearningEngine:
                 # _parse_ts normalisiert zusaetzlich auf naive (sichert gemischte Formate)
                 if feedin_watt is not None and dt_secs > 0:
                     pend["verpasste_wh"] += max(feedin_watt, 0.0) * dt_secs / 3600.0
-                if (now - ende).total_seconds() < 45 * 60:
+                if (now - ende).total_seconds() < self.data.config.zu_frueh_fenster_min * 60:
                     noch_offen.append(pend)
                     continue
-                if feedin_watt is not None and feedin_watt >= 800:
+                if feedin_watt is not None and feedin_watt >= self.data.config.zu_frueh_threshold_w:
                     self.data.zu_frueh_events.append(
                         now.isoformat(timespec="seconds"))
-                    del self.data.zu_frueh_events[:-100]
+                    # Auf config.zu_frueh_max_entries begrenzen
+                    del self.data.zu_frueh_events[:-self.data.config.zu_frueh_max_entries]
                     verpasst = pend.get("verpasste_wh", 0.0)
                     ersparnis = verpasst / 1000.0 * ZU_FRUEH_STROMPREIS_EUR_KWH
                     logging.warning(
@@ -606,14 +664,16 @@ class LearningEngine:
 
     def _kalibriere_forecast(self, now: datetime, heute: str,
                              forecast_today_wh_qm: Optional[float]):
-        """Taegliche Kalibrierung (ab 20 Uhr, einmal pro Tag).
+        """Taegliche Kalibrierung (ab config.forecast_kalibrierung_ab_stunde, einmal pro Tag).
 
         Verhaeltnis tatsaechlicher Netzeinschuss (Wh, integriert) zur
-        Tagesprognose (Wh/m2) als EWMA (alpha=0.3), geklemmt auf 0.3-2.0.
+        Tagesprognose (Wh/m2) als EWMA (alpha=config.forecast_ewma_alpha),
+        geklemmt auf config.forecast_ratio_min..forecast_ratio_max.
         Lernt den HAUSspezifischen Langfehler des Forecast-Dienstes inkl.
         typischem Eigenverbrauchsniveau.
         """
-        if self._kalibriert_datum == heute or now.hour < 20:
+        cfg = self.data.config
+        if self._kalibriert_datum == heute or now.hour < cfg.forecast_kalibrierung_ab_stunde:
             return
         self._kalibriert_datum = heute
         if forecast_today_wh_qm is None or forecast_today_wh_qm < 1000:
@@ -624,12 +684,13 @@ class LearningEngine:
             logging.info("Learning: Kalibrierung uebersprungen "
                          "(zu wenig Surplus-Daten heute)")
             return
-        ratio = max(0.3, min(
-            2.0, self._day_surplus_wh / float(forecast_today_wh_qm)))
+        ratio = max(cfg.forecast_ratio_min, min(
+            cfg.forecast_ratio_max, self._day_surplus_wh / float(forecast_today_wh_qm)))
+        alpha = cfg.forecast_ewma_alpha
         n = self.data.forecast_ratio_samples + 1
         self.data.forecast_ratio = (
             round(ratio, 3) if n <= 1
-            else round(self.data.forecast_ratio * 0.7 + ratio * 0.3, 3))
+            else round(self.data.forecast_ratio * (1 - alpha) + ratio * alpha, 3))
         self.data.forecast_ratio_samples = n
         self._save()
         logging.info(
@@ -707,8 +768,8 @@ class LearningEngine:
         self._cycle_feedin_ws = 0.0
         self._cycle_soc_sum_ws = 0.0
         self._cycle_secs = 0.0
-        if len(self.data.cycles) > 50:
-            self.data.cycles = self.data.cycles[-50:]
+        if len(self.data.cycles) > self.data.config.max_cycles:
+            self.data.cycles = self.data.cycles[-self.data.config.max_cycles:]
 
         # Saisonale Heizrate: exponentiell geglaetteter Mittelwert (EWMA,
         # alpha=0.10) statt kumulativer Mittelwert - reagiert auf
@@ -718,7 +779,8 @@ class LearningEngine:
         if count <= 1:
             new_avg = rate_unten
         else:
-            new_avg = hr["avg"] * (1.0 - 0.10) + rate_unten * 0.10
+            alpha_hr = self.data.config.heating_rate_ewma_alpha
+            new_avg = hr["avg"] * (1.0 - alpha_hr) + rate_unten * alpha_hr
         self.data.heat_rates[season] = {
             "avg": round(new_avg, 3),
             "count": count,
@@ -760,8 +822,8 @@ class LearningEngine:
         # interpretiert werden. Filtere abkühlende Phase nach Legionellen.
         if legionellen_end_time is not None:
             try:
-                end_naiv = self._naiv(legionellen_end_time)
-                now_naiv = self._naiv(now)
+                end_naiv = to_naive(legionellen_end_time)
+                now_naiv = to_naive(now)
                 if (now_naiv - end_naiv).total_seconds() / 3600.0 < 4.0:
                     return
             except (TypeError, ValueError):
@@ -829,8 +891,8 @@ class LearningEngine:
             drop_gesamt_k=round(drop_gesamt, 2),
         )
         self.data.usage_events.append(asdict(event))
-        if len(self.data.usage_events) > 100:
-            self.data.usage_events = self.data.usage_events[-100:]
+        if len(self.data.usage_events) > self.data.config.max_usage_events:
+            self.data.usage_events = self.data.usage_events[-self.data.config.max_usage_events:]
 
         # Nur erste Zapfung(en) pro Tageshaelfte beruecksichtigen
         ist_morgen = now.hour < 12
@@ -841,20 +903,22 @@ class LearningEngine:
             and (ts := self._parse_ts(e["timestamp"])) is not None
             and (ts.hour < 12) == ist_morgen
         ]
-        if len(today_events) <= 2:
+        if len(today_events) <= self.data.config.max_usage_per_half_day:
             hour_f = now.hour + now.minute / 60.0
             # EWMA (alpha=0.15): reagiert auf Veraenderungen des
             # Duschverhaltens schneller als ein kumulativer Mittelwert
             if ist_morgen:
                 count = self.data.morning_target_hour_samples + 1
                 alt = self.data.learned_morning_target_hour
-                new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
+                alpha_t = self.data.config.target_hour_ewma_alpha
+                new_target = hour_f if count <= 1 else alt * (1.0 - alpha_t) + hour_f * alpha_t
                 self.data.learned_morning_target_hour = round(new_target, 2)
                 self.data.morning_target_hour_samples = count
             else:
                 count = self.data.target_hour_samples + 1
                 alt = self.data.learned_target_hour
-                new_target = hour_f if count <= 1 else alt * (1.0 - 0.15) + hour_f * 0.15
+                alpha_t = self.data.config.target_hour_ewma_alpha
+                new_target = hour_f if count <= 1 else alt * (1.0 - alpha_t) + hour_f * alpha_t
                 self.data.learned_target_hour = round(new_target, 2)
                 self.data.target_hour_samples = count
             self._save()
@@ -878,7 +942,7 @@ class LearningEngine:
         """
         if now is None:
             now = datetime.now()
-        grenze = self._naiv(now - timedelta(hours=hours))
+        grenze = to_naive(now - timedelta(hours=hours))
         return [
             e for e in self.data.usage_events
             if (ts := self._parse_ts(e.get("timestamp"))) is not None and ts >= grenze

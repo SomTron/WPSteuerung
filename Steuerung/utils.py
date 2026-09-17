@@ -6,6 +6,17 @@ import shutil
 import os
 from typing import List
 
+
+def to_naive(dt: datetime) -> datetime:
+    """Zeitzonen-Info entfernen fuer sicheren Vergleich mit naive-datetimes.
+
+    datetime.now() liefert naive-Objekte; aus ISO-Strings oder Fremdbibliotheken
+    koennen offset-aware-Objekte kommen. Vergleich/Subtraktion gemischter Typen
+    wirft TypeError. Dieses Helferlein normalisiert auf naive.
+    """
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
 # Erwarteter Header für heizungsdaten.csv (20 Spalten aus main.py)
 EXPECTED_CSV_HEADER = [
     "Zeitstempel", "T_Oben", "T_Unten", "T_Mittig", "T_Boiler", "T_Verd", "Kompressor",

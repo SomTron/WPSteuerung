@@ -15,16 +15,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from utils import HEIZUNGSDATEN_CSV
+from utils import HEIZUNGSDATEN_CSV, to_naive
 
 
 _cache: Dict[str, tuple] = {}
 CACHE_TTL_SEKUNDEN = 1800  # 30 Minuten
-
-
-def _naiv(dt: datetime) -> datetime:
-    """Zeitzonen-Info entfernen fuer sicheren Vergleich mit datetime.now()."""
-    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
 def _lies_csv_letzte_tage(
@@ -34,7 +29,7 @@ def _lies_csv_letzte_tage(
     """Liest CSV-Zeilen der letzten tage. Toleriert fehlende Datei + leere Zeilen."""
     if not os.path.exists(csv_path):
         return []
-    grenze = _naiv(datetime.now() - timedelta(days=tage))
+    grenze = to_naive(datetime.now() - timedelta(days=tage))
     zeilen = []
     try:
         from collections import deque
@@ -48,7 +43,7 @@ def _lies_csv_letzte_tage(
             reader = csv.DictReader([header_line] + tail_lines)
             for row in reader:
                 try:
-                    ts = _naiv(datetime.fromisoformat(row.get("Zeitstempel", "")))
+                    ts = to_naive(datetime.fromisoformat(row.get("Zeitstempel", "")))
                 except (ValueError, TypeError):
                     continue
                 if ts < grenze:

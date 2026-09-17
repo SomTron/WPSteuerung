@@ -27,7 +27,7 @@ import os
 from datetime import datetime, timedelta
 import re
 
-from utils import HEIZUNGSDATEN_CSV
+from utils import HEIZUNGSDATEN_CSV, to_naive
 
 try:
     from priority_control_logic import _is_nachtsperre_aktiv
@@ -203,7 +203,7 @@ def _parse_zeitstempel(raw):
         dt = datetime.fromisoformat(text)
         # Zeitzonen-Info entfernen fuer konsistenten Vergleich mit
         # datetime.now() (naive) in der Cache-Logik (_historisches_wh_qm)
-        return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+        return to_naive(dt)
     except (ValueError, TypeError):
         pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M:%S"):
