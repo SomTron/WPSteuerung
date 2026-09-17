@@ -81,7 +81,12 @@ def test_komfort_rate_mit_gemischten_formaten(tmp_path):
 
 
 def test_get_info_wirft_mit_gemischten_daten_nicht(tmp_path):
-    """Der eigentliche Zweck: die Learning-Karte im Dashboard bleibt gefuellt."""
+    """Der eigentliche Zweck: die Learning-Karte im Dashboard bleibt gefuellt.
+
+    Testet auch usage_events mit gemischten Formaten, da die gelernten
+    Fenster (get_learned_evening_window / get_learned_morning_window)
+    darueber iterieren (Incident 15.09., zweite Welle).
+    """
     jetzt = datetime.now()
     engine = _engine(
         tmp_path,
@@ -89,6 +94,16 @@ def test_get_info_wirft_mit_gemischten_daten_nicht(tmp_path):
                   (jetzt - timedelta(days=1)).isoformat(timespec="seconds")],
         komfort=[jetzt.astimezone().isoformat(timespec="seconds")],
     )
+    # Auch usage_events mit gemischten Formaten befuellen
+    engine.data.usage_events = [
+        {"timestamp": (jetzt - timedelta(hours=2)).astimezone().isoformat(timespec="seconds")},  # aware
+        {"timestamp": (jetzt - timedelta(days=3)).isoformat(timespec="seconds")},               # naiv
+        {"timestamp": "2026-09-14T10:00:00"},                                                    # naiv alt
+    ]
     info = engine.get_info()
     assert info["quellen"]["zu_frueh_events_gesamt"] == 2
     assert "runtime_sec" in info["quellen"]
+    # learned windows duerfen None sein (zu wenig Samples im 14d-Fenster),
+    # aber duerfen KEINE Exception werfen
+    assert "learned_evening_window" in info
+    assert "learned_morning_window" in info

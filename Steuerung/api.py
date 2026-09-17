@@ -200,7 +200,10 @@ def _parse_zeitstempel(raw):
     except (ValueError, TypeError):
         pass
     try:
-        return datetime.fromisoformat(text)
+        dt = datetime.fromisoformat(text)
+        # Zeitzonen-Info entfernen fuer konsistenten Vergleich mit
+        # datetime.now() (naive) in der Cache-Logik (_historisches_wh_qm)
+        return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
     except (ValueError, TypeError):
         pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M:%S"):

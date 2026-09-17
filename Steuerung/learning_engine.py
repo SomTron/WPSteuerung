@@ -294,9 +294,8 @@ class LearningEngine:
         grenze = self._naiv(now - timedelta(days=tage))
         stunden = []
         for e in self.data.usage_events:
-            try:
-                ts = self._naiv(datetime.fromisoformat(e["timestamp"]))
-            except (KeyError, ValueError):
+            ts = self._parse_ts(e.get("timestamp"))
+            if ts is None:
                 continue
             if ts < grenze or not (5 <= ts.hour < 12):
                 continue
@@ -331,9 +330,8 @@ class LearningEngine:
             grenze = self._naiv(now - timedelta(days=tage))
             stunden = []
             for e in self.data.usage_events:
-                try:
-                    ts = self._naiv(datetime.fromisoformat(e["timestamp"]))
-                except (KeyError, ValueError):
+                ts = self._parse_ts(e.get("timestamp"))
+                if ts is None:
                     continue
                 if ts < grenze or not (16 <= ts.hour < 24):
                     continue
@@ -542,11 +540,11 @@ class LearningEngine:
         if self._pending_zu_frueh:
             noch_offen = []
             for pend in self._pending_zu_frueh:
-                try:
-                    ende = datetime.fromisoformat(pend["ende"])
-                except (ValueError, KeyError, TypeError):
+                ende = self._parse_ts(pend.get("ende"))
+                if ende is None:
                     continue
                 # JSON-Timestamps sind naive; now ist bereits naiv (wurde in update() reduziert)
+                # _parse_ts normalisiert zusaetzlich auf naive (sichert gemischte Formate)
                 if feedin_watt is not None and dt_secs > 0:
                     pend["verpasste_wh"] += max(feedin_watt, 0.0) * dt_secs / 3600.0
                 if (now - ende).total_seconds() < 45 * 60:
@@ -840,7 +838,8 @@ class LearningEngine:
         today_events = [
             e for e in self.data.usage_events
             if e["timestamp"].startswith(today_str)
-            and (datetime.fromisoformat(e["timestamp"]).hour < 12) == ist_morgen
+            and (ts := self._parse_ts(e["timestamp"])) is not None
+            and (ts.hour < 12) == ist_morgen
         ]
         if len(today_events) <= 2:
             hour_f = now.hour + now.minute / 60.0
