@@ -403,7 +403,6 @@ class LearningEngine:
         zaehlt die Verletzung (ausserhalb Nachtsperre, max. max_pro_tag)."""
         if t_oben is None or t_oben >= grenz_c or nachtsperre_aktiv:
             return
-        heute = now.strftime("%Y-%m-%d")
         heute_mitternacht = to_naive(
             now.replace(hour=0, minute=0, second=0, microsecond=0))
         heute_count = sum(

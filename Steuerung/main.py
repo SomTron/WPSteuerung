@@ -344,7 +344,6 @@ async def check_api_health(session, state):
     from datetime import timedelta
     now = datetime.now(state.local_tz)
     threshold_30min = now - timedelta(minutes=30)
-    threshold_10min = now - timedelta(minutes=10)
 
     for api_name, data in state.api_errors.items():
         # Fehler der letzten 30 Minuten zaehlen

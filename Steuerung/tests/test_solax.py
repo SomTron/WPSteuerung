@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, PropertyMock
+from unittest.mock import AsyncMock, MagicMock
 
 import asyncio
 import aiohttp
