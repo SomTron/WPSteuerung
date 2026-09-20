@@ -64,9 +64,11 @@ async def robust_api_call(
 
     for attempt in range(max_retries):
         try:
-            async with session.request(
-                method=method.upper(),
-                url=url,
+            # Nutze spezifische HTTP-Methoden (get/post) statt session.request(),
+            # damit externe Mocks (wie in den Tests) kompatibel bleiben
+            http_method = getattr(session, method.lower())
+            async with http_method(
+                url,
                 params=params,
                 json=json,
                 data=data,

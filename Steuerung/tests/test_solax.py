@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import asyncio
 import aiohttp
@@ -81,11 +81,10 @@ async def test_timeout_wird_abgefangen_und_gibt_none(caplog):
     """
     state = baue_state()
     session = MagicMock()
-
-    async def immer_timeout(*args, **kwargs):
-        raise asyncio.TimeoutError("Connection timed out")
-
-    session.get = AsyncMock(side_effect=immer_timeout)
+    # session.get() gibt einen AsyncMock zurueck, dessen __aenter__ den Fehler wirft
+    mock_resp = AsyncMock()
+    mock_resp.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError("Connection timed out"))
+    session.get.return_value = mock_resp
 
     with caplog.at_level("ERROR"):
         result = await get_solax_data(session, state)
@@ -98,11 +97,9 @@ async def test_timeout_wird_im_retry_log_erfasst(caplog):
     """Der Timeout-Fehler wird korrekt im Log mit Typ-Information erfasst."""
     state = baue_state()
     session = MagicMock()
-
-    async def immer_timeout(*args, **kwargs):
-        raise asyncio.TimeoutError("Connection timed out")
-
-    session.get = AsyncMock(side_effect=immer_timeout)
+    mock_resp = AsyncMock()
+    mock_resp.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError("Connection timed out"))
+    session.get.return_value = mock_resp
 
     with caplog.at_level("ERROR"):
         await get_solax_data(session, state)
@@ -125,11 +122,9 @@ async def test_clienterror_wird_abgefangen_und_gibt_none(caplog):
     """
     state = baue_state()
     session = MagicMock()
-
-    async def immer_client_error(*args, **kwargs):
-        raise aiohttp.ClientConnectionError("Connection refused")
-
-    session.get = AsyncMock(side_effect=immer_client_error)
+    mock_resp = AsyncMock()
+    mock_resp.__aenter__ = AsyncMock(side_effect=aiohttp.ClientConnectionError("Connection refused"))
+    session.get.return_value = mock_resp
 
     with caplog.at_level("ERROR"):
         result = await get_solax_data(session, state)
@@ -149,7 +144,7 @@ async def test_erfolgreicher_erstversuch():
     }
 
     session = MagicMock()
-    session.get = AsyncMock(return_value=MockResponse(json_data=erfolgsdaten))
+    session.get.return_value = MockResponse(json_data=erfolgsdaten)
 
     result = await get_solax_data(session, state)
 
@@ -169,15 +164,15 @@ async def test_retry_faehrt_bei_spaetem_erfolg():
         "success": True,
         "result": {"acpower": 999, "feedinpower": 300, "soc": 50}
     }
-    call_num = [0]
 
-    async def succeed_on_third(*args, **kwargs):
-        call_num[0] += 1
-        if call_num[0] < 3:
-            raise asyncio.TimeoutError(f"Timeout #{call_num[0]}")
-        return MockResponse(json_data=erfolgsdaten)
-
-    session.get = AsyncMock(side_effect=succeed_on_third)
+    # Simuliere: 1. und 2. Aufruf werfen Timeout, 3. Aufruf erfolgreich
+    fehler_resp = AsyncMock()
+    fehler_resp.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError("Timeout"))
+    session.get.side_effect = [
+        fehler_resp,           # 1. Versuch -> Timeout
+        fehler_resp,           # 2. Versuch -> Timeout
+        MockResponse(json_data=erfolgsdaten),  # 3. Versuch -> Erfolg
+    ]
 
     result = await get_solax_data(session, state)
 
@@ -208,7 +203,7 @@ async def test_cache_wird_genutzt():
     state.solar.last_api_call = now - timedelta(minutes=2)  # innerhalb 5 min TTL
 
     session = MagicMock()
-    session.get = AsyncMock()
+    session.get = MagicMock()  # einfacher Mock, session.get() wird nie aufgerufen
 
     result = await get_solax_data(session, state)
 

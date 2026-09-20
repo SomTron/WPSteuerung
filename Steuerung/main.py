@@ -952,14 +952,6 @@ def _logge_speicher(state, letzter_log):
     except Exception:
         pass
     return jetzt
-# API-Health-Monitoring (alle 10 Minuten)
-                now_local = datetime.now(state.local_tz)
-                if (getattr(state, '_last_api_health_warning', None) is None or
-                    (now_local - state._last_api_health_warning).total_seconds() >= 600):
-                    await check_api_health(session, state)
-                    state._last_api_health_warning = now_local
-
-                # Logik & Logging
 
 
 async def main_loop():
@@ -1014,6 +1006,12 @@ async def main_loop():
                 last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
                 letzter_speicher_log = _logge_speicher(state, letzter_speicher_log)
 
+# API-Health-Monitoring (alle 10 Minuten)
+                now_local = datetime.now(state.local_tz)
+                if (getattr(state, '_last_api_health_warning', None) is None or
+                    (now_local - state._last_api_health_warning).total_seconds() >= 600):
+                    await check_api_health(session, state)
+                    state._last_api_health_warning = now_local
                 # Logik & Logging
                 await run_logic_step(session, state, learning_engine=state.learning_engine)
                 await log_system_state(state)
