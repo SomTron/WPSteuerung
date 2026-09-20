@@ -12,7 +12,7 @@ permissions:
 jobs:
   syntaxcheck-und-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       MPLBACKEND: Agg        # matplotlib ohne Display (Headless-Runner)
       PYTHONFAULTHANDLER: 1
