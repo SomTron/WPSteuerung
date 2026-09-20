@@ -1006,11 +1006,26 @@ async def main_loop():
                 letzter_speicher_log = _logge_speicher(state, letzter_speicher_log)
 
 # API-Health-Monitoring (alle 10 Minuten)
-                now_local = datetime.now(state.local_tz)
-                if (getattr(state, '_last_api_health_warning', None) is None or
-                    (now_local - state._last_api_health_warning).total_seconds() >= 600):
-                    await check_api_health(session, state)
-                    state._last_api_health_warning = now_local
+                # Robust gegen fehlende/ungueltige Attribute (z.B. Test-Mocks):
+                # Ein Fehler im Health-Check darf den Loop NICHT blockieren.
+                try:
+                    now_local = datetime.now(state.local_tz)
+                    letzte_warnung = getattr(state, "_last_api_health_warning", None)
+                    faellig = (
+                        letzte_warnung is None
+                        or (now_local - letzte_warnung).total_seconds() >= 600
+                    )
+                except Exception:
+                    faellig = True
+                if faellig:
+                    try:
+                        await check_api_health(session, state)
+                    except Exception as e:
+                        logging.error(f"API-Health-Check fehlgeschlagen: {e}", exc_info=True)
+                    try:
+                        state._last_api_health_warning = datetime.now(state.local_tz)
+                    except Exception:
+                        pass
                 # Logik & Logging
                 await run_logic_step(session, state, learning_engine=state.learning_engine)
                 await log_system_state(state)
