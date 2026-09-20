@@ -7,7 +7,7 @@ deren Bedingungen erfüllt sind, gewinnt.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
 from dataclasses import dataclass
 
@@ -27,6 +27,8 @@ from json_config import (
     NotfallschutzConfig,
 )
 
+# Module-level throttle: Letzter Zeitstempel fuer gedrosselte Logs (alle 5 Min)
+_last_calcstart_log: Optional[datetime] = None
 
 @dataclass
 class RegelErgebnis:
@@ -1847,15 +1849,19 @@ def bewerte_alle_regeln(
     aktive_regeln.sort(key=lambda e: e.prioritaet, reverse=True)
     gewinner = aktive_regeln[0]
 
-    # CalcStart/AdaptivePV Koordinations-Logging
+    # CalcStart/AdaptivePV Koordinations-Logging (gedrosselt auf 5 Min)
     if (
         gewinner.name == "AdaptivePV"
         and any(r.name == "CalcStart" and r.aktiv for r in ergebnisse)
         and not any(r.name == "CalcStart" and r.einschalten is True for r in ergebnisse)
     ):
-        logging.debug(
-            "CalcStart wartet auf besseres PV-Angebot -> AdaptivePV übernimmt."
-        )
+        global _last_calcstart_log
+        now = datetime.now()
+        if _last_calcstart_log is None or (now - _last_calcstart_log) > timedelta(minutes=5):
+            _last_calcstart_log = now
+            logging.debug(
+                "CalcStart wartet auf besseres PV-Angebot -> AdaptivePV übernimmt."
+            )
 
     # Der Notfallschutz (Prio 110) greift ohne Workaround vor allen Sperren -
     # ein manueller Override ist nicht mehr noetig (frueher: Komfort-NOTFALL
