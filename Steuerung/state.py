@@ -164,8 +164,14 @@ class State:
         self.verdampfer_shutdowns: list = []  # Zeitstempel der Verdampfer-Abschaltungen
         self.last_sensor_error_time: Optional[datetime] = None
         self.last_pressure_error_time: Optional[datetime] = None
-        self._last_config_check: Optional[datetime] = now # Initialize with current time
+        self._last_config_check: Optional[datetime] = now
         self.last_config_hash: Optional[str] = None
+
+        # --- API-Health-Monitoring ---
+        # Zaehlt API-Fehler pro Typ fuer systematisches Monitoring
+        # Struktur: {api_name: {"errors": [(timestamp, error_type), ...], "last_alert": timestamp}}
+        self.api_errors: dict = {}
+        self._last_api_health_warning: Optional[datetime] = None
 
     # --- Properties representing Config Values ---
     @property

@@ -73,80 +73,89 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
     }
     
     try:
-        async with session.get(url, params=params, timeout=10) as response:
-            if response.status == 200:
-                data = await response.json()
-                
-                # Extract Hourly Data (Radiation)
-                hourly = data.get("hourly", {})
-                times = hourly.get("time", [])
-                direct = hourly.get("direct_radiation", [])
-                diffuse = hourly.get("diffuse_radiation", [])
-                
-                if not times or not direct or not diffuse:
-                    logging.warning("Open-Meteo API returned empty hourly data.")
-                    return None, None, None, None, None, None, None, None
-                
-                total_radiation = [dir + diff for dir, diff in zip(direct, diffuse)]
-                daily_totals = {}
-                for t_str, rad in zip(times, total_radiation):
-                    date_str = t_str.split("T")[0]
-                    daily_totals[date_str] = daily_totals.get(date_str, 0) + rad
-                
-                for date in daily_totals:
-                    daily_totals[date] = daily_totals[date] / 1000.0
-                
-                # Extract Daily Data (Sunrise/Sunset)
-                daily = data.get("daily", {})
-                daily_times = daily.get("time", [])
-                sunrises = daily.get("sunrise", [])
-                sunsets = daily.get("sunset", [])
-                
-                sun_data = {}
-                for d_str, sr, ss in zip(daily_times, sunrises, sunsets):
-                    sun_data[d_str] = {
-                        "sunrise": sr.split("T")[1] if "T" in sr else None,
-                        "sunset": ss.split("T")[1] if "T" in ss else None
-                    }
-                
-                tz = pytz.timezone(DEFAULT_TIMEZONE)
-                now = datetime.now(tz)
-                today_str = now.strftime("%Y-%m-%d")
-                tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        # Nutze den zentralen robusten API-Client mit Retry und Timeout-Handling
+        from api_client import robust_get
+        result = await robust_get(
+            session, url, params=params,
+            timeout_sec=10, max_retries=2, retry_delay_sec=3,
+            logger=logging.getLogger(__name__),
+        )
 
-                # Hourly forecast for today (W/mÃ‚Â² per hour)
-                hourly_today_wm2 = {}
-                for t_str, rad in zip(times, total_radiation):
-                    dt = datetime.fromisoformat(t_str.replace('Z','+00:00'))
-                    if dt.strftime("%Y-%m-%d") == today_str:
-                        hourly_today_wm2[dt.hour] = rad
-                
-                rad_today = daily_totals.get(today_str)
-                rad_tomorrow = daily_totals.get(tomorrow_str)
-                day2_str = (now + timedelta(days=2)).strftime("%Y-%m-%d")
-                rad_day2 = daily_totals.get(day2_str)
-                
-                sunrise_today = sun_data.get(today_str, {}).get("sunrise")
-                sunset_today = sun_data.get(today_str, {}).get("sunset")
-                sunrise_tomorrow = sun_data.get(tomorrow_str, {}).get("sunrise")
-                sunset_tomorrow = sun_data.get(tomorrow_str, {}).get("sunset")
-                
-                # Nur loggen wenn Daten vorhanden, sonst None safe behandeln
-                rad_today_str = f"{rad_today:.2f}" if rad_today is not None else "None"
-                rad_tomorrow_str = f"{rad_tomorrow:.2f}" if rad_tomorrow is not None else "None"
-                rad_day2_str = f"{rad_day2:.2f}" if rad_day2 is not None else "None"
-                sr_str = sunrise_today if sunrise_today is not None else "None"
-                ss_str = sunset_today if sunset_today is not None else "None"
-                logging.info(f"Solar forecast updated: Today={rad_today_str} kWh/m² ({sr_str}-{ss_str}), Tomorrow={rad_tomorrow_str} kWh/m², Day2={rad_day2_str} kWh/m²")
-                
-                # Log to dedicated CSV
-                await log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=csv_path)
-                
-                return rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, hourly_today_wm2
-            else:
-                error_text = await response.text()
-                logging.error(f"Error fetching solar forecast: Status {response.status}, Details: {error_text}")
+        if result.success:
+            data = result.data  # JSON-Daten aus dem ApiResult
+            
+            # Extract Hourly Data (Radiation)
+            hourly = data.get("hourly", {})
+            times = hourly.get("time", [])
+            direct = hourly.get("direct_radiation", [])
+            diffuse = hourly.get("diffuse_radiation", [])
+            
+            if not times or not direct or not diffuse:
+                logging.warning("Open-Meteo API returned empty hourly data.")
                 return None, None, None, None, None, None, None, None
+            
+            total_radiation = [dir + diff for dir, diff in zip(direct, diffuse)]
+            daily_totals = {}
+            for t_str, rad in zip(times, total_radiation):
+                date_str = t_str.split("T")[0]
+                daily_totals[date_str] = daily_totals.get(date_str, 0) + rad
+            
+            for date in daily_totals:
+                daily_totals[date] = daily_totals[date] / 1000.0
+            
+            # Extract Daily Data (Sunrise/Sunset)
+            daily = data.get("daily", {})
+            daily_times = daily.get("time", [])
+            sunrises = daily.get("sunrise", [])
+            sunsets = daily.get("sunset", [])
+            
+            sun_data = {}
+            for d_str, sr, ss in zip(daily_times, sunrises, sunsets):
+                sun_data[d_str] = {
+                    "sunrise": sr.split("T")[1] if "T" in sr else None,
+                    "sunset": ss.split("T")[1] if "T" in ss else None
+                }
+            
+            tz = pytz.timezone(DEFAULT_TIMEZONE)
+            now = datetime.now(tz)
+            today_str = now.strftime("%Y-%m-%d")
+            tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+
+            # Hourly forecast for today (W/m² per hour)
+            hourly_today_wm2 = {}
+            for t_str, rad in zip(times, total_radiation):
+                dt = datetime.fromisoformat(t_str.replace('Z','+00:00'))
+                if dt.strftime("%Y-%m-%d") == today_str:
+                    hourly_today_wm2[dt.hour] = rad
+            
+            rad_today = daily_totals.get(today_str)
+            rad_tomorrow = daily_totals.get(tomorrow_str)
+            day2_str = (now + timedelta(days=2)).strftime("%Y-%m-%d")
+            rad_day2 = daily_totals.get(day2_str)
+            
+            sunrise_today = sun_data.get(today_str, {}).get("sunrise")
+            sunset_today = sun_data.get(today_str, {}).get("sunset")
+            sunrise_tomorrow = sun_data.get(tomorrow_str, {}).get("sunrise")
+            sunset_tomorrow = sun_data.get(tomorrow_str, {}).get("sunset")
+            
+            # Nur loggen wenn Daten vorhanden, sonst None safe behandeln
+            rad_today_str = f"{rad_today:.2f}" if rad_today is not None else "None"
+            rad_tomorrow_str = f"{rad_tomorrow:.2f}" if rad_tomorrow is not None else "None"
+            rad_day2_str = f"{rad_day2:.2f}" if rad_day2 is not None else "None"
+            sr_str = sunrise_today if sunrise_today is not None else "None"
+            ss_str = sunset_today if sunset_today is not None else "None"
+            logging.info(f"Solar forecast updated: Today={rad_today_str} kWh/m² ({sr_str}-{ss_str}), Tomorrow={rad_tomorrow_str} kWh/m², Day2={rad_day2_str} kWh/m²")
+            
+            # Log to dedicated CSV
+            await log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=csv_path)
+            
+            return rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, hourly_today_wm2
+        else:
+            # API-Fehler (Timeout, HTTP-Fehler, etc.) - wurde bereits im api_client geloggt
+            logging.error(
+                f"Error fetching solar forecast: {result.error_type} - {result.error_message[:100] if result.error_message else 'Unbekannter Fehler'}"
+            )
+            return None, None, None, None, None, None, None, None
     except Exception as e:
         logging.error(f"Unexpected error in get_solar_forecast: {e}")
         return None, None, None, None, None, None, None, None

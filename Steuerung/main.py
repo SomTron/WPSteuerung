@@ -323,6 +323,63 @@ async def update_system_data(session, state):
         state.solar.batpower = state.solar.last_api_data.get("batPower", 0)
         state.solar.soc = state.solar.last_api_data.get("soc", 0)
 
+def track_api_error(state, api_name: str, error_type: str):
+    """Zeichnet einen API-Fehler im State auf fuer das Health-Monitoring."""
+    from datetime import datetime
+    now = datetime.now(state.local_tz)
+    if api_name not in state.api_errors:
+        state.api_errors[api_name] = {"errors": [], "last_alert": None}
+    state.api_errors[api_name]["errors"].append((now, error_type))
+    # Nur die letzten 100 Fehler behalten (Speicherschutz)
+    if len(state.api_errors[api_name]["errors"]) > 100:
+        state.api_errors[api_name]["errors"] = state.api_errors[api_name]["errors"][-100:]
+
+
+async def check_api_health(session, state):
+    """
+    Ueberprueft die API-Fehlerdichte der letzten 30 Minuten.
+    Bei mehr als 10 Fehlern pro API wird eine Warnung via Telegram gesendet
+    (maximal alle 60 Minuten).
+    """
+    from datetime import timedelta
+    now = datetime.now(state.local_tz)
+    threshold_30min = now - timedelta(minutes=30)
+    threshold_10min = now - timedelta(minutes=10)
+
+    for api_name, data in state.api_errors.items():
+        # Fehler der letzten 30 Minuten zaehlen
+        recent = [e for e in data["errors"] if e[0] > threshold_30min]
+        if len(recent) < 10:
+            continue  # Weniger als 10 Fehler in 30 Min -> kein Alarm
+
+        # Pruefen ob bereits eine Warnung in den letzten 60 Min gesendet wurde
+        last_alert = data.get("last_alert")
+        if last_alert and (now - last_alert).total_seconds() < 3600:
+            continue
+
+        # Fehlertypen analysieren
+        error_counts = {}
+        for _, err_type in recent:
+            error_counts[err_type] = error_counts.get(err_type, 0) + 1
+
+        fehler_details = ", ".join(f"{t}: {c}x" for t, c in sorted(error_counts.items(), key=lambda x: -x[1]))
+        warnung = (
+            f"⚠️ API-Warnung: {api_name}\n"
+            f"{len(recent)} Fehler in 30 Minuten\n"
+            f"Details: {fehler_details}"
+        )
+        logging.warning(warnung)
+
+        # Telegram-Alarm senden (falls konfiguriert)
+        if state.bot_token and state.chat_id:
+            try:
+                from telegram_api import send_telegram_message
+                await send_telegram_message(session, state.chat_id, warnung, state.bot_token)
+                logging.info(f"API-Health-Warnung via Telegram gesendet: {api_name}")
+            except Exception as e:
+                logging.error(f"API-Health-Warnung konnte nicht via Telegram gesendet werden: {e}")
+
+        data["last_alert"] = now
 async def check_periodic_tasks(session, state, last_vpn_check):
     """FÃ¼hrt zeitgesteuerte Hintergrundaufgaben aus."""
     now_dt = datetime.now()
@@ -895,6 +952,14 @@ def _logge_speicher(state, letzter_log):
     except Exception:
         pass
     return jetzt
+# API-Health-Monitoring (alle 10 Minuten)
+                now_local = datetime.now(state.local_tz)
+                if (getattr(state, '_last_api_health_warning', None) is None or
+                    (now_local - state._last_api_health_warning).total_seconds() >= 600):
+                    await check_api_health(session, state)
+                    state._last_api_health_warning = now_local
+
+                # Logik & Logging
 
 
 async def main_loop():
