@@ -287,7 +287,15 @@ async def update_system_data(session, state):
     
     # 2. PV-Daten aktualisieren
     # (get_solax_data aktualisiert bei Erfolg last_api_data/last_api_call selbst)
-    await get_solax_data(session, state)
+    # get_solax_data hat eigenes Retry-Handling (aiohttp.ClientError, asyncio.TimeoutError),
+    # hier nur als Sicherheitsnetz fuer unerwartete Exceptions
+    try:
+        await get_solax_data(session, state)
+    except asyncio.TimeoutError as e:
+        logging.error(f"Solax-API-Timeout trotz Retry: {e}")
+    except Exception as e:
+        logging.error(f"Unerwarteter Fehler beim Solax-API-Abruf: {type(e).__name__}: {e}", exc_info=True)
+        # Fallback: Sensordaten sind trotzdem verfuegbar, PV bleibt auf letztem Stand
 
     # Stale-Schutz ZUERST pruefen: Bei API-Ausfaellen bleibt last_api_data als
     # letzter guter Stand stehen und wuerde sonst stundenalt die PV-Regeln

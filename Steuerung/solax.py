@@ -58,12 +58,21 @@ async def get_solax_data(session, state):
                 else:
                     logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
                     return None
-        except aiohttp.ClientError as e:
-            logging.error(f"Fehler bei der API-Anfrage (Versuch {attempt + 1}/{max_retries}): {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logging.error(f"Fehler bei der API-Anfrage (Versuch {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
             else:
                 logging.error("Maximale Wiederholungen erreicht, verwende Fallback-Daten.")
+                return None
+        except Exception as e:
+            logging.error(
+                f"Unerwarteter Fehler bei der API-Anfrage (Versuch {attempt + 1}/{max_retries}): {type(e).__name__}: {e}"
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+            else:
+                logging.error("Maximale Wiederholungen erreicht (unexpected), verwende Fallback-Daten.")
                 return None
     return None
 
