@@ -252,13 +252,23 @@ def parse_log(pfad):
                     mvf = RE_COMP_EIN_VERIF.search(msg)
                     offener_zyklus = {
                         "start_ts": ts, "start_regel": None, "start_t_verd": None,
-                        "start_t_unten": None, "end_ts": None, "dauer_min": None,
+                        "start_t_unten": None, "start_t_mittig": None, "start_t_oben": None,
+                        "end_ts": None, "dauer_min": None,
                         "end_grund": None, "end_regel": None,
-                        "end_sensoren": None, "max_unten": None, "quelle": None,
+                        "end_sensoren": None, "max_unten": None, "max_mittig": None,
+                        "max_oben": None, "quelle": None,
                     }
                     if mvf:
                         offener_zyklus["start_t_verd"] = float(mvf.group(1))
                         offener_zyklus["start_t_unten"] = float(mvf.group(2))
+                    else:
+                        # Fallback: aeltere Log-Stellen ohne t_verd/t_unten -> Sensor-Snapshot
+                        offener_zyklus["start_t_verd"] = last_sensoren.get("verd")
+                        offener_zyklus["start_t_unten"] = last_sensoren.get("unten")
+                    # Die 'Kompressor EIN'-Zeile kennt nur Verd/Unten. Mittig/Oben
+                    # zum Zyklusstart aus dem letzten Sensoren-Snapshot uebernehmen.
+                    offener_zyklus["start_t_mittig"] = last_sensoren.get("mittig")
+                    offener_zyklus["start_t_oben"] = last_sensoren.get("oben")
                     for zts, zregel in reversed(ereignisse):
                         if zts <= ts and zregel[0] in ("CYCLE_START_WE", "WECHSEL"):
                             offener_zyklus["start_regel"] = zregel[1]
@@ -361,7 +371,7 @@ def parse_log(pfad):
     stats["snapshots"] = len(snapshots)
     stats["regelzeilen"] = sum(len(b["regeln"]) for b in snapshots)
 
-    # Zyklus-Anreicherung: Quelle, max_unten, T-Ueberschreitung
+    # Zyklus-Anreicherung: Quelle, max_* (unten/mittig/oben), T-Ueberschreitung
     for z in zyklen:
         if z["start_regel"] in ("AdaptivePV", "Einspeisung", "PV_mitte", "PV_unten"):
             z["quelle"] = "pv"
@@ -372,13 +382,17 @@ def parse_log(pfad):
         fenster_ende = z["end_ts"] + timedelta(minutes=8) if z["end_ts"] else None
         for snap in snapshots:
             if z["start_ts"] <= snap["ts"] <= (fenster_ende or snap["ts"]):
-                u = (snap.get("sensoren") or {}).get("unten")
-                if u is not None and (z["max_unten"] is None or u > z["max_unten"]):
-                    z["max_unten"] = u
+                for sensor_feld in ("unten", "mittig", "oben"):
+                    w = (snap.get("sensoren") or {}).get(sensor_feld)
+                    max_feld = "max_" + sensor_feld
+                    if w is not None and (z[max_feld] is None or w > z[max_feld]):
+                        z[max_feld] = w
         if z["end_sensoren"]:
-            u = z["end_sensoren"].get("unten")
-            if u is not None and (z["max_unten"] is None or u > z["max_unten"]):
-                z["max_unten"] = u
+            for sensor_feld in ("unten", "mittig", "oben"):
+                w = z["end_sensoren"].get(sensor_feld)
+                max_feld = "max_" + sensor_feld
+                if w is not None and (z[max_feld] is None or w > z[max_feld]):
+                    z[max_feld] = w
         if z["start_t_unten"] is not None and z["max_unten"] is not None:
             z["ueberschreitung_k"] = round(max(z["max_unten"] - OVERSHOOT_SCHWELLE_C, 0.0), 1)
         else:
@@ -524,18 +538,22 @@ def _schreibe_csv(pfad, zeilen, felder):
 def export_csve(parsed, out, outdir):
     os.makedirs(outdir, exist_ok=True)
 
-    # 1) Zyklus-Tabelle
+    # 1) Zyklus-Tabelle (Temperaturen unten/mittig/oben jeweils Start + Max)
     felder = ["start", "ende", "dauer_min", "quelle", "start_regel", "end_grund",
-              "start_unten", "max_unten", "ueberschreitung_k", "start_verd"]
+              "start_unten", "start_mittig", "start_oben",
+              "max_unten", "max_mittig", "max_oben",
+              "ueberschreitung_k", "start_verd"]
     zyklen = []
     for z in parsed["zyklen"]:
-        s0 = z["start_t_unten"]
         zyklen.append({
             "start": z["start_ts"].strftime("%Y-%m-%d %H:%M:%S"),
             "ende": (z["end_ts"].strftime("%Y-%m-%d %H:%M:%S") if z["end_ts"] else ""),
             "dauer_min": z["dauer_min"], "quelle": z["quelle"],
             "start_regel": z["start_regel"], "end_grund": z["end_grund"],
-            "start_unten": s0, "max_unten": z["max_unten"],
+            "start_unten": z["start_t_unten"], "start_mittig": z["start_t_mittig"],
+            "start_oben": z["start_t_oben"],
+            "max_unten": z["max_unten"], "max_mittig": z["max_mittig"],
+            "max_oben": z["max_oben"],
             "ueberschreitung_k": z["ueberschreitung_k"], "start_verd": z["start_t_verd"],
         })
     _schreibe_csv(os.path.join(outdir, "zyklen.csv"), zyklen, felder)
