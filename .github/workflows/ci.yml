@@ -37,15 +37,18 @@ jobs:
         # Regelwerk siehe ruff.toml: Fehlerklassen mit echtem Bug-Potenzial.
         # Laeuft VOR den Tests, damit Import-/Namensfehler schnell auffallen.
         run: |
-          python -m ruff check Steuerung
+          python -m ruff check Steuerung Updater/manager_status.py
           echo "ruff OK"
 
-      - name: Syntaxcheck aller Steuerungsmodule (compileall)
+      - name: Syntaxcheck (Python und POSIX-Shell)
         # archive/ und simulation/ sind historisch bzw. manuell und werden
         # bewusst nicht geprueft; Tests laufen unten ohnehin via pytest.
         run: |
           python -m compileall -q Steuerung -x "(archive|simulation|tests)"
-          echo "compileall OK"
+          python -m py_compile Updater/manager_status.py
+          sh -n Updater/wp-manager.sh
+          sh -n Updater/rpi-deploy.sh
+          echo "compileall + sh -n OK"
 
       - name: Test-Sammlung pruefen (Diagnose)
         run: |

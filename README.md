@@ -100,8 +100,9 @@ nano Steuerung/richtige_config.ini
 ## 📦 System-Management (Updater)
 
 Für eine einfache Wartung und Updates nutzen Sie die Skripte im `Updater/` Verzeichnis:
-- `wp-manager.sh`: Ein interaktives Menü für Logs, Neustarts und Status.
-- `rpi-deploy.sh`: Einfaches Deployment neuer Code-Versionen per „One-Click“.
+- `wp-manager.sh`: Interaktives Menü für Logs, verifizierte Serviceaktionen, Produktionsstatus, Zyklusdaten und Analyse-Timer.
+- `rpi-deploy.sh`: Deployment per Fast-Forward; lokale Änderungen werden gesichert und blockieren das Update, statt verworfen zu werden.
+- Catbox-Uploads sind wegen der öffentlich abrufbaren URLs immer bestätigungspflichtig.
 
 ---
 

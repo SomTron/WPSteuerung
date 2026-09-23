@@ -24,6 +24,57 @@ color_print() {
     printf "%b%s%b\n" "$1" "$2" "$NC"
 }
 
+# Bewahrt lokale getrackte Aenderungen als Patch + Statusliste auf. Es wird
+# nichts gestasht, ueberschrieben oder verworfen.
+backup_local_changes() {
+    repo="$1"
+    stamp=$(date '+%Y%m%d-%H%M%S')-$$
+    git_dir=$(cd "$repo" && git rev-parse --git-dir 2>/dev/null) || return 1
+    case "$git_dir" in
+        /*) ;;
+        *) git_dir="$repo/$git_dir" ;;
+    esac
+    backup_dir="$git_dir/wp-manager-backups/$stamp"
+    mkdir -p "$backup_dir" || return 1
+    git -C "$repo" status --porcelain=v1 > "$backup_dir/status.txt" || return 1
+    git -C "$repo" diff --binary HEAD -- > "$backup_dir/tracked-changes.patch" || return 1
+    git -C "$repo" rev-parse HEAD > "$backup_dir/base-commit.txt" || return 1
+    printf '%s\n' "$backup_dir"
+}
+
+verify_service_restart() {
+    service_name="$1"
+    old_pid=$(systemctl show "$service_name" -p MainPID --value 2>/dev/null || true)
+    old_restarts=$(systemctl show "$service_name" -p NRestarts --value 2>/dev/null || true)
+    case "$old_pid" in ''|*[!0-9]*) old_pid=0 ;; esac
+    case "$old_restarts" in ''|*[!0-9]*) old_restarts=0 ;; esac
+    if ! sudo systemctl restart "$service_name"; then
+        color_print "$RED" "FEHLER: systemctl restart ist fehlgeschlagen."
+        return 1
+    fi
+    sleep 2
+    new_pid=$(systemctl show "$service_name" -p MainPID --value 2>/dev/null || true)
+    new_restarts=$(systemctl show "$service_name" -p NRestarts --value 2>/dev/null || true)
+    case "$new_pid" in ''|*[!0-9]*) new_pid=0 ;; esac
+    case "$new_restarts" in ''|*[!0-9]*) new_restarts=0 ;; esac
+    if ! systemctl is-active --quiet "$service_name" || [ "$new_pid" -le 0 ]; then
+        color_print "$RED" "FEHLER: Service ist nicht stabil aktiv (MainPID=$new_pid)."
+        journalctl -u "$service_name" -n 30 --no-pager 2>/dev/null || true
+        return 1
+    fi
+    if [ "$old_pid" -gt 0 ] && [ "$new_pid" -eq "$old_pid" ]; then
+        color_print "$RED" "FEHLER: Neustart hat die MainPID nicht gewechselt ($new_pid)."
+        journalctl -u "$service_name" -n 30 --no-pager 2>/dev/null || true
+        return 1
+    fi
+    if [ "$new_restarts" -gt "$old_restarts" ]; then
+        color_print "$RED" "FEHLER: Service ist direkt in einen Crash gelaufen (NRestarts $old_restarts -> $new_restarts)."
+        journalctl -u "$service_name" -n 30 --no-pager 2>/dev/null || true
+        return 1
+    fi
+    color_print "$GREEN" "Service-Neustart verifiziert: MainPID=$new_pid, NRestarts=$new_restarts."
+}
+
 color_print "$CYAN" "========================================="
 color_print "$CYAN" "  WPSteuerung Deployment auf Raspberry Pi"
 color_print "$CYAN" "========================================="
@@ -36,9 +87,6 @@ if [ ! -d "$REPO_DIR" ]; then
 fi
 
 cd "$REPO_DIR"
-# Verhindere "fatal: Need to specify how to reconcile divergent branches"
-git config pull.rebase false
-
 # Remote-Refs aktualisieren, damit "wie viele Commits hinten"-Anzeigen
 # (hier und im wp-manager.sh Header) aktuell sind. Mit Timeout, falls offline.
 FETCH_FAILED=0
@@ -64,23 +112,18 @@ printf "\n"
 color_print "$CYAN" "Git Status (ohne untracked files):"
 git status -uno --short
 
-# Warne nur bei getrackten Aenderungen
+# Blockiere jeden Git-Schritt bei lokalen getrackten Aenderungen. Der Snapshot
+# ersetzt bewusst keine benutzerkontrollierte Commit-/Stash-Aufloesung.
 if [ -n "$(git status -uno --porcelain)" ]; then
-    color_print "$RED" "WARNUNG: Es gibt lokale Aenderungen an getrackten Dateien!"
-    printf "Moechtest du diese verwerfen? (j/n): "
-    read reply
-    case "$reply" in
-        [Jj]*)
-            git reset --hard
-            color_print "$GREEN" "Lokale Aenderungen verworfen."
-            color_print "$CYAN" "Starte Skript neu..."
-            exec sh "$SCRIPT_PATH" "$@"
-            ;;
-        *)
-            color_print "$YELLOW" "Abgebrochen."
-            exit 1
-            ;;
-    esac
+    color_print "$RED" "ABBRUCH: Lokale Aenderungen an getrackten Dateien!"
+    git status -uno --short | head -n 10
+    BACKUP_DIR=$(backup_local_changes "$REPO_DIR") || {
+        color_print "$RED" "FEHLER: Lokale Aenderungen konnten nicht gesichert werden."
+        exit 1
+    }
+    color_print "$YELLOW" "Kein Pull/Checkout ausgefuehrt. Snapshot: $BACKUP_DIR"
+    color_print "$YELLOW" "Bitte Aenderungen committen/stashen oder manuell zusammenfuehren."
+    exit 1
 fi
 
 # Zeige Abstand zum Remote-Branch (Entscheidungshilfe fuer Option 1)
@@ -117,6 +160,10 @@ read choice
 
 case "$choice" in
     1)
+        if [ "$CURRENT_BRANCH" = "HEAD" ]; then
+            color_print "$RED" "FEHLER: Update im detached HEAD ist nicht erlaubt. Bitte zuerst einen Branch waehlen."
+            exit 1
+        fi
         printf "\n${CYAN}Hole Informationen von GitHub...${NC}\n"
         git fetch --all > /dev/null 2>&1
 
@@ -144,20 +191,12 @@ case "$choice" in
                                                 printf "\nUpdate durchfuehren? (j/n): "
         read confirm
         if [ "$confirm" = "j" ] || [ "$confirm" = "J" ]; then
-            printf "\n${CYAN}Aktualisiere Branch '%s'...${NC}\n" "$CURRENT_BRANCH"
-            git pull origin "$CURRENT_BRANCH"
+            printf "\n${CYAN}Aktualisiere Branch '%s' (nur Fast-Forward)...${NC}\n" "$CURRENT_BRANCH"
+            git pull --ff-only origin "$CURRENT_BRANCH"
             printf "${GREEN}Code aktualisiert!${NC}\n"
-            # Service automatisch neu starten
             if systemctl is-active --quiet "$SERVICE_NAME"; then
-                printf "${CYAN}Starte Service neu...${NC}\n"
-                sudo systemctl restart "$SERVICE_NAME"
-                sleep 2
-                if systemctl is-active --quiet "$SERVICE_NAME"; then
-                    printf "${GREEN}Service erfolgreich neu gestartet!${NC}\n"
-                else
-                    printf "${RED}WARNUNG: Service konnte nicht gestartet werden!${NC}\n"
-                    printf "Pruefe mit: sudo journalctl -u $SERVICE_NAME -n 20\n"
-                fi
+                printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
+                verify_service_restart "$SERVICE_NAME"
             else
                 printf "${YELLOW}Service ist nicht aktiv, ueberspringe Neustart.${NC}\n"
             fi
@@ -178,17 +217,29 @@ case "$choice" in
         printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
         read raw_branch
 
-        # Bereinige Branch-Namen (entferne remotes/origin/ oder origin/)
-        target_branch=$(echo "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
+        # Bereinige Branch-Namen und validiere sie als echte Git-Referenz.
+        target_branch=$(printf '%s\n' "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
+        case "$target_branch" in
+            -*|'')
+                color_print "$RED" "FEHLER: Ungueltiger Branch-Name: $target_branch"
+                exit 1
+                ;;
+        esac
+        if ! git check-ref-format "refs/heads/$target_branch" >/dev/null 2>&1; then
+            color_print "$RED" "FEHLER: Ungueltiger Branch-Name: $target_branch"
+            exit 1
+        fi
 
         printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
 
-        # Pruefe ob Branch lokal existiert, sonst tracke remote
         if git show-ref --verify --quiet "refs/heads/$target_branch"; then
             git checkout "$target_branch"
+        elif git show-ref --verify --quiet "refs/remotes/origin/$target_branch"; then
+            printf "${YELLOW}Branch '%s' lokal nicht gefunden. Erzeuge Tracking-Branch...${NC}\n" "$target_branch"
+            git checkout -b "$target_branch" "origin/$target_branch"
         else
-            printf "${YELLOW}Branch '%s' lokal nicht gefunden. Versuche Tracking von origin/%s...${NC}\n" "$target_branch" "$target_branch"
-            git checkout -b "$target_branch" "origin/$target_branch" || git checkout "$target_branch"
+            color_print "$RED" "FEHLER: Branch existiert weder lokal noch auf origin: $target_branch"
+            exit 1
         fi
 
         printf "${GREEN}Zu Branch '%s' gewechselt!${NC}\n" "$target_branch"
@@ -196,8 +247,7 @@ case "$choice" in
         read reply
         case "$reply" in
             [Jj]*)
-                sudo systemctl restart "$SERVICE_NAME"
-                printf "${GREEN}Service neu gestartet!${NC}\n"
+                verify_service_restart "$SERVICE_NAME"
                 ;;
         esac
         ;;
@@ -210,8 +260,22 @@ case "$choice" in
         printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
         read raw_branch
 
-        # Bereinige Branch-Namen
-        target_branch=$(echo "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
+        # Bereinige Branch-Namen und validiere sie als echte Git-Referenz.
+        target_branch=$(printf '%s\n' "$raw_branch" | sed -e 's|^remotes/origin/||' -e 's|^origin/||')
+        case "$target_branch" in
+            -*|'')
+                color_print "$RED" "FEHLER: Ungueltiger Branch-Name: $target_branch"
+                exit 1
+                ;;
+        esac
+        if ! git check-ref-format "refs/heads/$target_branch" >/dev/null 2>&1; then
+            color_print "$RED" "FEHLER: Ungueltiger Branch-Name: $target_branch"
+            exit 1
+        fi
+        if ! git show-ref --verify --quiet "refs/remotes/origin/$target_branch"; then
+            color_print "$RED" "FEHLER: Ziel-Branch existiert auf origin nicht: $target_branch"
+            exit 1
+        fi
 
         # Informationen über aktuellen Stand
         CUR_COMMIT=$(git rev-parse --short HEAD)
@@ -241,27 +305,18 @@ case "$choice" in
         if [ "$confirm" = "j" ] || [ "$confirm" = "J" ]; then
             printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
             
-            # Pruefe ob Branch lokal existiert, sonst tracke remote
+            # Pruefe ob Branch lokal existiert, sonst erstelle Tracking-Branch.
             if git show-ref --verify --quiet "refs/heads/$target_branch"; then
                 git checkout "$target_branch"
             else
-                printf "${YELLOW}Branch '%s' lokal nicht gefunden. Versuche Tracking von origin/%s...${NC}\n" "$target_branch" "$target_branch"
-                git checkout -b "$target_branch" "origin/$target_branch" || git checkout "$target_branch"
+                git checkout -b "$target_branch" "origin/$target_branch"
             fi
 
-                        git pull origin "$target_branch"
+            git pull --ff-only origin "$target_branch"
             printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
-            # Service automatisch neu starten
             if systemctl is-active --quiet "$SERVICE_NAME"; then
-                printf "${CYAN}Starte Service neu...${NC}\n"
-                sudo systemctl restart "$SERVICE_NAME"
-                sleep 2
-                if systemctl is-active --quiet "$SERVICE_NAME"; then
-                    printf "${GREEN}Service erfolgreich neu gestartet!${NC}\n"
-                else
-                    printf "${RED}WARNUNG: Service konnte nicht gestartet werden!${NC}\n"
-                    printf "Pruefe mit: sudo journalctl -u $SERVICE_NAME -n 20\n"
-                fi
+                printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
+                verify_service_restart "$SERVICE_NAME"
             else
                 printf "${YELLOW}Service ist nicht aktiv, ueberspringe Neustart.${NC}\n"
             fi
@@ -275,9 +330,8 @@ case "$choice" in
         ;;
 
     4)
-        printf "${CYAN}Starte Service neu...${NC}\n"
-        sudo systemctl restart "$SERVICE_NAME"
-        printf "${GREEN}Service neu gestartet!${NC}\n"
+        printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
+        verify_service_restart "$SERVICE_NAME"
         ;;
 
         5)

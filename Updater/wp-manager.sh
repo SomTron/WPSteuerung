@@ -2,9 +2,9 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
-# v1.11: Laufende Zyklus-Historie aus Steuerung/csv log/zyklen.csv wird vor
-#       Analyse-Ergebnissen bevorzugt; Option 20 installiert/aktiviert die
-#       automatische taegliche Log-Analyse.
+# v1.12: Sicheres Fast-Forward ohne Datenverlust, verifizierte Serviceaktionen,
+#       Produktionsstatus mit Kompressor/Zyklen/Datenalter, 24-h-Fehler-/OOM-
+#       Diagnose, Analyse-Untermenue und zentraler Datenschutz-Upload.
 # v1.10: Neue Option 19 (Lauf-Status/letzte Abstuerze aus letzter_lauf.json) und
 #       Status-Zeile "Letzter Lauf" im Kopf - macht OOM-Kills/Crashes sichtbar,
 #       die vorher nur im Kernel-Journal standen. Banner-Version nachgezogen.
@@ -12,8 +12,8 @@
 #       Analyse-Zylen-CSV) - Kompressor-Zyklen direkt vom PI abrufen/teilen.
 # v1.8: Neue Optionen 15 (Entscheidungs-Log anzeigen) und 16 (Upload
 #       entscheidungs_log.jsonl) - Detailansicht der Regelentscheidungen.
-# v1.7: Option 10 Raeumt blockierende lokale Aenderungen vorher weg (mit Ruefrage,
-#       wie im Deploy-Skript) - Pull scheiterte sonst an Runtime-Dateien.
+# v1.7: Option 10 behandelte blockierende Runtime-Dateien; v1.12 ersetzte das
+#       Verwerfen durch Snapshot + kontrollierten Abbruch.
 # v1.6: Farb-Fix (%b statt %s bei Service/VPN-Status - zeigte vorher rohe \033-Codes),
 #       lokale-Aenderungen-Zaehler nur noch getrackte Dateien (-uno).
 # v1.5: CYAN-Farbe ergänzt (war vorher nicht definiert), informativer Status-Header
@@ -21,11 +21,13 @@
 #       Fehlerbehandlung bei Upload / Self-Update / Service-Steuerung, neue Option 13.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET_DIR="$(dirname "$SCRIPT_DIR")/Steuerung"
-# Log-Pfade: produktiv unter /var/log/wps (log2ram-tmpfs), Fallback auf
-# das Steuerungsverzeichnis (alte Installation / Entwicklung).
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+TARGET_DIR="$REPO_ROOT/Steuerung"
+# Log-/CSV-Pfade: produktiv unter /var/log/wps, CSV direkt im Steuerungs-CWD.
 LOG_FILE="${WPS_LOG_FILE:-/var/log/wps/heizungssteuerung.log}"
 ERROR_LOG_FILE="${WPS_ERROR_LOG_FILE:-/var/log/wps/error.log}"
+HEATING_CSV="${WPS_HEATING_CSV:-$TARGET_DIR/csv log/heizungsdaten.csv}"
+CYCLE_CSV="${WPS_CYCLE_CSV:-$TARGET_DIR/csv log/zyklen.csv}"
 [ -f "$LOG_FILE" ] || LOG_FILE="$TARGET_DIR/heizungssteuerung.log"
 [ -f "$ERROR_LOG_FILE" ] || ERROR_LOG_FILE="$TARGET_DIR/error.log"
 
@@ -69,6 +71,205 @@ is_number() {
     esac
 }
 
+status_value() {
+    printf '%s\n' "$MANAGER_STATUS" | sed -n "s/^$1=//p" | head -n 1
+}
+
+# Legt lokale, versionierte Aenderungen als Patch + Statusliste ab. Es wird
+# bewusst weder gestasht noch verworfen: Der Benutzer entscheidet selbst ueber
+# Commit, stash oder manuelle Zusammenfuehrung.
+backup_local_changes() {
+    repo="$1"
+    stamp=$(date '+%Y%m%d-%H%M%S')-$$
+    git_dir=$(cd "$repo" && git rev-parse --git-dir 2>/dev/null) || return 1
+    case "$git_dir" in
+        /*) ;;
+        *) git_dir="$repo/$git_dir" ;;
+    esac
+    backup_dir="$git_dir/wp-manager-backups/$stamp"
+    mkdir -p "$backup_dir" || return 1
+    git -C "$repo" status --porcelain=v1 > "$backup_dir/status.txt" || return 1
+    git -C "$repo" diff --binary HEAD -- > "$backup_dir/tracked-changes.patch" || return 1
+    printf '%s\n' "$backup_dir"
+}
+
+# Fuehrt nur Fast-Forward-Updates aus. Lokale Aenderungen werden gesichert und
+# blockieren den Updateversuch; so kann kein Update still Daten vernichten.
+safe_manager_update() {
+    repo="$1"
+    if [ -n "$(git -C "$repo" status --porcelain -uno 2>/dev/null)" ]; then
+        backup_dir=$(backup_local_changes "$repo") || {
+            printf "${RED}✗ Lokale Änderungen konnten nicht gesichert werden.${NC}\n"
+            return 1
+        }
+        printf "${YELLOW}Update blockiert: lokale getrackte Änderungen vorhanden.${NC}\n"
+        git -C "$repo" status --short -uno | head -n 10 | sed 's/^/   /'
+        printf "Snapshot: %s\n" "$backup_dir"
+        printf "Bitte Änderungen committen/stashen oder manuell sichern.\n"
+        return 1
+    fi
+    old_commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null) || return 1
+    git -C "$repo" pull --ff-only || return 1
+    new_commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null) || return 1
+    if [ "$old_commit" != "$new_commit" ]; then
+        printf "${GREEN}✓ Update installiert: %s → %s.${NC}\n" "$old_commit" "$new_commit"
+        return 10
+    fi
+    printf "${GREEN}✓ Bereits aktuell (%s).${NC}\n" "$new_commit"
+    return 0
+}
+
+# Fuehrt systemctl aus und prueft danach den tatsaechlichen Endzustand. Fuer
+# Start/Restart werden MainPID und NRestarts geprueft, damit ein sofortiger
+# Crash-Loop nicht als Erfolg gemeldet wird.
+verify_service_action() {
+    action="$1"
+    service_name="$2"
+    old_pid=$(systemctl show "$service_name" -p MainPID --value 2>/dev/null)
+    old_restarts=$(systemctl show "$service_name" -p NRestarts --value 2>/dev/null)
+    case "$old_pid" in ''|*[!0-9]*) old_pid=0 ;; esac
+    case "$old_restarts" in ''|*[!0-9]*) old_restarts=0 ;; esac
+
+    if ! sudo systemctl "$action" "$service_name"; then
+        printf "${RED}✗ systemctl %s ist fehlgeschlagen.${NC}\n" "$action"
+        return 1
+    fi
+    case "$action" in
+        start|restart) expected=active ;;
+        stop) expected=inactive ;;
+        *) return 2 ;;
+    esac
+    reached=1
+    tries=0
+    while [ "$tries" -lt 10 ]; do
+        if systemctl is-active --quiet "$service_name"; then actual=active; else actual=inactive; fi
+        if [ "$actual" = "$expected" ]; then reached=0; break; fi
+        tries=$((tries + 1))
+        sleep 1
+    done
+    if [ "$reached" -ne 0 ]; then
+        printf "${RED}✗ Endzustand nach %s ist '%s', erwartet '%s'.${NC}\n" "$action" "$actual" "$expected"
+        systemctl status "$service_name" --no-pager -l 2>/dev/null || true
+        journalctl -u "$service_name" -n 30 --no-pager 2>/dev/null || true
+        return 1
+    fi
+
+    sleep 2
+    new_pid=$(systemctl show "$service_name" -p MainPID --value 2>/dev/null)
+    new_restarts=$(systemctl show "$service_name" -p NRestarts --value 2>/dev/null)
+    case "$new_pid" in ''|*[!0-9]*) new_pid=0 ;; esac
+    case "$new_restarts" in ''|*[!0-9]*) new_restarts=0 ;; esac
+    if [ "$action" = "stop" ] && [ "$new_pid" -ne 0 ]; then
+        printf "${RED}✗ Service ist gestoppt, aber MainPID ist noch %s.${NC}\n" "$new_pid"
+        return 1
+    elif [ "$action" = "restart" ] && [ "$old_pid" -gt 0 ] && [ "$new_pid" -eq "$old_pid" ]; then
+        printf "${RED}✗ Neustart hat die MainPID nicht gewechselt (%s).${NC}\n" "$new_pid"
+        journalctl -u "$service_name" -n 30 --no-pager 2>/dev/null || true
+        return 1
+    elif [ "$action" != "stop" ] && [ "$new_pid" -le 0 ]; then
+        printf "${RED}✗ Service ist aktiv, aber MainPID ist ungueltig (%s).${NC}\n" "$new_pid"
+        journalctl -u "$service_name" -n 30 --no-pager 2>/dev/null || true
+        return 1
+    elif [ "$new_restarts" -gt "$old_restarts" ]; then
+        printf "${RED}✗ Service ist in einen Neustart-Crash gelaufen (%s → %s).${NC}\n" "$old_restarts" "$new_restarts"
+        journalctl -u "$service_name" -n 30 --no-pager 2>/dev/null || true
+        return 1
+    fi
+    printf "${GREEN}✓ %s verifiziert: PID %s, NRestarts %s.${NC}\n" "$action" "$new_pid" "$new_restarts"
+    return 0
+}
+
+# Einheitlicher, bewusst bestaetigungspflichtiger Catbox-Upload. Originaldaten
+# werden nur in ein privates temporaeres Verzeichnis kopiert und danach geloescht.
+upload_file() {
+    source_file="$1"
+    label="$2"
+    max_bytes="${WPS_UPLOAD_MAX_BYTES:-209715200}"
+    case "$max_bytes" in
+        ''|*[!0-9]*)
+            printf "${RED}✗ WPS_UPLOAD_MAX_BYTES muss eine positive Ganzzahl sein.${NC}\n"
+            return 1
+            ;;
+    esac
+    if [ "$max_bytes" -le 0 ]; then
+        printf "${RED}✗ WPS_UPLOAD_MAX_BYTES muss groesser als 0 sein.${NC}\n"
+        return 1
+    fi
+    if [ ! -f "$source_file" ] || [ ! -r "$source_file" ]; then
+        printf "${RED}✗ Datei nicht lesbar: %s${NC}\n" "$source_file"
+        return 1
+    fi
+    file_size=$(wc -c < "$source_file" 2>/dev/null | tr -d ' ')
+    case "$file_size" in
+        ''|*[!0-9]*)
+            printf "${RED}✗ Dateigröße konnte nicht ermittelt werden.${NC}\n"
+            return 1
+            ;;
+    esac
+    if [ "$file_size" -eq 0 ]; then
+        printf "${RED}✗ Datei ist leer.${NC}\n"
+        return 1
+    fi
+    if [ "$file_size" -gt "$max_bytes" ]; then
+        printf "${RED}✗ Upload zu gross: %s Bytes (Limit %s).${NC}\n" "$file_size" "$max_bytes"
+        return 1
+    fi
+    if ! command -v gzip >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+        printf "${RED}✗ Upload benoetigt curl und gzip.${NC}\n"
+        return 1
+    fi
+    printf "${YELLOW}ACHTUNG: '%s' wird oeffentlich auf catbox.moe hochgeladen.${NC}\n" "$label"
+    printf "Die Datei kann Betriebs-, Temperatur- und Entscheidungsdaten enthalten.\n"
+    printf "URL ist ohne Login abrufbar. Upload jetzt ausfuehren? (j/N): "
+    read upload_reply
+    case "$upload_reply" in
+        [Jj]*) ;;
+        *) printf "Upload abgebrochen.\n"; return 0 ;;
+    esac
+
+    temp_dir=$(mktemp -d 2>/dev/null) || {
+        printf "${RED}✗ Temporaeres Verzeichnis konnte nicht erstellt werden.${NC}\n"
+        return 1
+    }
+    trap 'rm -rf "$temp_dir"' 0 1 2 3 15
+    base_name=$(basename "$source_file")
+    upload_name="${base_name}.gz"
+    if ! gzip -c "$source_file" > "$temp_dir/$upload_name"; then
+        rm -rf "$temp_dir"
+        printf "${RED}✗ Komprimierung fehlgeschlagen.${NC}\n"
+        return 1
+    fi
+    compressed_size=$(wc -c < "$temp_dir/$upload_name" 2>/dev/null | tr -d ' ')
+    case "$compressed_size" in
+        ''|*[!0-9]*)
+            rm -rf "$temp_dir"
+            printf "${RED}✗ Komprimierte Dateigröße konnte nicht ermittelt werden.${NC}\n"
+            return 1
+            ;;
+    esac
+    if [ "$compressed_size" -gt "$max_bytes" ]; then
+        rm -rf "$temp_dir"
+        printf "${RED}✗ Komprimierte Datei überschreitet das Limit (%s > %s Bytes).${NC}\n" \
+            "$compressed_size" "$max_bytes"
+        return 1
+    fi
+    printf "Lade %s (%s komprimiert) ...\n" "$label" "$(du -h "$temp_dir/$upload_name" | cut -f1)"
+    upload_url=$(curl --connect-timeout 15 --max-time 300 -fsS \
+        -F 'reqtype=fileupload' -F "fileToUpload=@$temp_dir/$upload_name" \
+        https://catbox.moe/user/api.php)
+    curl_rc=$?
+    rm -rf "$temp_dir"
+    if [ "$curl_rc" -ne 0 ]; then
+        printf "${RED}✗ Upload fehlgeschlagen (curl RC=%s).${NC}\n" "$curl_rc"
+        return 1
+    fi
+    if ! printf '%s' "$upload_url" | grep -Eq '^https://files\.catbox\.moe/[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)?$'; then
+        printf "${RED}✗ Unerwartete Catbox-Antwort.${NC}\n"
+        return 1
+    fi
+    printf "${GREEN}✓ Upload erfolgreich.${NC}\nURL: ${BLUE}%s${NC}\n" "$upload_url"
+}
+
 if [ ! -d "$TARGET_DIR" ]; then
     printf "${RED}Error: $TARGET_DIR not found!${NC}\n"
     exit 1
@@ -107,19 +308,110 @@ if not result:
 # Bevorzugt die laufende, direkt bei jedem Kompressorlauf fortgeschriebene
 # Historie. Fallback: neueste zyklen.csv aus einem manuellen Analyse-Lauf.
 finde_zyklen_csv() {
-    LIVE_CYCLE_CSV="$TARGET_DIR/csv log/zyklen.csv"
-    if [ -s "$LIVE_CYCLE_CSV" ] && [ "$(wc -l < "$LIVE_CYCLE_CSV" 2>/dev/null | tr -d ' ')" -gt 1 ]; then
-        printf '%s\n' "$LIVE_CYCLE_CSV"
+    if [ -s "$CYCLE_CSV" ] && [ "$(wc -l < "$CYCLE_CSV" 2>/dev/null | tr -d ' ')" -gt 1 ]; then
+        printf '%s\n' "$CYCLE_CSV"
         return 0
     fi
-    ROOT_DIR="$(dirname "$SCRIPT_DIR")/logs"
-    ls -1t "$ROOT_DIR"/analyse_*/zyklen.csv 2>/dev/null | head -n1
+    ls -1t "$REPO_ROOT"/logs/analyse_*/zyklen.csv 2>/dev/null | head -n1
 }
 
 
 wait_for_key() {
     printf "\n${YELLOW}Drücke Enter, um ins Menü zurückzukehren...${NC}"
     read dummy
+}
+
+analysis_status() {
+    timer_enabled=$(systemctl is-enabled wp-analyse.timer 2>/dev/null || true)
+    timer_active=$(systemctl is-active wp-analyse.timer 2>/dev/null || true)
+    [ -n "$timer_enabled" ] || timer_enabled=unbekannt
+    [ -n "$timer_active" ] || timer_active=inaktiv
+    printf "${CYAN}=== Automatische Analyse ===${NC}\n"
+    printf "Timer enabled: %s\n" "$timer_enabled"
+    printf "Timer active:  %s\n" "$timer_active"
+    printf "Service:       %s\n" "$(systemctl show wp-analyse.service -p LoadState --value 2>/dev/null || echo unbekannt)"
+    printf "Letztes Resultat: %s (ExecMainStatus %s)\n" \
+        "$(systemctl show wp-analyse.service -p Result --value 2>/dev/null || echo n/a)" \
+        "$(systemctl show wp-analyse.service -p ExecMainStatus --value 2>/dev/null || echo n/a)"
+    systemctl list-timers wp-analyse.timer --all --no-pager 2>/dev/null || true
+}
+
+install_auto_analysis() {
+    service_unit="$REPO_ROOT/Steuerung/wp-analyse.service"
+    timer_unit="$REPO_ROOT/Steuerung/wp-analyse.timer"
+    if [ ! -f "$service_unit" ] || [ ! -f "$timer_unit" ]; then
+        printf "${RED}Timer-Dateien fehlen. Bitte zuerst den aktuellen Code deployen.${NC}\n"
+        return 1
+    fi
+    printf "${CYAN}Installiere und aktiviere taegliche WP-Analyse ...${NC}\n"
+    sudo install -m 0644 "$service_unit" /etc/systemd/system/wp-analyse.service || return 1
+    sudo install -m 0644 "$timer_unit" /etc/systemd/system/wp-analyse.timer || return 1
+    sudo systemctl daemon-reload || return 1
+    sudo systemctl enable --now wp-analyse.timer || return 1
+    if systemctl is-enabled --quiet wp-analyse.timer && systemctl is-active --quiet wp-analyse.timer; then
+        printf "${GREEN}✓ wp-analyse.timer installiert, aktiviert und aktiv.${NC}\n"
+        systemctl list-timers wp-analyse.timer --all --no-pager 2>/dev/null || true
+        return 0
+    fi
+    printf "${RED}✗ Timer ist nach der Installation nicht enabled/active.${NC}\n"
+    systemctl status wp-analyse.timer --no-pager -l 2>/dev/null || true
+    return 1
+}
+
+run_auto_analysis() {
+    if [ ! -f "$REPO_ROOT/Steuerung/wp-analyse.service" ]; then
+        printf "${RED}Analyse-Unit fehlt. Bitte zuerst Option 20.3 ausfuehren.${NC}\n"
+        return 1
+    fi
+    printf "${CYAN}Starte wp-analyse.service manuell ...${NC}\n"
+    if ! sudo systemctl start wp-analyse.service; then
+        printf "${RED}✗ Analyse-Service konnte nicht erfolgreich beendet werden.${NC}\n"
+        journalctl -u wp-analyse.service -n 40 --no-pager 2>/dev/null || true
+        return 1
+    fi
+    result=$(systemctl show wp-analyse.service -p Result --value 2>/dev/null)
+    exit_status=$(systemctl show wp-analyse.service -p ExecMainStatus --value 2>/dev/null)
+    if [ "$result" = "success" ] && [ "$exit_status" = "0" ]; then
+        printf "${GREEN}✓ Analyse-Testlauf erfolgreich.${NC}\n"
+        find "$REPO_ROOT/logs/analyse_auto" -maxdepth 1 -type f -printf '%TY-%Tm-%Td %TH:%TM  %p\n' 2>/dev/null | sort | tail -n 8
+        return 0
+    fi
+    printf "${RED}✗ Analyse-Testlauf fehlgeschlagen: Result=%s ExecMainStatus=%s.${NC}\n" "$result" "$exit_status"
+    journalctl -u wp-analyse.service -n 40 --no-pager 2>/dev/null || true
+    return 1
+}
+
+analysis_menu() {
+    while :; do
+        clear
+        printf "${BLUE}=========================================================${NC}\n"
+        printf "                WP-Analyse-Verwaltung\n"
+        printf "${BLUE}=========================================================${NC}\n"
+        printf "1) Status und naechster Timer-Lauf\n"
+        printf "2) Manuellen Testlauf starten\n"
+        printf "3) Timer installieren / reparieren / aktivieren\n"
+        printf "4) Timer deaktivieren\n"
+        printf "5) Journal der Analyse (letzte 80 Zeilen)\n"
+        printf "0) Zurueck zum Hauptmenue\n"
+        printf "Choice: "
+        read analysis_choice
+        case "$analysis_choice" in
+            1) analysis_status ;;
+            2) run_auto_analysis ;;
+            3) install_auto_analysis ;;
+            4)
+                if sudo systemctl disable --now wp-analyse.timer; then
+                    printf "${GREEN}✓ wp-analyse.timer deaktiviert.${NC}\n"
+                else
+                    printf "${RED}✗ Timer konnte nicht deaktiviert werden.${NC}\n"
+                fi
+                ;;
+            5) journalctl -u wp-analyse.service -n 80 --no-pager 2>/dev/null || true ;;
+            0) return 0 ;;
+            *) printf "${RED}Ungültige Auswahl: %s${NC}\n" "$analysis_choice" ;;
+        esac
+        wait_for_key
+    done
 }
 
 while true; do
@@ -132,12 +424,26 @@ while true; do
     GIT_BEHIND=$(cd "$TARGET_DIR" && git rev-list --count "HEAD..@{u}" 2>/dev/null)
     [ -z "$GIT_BEHIND" ] && GIT_BEHIND="?"
 
+    # ---- Produktionsdaten: nur CSV-Ende/letzter Snapshot, keine Vollfiles ----
+    MANAGER_STATUS=$(python3 "$SCRIPT_DIR/manager_status.py" \
+        "$HEATING_CSV" "$CYCLE_CSV" "$TARGET_DIR/last_state.txt" 2>/dev/null || true)
+    COMP_VALUE=$(status_value compressor); [ -n "$COMP_VALUE" ] || COMP_VALUE="UNBEKANNT"
+    COMP_SOURCE=$(status_value compressor_source); [ -n "$COMP_SOURCE" ] || COMP_SOURCE="n/a"
+    COMP_AGE=$(status_value compressor_age); [ -n "$COMP_AGE" ] || COMP_AGE="n/a"
+    HEATING_AGE=$(status_value heating_age); [ -n "$HEATING_AGE" ] || HEATING_AGE="n/a"
+    CYCLE_COUNT=$(status_value cycle_count); [ -n "$CYCLE_COUNT" ] || CYCLE_COUNT="n/a"
+    CYCLE_LAST=$(status_value cycle_last_end); [ -n "$CYCLE_LAST" ] || CYCLE_LAST="n/a"
+    CYCLE_AGE=$(status_value cycle_age); [ -n "$CYCLE_AGE" ] || CYCLE_AGE="n/a"
+    CYCLE_REASON=$(status_value cycle_last_reason); [ -n "$CYCLE_REASON" ] || CYCLE_REASON="n/a"
+
     # ---- Service-Status mit Details ----
     SVC_ENABLED=$(systemctl is-enabled wpsteuerung 2>/dev/null)
     [ -z "$SVC_ENABLED" ] && SVC_ENABLED="unbekannt"
     SVC_PID=""
     SVC_MEM=""
     SVC_SINCE=""
+    SVC_RESTARTS=$(systemctl show wpsteuerung -p NRestarts --value 2>/dev/null)
+    [ -z "$SVC_RESTARTS" ] && SVC_RESTARTS="n/a"
     if systemctl is-active --quiet wpsteuerung; then
         SVC_STATUS="${GREEN}✓ AKTIV${NC}"
         SVC_PID=$(systemctl show wpsteuerung -p MainPID --value 2>/dev/null)
@@ -146,6 +452,13 @@ while true; do
     else
         SVC_STATUS="${RED}✗ INAKTIV${NC}"
     fi
+
+    ANALYSIS_ENABLED=$(systemctl is-enabled wp-analyse.timer 2>/dev/null || true)
+    ANALYSIS_ACTIVE=$(systemctl is-active wp-analyse.timer 2>/dev/null || true)
+    [ -n "$ANALYSIS_ENABLED" ] || ANALYSIS_ENABLED="unbekannt"
+    [ -n "$ANALYSIS_ACTIVE" ] || ANALYSIS_ACTIVE="inaktiv"
+    ANALYSIS_NEXT=$(systemctl list-timers wp-analyse.timer --all --no-pager --no-legend 2>/dev/null | awk 'NR==1 {print $1 " " $2 " " $3}')
+    [ -z "$ANALYSIS_NEXT" ] && ANALYSIS_NEXT="kein Lauf geplant"
 
     # VPN / WireGuard Status
     if systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
@@ -191,21 +504,26 @@ while true; do
         CPU_TEMP="$(( $(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0) / 1000 ))°C"
     fi
 
-    # ---- Log-Statistik ----
+    # ---- 24-h-Diagnose: bewusst Journal statt lebenslanger error.log-Zeilen ----
     LOG_SIZE=""
     [ -f "$LOG_FILE" ] && LOG_SIZE=$(du -h "$LOG_FILE" 2>/dev/null | cut -f1)
-    ERR_COUNT=0
-    ERR_TIME=""
+    RECENT_ERROR_COUNT="n/a"
     LAST_ERR=""
-    if [ -f "$ERROR_LOG_FILE" ]; then
-        ERR_COUNT=$(wc -l < "$ERROR_LOG_FILE" | tr -d ' ')
-        ERR_TIME=$(stat -c %y "$ERROR_LOG_FILE" 2>/dev/null | cut -d. -f1)
-        [ -s "$ERROR_LOG_FILE" ] && LAST_ERR=$(tail -n 1 "$ERROR_LOG_FILE" 2>/dev/null | cut -c1-70)
+    if command -v journalctl >/dev/null 2>&1; then
+        RECENT_ERROR_COUNT=$(journalctl -u wpsteuerung --since '24 hours ago' --no-pager 2>/dev/null \
+            | grep -Eic ' ERROR | CRITICAL |Traceback|Exception' || true)
+        LAST_ERR=$(journalctl -u wpsteuerung --since '24 hours ago' --no-pager 2>/dev/null \
+            | grep -E ' ERROR | CRITICAL |Traceback|Exception' | tail -n 1 | cut -c1-100)
+    fi
+    RECENT_OOM_COUNT="n/a"
+    if command -v journalctl >/dev/null 2>&1; then
+        RECENT_OOM_COUNT=$(journalctl -k --since '24 hours ago' --no-pager 2>/dev/null \
+            | grep -Eic 'Out of memory|Killed process' || true)
     fi
 
     clear
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.11                 ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager v1.12                 ${NC}\n"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Branch:   ${YELLOW}%s${NC}" "$CUR_BRANCH"
@@ -231,10 +549,24 @@ while true; do
     fi
     printf "  ${DIM}[autostart: %s]${NC}\n" "$SVC_ENABLED"
     if [ -n "$SVC_SINCE" ]; then
-        printf "          ${DIM}läuft seit %s${NC}\n" "$SVC_SINCE"
+        printf "          ${DIM}läuft seit %s | NRestarts %s${NC}\n" "$SVC_SINCE" "$SVC_RESTARTS"
+    else
+        printf "          ${DIM}NRestarts %s${NC}\n" "$SVC_RESTARTS"
     fi
-    printf "VPN:      %b%s\n" "$VPN_STATUS" "$VPN_INFO"
-    printf "Lauf:     %b\n" "$LAUF_STATUS"
+    case "$COMP_VALUE" in
+        EIN) COMP_COLOR="$GREEN" ;;
+        AUS) COMP_COLOR="$CYAN" ;;
+        *) COMP_COLOR="$YELLOW" ;;
+    esac
+    printf "WP:        ${COMP_COLOR}%s${NC}  ${DIM}letzter bekannter Stand: %s (vor %s, %s)${NC}\n" \
+        "$COMP_VALUE" "$COMP_VALUE" "$COMP_AGE" "$COMP_SOURCE"
+    printf "CSV:       Temperaturdaten vor %s | Zyklen: %s, letzter vor %s (%s)\n" \
+        "$HEATING_AGE" "$CYCLE_COUNT" "$CYCLE_AGE" "$CYCLE_LAST"
+    printf "           letzter Zyklus: %s\n" "$CYCLE_REASON"
+    printf "Analyse:   Timer %s/%s, Autostart %s | nächst: %s\n" \
+        "$ANALYSIS_ACTIVE" "$ANALYSIS_ENABLED" "$ANALYSIS_ENABLED" "$ANALYSIS_NEXT"
+    printf "VPN:       %b%s\n" "$VPN_STATUS" "$VPN_INFO"
+    printf "Lauf:      %b\n" "$LAUF_STATUS"
     SYS_LINE="System:   ${HOST_UP:-unbekannt}"
     [ -n "$CPU_TEMP" ] && SYS_LINE="$SYS_LINE | CPU $CPU_TEMP"
     if [ -n "$DISK_AVAIL" ]; then
@@ -244,11 +576,16 @@ while true; do
     # printf --  : dash (Dash) meldet sonst "Illegal option --", wenn die
     # Farbvariable leer ist (> kein TTY) und das Format mit '-' beginnt.
     printf -- "${BLUE}---------------------------------------------------------${NC}\n"
-    if [ -f "$ERROR_LOG_FILE" ] && [ "$ERR_COUNT" != "0" ]; then
-        printf "⚠ Error-Log: ${RED}%s Einträge${NC}, letzte Änderung: %s\n" "$ERR_COUNT" "$ERR_TIME"
+    if [ "$RECENT_ERROR_COUNT" != "n/a" ] && [ "$RECENT_ERROR_COUNT" != "0" ]; then
+        printf "⚠ 24 h:     ${RED}%s Fehler/Traceback${NC}, OOM ${RED}%s${NC}\n" \
+            "$RECENT_ERROR_COUNT" "$RECENT_OOM_COUNT"
         [ -n "$LAST_ERR" ] && printf "  ${RED}➜ %s${NC}\n" "$LAST_ERR"
+    elif [ "$RECENT_ERROR_COUNT" = "0" ]; then
+        printf "Diagnose:   24 h: ${GREEN}keine Fehler/Tracebacks${NC}, OOM: %s\n" "$RECENT_OOM_COUNT"
+    else
+        printf "Diagnose:   24-h-Journal nicht verfügbar\n"
     fi
-    [ -n "$LOG_SIZE" ] && printf "Log:      heizungssteuerung.log (%s)\n" "$LOG_SIZE"
+    [ -n "$LOG_SIZE" ] && printf "Log:        heizungssteuerung.log (%s)\n" "$LOG_SIZE"
     printf -- "${BLUE}---------------------------------------------------------${NC}\n\n"
     
     printf "1) 📜   Live-Logs (tail -f, Strg+C beendet)\n"
@@ -270,7 +607,7 @@ while true; do
     printf "17) 📊  Zyklen-Analyse anzeigen (zyklen.csv)\n"
     printf "18) ☁️  Upload zyklen.csv to Catbox\n"
     printf "19) 🩺  Lauf-Status / letzte Abstuerze (letzter_lauf.json)\n"
-    printf "20) ⏰  Auto-Analyse installieren/aktivieren (taeglich 04:30)\n"
+    printf "20) ⏰  Auto-Analyse (Status, Testlauf, Timer, Journal)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -306,94 +643,32 @@ while true; do
             ;;
         4) sh "$SCRIPT_DIR/rpi-deploy.sh"; wait_for_key ;;
         5)
-            printf "${CYAN}Starte Service neu...${NC}\n"
-            sudo systemctl restart wpsteuerung \
-                && printf "${GREEN}✓ Service neu gestartet.${NC}\n" \
-                || printf "${RED}✗ Neustart fehlgeschlagen!${NC}\n"
+            printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
+            verify_service_action restart wpsteuerung
             wait_for_key
             ;;
         6)
-            printf "${CYAN}Stoppe Service...${NC}\n"
-            sudo systemctl stop wpsteuerung \
-                && printf "${GREEN}✓ Service gestoppt.${NC}\n" \
-                || printf "${RED}✗ Stop fehlgeschlagen!${NC}\n"
+            printf "${CYAN}Stoppe Service und verifiziere...${NC}\n"
+            verify_service_action stop wpsteuerung
             wait_for_key
             ;;
         7)
-            printf "${CYAN}Starte Service...${NC}\n"
-            sudo systemctl start wpsteuerung \
-                && printf "${GREEN}✓ Service gestartet.${NC}\n" \
-                || printf "${RED}✗ Start fehlgeschlagen!${NC}\n"
+            printf "${CYAN}Starte Service und verifiziere...${NC}\n"
+            verify_service_action start wpsteuerung
             wait_for_key
             ;;
         8) ls -la "$TARGET_DIR"; wait_for_key ;;
-        9) 
-            CSV_PATH="$TARGET_DIR/csv log/heizungsdaten.csv"
-            if [ -f "$CSV_PATH" ]; then
-                TMP_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/wp-manager.$$")
-                mkdir -p "$TMP_DIR"
-                printf "${CYAN}Bereite heizungsdaten.csv für Upload vor (%s)...${NC}\n" "$(du -h "$CSV_PATH" | cut -f1)"
-                cp "$CSV_PATH" "$TMP_DIR/heizungsdaten_upload.csv"
-                gzip -f "$TMP_DIR/heizungsdaten_upload.csv"
-                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\n"
-                UPLOAD_URL=$(curl -fsS -F "reqtype=fileupload" \
-                    -F "fileToUpload=@$TMP_DIR/heizungsdaten_upload.csv.gz" \
-                    https://catbox.moe/user/api.php)
-                CURL_RC=$?
-                if [ $CURL_RC -eq 0 ] && [ -n "$UPLOAD_URL" ] && printf '%s' "$UPLOAD_URL" | grep -q '^https://'; then
-                    printf "${GREEN}✓ Upload erfolgreich! (${YELLOW}%s komprimiert${GREEN})${NC}\n" "$(du -h "$TMP_DIR/heizungsdaten_upload.csv.gz" | cut -f1)"
-                    printf "URL: ${BLUE}%s${NC}\n" "$UPLOAD_URL"
-                else
-                    printf "${RED}✗ Fehler beim Upload (curl RC=%s)!${NC}\n" "$CURL_RC"
-                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: %s${NC}\n" "$UPLOAD_URL"
-                fi
-                rm -rf "$TMP_DIR"
-            else
-                printf "${RED}Fehler: $CSV_PATH nicht gefunden!${NC}\n"
-            fi
+        9)
+            upload_file "$HEATING_CSV" "heizungsdaten.csv"
             wait_for_key
             ;;
         10)
-            printf "${CYAN}Aktualisiere WP-Manager (Updater-Repo)...${NC}\n"
-            # Vorab-Check: Lokale Aenderungen an getrackten Dateien blockieren
-            # den Pull ("would be overwritten by merge"). Klassiker: Die vom
-            # Service fortlaufend geschriebene sonnen_prognose.csv.
-            REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)
-            GIT_DIRTY_TRACKED=$(git -C "$REPO_ROOT" status --porcelain -uno 2>/dev/null | wc -l | tr -d ' ')
-            if [ "$GIT_DIRTY_TRACKED" != "0" ] && [ -n "$GIT_DIRTY_TRACKED" ]; then
-                printf "${YELLOW}⚠ %s lokale Aenderungen blockieren den Pull:${NC}\n" "$GIT_DIRTY_TRACKED"
-                git -C "$REPO_ROOT" status --porcelain -uno 2>/dev/null | head -5 | sed 's/^/   /'
-                printf "Diese Aenderungen verwerfen (git reset --hard)? (j/n): "
-                read reply
-                case "$reply" in
-                    [Jj]*)
-                        if git -C "$REPO_ROOT" reset --hard >/dev/null 2>&1; then
-                            printf "${GREEN}✓ Lokale Aenderungen verworfen.${NC}\n"
-                        else
-                            printf "${RED}✗ Reset fehlgeschlagen – bitte manuell loesen.${NC}\n"
-                            wait_for_key
-                            continue
-                        fi
-                        ;;
-                    *)
-                        printf "${YELLOW}Abgebrochen. Alternativ: Option 4 (Deploy) nutzt denselben Ablauf.${NC}\n"
-                        wait_for_key
-                        continue
-                        ;;
-                esac
-            fi
-            OLD_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)
-            if git -C "$SCRIPT_DIR" pull --ff-only; then
-                NEW_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)
-                if [ -n "$OLD_COMMIT" ] && [ "$OLD_COMMIT" != "$NEW_COMMIT" ]; then
-                    printf "${GREEN}✓ Update installiert: %s → %s. Starte Skript neu...${NC}\n" "$OLD_COMMIT" "$NEW_COMMIT"
-                    sleep 1
-                    exec sh "$0" "$@"
-                else
-                    printf "${GREEN}✓ Bereits auf neuestem Stand (%s).${NC}\n" "${NEW_COMMIT:-?}"
-                fi
-            else
-                printf "${RED}✗ Git pull fehlgeschlagen (offline / Konflikte / keine Änderungen möglich?)${NC}\n"
+            printf "${CYAN}Aktualisiere WP-Manager (nur Fast-Forward)...${NC}\n"
+            safe_manager_update "$REPO_ROOT"
+            update_rc=$?
+            if [ "$update_rc" -eq 10 ]; then
+                sleep 1
+                exec sh "$0" "$@"
             fi
             wait_for_key
             ;;
@@ -444,28 +719,7 @@ while true; do
             wait_for_key
             ;;
         14)
-            if [ -f "$LOG_FILE" ]; then
-                TMP_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/wp-manager.$$")
-                mkdir -p "$TMP_DIR"
-                printf "${CYAN}Bereite heizungssteuerung.log für Upload vor (%s)...${NC}\n" "$(du -h "$LOG_FILE" | cut -f1)"
-                cp "$LOG_FILE" "$TMP_DIR/heizungssteuerung_upload.log"
-                gzip -f "$TMP_DIR/heizungssteuerung_upload.log"
-                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\n"
-                UPLOAD_URL=$(curl -fsS -F "reqtype=fileupload" \
-                    -F "fileToUpload=@$TMP_DIR/heizungssteuerung_upload.log.gz" \
-                    https://catbox.moe/user/api.php)
-                CURL_RC=$?
-                if [ $CURL_RC -eq 0 ] && [ -n "$UPLOAD_URL" ] && printf '%s' "$UPLOAD_URL" | grep -q '^https://'; then
-                    printf "${GREEN}✓ Upload erfolgreich! (${YELLOW}%s komprimiert${GREEN})${NC}\n" "$(du -h "$TMP_DIR/heizungssteuerung_upload.log.gz" | cut -f1)"
-                    printf "URL: ${BLUE}%s${NC}\n" "$UPLOAD_URL"
-                else
-                    printf "${RED}✗ Fehler beim Upload (curl RC=%s)!${NC}\n" "$CURL_RC"
-                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: %s${NC}\n" "$UPLOAD_URL"
-                fi
-                rm -rf "$TMP_DIR"
-            else
-                printf "${RED}Fehler: $LOG_FILE nicht gefunden!${NC}\n"
-            fi
+            upload_file "$LOG_FILE" "heizungssteuerung.log"
             wait_for_key
             ;;
         15)
@@ -510,28 +764,7 @@ except Exception as ex:
             ;;
         16)
             ENT_LOG_FILE="${WPS_ENT_LOG_FILE:-$TARGET_DIR/entscheidungs_log.jsonl}"
-            if [ -f "$ENT_LOG_FILE" ]; then
-                TMP_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/wp-manager.$$")
-                mkdir -p "$TMP_DIR"
-                printf "${CYAN}Bereite entscheidungs_log.jsonl fuer Upload vor (%s)...${NC}\\n" "$(du -h "$ENT_LOG_FILE" | cut -f1)"
-                cp "$ENT_LOG_FILE" "$TMP_DIR/entscheidungs_log_upload.jsonl"
-                gzip -f "$TMP_DIR/entscheidungs_log_upload.jsonl"
-                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\\n"
-                UPLOAD_URL=$(curl -fsS -F "reqtype=fileupload" \
-                    -F "fileToUpload=@$TMP_DIR/entscheidungs_log_upload.jsonl.gz" \
-                    https://catbox.moe/user/api.php)
-                CURL_RC=$?
-                if [ $CURL_RC -eq 0 ] && [ -n "$UPLOAD_URL" ] && printf '%s' "$UPLOAD_URL" | grep -q '^https://'; then
-                    printf "${GREEN}✓ Upload erfolgreich! (${YELLOW}%s komprimiert${GREEN})${NC}\\n" "$(du -h "$TMP_DIR/entscheidungs_log_upload.jsonl.gz" | cut -f1)"
-                    printf "URL: ${BLUE}%s${NC}\\n" "$UPLOAD_URL"
-                else
-                    printf "${RED}✗ Fehler beim Upload (curl RC=%s)!${NC}\\n" "$CURL_RC"
-                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: %s${NC}\\n" "$UPLOAD_URL"
-                fi
-                rm -rf "$TMP_DIR"
-            else
-                printf "${RED}Fehler: entscheidungs_log.jsonl nicht gefunden!${NC}\\n"
-            fi
+            upload_file "$ENT_LOG_FILE" "entscheidungs_log.jsonl"
             wait_for_key
             ;;
         17)
@@ -567,46 +800,13 @@ except Exception as ex:
         18)
             ZYKLEN_CSV=$(finde_zyklen_csv)
             if [ -n "$ZYKLEN_CSV" ]; then
-                TMP_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/wp-manager.$$")
-                mkdir -p "$TMP_DIR"
-                printf "${CYAN}Bereite zyklen.csv fuer Upload vor (%s)...${NC}\\n" "$(du -h "$ZYKLEN_CSV" | cut -f1)"
-                cp "$ZYKLEN_CSV" "$TMP_DIR/zyklen_upload.csv"
-                gzip -f "$TMP_DIR/zyklen_upload.csv"
-                printf "${CYAN}Lade zu Catbox.moe hoch...${NC}\\n"
-                UPLOAD_URL=$(curl -fsS -F "reqtype=fileupload" \
-                    -F "fileToUpload=@$TMP_DIR/zyklen_upload.csv.gz" \
-                    https://catbox.moe/user/api.php)
-                CURL_RC=$?
-                if [ $CURL_RC -eq 0 ] && [ -n "$UPLOAD_URL" ] && printf '%s' "$UPLOAD_URL" | grep -q '^https://'; then
-                    printf "${GREEN}✓ Upload erfolgreich! (${YELLOW}%s komprimiert${GREEN})${NC}\\n" "$(du -h "$TMP_DIR/zyklen_upload.csv.gz" | cut -f1)"
-                    printf "URL: ${BLUE}%s${NC}\\n" "$UPLOAD_URL"
-                else
-                    printf "${RED}✗ Fehler beim Upload (curl RC=%s)!${NC}\\n" "$CURL_RC"
-                    [ -n "$UPLOAD_URL" ] && printf "${RED}Antwort: %s${NC}\\n" "$UPLOAD_URL"
-                fi
-                rm -rf "$TMP_DIR"
+                upload_file "$ZYKLEN_CSV" "zyklen.csv"
             else
                 printf "${RED}Fehler: keine zyklen.csv gefunden.${NC}\\n"
             fi
             wait_for_key
             ;;
-        20)
-            REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-            if [ ! -f "$REPO_ROOT/Steuerung/wp-analyse.service" ] || \
-               [ ! -f "$REPO_ROOT/Steuerung/wp-analyse.timer" ]; then
-                printf "${RED}Timer-Dateien fehlen. Bitte zuerst den aktuellen Code deployen.${NC}\\n"
-            else
-                printf "${CYAN}Installiere taegliche WP-Analyse ...${NC}\\n"
-                sudo install -m 0644 "$REPO_ROOT/Steuerung/wp-analyse.service" /etc/systemd/system/wp-analyse.service
-                sudo install -m 0644 "$REPO_ROOT/Steuerung/wp-analyse.timer" /etc/systemd/system/wp-analyse.timer
-                sudo systemctl daemon-reload
-                sudo systemctl enable --now wp-analyse.timer
-                printf "${GREEN}✓ wp-analyse.timer aktiv. Nächster Lauf:${NC}\\n"
-                systemctl list-timers wp-analyse.timer --no-pager 2>/dev/null || true
-                printf "${DIM}Manueller Test: sudo systemctl start wp-analyse.service${NC}\\n"
-            fi
-            wait_for_key
-            ;;
+        20) analysis_menu ;;
         19)
             LAUF_JSON="$TARGET_DIR/letzter_lauf.json"
             printf "${CYAN}=== Lauf-Status / letzte Abstuerze ===${NC}\\n"
@@ -619,8 +819,10 @@ except Exception as ex:
                 printf "${DIM}(wird beim naechsten Start der Steuerung angelegt)${NC}\\n\\n"
             fi
 
-            printf "${CYAN}--- Bewertung (startup_diagnose) ---${NC}\\n"
-            python3 -c "
+            printf "${CYAN}--- Bewertung (startup_diagnose) ---${NC}\n"
+            (
+                cd "$TARGET_DIR" || exit 1
+                python3 -c "
 import sys
 sys.path.insert(0, '$TARGET_DIR')
 try:
@@ -648,6 +850,7 @@ else:
 print()
 print('Speicher jetzt: %s' % sd.formatiere_speicher(sd.speicher_werte()))
 " 2>&1 | more
+            )
 
             printf "\\n${CYAN}--- Service / System ---${NC}\\n"
             printf "Neustarts durch systemd: %s\\n" "$(systemctl show wpsteuerung -p NRestarts --value 2>/dev/null)"
@@ -655,11 +858,11 @@ print('Speicher jetzt: %s' % sd.formatiere_speicher(sd.speicher_werte()))
             if command -v vcgencmd >/dev/null 2>&1; then
                 printf "Throttling (Strom/Temp): %s  ${DIM}(0x0 = unauffaellig)${NC}\\n" "$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
             fi
-            OOM_COUNT=$(dmesg 2>/dev/null | grep -c "Out of memory")
+            OOM_COUNT=$(journalctl -k --since '24 hours ago' --no-pager 2>/dev/null \
+                | grep -Eic 'Out of memory|Killed process' || true)
             [ -z "$OOM_COUNT" ] && OOM_COUNT="n/a"
-            printf "OOM-Ereignisse im Kernel-Ringpuffer: %s\\n" "$OOM_COUNT"
-            printf "${DIM}Hinweis: Der Ringpuffer ist begrenzt - 0 bedeutet nicht,\\n"
-            printf "dass es nie einen OOM gab (siehe Journal/Historie).${NC}\\n"
+            printf "OOM-Ereignisse im Kernel-Journal (letzte 24 h): %s\\n" "$OOM_COUNT"
+            printf "${DIM}Bei fehlender Journal-Berechtigung oder leerem Journal ist die Anzahl nur ein Hinweis.${NC}\\n"
             wait_for_key
             ;;
         0) exit 0 ;;
