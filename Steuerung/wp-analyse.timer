@@ -1,0 +1,11 @@
+[Unit]
+Description=Taegliche WP-Analyse aktualisieren
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=5m
+Unit=wp-analyse.service
+
+[Install]
+WantedBy=timers.target

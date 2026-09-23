@@ -22,8 +22,11 @@ logs/analyse_*/
 # bei jedem Deploy mit "lokale Aenderungen verwerfen?")
 Steuerung/sonnen_prognose.csv
 
-# heizungsdaten.csv im Hauptordner ignorieren, aber nicht im Analyse-Ordner
+# Laufzeit-Historien im Hauptordner ignorieren, aber nicht im Analyse-Ordner
 Steuerung/csv\ log/heizungsdaten.csv
+Steuerung/csv\ log/heizungsdaten_*.csv
+Steuerung/csv\ log/zyklen.csv
+Steuerung/csv\ log/zyklen_*.csv
 !Analyse/
 !Analyse/*.csv
 Analyse/*.md

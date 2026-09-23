@@ -679,7 +679,9 @@ async def control_system(cmd: ControlCommand):
 
     elif cmd.command == "force_off":
         if "set_kompressor" in control_funcs:
-            await control_funcs["set_kompressor"](shared_state, False, force=True)
+            await control_funcs["set_kompressor"](
+                shared_state, False, force=True, end_grund="api_manuell"
+            )
             return {"status": "success", "message": "Compressor forced OFF"}
         raise HTTPException(status_code=503, detail="Control function not available")
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Automatische WP-Zyklus- und Loganalyse
+After=wpsteuerung.service
+
+[Service]
+Type=oneshot
+User=patrik
+Group=patrik
+WorkingDirectory=/home/patrik/WPSteuerung
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/patrik/WPSteuerung/.venv/bin/python Analyse/log_analyse.py --log /var/log/wps/heizungssteuerung.log --out /home/patrik/WPSteuerung/logs/analyse_auto
+Nice=10
+CPUWeight=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/patrik/WPSteuerung/logs

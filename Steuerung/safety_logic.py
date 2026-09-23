@@ -51,7 +51,9 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         state.control.ausschluss_grund = "Sensorfehler"
         state.control.blocking_reason = "Sensor-Fehler"
         if state.control.kompressor_ein:
-            await set_kompressor_status_func(state, False, force=True)
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="sensorfehler"
+            )
         return False
 
     safety_temp = None
@@ -100,14 +102,18 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
         state.control.blocking_reason = f"Sicherheitstemp (>= {safety_temp}°C)"
         if state.control.kompressor_ein:
-            await set_kompressor_status_func(state, False, force=True)
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="uebertemperatur"
+            )
         return False
 
     if not is_valid_temperature(t_verd, min_temp=TEMP_VERD_MIN_VALID, max_temp=TEMP_VERD_MAX_VALID):
         state.control.ausschluss_grund = "Verdampfertemperatur ungültig"
         state.control.blocking_reason = "Verdampfer ungültig"
         if state.control.kompressor_ein:
-            await set_kompressor_status_func(state, False, force=True)
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="verdampfer_ungueltig"
+            )
         return False
     
     verd_limit = state.config.Heizungssteuerung.VERDAMPFERTEMPERATUR
@@ -141,7 +147,9 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
             state.control.blocking_reason = f"Verdampfer zu kalt ({t_verd:.1f}°C < {verd_limit}°C)"
         
         if state.control.kompressor_ein:
-            await set_kompressor_status_func(state, False, force=True)
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="verdampfer_zu_kalt"
+            )
         return False
     
     state.verdampfer_blocked = False

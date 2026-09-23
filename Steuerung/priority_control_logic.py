@@ -83,7 +83,9 @@ async def check_pressure_and_config(
         state.control.ausschluss_grund = "Druckschalterfehler"
         state.control.blocking_reason = "Druckschalter-Fehler"
         if state.control.kompressor_ein:
-            await set_kompressor_status_func(state, False, force=True)
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="druckfehler"
+            )
         return False
 
     if not only_pressure:
@@ -1012,7 +1014,8 @@ async def handle_compressor_off(
     ueberhitz = _effektive_ueberhitzung_schwelle(state)
     if t_oben is not None and t_oben >= ueberhitz:
         if await set_kompressor_status_func(
-            state, False, force=True, t_boiler_oben=t_oben
+            state, False, force=True, t_boiler_oben=t_oben,
+            end_grund="ueberhitzungsschutz",
         ):
             state.control.blocking_reason = f"Ueberhitzungsschutz ({t_oben:.1f}C >= {ueberhitz:.1f}C)"
             logging.warning(f"SICHERHEIT AUS: Ueberhitzung ({t_oben:.1f}C)")
@@ -1027,7 +1030,8 @@ async def handle_compressor_off(
     t_max, limit, wiederein, fuehler = _boiler_max_info(state)
     if t_max is not None and t_max >= limit:
         if await set_kompressor_status_func(
-            state, False, force=True, t_boiler_oben=t_oben
+            state, False, force=True, t_boiler_oben=t_oben,
+            end_grund="boiler_max",
         ):
             state.control.boiler_max_blockiert = wiederein
             state.control.blocking_reason = (
@@ -1080,7 +1084,8 @@ async def handle_compressor_off(
             t_prognose = t_max + rate_var * (rest_min / 60.0)
             if t_prognose >= limit - reserve_k:
                 if await set_kompressor_status_func(
-                    state, False, force=True, t_boiler_oben=t_oben
+                    state, False, force=True, t_boiler_oben=t_oben,
+                    end_grund="overshoot_vorhersage",
                 ):
                     state.control.blocking_reason = (
                         f"Overshoot-Vorhersage ({fuehler} {t_max:.1f}C + "
@@ -1112,7 +1117,8 @@ async def handle_compressor_off(
             f" (Start {float(start):.1f}C)" if isinstance(start, (int, float)) else ""
         )
         if await set_kompressor_status_func(
-            state, False, force=True, t_boiler_oben=t_oben
+            state, False, force=True, t_boiler_oben=t_oben,
+            end_grund="schichtung",
         ):
             state.control.blocking_reason = (
                 f"Schichtungs-Obergrenze ({t_oben:.1f}C >= {float(schichtung_max):.1f}C{steig_txt})"
@@ -1165,7 +1171,8 @@ async def handle_compressor_off(
         )
         if elapsed >= min_laufzeit_eff:
             if await set_kompressor_status_func(
-                state, False, force=True, t_boiler_oben=t_oben
+                state, False, force=True, t_boiler_oben=t_oben,
+                end_grund="regel_aus",
             ):
                 state.control.blocking_reason = None
                 state.control._lauf_start_regel = None  # Fahrt beendet
@@ -1200,7 +1207,8 @@ async def handle_compressor_off(
         )
         if elapsed >= min_laufzeit:
             if await set_kompressor_status_func(
-                state, False, force=True, t_boiler_oben=t_oben
+                state, False, force=True, t_boiler_oben=t_oben,
+                end_grund="regel_aus",
             ):
                 state.control.blocking_reason = None
                 logging.info(

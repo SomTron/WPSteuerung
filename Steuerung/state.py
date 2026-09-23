@@ -100,6 +100,8 @@ class State:
         self.solar = SolarState()
         self.control = ControlState(self.config)
         self.stats = StatsState(now)
+        # Laufzeit-Snapshot fuer die persistente Zyklus-CSV (nicht serialisiert).
+        self._cycle_log: Optional[dict] = None
         
         # Urlaubs/Bademodus (Legacy/Simple Group)
         self.urlaubsmodus_aktiv: bool = False

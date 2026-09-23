@@ -2,6 +2,9 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.11: Laufende Zyklus-Historie aus Steuerung/csv log/zyklen.csv wird vor
+#       Analyse-Ergebnissen bevorzugt; Option 20 installiert/aktiviert die
+#       automatische taegliche Log-Analyse.
 # v1.10: Neue Option 19 (Lauf-Status/letzte Abstuerze aus letzter_lauf.json) und
 #       Status-Zeile "Letzter Lauf" im Kopf - macht OOM-Kills/Crashes sichtbar,
 #       die vorher nur im Kernel-Journal standen. Banner-Version nachgezogen.
@@ -101,9 +104,14 @@ if not result:
 }
 
 
-# Findet die neueste zyklen.csv aus einem Analyse-Lauf (Analyse/log_analyse.py).
-# Pfad: <repo>/logs/analyse_*/zyklen.csv. Ausgabe: Pfad oder leer.
+# Bevorzugt die laufende, direkt bei jedem Kompressorlauf fortgeschriebene
+# Historie. Fallback: neueste zyklen.csv aus einem manuellen Analyse-Lauf.
 finde_zyklen_csv() {
+    LIVE_CYCLE_CSV="$TARGET_DIR/csv log/zyklen.csv"
+    if [ -s "$LIVE_CYCLE_CSV" ] && [ "$(wc -l < "$LIVE_CYCLE_CSV" 2>/dev/null | tr -d ' ')" -gt 1 ]; then
+        printf '%s\n' "$LIVE_CYCLE_CSV"
+        return 0
+    fi
     ROOT_DIR="$(dirname "$SCRIPT_DIR")/logs"
     ls -1t "$ROOT_DIR"/analyse_*/zyklen.csv 2>/dev/null | head -n1
 }
@@ -197,7 +205,7 @@ while true; do
 
     clear
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.10                 ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager v1.11                 ${NC}\n"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Branch:   ${YELLOW}%s${NC}" "$CUR_BRANCH"
@@ -262,6 +270,7 @@ while true; do
     printf "17) 📊  Zyklen-Analyse anzeigen (zyklen.csv)\n"
     printf "18) ☁️  Upload zyklen.csv to Catbox\n"
     printf "19) 🩺  Lauf-Status / letzte Abstuerze (letzter_lauf.json)\n"
+    printf "20) ⏰  Auto-Analyse installieren/aktivieren (taeglich 04:30)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -528,8 +537,9 @@ except Exception as ex:
         17)
             ZYKLEN_CSV=$(finde_zyklen_csv)
             if [ -z "$ZYKLEN_CSV" ]; then
-                printf "${RED}Keine zyklen.csv gefunden - fuehre zuerst Analyse/log_analyse.py\\n"
-                printf "                aus (erzeugt logs/analyse_*/zyklen.csv).${NC}\\n"
+                printf "${RED}Keine zyklen.csv gefunden. Der erste Eintrag entsteht nach"
+                printf " einem abgeschlossenen Kompressorzyklus;${NC}\\n"
+                printf "                alternativ Option 20 (Auto-Analyse) ausfuehren.\\n"
                 wait_for_key
             else
                 printf "${CYAN}Wie viele Zyklen anzeigen? (Default 20):${NC} "
@@ -540,7 +550,7 @@ except Exception as ex:
                     zyk_n=20
                     sleep 1
                 fi
-                printf "${CYAN}Neueste Analyse: %s${NC}\\n" "$ZYKLEN_CSV"
+                printf "${CYAN}Zyklus-Historie: %s${NC}\\n" "$ZYKLEN_CSV"
                 # BOM (UTF-8-Signatur) bleibt als Spalte 1 sichtbar
                 if command -v column >/dev/null 2>&1; then
                     {
@@ -576,7 +586,24 @@ except Exception as ex:
                 fi
                 rm -rf "$TMP_DIR"
             else
-                printf "${RED}Fehler: keine zyklen.csv gefunden (Analyse-Lauf fehlt).${NC}\\n"
+                printf "${RED}Fehler: keine zyklen.csv gefunden.${NC}\\n"
+            fi
+            wait_for_key
+            ;;
+        20)
+            REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+            if [ ! -f "$REPO_ROOT/Steuerung/wp-analyse.service" ] || \
+               [ ! -f "$REPO_ROOT/Steuerung/wp-analyse.timer" ]; then
+                printf "${RED}Timer-Dateien fehlen. Bitte zuerst den aktuellen Code deployen.${NC}\\n"
+            else
+                printf "${CYAN}Installiere taegliche WP-Analyse ...${NC}\\n"
+                sudo install -m 0644 "$REPO_ROOT/Steuerung/wp-analyse.service" /etc/systemd/system/wp-analyse.service
+                sudo install -m 0644 "$REPO_ROOT/Steuerung/wp-analyse.timer" /etc/systemd/system/wp-analyse.timer
+                sudo systemctl daemon-reload
+                sudo systemctl enable --now wp-analyse.timer
+                printf "${GREEN}✓ wp-analyse.timer aktiv. Nächster Lauf:${NC}\\n"
+                systemctl list-timers wp-analyse.timer --no-pager 2>/dev/null || true
+                printf "${DIM}Manueller Test: sudo systemctl start wp-analyse.service${NC}\\n"
             fi
             wait_for_key
             ;;

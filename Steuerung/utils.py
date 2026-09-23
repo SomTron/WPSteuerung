@@ -181,15 +181,16 @@ def safe_float(value, default=0.0, field_name="unknown"):
 
 # ── CSV-Monatsrotation ────────────────────────────────────────────────
 
-def _parse_zeitstempel_aus_csv_zeile(zeile: str):
+def _parse_zeitstempel_aus_csv_zeile(zeile: str, delimiter: str = ","):
     """Erste Spalte einer Datenzeile als datetime parsen (oder None)."""
     try:
-        return datetime.strptime(zeile.split(",")[0].strip(), "%Y-%m-%d %H:%M:%S")
+        erste = zeile.split(delimiter, 1)[0].strip().lstrip("\ufeff")
+        return datetime.strptime(erste, "%Y-%m-%d %H:%M:%S")
     except (ValueError, IndexError, AttributeError):
         return None
 
 
-def _letzter_csv_zeitstempel(csv_path: str):
+def _letzter_csv_zeitstempel(csv_path: str, delimiter: str = ","):
     """Letzten parsebaren Zeitstempel lesen (nur ~4KB vom Dateiende)."""
     groesse = os.path.getsize(csv_path)
     with open(csv_path, "rb") as f:
@@ -199,13 +200,13 @@ def _letzter_csv_zeitstempel(csv_path: str):
     if groesse > 4096 and len(zeilen) > 1:
         zeilen = zeilen[1:]  # evtl. angeschnittene erste Zeile verwerfen
     for zeile in reversed(zeilen):
-        ts = _parse_zeitstempel_aus_csv_zeile(zeile)
+        ts = _parse_zeitstempel_aus_csv_zeile(zeile, delimiter)
         if ts:
             return ts
     return None
 
 
-def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None):
+def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None, delimiter: str = ","):
     """Archiviert heizungsdaten.csv nach Monatswechsel (Schutz gegen Endwachstum).
 
     Stammt der letzte Eintrag aus einem frueheren Monat als 'heute', wird die
@@ -216,6 +217,7 @@ def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None):
     Args:
         csv_path: Pfad zur CSV (Default: HEIZUNGSDATEN_CSV).
         heute: Referenzzeitpunkt, fuer Tests injizierbar (Default: jetzt).
+        delimiter: Trennzeichen der ersten Datumsspalte (Default: Komma).
 
     Returns:
         Archiv-Pfad bei Rotation, sonst None.
@@ -227,7 +229,7 @@ def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None):
     try:
         if not os.path.exists(csv_path):
             return None
-        letzter = _letzter_csv_zeitstempel(csv_path)
+        letzter = _letzter_csv_zeitstempel(csv_path, delimiter)
         if letzter is None:
             return None
         if (letzter.year, letzter.month) == (heute.year, heute.month):

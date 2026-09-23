@@ -21,8 +21,9 @@ Eine umfassende Open-Source-Lösung zur Steuerung und Optimierung von Wärmepump
 - **📅 Betriebsmodi**: Normal, Nachtabsenkung, PV-Boost, Bademodus (erhöhter Bedarf) und Urlaubsmodus (Energiesparen).
 - **🧠 Selbstlernend**: Heizraten (saisonal), Zapf-Zeiten, Forecast-Kalibrierung und Stunden-Surplus-Profil; „ZU-FRUEH“-Erkennung bewertet verpasste PV-Wh.
 - **☀️ PV-optimiert**: PV-Warten der Abweichungs-Regel bei guter Tagesprognose (kein Netz-Heizen am Morgen), PV-Weiterlauf-Band gegen Kurzzyklen, Hysterese-Sparen.
-- **📊 Daten-Logging**: Kontinuierliches Logging aller Messwerte in CSV-Dateien für Langzeitanalysen. Jeder Neustart schreibt die **GitHub-Revision** (Commit) ins Log.
-- **🕵️ Log-Analyse**: `Analyse/log_analyse.py` erzeugt aus dem Log einen Analysereport (Tages-KPIs, Zyklen, Overshoot, Morgen-Netzbezug, Stale-Phasen) plus CSV-Dateien.
+- **📊 Daten-Logging**: Kontinuierliches Logging aller Messwerte (oben/mittig/unten/Verdampfer) im 10-Sekunden-Takt; monatliche CSV-Rotation verhindert unbegrenztes Wachstum. Jeder Neustart schreibt die **GitHub-Revision** (Commit) ins Log.
+- **🔄 Zyklus-Historie**: Nach jedem realen Kompressorlauf wird sofort `Steuerung/csv log/zyklen.csv` fortgeschrieben – inklusive Start-/Endzeit, Dauer, Stromquelle, Regel, Abschaltgrund und Temperaturen oben/mittig/unten (Start + Maxima).
+- **🕵️ Automatische Log-Analyse**: Der systemd-Timer `wp-analyse.timer` aktualisiert täglich den vollständigen Analysereport (Tages-KPIs, Zyklen, Overshoot, Morgen-Netzbezug, Stale-Phasen) plus CSV-Dateien.
 
 ---
 

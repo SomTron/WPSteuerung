@@ -97,6 +97,18 @@ class TestRotation:
             f.write("kein,zeitstempel,hier\n")
         assert rotiere_csv_monatlich(csv_pfad, heute=datetime(2026, 8, 1)) is None
 
+    def test_semikolon_und_bom_werden_bei_zyklusrotation_erkannt(self, tmp_path):
+        pfad = str(tmp_path / "zyklen.csv")
+        with open(pfad, "w", encoding="utf-8-sig") as f:
+            f.write("start;ende\n")
+            f.write("2026-07-31 23:50:00;2026-07-31 23:55:00\n")
+        archiv = rotiere_csv_monatlich(
+            pfad, heute=datetime(2026, 8, 1, 0, 5), delimiter=";"
+        )
+        assert archiv == str(tmp_path / "zyklen_2026-07.csv")
+        assert not os.path.exists(pfad)
+        assert os.path.exists(archiv)
+
 
 # ── relevante_csv_dateien ─────────────────────────────────────────────
 

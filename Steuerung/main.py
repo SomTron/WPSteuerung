@@ -28,6 +28,7 @@ from api import app, init_api
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_and_fix_csv_header, rotiere_csv_monatlich
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
+from cycle_logging import CYCLE_CSV, begin_cycle, ensure_cycle_csv, finish_cycle, update_cycle_maxima
 from logic_utils import (
     check_log_throttle,
     evaluate_sommer_modus,
@@ -65,7 +66,7 @@ def handle_exit(signum, frame):
     logging.info(f"Signal {signum} empfangen. Beende Programm...")
     stop_event.set()
 
-async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
+async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, end_grund=None):
     """
     Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
     """
@@ -73,8 +74,11 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
     was_ein = state.control.kompressor_ein
 
     if status:
-        # Einschalten
-        if was_ein and not force:
+        # Bereits laufender Zyklus darf durch ein redundantes force_on weder
+        # Laufzeit noch Start-Snapshot/Historieneintrag ueberschreiben.
+        if was_ein:
+            if force:
+                hardware_manager.set_compressor_state(True)
             return True
         
         hardware_manager.set_compressor_state(True)
@@ -83,6 +87,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
         # Statistiken aktualisieren + Zyklus-ID je Kompressor-Lauf inkrementieren
         state.stats.last_compressor_on_time = now
         state.control.zyklus_id = getattr(state.control, 'zyklus_id', 0) + 1
+        begin_cycle(state, now, state.control.zyklus_id)
         
         # Startwerte fÃ¼r Verifizierung speichern
         state.kompressor_verification_start_time = now
@@ -107,6 +112,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None):
             state.stats.total_runtime_today += elapsed
             state.stats.last_completed_cycle = now
             zyklus = getattr(state.control, 'zyklus_id', '?')
+            finish_cycle(state, now, end_grund=end_grund)
             logging.info(f"Kompressor AUS (cycle={zyklus}). Laufzeit: {elapsed}")
         else:
             zyklus = getattr(state.control, 'zyklus_id', '?')
@@ -184,7 +190,7 @@ async def setup_application():
     # 7. CSV: Monatsrotation pruefen (holt ggf. den Rueckstand nach Ausfall),
     # dann Header-Check
     try:
-        archiv = rotiere_csv_monatlich()
+        archiv = rotiere_csv_monatlich(HEIZUNGSDATEN_CSV)
         if archiv:
             logging.info(f"CSV-Monatsrotation beim Start: {archiv}")
     except Exception as e:
@@ -209,6 +215,9 @@ async def setup_application():
                 logging.info("CSV Header check passed.")
     except Exception as e:
         logging.error(f"Startup CSV check failed: {e}")
+
+    # 7c. Abgeschlossene Kompressorzyklen persistent vorbereiten/rotieren.
+    ensure_cycle_csv(CYCLE_CSV)
 
     # 8. Start Telegram Task
     tg_task = asyncio.create_task(telegram_task(
@@ -572,7 +581,9 @@ async def run_logic_step(session, state, learning_engine=None):
         is_running, error_msg = await control_logic.verify_compressor_running(state, session, state.sensors.t_verd, state.sensors.t_unten)
         if not is_running and state.kompressor_verification_error_count >= COMPRESSOR_VERIFICATION_ERROR_THRESHOLD:
             logging.error(f"Kompressor-Verifizierung fehlgeschlagen (2x): {error_msg} - Schalte aus!")
-            await set_kompressor_status(state, False, force=True)
+            await set_kompressor_status(
+                state, False, force=True, end_grund="kompressor_verifizierung"
+            )
             state.control.ausschluss_grund = "Kompressor laeuft nicht (Verifizierung fehlgeschlagen)"
             # Explizite Neustartsperre statt Zukunftszeitstempel in last_compressor_off_time
             pcl.setze_neustartsperre(state, minuten=10)
@@ -772,6 +783,16 @@ def write_last_state_snapshot(state):
 
 async def log_system_state(state):
     """Schreibt CSV-Log, aktualisiert LCD und loggt Temperaturen + Entscheidungen."""
+    # Stunde einmalig pruefen, damit auch ein dauerhaft laufender Pi
+    # heizungsdaten.csv zum Monatswechsel atomar archiviert.
+    if check_log_throttle(state, "_last_csv_rotation_check", interval_minutes=60.0):
+        archiv = rotiere_csv_monatlich(HEIZUNGSDATEN_CSV)
+        if archiv:
+            logging.info(f"CSV-Monatsrotation im Betrieb: {archiv}")
+
+    # Temperaturmaxima des laufenden Zyklus mit jedem 10-s-Sample fortschreiben.
+    update_cycle_maxima(state)
+
     # 1. Temperatur- und Entscheidungs-Logging (gethrottelt alle 5 Min)
     if check_log_throttle(state, '_last_temp_log', interval_minutes=5.0):
         logging.info(
