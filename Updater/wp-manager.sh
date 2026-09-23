@@ -233,13 +233,15 @@ while true; do
         SYS_LINE="$SYS_LINE | Disk: $DISK_AVAIL frei ($DISK_USEPCT belegt)"
     fi
     printf "%s\n" "$SYS_LINE"
-    printf "${BLUE}---------------------------------------------------------${NC}\n"
+    # printf --  : dash (Dash) meldet sonst "Illegal option --", wenn die
+    # Farbvariable leer ist (> kein TTY) und das Format mit '-' beginnt.
+    printf -- "${BLUE}---------------------------------------------------------${NC}\n"
     if [ -f "$ERROR_LOG_FILE" ] && [ "$ERR_COUNT" != "0" ]; then
         printf "⚠ Error-Log: ${RED}%s Einträge${NC}, letzte Änderung: %s\n" "$ERR_COUNT" "$ERR_TIME"
         [ -n "$LAST_ERR" ] && printf "  ${RED}➜ %s${NC}\n" "$LAST_ERR"
     fi
     [ -n "$LOG_SIZE" ] && printf "Log:      heizungssteuerung.log (%s)\n" "$LOG_SIZE"
-    printf "${BLUE}---------------------------------------------------------${NC}\n\n"
+    printf -- "${BLUE}---------------------------------------------------------${NC}\n\n"
     
     printf "1) 📜   Live-Logs (tail -f, Strg+C beendet)\n"
     printf "2) 📄   Last 200 log lines\n"
