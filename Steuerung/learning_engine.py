@@ -246,6 +246,7 @@ class LearningEngine:
                     zu_frueh_events=raw.get("zu_frueh_events", []),
                     forecast_ratio=raw.get("forecast_ratio", 1.0),
                     forecast_ratio_samples=raw.get("forecast_ratio_samples", 0),
+                    forecast_hourly_deviations=raw.get("forecast_hourly_deviations", {}),
                     surplus_by_hour=raw.get("surplus_by_hour", {}),
                     config=LearningConfig(**raw.get("config", {})),
                 )
@@ -675,6 +676,11 @@ class LearningEngine:
         if self._kalibriert_datum == heute or now.hour < cfg.forecast_kalibrierung_ab_stunde:
             return
         self._kalibriert_datum = heute
+        # Open-Meteo liefert die Tagesprognose in kWh/m2 (typisch 5,0),
+        # intern wird sie in Wh/m2 erwartet. Sonst wird jeder Tag als
+        # "keine brauchbare Prognose" verworfen und die Kalibrierung bleibt N/A.
+        if forecast_today_wh_qm is not None and 0 < forecast_today_wh_qm < 100:
+            forecast_today_wh_qm *= 1000.0
         if forecast_today_wh_qm is None or forecast_today_wh_qm < 1000:
             logging.info("Learning: Kalibrierung uebersprungen "
                          "(keine brauchbare Tagesprognose)")

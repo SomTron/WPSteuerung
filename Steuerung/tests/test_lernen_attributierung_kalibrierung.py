@@ -119,6 +119,13 @@ class TestForecastKalibrierung:
         # EWMA: 2.0 -> 1.76 -> 1.502
         assert abs(engine.get_forecast_ratio() - 1.502) < 0.01
 
+    def test_kwh_prognose_wird_auf_wh_normiert(self, engine):
+        """Open-Meteo-kWh/m2 darf die Kalibrierung nicht als unbrauchbar verwerfen."""
+        self._tag(engine, datetime(2026, 8, 24), 5000.0)
+        _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5.0)
+        assert engine.data.forecast_ratio_samples == 1
+        assert engine.data.forecast_ratio == pytest.approx(1.0)
+
     def test_clamps_und_leere_tage(self, engine):
         self._tag(engine, datetime(2026, 8, 24), 40.0)      # unter Mindest-Daten
         _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)

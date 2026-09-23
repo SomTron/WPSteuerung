@@ -833,6 +833,8 @@
                 if (!document.getElementById('compressor-card')) {
                     if (debugEl) debugEl.textContent = 'renderApp() called...';
                     renderApp();
+                    // Nach dem ersten Rendering auch die dynamischen Werte befuellen.
+                    updateValues();
                     if (debugEl) debugEl.textContent = 'renderApp() done!';
                 } else {
                     if (debugEl) debugEl.textContent = 'updateValues() called...';
@@ -1351,6 +1353,35 @@
                     // Noch keine Kalibrierungsdaten -> Hinweis statt N/A
                     fcEl.textContent = 'noch keine Daten (ab 3 Tagen)';
                     fcEl.style.color = 'var(--text-secondary)';
+                }
+            }
+
+            // Forecast-Kalibrierung: Separate Dashboard-Karte ebenfalls befuellen.
+            // Ohne diesen Block bleiben calib-factor/calib-samples dauerhaft N/A.
+            const calibFactorEl = document.getElementById('calib-factor');
+            const calibSamplesEl = document.getElementById('calib-samples');
+            const calibStatusEl = document.getElementById('calib-status');
+            const calibStatusRow = document.getElementById('calib-status-row');
+            if (calibFactorEl && calibSamplesEl) {
+                const nCalib = Math.max(0, Number(lrn.forecast_ratio_samples) || 0);
+                const rCalib = Number(lrn.forecast_ratio);
+                const gültig = Number.isFinite(rCalib) && rCalib > 0;
+                const faktorText = gültig
+                    ? rCalib.toFixed(2).replace('.', ',')
+                    : '1,00';
+                if (nCalib >= 3) {
+                    calibFactorEl.textContent = 'x' + faktorText;
+                    if (calibStatusEl) calibStatusEl.textContent = 'aktiv';
+                } else if (nCalib > 0) {
+                    calibFactorEl.textContent = 'x' + faktorText + ' (sammelt)';
+                    if (calibStatusEl) calibStatusEl.textContent = nCalib + '/3 Tage';
+                } else {
+                    calibFactorEl.textContent = 'x' + faktorText + ' (Default)';
+                    if (calibStatusEl) calibStatusEl.textContent = 'wartet auf 20-Uhr-Daten';
+                }
+                calibSamplesEl.textContent = nCalib + '/3 Tage';
+                if (calibStatusEl && calibStatusRow) {
+                    calibStatusRow.style.display = 'flex';
                 }
             }
 
