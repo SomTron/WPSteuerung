@@ -1,5 +1,6 @@
 """Tests fuer die persistente Kompressorzyklus-Historie."""
 import csv
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -91,7 +92,7 @@ def test_schreibfehler_wirft_nicht(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_set_kompressor_status_schreibt_einen_zyklus(monkeypatch, tmp_path):
+async def test_set_kompressor_status_schreibt_einen_zyklus(monkeypatch, tmp_path, caplog):
     import main
 
     pfad = str(tmp_path / "zyklen.csv")
@@ -120,9 +121,15 @@ async def test_set_kompressor_status_schreibt_einen_zyklus(monkeypatch, tmp_path
     assert state._cycle_log == start_snapshot
     assert state.control.zyklus_id == 1
 
-    assert await main.set_kompressor_status(
-        state, False, force=True, end_grund="boiler_max"
-    ) is True
+    with caplog.at_level(logging.INFO):
+        assert await main.set_kompressor_status(
+            state, False, force=True, end_grund="boiler_max"
+        ) is True
+    assert any(
+        "Kompressor AUS (cycle=1)" in record.getMessage()
+        and "reason=boiler_max" in record.getMessage()
+        for record in caplog.records
+    )
     with open(pfad, encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f, delimiter=";"))
     assert len(rows) == 1

@@ -113,7 +113,11 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
             state.stats.last_completed_cycle = now
             zyklus = getattr(state.control, 'zyklus_id', '?')
             finish_cycle(state, now, end_grund=end_grund)
-            logging.info(f"Kompressor AUS (cycle={zyklus}). Laufzeit: {elapsed}")
+            abschaltgrund = end_grund or getattr(state.control, "blocking_reason", None) or "unbekannt"
+            logging.info(
+                f"Kompressor AUS (cycle={zyklus}). Laufzeit: {elapsed} "
+                f"reason={abschaltgrund}"
+            )
         else:
             zyklus = getattr(state.control, 'zyklus_id', '?')
             logging.info(f"Kompressor AUS (cycle={zyklus})")
