@@ -8,6 +8,7 @@ Sicherheitsgarantien weiter aktiv.
 import os
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -44,6 +45,57 @@ def test_stale_pausiert_pv_regeln():
             assert e.aktiv is False, f"{e.name} sollte durch Stale pausiert sein"
             assert e.einschalten is None, f"{e.name} sollte keine Entscheidung treffen"
             assert "Solar-Daten veraltet" in e.grund
+
+
+def test_stale_hochpriorisierte_regel_wird_nicht_gewinner():
+    """Eine pausierte Solarregel darf die Netz-Fallback-Regel nicht verdrängen."""
+    config = baue_config()
+    config.batterie.aktiv = True
+    config.komfort.komfort_einschalten_bei_c = 0.0
+    temp = {"oben": 43.0, "mittig": 42.0, "unten": 36.0}
+
+    gewinner, alle = pc.bewerte_alle_regeln(
+        config=config, temp_dict=temp, pv_leistung=8000.0,
+        kompressor_ein=False, now=datetime(2026, 1, 15, 12, 0),
+        forecast_wh_qm=2500.0, forecast_today_wh_qm=2800.0,
+        soc=95.0, battery_power=1500.0, solar_stale=True,
+    )
+
+    batterie = next(e for e in alle if e.name == "Batterie")
+    assert batterie.aktiv is False and batterie.einschalten is None
+    assert gewinner is not None
+    assert gewinner.name == "Abweichung"
+    assert gewinner.aktiv is True and gewinner.einschalten is True
+
+
+def test_kaputter_solarzeitstempel_gilt_als_stale():
+    """Fehlerhafte Solax-Zeitdaten dürfen die PV-Regeln nicht freischalten."""
+    import priority_control_logic as pcl
+
+    state = SimpleNamespace(solar=SimpleNamespace(last_api_call=object()))
+    assert pcl._solar_daten_veraltet(state) is True
+
+
+def test_stale_warnung_wird_gedrosselt(caplog, monkeypatch):
+    """Ein anhaltender Solax-Ausfall darf nicht jede Loop-Bewertung loggen."""
+    config = baue_config()
+    temp = {"oben": 43.0, "mittig": 42.0, "unten": 40.0}
+    monkeypatch.setattr(pc, "_last_stale_warning", None)
+
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            pc.bewerte_alle_regeln(
+                config=config, temp_dict=temp, pv_leistung=0.0,
+                kompressor_ein=False, now=datetime(2026, 1, 15, 12, 0),
+                forecast_wh_qm=None, forecast_today_wh_qm=None,
+                soc=50.0, battery_power=0.0, solar_stale=True,
+            )
+
+    stale_warnings = [
+        record for record in caplog.records
+        if "Solar-Daten veraltet:" in record.getMessage()
+    ]
+    assert len(stale_warnings) == 1
 
 
 def test_forecast_vorhanden_pv_regeln_nur_backup():

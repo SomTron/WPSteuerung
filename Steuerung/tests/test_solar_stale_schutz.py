@@ -80,7 +80,7 @@ async def test_ohne_api_historie_kein_crash():
          patch('main.get_solax_data', new_callable=AsyncMock, return_value=None):
         await update_system_data(None, state)
 
-    assert state.solar.feedinpower == 1234.0  # Startwerte unberuehrt
+    assert state.solar.feedinpower == 0.0
     assert state.solar.last_api_call is None
 
 

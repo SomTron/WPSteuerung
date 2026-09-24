@@ -441,7 +441,7 @@ Konfigurationsschlüsseln.
   2. `t_unten` fehlt → inaktiv.
   3. **Prophylaxe läuft bereits** (`legionellen_aktiv=true`):
      - `t_unten < target_temp_c` → `EIN` („heize weiter").
-     - `t_unten >= target_temp_c`: Probezeit seit `legionellen_started_at`
+     - `t_unten >= target_temp_c`: Probezeit seit `legionellen_target_reached_at`
        abgelaufen → `AUS` (Ziel erreicht + Probezeit gehalten); sonst `EIN`
        (Ziel erreicht, warte Probezeit).
   4. **Neue Prophylaxe:**
@@ -449,6 +449,7 @@ Konfigurationsschlüsseln.
      - Nur **exakt zur Startzeit** (`now.hour == start_h` und
        `now.minute >= start_m`) aktiv; sonst inaktiv.
      - Kompressor läuft bereits → `einschalten=None` (warte auf Abschluss).
+     - PV-Erzeugung oder ausreichend entladene Batterie muss vorhanden sein.
      - Sonst → `EIN`.
 - **Lifecycle (in `run_logic_step`):** Bei `EIN` wird `legionellen_aktiv=true`,
   `legionellen_started_at=jetzt` und der Temperatur-Override

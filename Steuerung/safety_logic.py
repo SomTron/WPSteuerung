@@ -38,10 +38,14 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten,
         error_msg = ", ".join(errors)
         state.control.blocking_reason = f"Sensorfehler: {error_msg}"
         state.last_sensor_error_time = datetime.now(state.local_tz)
-        if check_log_throttle(state, "last_sensor_error_time"):
+        # Separater Throttle-Marker: last_sensor_error_time fachlich der letzte
+        # Fehlerzeitpunkt; sonst wird die erste Meldung durch das sofortige Setzen
+        # des Markers unterdrückt.
+        if check_log_throttle(state, "_last_sensor_error_log"):
             logging.error(f"Sensorfehler: {error_msg}")
         return False
     state.last_sensor_error_time = None
+    state._last_sensor_error_log = None
     return True
 
 async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_verd, set_kompressor_status_func: Callable):

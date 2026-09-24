@@ -118,6 +118,7 @@ class TestBatterieSocHysterese:
             now_hour=12,
             nachtsperre_start=19,
             nachtsperre_ende=8,
+            battery_power=1000.0,
         )
 
     def test_lauf_endet_nicht_bei_1pct_soc_tick(self):

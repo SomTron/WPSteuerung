@@ -283,9 +283,11 @@ class TestLegionellenWochentagsGate:
         from priority_control import evaluate_legionellen
         # 2025-06-13 = Freitag
         now = datetime(2025, 6, 13, 8, 0)
-        erg = evaluate_legionellen(self._cfg(), self._temps(), now)
+        erg = evaluate_legionellen(
+            self._cfg(), self._temps(), now, pv_leistung=500.0
+        )
         assert erg.einschalten is True
-        assert "Starte Erhitzung" in erg.grund
+        assert "Starte mit PV" in erg.grund
 
     def test_geplanter_tag_samstag_erlaubt_nur_diesen(self):
         """legeionellen_planned_tag=5 (Samstag): Start NUR am Samstag.
@@ -303,7 +305,7 @@ class TestLegionellenWochentagsGate:
         # Samstag (=5) == geplanter Tag 5 -> Start
         erg_sa = evaluate_legionellen(
             self._cfg(), self._temps(), samstag,
-            legionellen_planned_tag=5,
+            legionellen_planned_tag=5, pv_leistung=500.0,
         )
         assert erg_sa.einschalten is True
 
@@ -312,7 +314,7 @@ class TestLegionellenWochentagsGate:
         freitag = datetime(2025, 6, 13, 8, 0)  # Freitag
         erg = evaluate_legionellen(
             self._cfg(), self._temps(), freitag,
-            legionellen_planned_tag=4,
+            legionellen_planned_tag=4, pv_leistung=500.0,
         )
         assert erg.einschalten is True
 

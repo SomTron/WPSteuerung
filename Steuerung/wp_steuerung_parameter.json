@@ -180,9 +180,14 @@
       "letzter_tag": 6,
       "start_uhr": 8,
       "spaeteste_start_uhr": 16,
-      "probezeit_minuten": 30,
       "erforderliche_wh_qm": 800.0,
-      "pv_prognose_schwelle_gut": 2000.0
+      "mindest_prognose_wh_qm": 800.0,
+      "tagwechsel_ab_diff_wh_qm": 300.0,
+      "pv_prognose_schwelle_gut": 2000.0,
+      "probezeit_minuten": 30,
+      "pv_start_min_watt": 500.0,
+      "batterie_start_min_watt": 50.0,
+      "batterie_start_min_soc_prozent": 90.0
     },
     "boiler_modell": {
       "volumen_l": 300.0,

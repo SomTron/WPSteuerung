@@ -7,6 +7,7 @@ deren Bedingungen erfüllt sind, gewinnt.
 """
 
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
 from dataclasses import dataclass
@@ -1439,6 +1440,54 @@ def evaluate_calculated_start(
     return result
 
 
+def _fmt_quelle(value) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.0f}"
+    except (TypeError, ValueError, OverflowError):
+        return "n/a"
+
+
+def _legionellen_quelle_status(cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower=None):
+    """Prüft aktuelle PV-Erzeugung ODER ausreichend entladene Batterie.
+
+    ``pv_leistung`` bleibt die Netzeinspeisung für die übrigen Regeln.
+    Für die Legionellenfahrt wird bevorzugt die aktuelle AC-PV-Erzeugung
+    verwendet; der Fallback dient nur alten Test-/In-Memory-States.
+    """
+    if solar_stale:
+        return False, "Solardaten veraltet"
+    pv_signal = pv_acpower if pv_acpower is not None else pv_leistung
+    pv_min = float(getattr(cfg, "pv_start_min_watt", 50.0))
+    batt_min = float(getattr(cfg, "batterie_start_min_watt", 50.0))
+    soc_min = float(getattr(cfg, "batterie_start_min_soc_prozent", 90.0))
+    pv_ok = (
+        isinstance(pv_signal, (int, float))
+        and not isinstance(pv_signal, bool)
+        and math.isfinite(float(pv_signal))
+        and float(pv_signal) >= pv_min
+    )
+    batterie_ok = (
+        isinstance(battery_power, (int, float))
+        and not isinstance(battery_power, bool)
+        and math.isfinite(float(battery_power))
+        and float(battery_power) >= batt_min
+        and isinstance(soc, (int, float))
+        and not isinstance(soc, bool)
+        and math.isfinite(float(soc))
+        and float(soc) >= soc_min
+    )
+    if pv_ok:
+        return True, "PV"
+    if batterie_ok:
+        return True, "Batterie"
+    return False, (
+        f"PV-Erzeugung {_fmt_quelle(pv_signal)}W < {pv_min:.0f}W, "
+        f"Batterie {_fmt_quelle(battery_power)}W/{_fmt_quelle(soc)}% < {batt_min:.0f}W/{soc_min:.0f}%"
+    )
+
+
 def evaluate_legionellen(
     legionellen_cfg,
     temp_dict,
@@ -1450,8 +1499,15 @@ def evaluate_legionellen(
     legionellen_last_done=None,
     legionellen_started_at=None,
     kompressor_ein=False,
+    legionellen_target_reached_at=None,
     wochenende_cfg=None,
     legionellen_planned_tag=None,
+    legionellen_planned_date=None,
+    pv_leistung: Optional[float] = None,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    soc: Optional[float] = None,
+    solar_stale: bool = False,
 ):
     """Bewertet, ob die Legionellenprophylaxe durchgefuehrt werden soll."""
     result = RegelErgebnis(
@@ -1470,11 +1526,32 @@ def evaluate_legionellen(
         return result
     if legionellen_aktiv:
         if t_unten >= legionellen_cfg.target_temp_c:
-            result.einschalten = False
-            result.grund = (
-                f"Legionellen: unten {t_unten:.1f}C >= {legionellen_cfg.target_temp_c:.0f}C "
-                f"Zieltemperatur erreicht -> AUS"
-            )
+            if legionellen_started_at is None:
+                result.einschalten = None
+                result.grund = "Legionellen wartet: Startzeit fehlt fuer die Probezeit"
+                return result
+            try:
+                gehalten_seit = now - (legionellen_target_reached_at or legionellen_started_at)
+            except (TypeError, ValueError):
+                gehalten_seit = timedelta(0)
+            if legionellen_target_reached_at is None:
+                result.einschalten = True
+                result.grund = "Legionellen: Zieltemperatur erreicht; Probezeit startet"
+                return result
+            # Ziel erreicht, aber die konfigurierte Probezeit muss noch ablaufen.
+            if gehalten_seit < timedelta(minutes=int(legionellen_cfg.probezeit_minuten)):
+                result.einschalten = True
+                verbleib = max(0, int((timedelta(minutes=int(legionellen_cfg.probezeit_minuten)) - gehalten_seit).total_seconds() // 60) + 1)
+                result.grund = (
+                    f"Legionellen: Zieltemperatur erreicht; Probezeit laeuft noch "
+                    f"(ca. {verbleib} min)"
+                )
+            else:
+                result.einschalten = False
+                result.grund = (
+                    f"Legionellen: unten {t_unten:.1f}C >= {legionellen_cfg.target_temp_c:.0f}C "
+                    f"und Probezeit {legionellen_cfg.probezeit_minuten} min abgeschlossen -> AUS"
+                )
             return result
         else:
             result.einschalten = True
@@ -1509,6 +1586,14 @@ def evaluate_legionellen(
         int(legionellen_cfg.bevorzugter_tag),
         int(legionellen_cfg.letzter_tag) + 1,
     )
+    if legionellen_planned_date is not None and now.date() != legionellen_planned_date:
+        result.aktiv = True
+        result.einschalten = None
+        result.grund = (
+            f"Legionellen: geplanter Termin {legionellen_planned_date} ist nicht heute; "
+            "Forecast-Plan verwerfen"
+        )
+        return result
     if legionellen_planned_tag is not None:
         if heute_wochentag != int(legionellen_planned_tag):
             result.aktiv = True
@@ -1540,10 +1625,11 @@ def evaluate_legionellen(
                 # Fahrt ist eigentlich faellig, wird aber bis zur Freigabe
                 # von der Wochenende-Sperre gehalten. Fenster offen lassen,
                 # damit um fruehster_start sofort gestartet wird.
-                result.einschalten = True
+                result.einschalten = None
                 result.grund = (
-                    f"Legionellen: Wochenende-Sperre blockt bis {fruehster_start:g}:00, "
-                    f"Fahrt wird danach nachgeholt (unten {t_unten:.1f}C)"
+                    f"Legionellen: Wochenende-Sperre blockt bis {fruehster_start:g}:00; "
+                    f"PV-/Batterie-Quelle und Start werden danach erneut geprueft "
+                    f"(unten {t_unten:.1f}C)"
                 )
             else:
                 result.aktiv = False
@@ -1561,10 +1647,17 @@ def evaluate_legionellen(
             result.einschalten = None
             result.grund = "Kompressor laeuft bereits, warte auf Abschluss"
             return result
+        quelle_ok, quelle_text = _legionellen_quelle_status(
+            legionellen_cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower
+        )
+        if not quelle_ok:
+            result.einschalten = None
+            result.grund = f"Legionellen wartet auf PV/Batterie: {quelle_text}"
+            return result
         result.einschalten = True
         result.grund = (
             f"Legionellenprophylaxe faellig (Wochenende-Nachholung): Starte "
-            f"Erhitzung auf {legionellen_cfg.target_temp_c:.0f}C "
+            f"mit {quelle_text} auf {legionellen_cfg.target_temp_c:.0f}C "
             f"(unten {t_unten:.1f}C)"
         )
         return result
@@ -1578,9 +1671,17 @@ def evaluate_legionellen(
         result.einschalten = None
         result.grund = "Kompressor laeuft bereits, warte auf Abschluss"
         return result
+    quelle_ok, quelle_text = _legionellen_quelle_status(
+        legionellen_cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower
+    )
+    if not quelle_ok:
+        result.einschalten = None
+        result.grund = f"Legionellen wartet auf PV/Batterie: {quelle_text}"
+        return result
+    quelle = quelle_text
     result.einschalten = True
     result.grund = (
-        f"Legionellenprophylaxe faellig: Starte Erhitzung auf "
+        f"Legionellenprophylaxe faellig: Starte mit {quelle} auf "
         f"{legionellen_cfg.target_temp_c:.0f}C (unten {t_unten:.1f}C)"
     )
     return result
@@ -1615,6 +1716,7 @@ def bewerte_alle_regeln(
     forecast_wh_qm: Optional[float] = None,
     forecast_today_wh_qm: Optional[float] = None,
     soc: Optional[float] = None,
+    pv_acpower: Optional[float] = None,
     battery_power: Optional[float] = None,
     learned_evening_window: Optional[Tuple[float, float]] = None,
     learned_morning_window: Optional[Tuple[float, float]] = None,
@@ -1630,9 +1732,11 @@ def bewerte_alle_regeln(
     legionellen_aktiv: bool = False,
     legionellen_last_done=None,
     legionellen_started_at=None,
+    legionellen_target_reached_at=None,
     forecast_day2_wh_qm: Optional[float] = None,
     wochenende_cfg=None,
     legionellen_planned_tag=None,
+    legionellen_planned_date=None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -1821,16 +1925,30 @@ def bewerte_alle_regeln(
         legionellen_last_done=legionellen_last_done,
         legionellen_started_at=legionellen_started_at,
         kompressor_ein=kompressor_ein,
+        legionellen_target_reached_at=legionellen_target_reached_at,
+        pv_acpower=pv_acpower,
         wochenende_cfg=config.wochenende,
         legionellen_planned_tag=legionellen_planned_tag,
+        legionellen_planned_date=legionellen_planned_date,
+        pv_leistung=pv_leistung,
+        battery_power=battery_power,
+        soc=soc,
+        solar_stale=solar_stale,
     )
     ergebnisse.append(ergebnis)
 
-    # Gewinner bestimmen: Hoechste priorisierte Regel, die eine klare Entscheidung trifft
+    # Gewinner bestimmen: Höchste priorisierte Regel mit klarer Entscheidung.
+    # Legionellen-Wartefälle (None) bleiben sichtbar und können einen anderen
+    # aktiven Regler nicht fälschlich als effektive Hardwarequelle überschreiben.
     aktive_regeln = [e for e in ergebnisse if e.aktiv and e.einschalten is not None]
+    gewinner = max(
+        aktive_regeln,
+        key=lambda e: e.prioritaet,
+        default=None,
+    )
 
     if not aktive_regeln:
-        # Keine Regel will etwas tun
+        # Keine aktive Regel mit klarer EIN/AUS-Entscheidung.
         return None, ergebnisse
 
     # Solar-Daten veraltet: PV-/Batterie-/Prognose-Regeln duerfen nicht

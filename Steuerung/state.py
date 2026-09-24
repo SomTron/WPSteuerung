@@ -57,6 +57,10 @@ class ControlState:
         self.schichtung_oben_start: Optional[float] = None
         self.zyklus_id: int = 0
         self._hardware_wechsel_historie: deque = deque(maxlen=32)
+        self.requested_rule_name: Optional[str] = None
+        self.effective_rule_name: Optional[str] = None
+        self.effective_source: Optional[str] = None
+        self.manual_force_on_pending: bool = False
         self._rate_messungen: deque = deque(maxlen=5)
         self._rate_confidence: float = 0.0
         self._last_start_anticipation: dict = {}
@@ -120,6 +124,10 @@ class State:
         self.legionellen_planned_day: Optional[str] = None
         self.legionellen_planned_tag: Optional[int] = None
         self.legionellen_planned_time: Optional[str] = None
+        self.legionellen_planned_date: Optional[date] = None
+        self.legionellen_planned_forecast_wh: Optional[float] = None
+        self.legionellen_plan_revision: int = 0
+        self.legionellen_plan_created_at: Optional[datetime] = None
         self.legionellen_end_time: Optional[datetime] = None
         self.legionellen_planned_reason: Optional[str] = None
         self.legionellen_telegram_start_sent: bool = False
@@ -156,6 +164,7 @@ class State:
         # --- Safety & Error Handling ---
         self.verdampfer_blocked: bool = False
         self.last_sensor_error_time: Optional[datetime] = None
+        self._last_sensor_error_log: Optional[datetime] = None
         self.last_pressure_error_time: Optional[datetime] = None
         self.verdampfer_shutdowns: list = []
         self._last_config_check: Optional[datetime] = now

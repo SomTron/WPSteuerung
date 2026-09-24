@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import math
 import pytz
 import logging
 
@@ -161,21 +162,32 @@ def safe_float(value, default=0.0, field_name="unknown"):
         if value is None:
             logging.warning(f"API: {field_name} is None, using {default}")
             return default
-        
+
+        if isinstance(value, bool):
+            logging.error(
+                f"API: {field_name} unexpected type bool, using {default}"
+            )
+            return default
+
         if isinstance(value, (int, float)):
-            return float(value)
-        
-        if isinstance(value, str):
+            number = float(value)
+        elif isinstance(value, str):
             value = value.strip()
             if not value or value.lower() in ['n/a', 'null', 'none', 'error', '-']:
                 logging.warning(f"API: {field_name}='{value}' invalid, using {default}")
                 return default
-            return float(value)
-        
-        logging.error(f"API: {field_name} unexpected type {type(value).__name__}, using {default}")
-        return default
-    except (ValueError, TypeError) as e:
-        logging.error(f"API: Cannot convert {field_name}='{value}': {e}, using {default}")
+            number = float(value)
+        else:
+            logging.error(
+                f"API: {field_name} unexpected type {type(value).__name__}, using {default}"
+            )
+            return default
+
+        if not math.isfinite(number):
+            raise ValueError("value is not finite")
+        return number
+    except (ValueError, TypeError, OverflowError) as exc:
+        logging.error(f"API: Cannot convert {field_name}='{value}': {exc}, using {default}")
         return default
 
 

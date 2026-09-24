@@ -30,6 +30,20 @@ sys.modules["RPLCD.i2c"] = mock_rplcd
 # Mock w1thermsensor (just in case)
 sys.modules["w1thermsensor"] = MagicMock()
 
+@pytest.fixture(autouse=True)
+def isolate_entscheidungslog(tmp_path, monkeypatch):
+    """Unit-Tests duerfen niemals in den echten Entscheidungslog schreiben."""
+    import entscheidungs_log
+
+    test_pfad = str(tmp_path / "entscheidungs_log.jsonl")
+    monkeypatch.setattr(entscheidungs_log, "LOG_DATEI", test_pfad)
+    monkeypatch.setattr(entscheidungs_log, "_cache_pfad", None)
+    monkeypatch.setattr(entscheidungs_log, "_cache_zeile", None)
+    yield
+    entscheidungs_log._cache_pfad = None
+    entscheidungs_log._cache_zeile = None
+
+
 @pytest.fixture
 def mock_aioresponse():
     """Fixture to mock aiohttp responses if needed."""

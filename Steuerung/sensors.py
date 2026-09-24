@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import os
 from datetime import datetime, timedelta
 import pytz
@@ -66,7 +67,7 @@ class SensorManager:
                          self._track_sensor_error(sensor_id)
                          return None
 
-                    if temp < -20 or temp > 100:
+                    if not math.isfinite(temp) or temp < -20 or temp > 100:
                         logging.error(f"Unrealistischer Temperaturwert von Sensor {sensor_id}: {temp} °C")
                         self._track_sensor_error(sensor_id)
                         return None

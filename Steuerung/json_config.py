@@ -625,7 +625,13 @@ class LegionellenConfig(BaseModel):
     spaeteste_start_uhr: int = Field(default=12, description="Späteste Startstunde (muss bis dahin begonnen haben)")
     max_duration_hours: int = Field(default=8, description="Maximale Laufzeit der Legionellenfahrt (Stunden)")
     erforderliche_wh_qm: float = Field(default=800.0, description="Mindest-PV-Prognose Wh/qm für den bevorzugten Tag")
+    mindest_prognose_wh_qm: float = Field(default=800.0, description="Mindestprognose für einen planbaren Legionellen-Tag (Wh/qm)")
+    tagwechsel_ab_diff_wh_qm: float = Field(default=300.0, description="Mindestvorsprung eines alternativen PV-Tages (Wh/qm)")
     pv_prognose_schwelle_gut: float = Field(default=2000.0, description="PV-Prognose >= diesem Wert gilt als 'guter PV-Tag' (Wh/qm)")
+    probezeit_minuten: int = Field(default=30, description="Haltezeit nach Erreichen der Legionellen-Zieltemperatur")
+    pv_start_min_watt: float = Field(default=500.0, description="Mindest-PV-Leistung für Start der Legionellenfahrt (W)")
+    batterie_start_min_watt: float = Field(default=50.0, description="Mindest-Batterieleistung für Start der Legionellenfahrt (W)")
+    batterie_start_min_soc_prozent: float = Field(default=90.0, description="Mindest-SOC für Batterie-Start der Legionellenfahrt (%)")
 
     @model_validator(mode="after")
     def _pruefe_legionellen(self):
@@ -643,6 +649,20 @@ class LegionellenConfig(BaseModel):
             raise ValueError(f"start_uhr={self.start_uhr} ausserhalb 0-23")
         if not (1 <= self.max_duration_hours <= 12):
             raise ValueError(f"max_duration_hours={self.max_duration_hours} ausserhalb 1-12")
+        if not (0 <= self.probezeit_minuten <= 240):
+            raise ValueError("probezeit_minuten muss zwischen 0 und 240 liegen")
+        if not (0 <= self.erforderliche_wh_qm <= 20000):
+            raise ValueError("erforderliche_wh_qm ausserhalb 0-20000 Wh/qm")
+        if not (0 <= self.mindest_prognose_wh_qm <= 20000):
+            raise ValueError("mindest_prognose_wh_qm ausserhalb 0-20000 Wh/qm")
+        if not (0 <= self.tagwechsel_ab_diff_wh_qm <= 20000):
+            raise ValueError("tagwechsel_ab_diff_wh_qm ausserhalb 0-20000 Wh/qm")
+        if self.pv_start_min_watt < 0 or self.batterie_start_min_watt < 0:
+            raise ValueError("Startleistungen fuer PV/Batterie duerfen nicht negativ sein")
+        if not (0 <= self.batterie_start_min_soc_prozent <= 100):
+            raise ValueError("batterie_start_min_soc_prozent ausserhalb 0-100")
+        if not (self.start_uhr <= self.spaeteste_start_uhr <= 23):
+            raise ValueError("spaeteste_start_uhr muss zwischen start_uhr und 23 liegen")
         return self
 
 

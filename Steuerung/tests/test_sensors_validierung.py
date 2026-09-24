@@ -42,3 +42,19 @@ async def test_mittelfuehler_wird_von_der_sicherheitspruefung_abgewiesen():
     )
     assert await check_for_sensor_errors(None, state, 45.0, 41.0, float("nan")) is False
     assert "T_Mittig" in state.control.blocking_reason
+
+
+@pytest.mark.asyncio
+async def test_sensorfehler_werden_nur_einmal_pro_intervall_geloggt(caplog):
+    import logging
+
+    state = SimpleNamespace(
+        local_tz=pytz.timezone("Europe/Berlin"),
+        control=SimpleNamespace(blocking_reason=None),
+        last_sensor_error_time=None,
+    )
+    with caplog.at_level(logging.ERROR):
+        assert await check_for_sensor_errors(None, state, 45.0, 41.0, float("nan")) is False
+        assert await check_for_sensor_errors(None, state, 45.0, 41.0, float("nan")) is False
+    sensor_logs = [record for record in caplog.records if "Sensorfehler:" in record.getMessage()]
+    assert len(sensor_logs) == 1

@@ -31,6 +31,7 @@ from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
 from cycle_logging import CYCLE_CSV, begin_cycle, ensure_cycle_csv, finish_cycle, update_cycle_maxima
+from legionellen_plan import clear_plan, load_plan, save_plan
 from logic_utils import (
     check_log_throttle,
     evaluate_sommer_modus,
@@ -103,6 +104,17 @@ def _record_hardware_change(state, now, status):
         logging.debug("Hardware-Wechselhistorie nicht aktualisierbar", exc_info=True)
 
 
+async def _set_hardware_state(state, status: bool) -> bool:
+    """Schreibt den Kompressor unter einem asyncio-Lock und in einem Thread."""
+    if hardware_manager is None:
+        return False
+    lock = getattr(state, "gpio_lock", None)
+    if lock is not None:
+        async with lock:
+            return await asyncio.to_thread(hardware_manager.set_compressor_state, status) is not False
+    return await asyncio.to_thread(hardware_manager.set_compressor_state, status) is not False
+
+
 async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, end_grund=None):
     """
     Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
@@ -115,11 +127,11 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
         # Laufzeit noch Start-Snapshot/Historieneintrag ueberschreiben.
         if was_ein:
             if force:
-                if not hardware_manager.set_compressor_state(True):
+                if not await _set_hardware_state(state, True):
                     return False
             return True
 
-        if not hardware_manager.set_compressor_state(True):
+        if not await _set_hardware_state(state, True):
             state.control.blocking_reason = "Kompressor-Einschalten fehlgeschlagen"
             return False
         state.control.kompressor_ein = True
@@ -144,10 +156,10 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
             # Idempotenter manueller Off-Befehl: keine neue Pause, keine
             # Statistikänderung und kein künstliches Verlängern der Sperre.
             if force:
-                return await asyncio.to_thread(hardware_manager.set_compressor_state, False)
+                return await _set_hardware_state(state, False)
             return True
 
-        if not await asyncio.to_thread(hardware_manager.set_compressor_state, False):
+        if not await _set_hardware_state(state, False):
             state.control.blocking_reason = "Kompressor-Ausschalten fehlgeschlagen"
             return False
         state.control.kompressor_ein = False
@@ -199,6 +211,7 @@ async def setup_application():
     
     # 2. State init
     state = State(config_manager)
+    load_plan(state)
     # Nach einem sauberen Service-Restart die letzte AUS-Zeit aus dem
     # Snapshot uebernehmen. Sonst waere die JSON-Mindestpause nach einem
     # Neustart nicht mehr geschuetzt und ein Kompressor koennte erneut
@@ -227,7 +240,7 @@ async def setup_application():
         logging.info("Using mock hardware (non-Raspberry Pi platform)")
     
     hardware_manager.init_gpio()
-    if not hardware_manager.set_compressor_state(False):
+    if not await _set_hardware_state(state, False):
         raise RuntimeError("Kompressor-GPIO konnte nicht fail-safe auf AUS gesetzt werden")
     logging.info("Kompressor-Hardware fail-safe initialisiert: AUS")
     await hardware_manager.init_lcd()
@@ -395,10 +408,12 @@ async def update_system_data(session, state):
                 )
             else:
                 logging.warning("Solar-Datenzeitstempel fehlt/ungültig - PV-Werte auf 0 gesetzt")
+        state.solar.acpower = 0.0
         state.solar.feedinpower = 0.0
         state.solar.batpower = 0.0
         state.solar.soc = 0.0
     elif state.solar.last_api_data:
+        state.solar.acpower = state.solar.last_api_data.get("acpower", 0)
         state.solar.feedinpower = state.solar.last_api_data.get("feedinpower", 0)
         state.solar.batpower = state.solar.last_api_data.get("batPower", 0)
         state.solar.soc = state.solar.last_api_data.get("soc", 0)
@@ -459,25 +474,55 @@ async def check_api_health(session, state):
                 logging.error(f"API-Health-Warnung konnte nicht via Telegram gesendet werden: {e}")
 
         data["last_alert"] = now
+def _as_local_datetime(value, local_tz, default=None):
+    """Normalisiert einen Zeitstempel fail-safe auf die lokale Zeitzone."""
+    if not isinstance(value, datetime):
+        return default
+    if value.tzinfo is not None:
+        return value
+    try:
+        return local_tz.localize(value)
+    except AttributeError:
+        return value.replace(tzinfo=local_tz)
+
+
 async def check_periodic_tasks(session, state, last_vpn_check):
     """FÃ¼hrt zeitgesteuerte Hintergrundaufgaben aus."""
     now_dt = datetime.now(state.local_tz)
-    now_local = datetime.now(state.local_tz)
+    now_local = now_dt
     
-    # 1. VPN Check
-    if (now_dt - last_vpn_check).total_seconds() >= VPN_CHECK_INTERVAL_SEC:
+    # 1. VPN Check -- alte/ungültige Snapshots dürfen den Loop nicht beenden.
+    last_vpn_check = _as_local_datetime(last_vpn_check, state.local_tz)
+    if last_vpn_check is None:
+        last_vpn_check = now_dt - timedelta(seconds=VPN_CHECK_INTERVAL_SEC)
+    vpn_due = (
+        safe_timedelta(now_dt, last_vpn_check, state.local_tz).total_seconds()
+        >= VPN_CHECK_INTERVAL_SEC
+    )
+    if vpn_due:
         await check_vpn_status(state)
         last_vpn_check = now_dt
     
     # 2. Solar Forecast (alle FORECAST_UPDATE_INTERVAL_HOURS)
-    if state.last_forecast_update is None or (now_local - state.last_forecast_update).total_seconds() >= FORECAST_UPDATE_INTERVAL_HOURS * 3600:
+    last_forecast_update = _as_local_datetime(
+        getattr(state, "last_forecast_update", None), state.local_tz
+    )
+    forecast_due = (
+        last_forecast_update is None
+        or safe_timedelta(now_local, last_forecast_update, state.local_tz).total_seconds()
+        >= FORECAST_UPDATE_INTERVAL_HOURS * 3600
+    )
+    if forecast_due:
         # Retry-Throttle: Ein Fehlversuch (Netz/DNS weg) darf NICHT im
         # 10-s-Loop-Takt wiederholt werden - sonst API-/Log-Spam. Erst nach
         # FORECAST_RETRY_INTERVAL_MIN erneut fragen.
-        letzter_versuch = getattr(state, "last_forecast_attempt", None)
+        letzter_versuch = _as_local_datetime(
+            getattr(state, "last_forecast_attempt", None), state.local_tz
+        )
         versuch_faellig = (
             letzter_versuch is None
-            or (now_local - letzter_versuch).total_seconds() >= FORECAST_RETRY_INTERVAL_MIN * 60
+            or safe_timedelta(now_local, letzter_versuch, state.local_tz).total_seconds()
+            >= FORECAST_RETRY_INTERVAL_MIN * 60
         )
     else:
         versuch_faellig = False
@@ -485,7 +530,12 @@ async def check_periodic_tasks(session, state, last_vpn_check):
     if versuch_faellig:
         state.last_forecast_attempt = now_local
         rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow, hourly_today_wm2 = await get_solar_forecast(session, state.config)
-        if rad_today is not None:
+        # Nur ein vollständiger Tagesforecast gilt als erfolgreich. Sonst
+        # dürfen weder alte Prognose noch alter Legionellenplan weiterlaufen.
+        if any(value is None for value in (rad_today, rad_tomorrow, rad_day2)):
+            state.last_forecast_update = None
+            pcl._set_stale_forecast(state)
+        else:
             state.solar.forecast_today = rad_today
             state.solar.forecast_hourly_wm2 = hourly_today_wm2
             state.solar.forecast_tomorrow = rad_tomorrow
@@ -495,6 +545,8 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.sunrise_tomorrow = sr_tomorrow
             state.sunset_tomorrow = ss_tomorrow
             state.last_forecast_update = now_local
+            state.forecast_stale = False
+            state.forecast_age_s = 0
 
             # --- Sommer-Modus: max. EINE Bewertung pro Kalendertag ---
             # Aktivierung erst nach 'benoetigte_tage' AUFENANDERFOLGENDEN Kalendertagen
@@ -542,50 +594,69 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                     letzte_kw = state.legionellen_last_done.isocalendar()[1]
 
                 # Nur planen, wenn nicht bereits in dieser KW erledigt
-                if letzte_kw != aktuelle_kw or state.legionellen_last_done is None:
+                if any(prognose is None for prognose in (rad_today_wh, rad_tomorrow_wh, rad_day2_wh)):
+                    clear_plan(state, "Unvollständige Tagesprognose", persist=True)
+                elif letzte_kw != aktuelle_kw or state.legionellen_last_done is None:
                     aktueller_wochentag = now_local.weekday()
 
-                    # Verfuegbare Tage zwischen bevorzugt und letztem Tag
-                    verfuegbare_tage = []
-                    for tag in range(legionellen_cfg.bevorzugter_tag, legionellen_cfg.letzter_tag + 1):
-                        if tag >= aktueller_wochentag:
-                            verfuegbare_tage.append(tag)
+                    # Nur die verbleibenden erlaubten Kalendertage berücksichtigen.
+                    # Ein bereits verstrichener Plan darf nicht wieder auf einen
+                    # alten Wochentag zurückfallen.
+                    verfuegbare_tage = [
+                        tag
+                        for tag in range(legionellen_cfg.bevorzugter_tag, legionellen_cfg.letzter_tag + 1)
+                        if tag >= aktueller_wochentag
+                    ]
 
-                    if verfuegbare_tage:
-                        tages_prognose = {}
-                        for offset, tag_idx in [(0, aktueller_wochentag),
-                                                 (1, (aktueller_wochentag + 1) % 7),
-                                                 (2, (aktueller_wochentag + 2) % 7)]:
-                            if offset == 0 and rad_today_wh is not None:
-                                tages_prognose[tag_idx] = rad_today_wh
-                            elif offset == 1 and rad_tomorrow_wh is not None:
-                                tages_prognose[tag_idx] = rad_tomorrow_wh
-                            elif offset == 2 and rad_day2_wh is not None:
-                                tages_prognose[tag_idx] = rad_day2_wh
-
-                        bester_tag = legionellen_cfg.bevorzugter_tag
-                        beste_prognose = tages_prognose.get(bester_tag, 0.0)
-                        bester_grund = "Bevorzugter Tag"
-
-                        for tag in verfuegbare_tage:
-                            if tag == legionellen_cfg.bevorzugter_tag:
-                                continue
-                            prognose = tages_prognose.get(tag, 0.0)
-                            if (prognose - beste_prognose) >= legionellen_cfg.erforderliche_wh_qm:
-                                bester_tag = tag
-                                beste_prognose = prognose
-                                bester_grund = f"Bessere PV-Prognose ({prognose:.0f} Wh/qm)"
-                            elif (prognose >= legionellen_cfg.pv_prognose_schwelle_gut and
-                                  beste_prognose < legionellen_cfg.pv_prognose_schwelle_gut):
-                                bester_tag = tag
-                                beste_prognose = prognose
-                                bester_grund = f"Gute PV-Prognose am Alternativtag ({prognose:.0f} Wh/qm)"
-
-                        from priority_control import _wochentag_name
-                        state.legionellen_planned_day = _wochentag_name(bester_tag)
-                        state.legionellen_planned_tag = bester_tag  # numerisch (0=Mo..6=So) fuer Start-Gate
-                        state.legionellen_planned_time = f"{legionellen_cfg.start_uhr}:00"
-                        state.legionellen_planned_reason = bester_grund
+                    if not verfuegbare_tage:
+                        clear_plan(state, "Kein weiterer Legionellen-Tag in dieser Woche", persist=True)
+                    else:
+                        tages_prognose = {
+                            aktueller_wochentag: rad_today_wh,
+                            (aktueller_wochentag + 1) % 7: rad_tomorrow_wh,
+                            (aktueller_wochentag + 2) % 7: rad_day2_wh,
+                        }
+                        tages_prognose = {
+                            tag: prognose for tag, prognose in tages_prognose.items()
+                            if prognose is not None
+                            and tag in verfuegbare_tage
+                            and prognose >= legionellen_cfg.mindest_prognose_wh_qm
+                        }
+                        if not tages_prognose:
+                            clear_plan(
+                                state,
+                                f"Kein belastbarer PV-Tag (mindestens {legionellen_cfg.mindest_prognose_wh_qm:.0f} Wh/m²)",
+                                persist=True,
+                            )
+                        else:
+                            bester_tag = max(
+                                tages_prognose,
+                                key=lambda tag: (
+                                    tages_prognose[tag],
+                                    tag == legionellen_cfg.bevorzugter_tag,
+                                ),
+                            )
+                            # Nur bei deutlich besserem Alternativtag wechseln.
+                            preferred = tages_prognose.get(legionellen_cfg.bevorzugter_tag)
+                            if preferred is not None and (
+                                tages_prognose[bester_tag] - preferred
+                                < legionellen_cfg.tagwechsel_ab_diff_wh_qm
+                            ):
+                                bester_tag = legionellen_cfg.bevorzugter_tag
+                            from priority_control import _wochentag_name
+                            delta = (bester_tag - aktueller_wochentag) % 7
+                            state.legionellen_planned_day = _wochentag_name(bester_tag)
+                            state.legionellen_planned_tag = bester_tag
+                            state.legionellen_planned_time = f"{legionellen_cfg.start_uhr:02d}:00"
+                            state.legionellen_planned_date = now_local.date() + timedelta(days=delta)
+                            state.legionellen_planned_forecast_wh = float(tages_prognose[bester_tag])
+                            state.legionellen_plan_revision += 1
+                            state.legionellen_plan_created_at = now_local
+                            state.legionellen_planned_reason = (
+                                f"Bester PV-Tag: {tages_prognose[bester_tag]:.0f} Wh/m² "
+                                f"(>= {legionellen_cfg.mindest_prognose_wh_qm:.0f} Wh/m²)"
+                            )
+                            save_plan(state)
 
     return last_vpn_check
 
@@ -642,23 +713,165 @@ async def check_and_send_alerts(session, state):
     # Der technische Statuswechsel wird weiterhin fÃ¼r andere Zwecke geloggt/gespeichert
     state.control.last_blocking_reason = current_blocking
 
+async def _aktualisiere_legionellen_lifecycle(session, state, result):
+    """Startet, ueberwacht und beendet die Legionellenfahrt nach dem Hardware-Start."""
+    cfg = state.priority_config.legionellen
+    if not cfg.aktiv:
+        return
+    winner = result.get("gewinner_ergebnis")
+    if not state.legionellen_aktiv and state.legionellen_temp_override is not None:
+        state.legionellen_temp_override = None
+    if winner is None or winner.name != "Legionellen":
+        return
+
+    now = datetime.now(state.local_tz)
+    if (
+        winner.einschalten is True
+        and not state.legionellen_aktiv
+        and state.control.kompressor_ein
+        and getattr(state.control, "_lauf_start_regel", None) == "Legionellen"
+    ):
+        state.legionellen_aktiv = True
+        state.legionellen_started_at = now
+        state.legionellen_target_reached_at = None
+        state.legionellen_telegram_start_sent = False
+        state.legionellen_telegram_done_sent = False
+        state.legionellen_temp_override = cfg.legionellen_max_temp_c
+        state.control.requested_rule_name = "Legionellen"
+        state.control.effective_rule_name = "Legionellen"
+        state.control.effective_source = pcl._aktuelle_quellenbezeichnung(state)
+        logging.info(
+            "Legionellenprophylaxe GESTARTET: Heize auf %.0fC (max %.0fC)",
+            cfg.target_temp_c, cfg.legionellen_max_temp_c,
+        )
+        if not state.legionellen_telegram_start_sent:
+            try:
+                msg = (f"🦠 *Legionellenprophylaxe gestartet!*\n"
+                       f"Heize auf {cfg.target_temp_c:.0f}°C "
+                       f"(unten: {state.sensors.t_unten:.1f}°C)")
+                from telegram_api import send_telegram_message as _send_tg
+                await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
+                               state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
+                state.legionellen_telegram_start_sent = True
+            except Exception as exc:
+                logging.warning(f"Legionellen-Telegram-Start fehlgeschlagen: {exc}")
+        return
+
+    if not state.legionellen_aktiv:
+        return
+
+    started = state.legionellen_started_at
+    if started is not None:
+        try:
+            elapsed = safe_timedelta(now, started, state.local_tz)
+        except (TypeError, ValueError):
+            elapsed = timedelta(0)
+        if elapsed >= timedelta(hours=cfg.max_duration_hours):
+            state.legionellen_aktiv = False
+            state.legionellen_temp_override = None
+            state.legionellen_started_at = None
+            state.legionellen_target_reached_at = None
+            clear_plan(state, "Legionellenlauf Timeout", persist=True)
+            logging.warning(
+                "Legionellenprophylaxe ABGEBROCHEN (Timeout: %.1fh >= %.1fh)",
+                elapsed.total_seconds() / 3600.0, cfg.max_duration_hours,
+            )
+            return
+
+    t_unten = state.sensors.t_unten
+    if (
+        isinstance(t_unten, (int, float))
+        and t_unten >= cfg.target_temp_c
+        and state.legionellen_target_reached_at is None
+    ):
+        state.legionellen_target_reached_at = now
+        logging.info(
+            "Legionellen: Zieltemperatur erreicht, Probezeit startet (%d min)",
+            cfg.probezeit_minuten,
+        )
+
+    if winner.einschalten is not False or state.legionellen_target_reached_at is None:
+        return
+    try:
+        probe_done = safe_timedelta(
+            now, state.legionellen_target_reached_at, state.local_tz
+        ) >= timedelta(minutes=cfg.probezeit_minuten)
+    except (TypeError, ValueError):
+        probe_done = False
+    if not probe_done:
+        return
+
+    state.legionellen_last_done = now.date()
+    state.legionellen_wochennummer = now.isocalendar()[1]
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.legionellen_started_at = None
+    state.legionellen_target_reached_at = None
+    state.legionellen_end_time = now
+    clear_plan(state, "Legionellenlauf abgeschlossen", persist=True)
+    state._last_was_legionellen = True
+    state.control.requested_rule_name = "Legionellen"
+    state.control.effective_rule_name = "Legionellen"
+    state.control.effective_source = pcl._aktuelle_quellenbezeichnung(state)
+    logging.info(
+        "Legionellenprophylaxe ABGESCHLOSSEN: KW %d, Ziel %.0fC inklusive %d min Probezeit",
+        now.isocalendar()[1], cfg.target_temp_c, cfg.probezeit_minuten,
+    )
+    if not state.legionellen_telegram_done_sent:
+        try:
+            msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
+                   f"KW {now.isocalendar()[1]}: {cfg.target_temp_c:.0f}°C und Probezeit erreicht")
+            from telegram_api import send_telegram_message as _send_tg
+            await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
+                           state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
+            state.legionellen_telegram_done_sent = True
+        except Exception as exc:
+            logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {exc}")
+
+
 async def run_logic_step(session, state, learning_engine=None):
     """Fuehrt einen Schritt der Steuerungslogik aus (Pareto-Prioritaeten)."""
     # Manuelle API-Befehle werden nur hier im Main-Loop verarbeitet.
-    manual_force_on = False
+    # Die Reihenfolge innerhalb eines Queue-Batches ist relevant: Ein späteres
+    # force_on nach force_off darf nicht durch das frühere force_off verworfen
+    # werden.
+    manual_force_on = getattr(state.control, "manual_force_on_pending", False) is True
+    force_off_requested = False
     for command, params in _pop_control_commands():
-        if command == "set_mode":
+        if command == "force_off":
+            force_off_requested = True
+            manual_force_on = False
+            state.control.manual_force_on_pending = False
+            # Auch ein manueller Off-Befehl muss den laufenden
+            # Legionellen-Lifecycle sauber beenden.
+            off_ok = await set_kompressor_status(state, False, force=True, end_grund="api_manuell")
+            if not off_ok:
+                state.control.blocking_reason = "Manuelles Ausschalten fehlgeschlagen"
+                return
+            if getattr(state, "legionellen_aktiv", False):
+                state.legionellen_aktiv = False
+                state.legionellen_temp_override = None
+                state.legionellen_started_at = None
+                state.legionellen_target_reached_at = None
+                state.legionellen_end_time = datetime.now(state.local_tz)
+                state._last_was_legionellen = True
+                clear_plan(state, "Legionellenlauf manuell beendet", persist=True)
+        elif command == "set_mode":
             mode = params.get("mode")
             active = bool(params.get("active"))
             if mode == "bademodus":
                 state.bademodus_aktiv = active
             elif mode == "urlaubsmodus":
                 state.urlaubsmodus_aktiv = active
-        elif command == "force_off":
-            await set_kompressor_status(state, False, force=True, end_grund="api_manuell")
-            return
         elif command == "force_on":
             manual_force_on = True
+            state.control.manual_force_on_pending = True
+
+    # Nur ein reiner Off-Batch beendet diesen Durchlauf. Folgt danach ein
+    # force_on im selben Batch, wird der On-Wunsch noch in diesem Zyklus
+    # nach den Sicherheitsprüfungen ausgeführt.
+    if force_off_requested and not manual_force_on:
+        return
 
     # 1. Druckschalter & Config
     if not await pcl.check_pressure_and_config(
@@ -683,8 +896,15 @@ async def run_logic_step(session, state, learning_engine=None):
     # safety_logic.check_sensors_and_safety â€“ ein zweiter Aufruf waere redundant.
     if await pcl.check_safety_limits(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
         if manual_force_on:
-            await set_kompressor_status(state, True, force=True, end_grund="api_manuell")
-            return True
+            state.control.requested_rule_name = "API force_on"
+            state.control.effective_rule_name = "API force_on"
+            state.control.effective_source = "Manuell"
+            ok = await set_kompressor_status(state, True, force=True, end_grund="api_manuell")
+            if not ok:
+                state.control.blocking_reason = "Manuelles Einschalten blockiert: Sicherheitsprüfung/GPIO"
+            else:
+                state.control.manual_force_on_pending = False
+            return bool(ok)
         # 4. Prioritaeten-Engine: Regel bewerten
         result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig, learning_engine=learning_engine)
         
@@ -720,91 +940,11 @@ async def run_logic_step(session, state, learning_engine=None):
         # 6. Sofort-Alarme pruefen
         await check_and_send_alerts(session, state)
 
-        # 7. Legionellenprophylaxe Lifecycle-Tracking
-        legionellen_cfg_lc = state.priority_config.legionellen
-        if legionellen_cfg_lc.aktiv:
-            gewinner_lc = result.get("gewinner_ergebnis")
-            if gewinner_lc is not None and gewinner_lc.name == "Legionellen":
-                if gewinner_lc.einschalten is True and not state.legionellen_aktiv:
-                    # Start der Prophylaxe
-                    state.legionellen_aktiv = True
-                    state.legionellen_started_at = datetime.now(state.local_tz)
-                    state.legionellen_telegram_start_sent = False
-                    state.legionellen_telegram_done_sent = False
-                    state.legionellen_temp_override = legionellen_cfg_lc.legionellen_max_temp_c
-                    state.legionellen_target_reached_at = None
-                    logging.info(
-                        f"Legionellenprophylaxe GESTARTET: Heize auf "
-                        f"{legionellen_cfg_lc.target_temp_c:.0f}C (max {legionellen_cfg_lc.legionellen_max_temp_c:.0f}C)"
-                    )
-                    # Telegram-Benachrichtigung
-                    try:
-                        msg = (f"🦠 *Legionellenprophylaxe gestartet!*\n"
-                               f"Heize auf {legionellen_cfg_lc.target_temp_c:.0f}°C "
-                               f"(unten: {state.sensors.t_unten:.1f}°C)")
-                        from telegram_api import send_telegram_message as _send_tg
-                        await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
-                                       state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
-                        state.legionellen_telegram_start_sent = True
-                    except Exception as e:
-                        logging.warning(f"Legionellen-Telegram-Start fehlgeschlagen: {e}")
+        # 7. Legionellen-Lifecycle nach dem tatsächlichen Hardware-Start
+        await _aktualisiere_legionellen_lifecycle(session, state, result)
+        if not state.legionellen_aktiv and state.legionellen_temp_override is not None:
+            state.legionellen_temp_override = None
 
-                elif gewinner_lc.einschalten is True and state.legionellen_aktiv:
-                    # Laufende Prophylaxe: Heizen bis Zieltemperatur
-                    # Timeout-PrÃ¼fung: Abbruch nach max_duration_hours
-                    if state.legionellen_started_at is not None:
-                        start = state.legionellen_started_at
-                        now = datetime.now(state.local_tz)
-                        duration = (now - start).total_seconds() / 3600.0
-                        if duration >= legionellen_cfg_lc.max_duration_hours:
-                            # Timeout erreicht - Prophylaxe abbrechen
-                            state.legionellen_aktiv = False
-                            state.legionellen_temp_override = None
-                            state.legionellen_started_at = None
-                            state.legionellen_target_reached_at = None
-                            logging.warning(
-                                f"Legionellenprophylaxe ABGEBROCHEN (Timeout: {duration:.1f}h >= "
-                                f"{legionellen_cfg_lc.max_duration_hours}h) - Ziel {legionellen_cfg_lc.target_temp_c:.0f}C nicht erreicht"
-                            )
-
-                elif gewinner_lc.einschalten is False and state.legionellen_aktiv:
-                    # Prophylaxe abschliessen: Zieltemperatur erreicht
-                    t_unten_lc = getattr(state.sensors, "t_unten", None)
-                    if t_unten_lc is not None and isinstance(t_unten_lc, (int, float)) and t_unten_lc >= legionellen_cfg_lc.target_temp_c:
-                        state.legionellen_last_done = datetime.now(state.local_tz).date()
-                        aktuelle_kw = datetime.now(state.local_tz).isocalendar()[1]
-                        state.legionellen_wochennummer = aktuelle_kw
-                        state.legionellen_aktiv = False
-                        state.legionellen_temp_override = None
-                        state.legionellen_started_at = None
-                        state.legionellen_target_reached_at = None
-                        state.legionellen_end_time = datetime.now(state.local_tz)
-                        state._last_was_legionellen = True  # Track for temp warning hysteresis
-                        logging.info(
-                            f"Legionellenprophylaxe ABGESCHLOSSEN: "
-                            f"KW {aktuelle_kw}, Temp-Ziel {legionellen_cfg_lc.target_temp_c:.0f}C erreicht (unten: {t_unten_lc:.1f}C)"
-                        )
-                        try:
-                            msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
-                                   f"KW {aktuelle_kw}: {legionellen_cfg_lc.target_temp_c:.0f}°C erreicht (unten: {t_unten_lc:.1f}°C)")
-                            from telegram_api import send_telegram_message as _send_tg
-                            await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
-                                           state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
-                            state.legionellen_telegram_done_sent = True
-                        except Exception as e:
-                            logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {e}")
-                    else:
-                        # Abgebrochen ohne Zielerreichung
-                        state.legionellen_aktiv = False
-                        state.legionellen_temp_override = None
-                        state.legionellen_started_at = None
-                        state.legionellen_target_reached_at = None
-                        logging.warning("Legionellenprophylaxe ABGEBROCHEN (Ziel nicht erreicht)")
-            else:
-                # Keine Legionellen-Regel aktiv -> Override zuruecksetzen
-                if state.legionellen_temp_override is not None:
-                    state.legionellen_temp_override = None
-                    logging.debug("Legionellen-Temp-Override zurueckgesetzt")
 
 def build_heizungsdaten_zeile(state):
     """Baut die CSV-Datenzeile fuer heizungsdaten.csv (20 Spalten).
@@ -814,21 +954,26 @@ def build_heizungsdaten_zeile(state):
     def fmt_csv(val):
         return str(val) if val is not None else "N/A"
 
-    solax = state.solar.last_api_data or {}
+    local_tz = getattr(state, "local_tz", None)
+    solax = getattr(state.solar, "last_api_data", None) or {}
 
     # Power Source
     power_source = "Netz"
-    if state.solar.feedinpower and state.solar.feedinpower > 0:
+    acpower = getattr(state.solar, "acpower", None)
+    feedin = getattr(state.solar, "feedinpower", 0)
+    if (acpower and acpower > 0) or (feedin and feedin > 0):
         power_source = "Solar"
-    elif state.solar.batpower and state.solar.batpower > 0:
-        power_source = "Batterie"
+    else:
+        batpower = getattr(state.solar, "batpower", None)
+        if batpower and batpower > 0:
+            power_source = "Batterie"
 
     return [
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        datetime.now(local_tz).strftime("%Y-%m-%d %H:%M:%S"),
         fmt_csv(state.sensors.t_oben), fmt_csv(state.sensors.t_unten), fmt_csv(state.sensors.t_mittig),
         fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd),
         "1" if state.control.kompressor_ein else "0",
-        fmt_csv(solax.get("acpower", 0)), fmt_csv(state.solar.feedinpower),
+        fmt_csv(acpower), fmt_csv(feedin),
         fmt_csv(state.solar.batpower), fmt_csv(state.solar.soc),
         fmt_csv(solax.get("powerdc1", 0)), fmt_csv(solax.get("powerdc2", 0)),
         fmt_csv(solax.get("consumeenergy", 0)),
@@ -915,7 +1060,7 @@ def write_last_state_snapshot(state):
             f"T_mittig={_fmt_temp(getattr(state.sensors, 't_mittig', None))} | "
             f"T_unten={_fmt_temp(getattr(state.sensors, 't_unten', None))} | "
             f"T_verd={_fmt_temp(getattr(state.sensors, 't_verd', None))} | "
-            f"PV={state.solar.feedinpower or 0.0:.0f}W | "
+            f"PV={state.solar.acpower or 0.0:.0f}W | "
             f"SOC={state.solar.soc or 0.0:.0f}%\n"
         )
         with open(LAST_STATE_FILE, "w", encoding="utf-8") as f:
@@ -1139,7 +1284,9 @@ async def main_loop():
     await _melde_unsauberen_lauf(session, state)
     letzter_speicher_log = _logge_speicher(state, None)
 
-    last_vpn_check = datetime.now() - timedelta(minutes=1)
+    # API-Schreibbefehle werden vor den Sicherheitsprüfungen nicht verworfen:
+    # werden nach Druck- und Sensorprüfung ausgeführt, set_mode sofort.
+    last_vpn_check = datetime.now(state.local_tz) - timedelta(minutes=1)
     
     try:
         while not stop_event.is_set():

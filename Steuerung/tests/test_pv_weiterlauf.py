@@ -49,7 +49,7 @@ class TestHystereseSparen:
     def test_gute_prognose_senkt_einschaltgrenze(self):
         """5.34 kWh heute -> Grenze 45-1=44, unten 44.5 -> noch warten
         (sonst wuerde die WP oben-nahe starten und am Limit takten)."""
-        erg = _adp(unten=44.5, forecast_today=5.34)
+        erg = _adp(unten=44.5, forecast_today=5340.0)
         assert erg.einschalten is None
         assert "Einschaltgrenze" in erg.grund
 
@@ -60,7 +60,7 @@ class TestHystereseSparen:
         assert "PV " in erg.grund or "C" in erg.grund  # normaler Schwelle-Weg
 
     def test_sparen_absaltbar(self):
-        erg = _adp(unten=44.5, forecast_today=5.34,
+        erg = _adp(unten=44.5, forecast_today=5340.0,
                    cfg=_adp_cfg(sparen_hysterese_k=0.0))
         assert "Einschaltgrenze" not in erg.grund
 

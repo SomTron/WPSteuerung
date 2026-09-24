@@ -6,7 +6,12 @@ from datetime import datetime, timedelta
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from pv_profil import berechne_profil, get_peak_leistung, get_erwartete_pv_watt  # noqa: E402
+from pv_profil import (  # noqa: E402
+    _parse_float,
+    berechne_profil,
+    get_peak_leistung,
+    get_erwartete_pv_watt,
+)
 
 
 def schreibe_test_csv(pfad, eintraege):
@@ -78,6 +83,17 @@ class TestBerechneProfil:
         profil = berechne_profil(csv_path=pfad)
         assert profil[jetzt.hour] == 0.0
         assert profil[(jetzt + timedelta(hours=1)).hour] == 300.0
+
+
+class TestFloatValidierung:
+    def test_deutsche_und_englische_notation(self):
+        assert _parse_float("1,25") == 1.25
+        assert _parse_float(" 1.25 ") == 1.25
+
+    def test_nicht_endliche_werte_werden_verworfen(self):
+        assert _parse_float("nan") is None
+        assert _parse_float("inf") is None
+        assert _parse_float("-Infinity") is None
 
 
 class TestPeakUndErwartung:

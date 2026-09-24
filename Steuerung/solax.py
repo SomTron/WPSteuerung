@@ -10,7 +10,7 @@ API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
 async def get_solax_data(session, state):
     """
     Holt aktuelle Solax-Daten mit Freshness-Check.
-    Gibt None zurück wenn Daten zu alt sind (>30 min) oder API nicht erreichbar.
+    Gibt None zurück wenn Daten zu alt sind (>15 min) oder API nicht erreichbar.
     """
     local_tz = pytz.timezone(DEFAULT_TIMEZONE)
     now = datetime.now(local_tz)

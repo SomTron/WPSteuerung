@@ -122,7 +122,7 @@ class TestForecastKalibrierung:
     def test_kwh_prognose_wird_auf_wh_normiert(self, engine):
         """Open-Meteo-kWh/m2 darf die Kalibrierung nicht als unbrauchbar verwerfen."""
         self._tag(engine, datetime(2026, 8, 24), 5000.0)
-        _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5.0)
+        _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)
         assert engine.data.forecast_ratio_samples == 1
         assert engine.data.forecast_ratio == pytest.approx(1.0)
 

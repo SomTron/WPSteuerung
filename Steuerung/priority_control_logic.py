@@ -9,6 +9,7 @@ Die Regel hoechster Prioritaet bestimmt das Schaltverhalten.
 
 import logging
 import re
+import datetime as _datetime_module
 from datetime import datetime, timedelta
 from typing import Callable
 
@@ -27,6 +28,7 @@ try:
 except ImportError:
     entscheidungs_log = None
 from logic_utils import check_log_throttle, normalize_forecast_wh_qm
+from legionellen_plan import clear_plan
 from safety_logic import (
     handle_critical_compressor_error,
 )
@@ -104,11 +106,12 @@ def _solar_daten_veraltet(state) -> bool:
     Die PV-abhaengigen Regeln werden dann pausiert (siehe priority_control);
     main.py setzt zusaetzlich die Werte selbst auf 0."""
     last_api_call = getattr(state.solar, "last_api_call", None)
-    if last_api_call is None:
-        return True  # nie geliefert -> nicht bewertbar -> konservativ pausieren
+    if not isinstance(last_api_call, _datetime_module.datetime):
+        return True  # nicht lieferbar oder Mock/ungültig -> fail-safe
     try:
-        jetzt = datetime.now(getattr(last_api_call, "tzinfo", None))
-        alter_min = (jetzt - last_api_call).total_seconds() / 60.0
+        alter_min = safe_timedelta(
+            datetime.now(state.local_tz), last_api_call, state.local_tz
+        ).total_seconds() / 60.0
     except (TypeError, ValueError) as exc:
         # Fehlerhafte Zeitdaten sind nicht frisch. Fail-safe: Solarregeln
         # pausieren, statt mit einem unkontrollierbaren Zustand zu arbeiten.
@@ -121,18 +124,19 @@ def _forecast_daten_veraltet(state) -> bool:
     """Forecast ist nach der Update-Frist nicht mehr vertrauenswürdig."""
     updated = getattr(state, "last_forecast_update", None)
     if updated is None:
-        # Ohne erfolgreichen Abruf darf kein bereits gesetzter Forecast als
-        # aktuell verwendet werden. Das schützt auch In-Memory-/Test-States.
+        # Ohne erfolgreichen Abruf darf weder ein gespeicherter noch ein
+        # bereits gesetzter Forecast als aktuell verwendet werden.
         hat_forecast = any(
             getattr(state.solar, name, None) is not None
             for name in ("forecast_today", "forecast_tomorrow", "forecast_day2")
         )
-        state.forecast_stale = bool(hat_forecast)
+        hat_plan = getattr(state, "legionellen_planned_date", None) is not None
+        state.forecast_stale = bool(hat_forecast or hat_plan)
         state.forecast_age_s = None
-        if hat_forecast:
+        if state.forecast_stale:
             logging.debug("Forecast-Daten ohne Aktualisierungszeitpunkt -> stale")
-        return hat_forecast
-    if not isinstance(updated, datetime):
+        return state.forecast_stale
+    if not isinstance(updated, _datetime_module.datetime):
         state.forecast_age_s = None
         return True
     try:
@@ -149,9 +153,15 @@ def _forecast_daten_veraltet(state) -> bool:
         return True
 
 
+def _invalidate_legionellen_plan(state, reason: str = "Forecast veraltet") -> None:
+    """Alten Legionellen-Tagesplan verwerfen, statt ihn weiter zu starten."""
+    clear_plan(state, reason, persist=True)
+
+
 def _set_stale_forecast(state) -> None:
     """Alle prognoseabhängigen Felder neutralisieren, nie alte Werte weitergeben."""
     state.forecast_stale = True
+    _invalidate_legionellen_plan(state, "Forecast veraltet")
     if check_log_throttle(state, "_log_forecast_stale", interval_minutes=30):
         logging.warning(
             "Forecast veraltet/ungültig -> Prognose-Regeln werden nicht mehr gesteuert"
@@ -250,6 +260,17 @@ def _pv_weiterlauf_block(state, gewinner, should_on: bool) -> bool:
     return should_on
 
 
+def _aktuelle_quellenbezeichnung(state) -> str:
+    """Trennt PV-Erzeugung, Batterieentladung und Netzbezug im Status."""
+    pv = getattr(getattr(state, "solar", None), "acpower", 0)
+    battery = getattr(getattr(state, "solar", None), "batpower", 0)
+    if isinstance(pv, (int, float)) and pv > 0:
+        return "PV"
+    if isinstance(battery, (int, float)) and battery > 0:
+        return "Batterie"
+    return "Netz"
+
+
 def _soll_priority_loggen(state, alle_ergebnisse) -> bool:
     """Kompakt-Log-Entscheidung (Empfehlung "Logvolumen reduzieren").
 
@@ -334,6 +355,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     forecast_stale = _forecast_daten_veraltet(state)
     if forecast_stale:
         _set_stale_forecast(state)
+        # Nach der Invalidierung bleiben die PV-/Batterie-Livewerte nutzbar;
+        # nur die Prognose ist nicht mehr vertrauenswürdig.
     else:
         state.forecast_stale = False
     # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
@@ -348,6 +371,11 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     if hourly_mw2 is not None:
         pv_flaeche = float(getattr(effektive_config.wp, "pv_array_size_qm", 10.0))
         hourly_forecast_watt = {h: w * pv_flaeche for h, w in hourly_mw2.items()}
+
+    planned_date = getattr(state, "legionellen_planned_date", None)
+    if planned_date is not None and planned_date != datetime.now(state.local_tz).date():
+        _invalidate_legionellen_plan(state, "Geplanter Legionellen-Termin ist nicht heute")
+        planned_date = None
 
     # Alle Regeln bewerten (mit effektiver Config)
     # Learning Engine aktualisieren (Heizzyklen + Zapfprofil + Solar-Tracking)
@@ -428,6 +456,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         forecast_hourly_wh=hourly_forecast_watt,
         soc=getattr(state.solar, "soc", None),
         battery_power=getattr(state.solar, "batpower", None),
+        pv_acpower=getattr(state.solar, "acpower", None),
         learned_evening_window=gelerntes_abendfenster,
         learned_morning_window=_gelerntes_morgenfenster_mit_bonus(
             state, learning_engine
@@ -443,11 +472,13 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         legionellen_aktiv=bool(state.legionellen_aktiv),
         legionellen_last_done=state.legionellen_last_done,
         legionellen_started_at=state.legionellen_started_at,
+        legionellen_target_reached_at=getattr(state, "legionellen_target_reached_at", None),
         forecast_day2_wh_qm=normalize_forecast_wh_qm(
             getattr(state.solar, "forecast_day2", None)
         ),
         wochenende_cfg=state.priority_config.wochenende,  # fuer Wochenende-Nachholung
         legionellen_planned_tag=getattr(state, "legionellen_planned_tag", None),
+        legionellen_planned_date=getattr(state, "legionellen_planned_date", None),
     )
 
     # Ergebnisse loggen - KOMPAKT-MODUS (Empfehlung "Logvolumen reduzieren"):
@@ -461,7 +492,20 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
 
     # Gewinner-Regel in State speichern fuer Anzeige
     state.control.active_rule_sensor = None
-    state.control.active_rule_name = None
+    # Effective source fields are separate from the requested rule. A waiting
+    # Legionella rule must not be shown as if it were already driving hardware.
+    if gewinner is None:
+        waiting = next(
+            (e for e in alle_ergebnisse if e.name == "Legionellen" and e.aktiv and e.einschalten is None),
+            None,
+        )
+        state.control.requested_rule_name = waiting.name if waiting else None
+        state.control.active_rule_name = waiting.name if waiting else None
+    else:
+        state.control.requested_rule_name = gewinner.name
+        state.control.active_rule_name = gewinner.name
+    state.control.effective_rule_name = state.control.previous_modus
+    state.control.effective_source = _aktuelle_quellenbezeichnung(state)
 
     if gewinner is not None:
         state.control.active_rule_name = gewinner.name
@@ -603,6 +647,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
 
     if ist_bestaetigt:
         state.control.previous_modus = modus
+        state.control.effective_rule_name = modus
+        state.control.effective_source = _aktuelle_quellenbezeichnung(state)
         state.control._soll_einschalten_bestaetigt = bool(should_on)
         if modus != prev_modus:
             logging.info(

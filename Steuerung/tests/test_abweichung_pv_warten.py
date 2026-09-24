@@ -51,7 +51,7 @@ class TestPvWarten:
 
     def test_kwh_eingabe_wird_normalisiert(self):
         """state.solar.forecast_today = kWh/m2 (5.34) -> Wh/m2 (5340) -> warten."""
-        erg = _abw(oben=30.0, unten=25.0, feedin=0.0, stunde=8, forecast=5.34)
+        erg = _abw(oben=30.0, unten=25.0, feedin=0.0, stunde=8, forecast=5340.0)
         assert erg.einschalten is None
         assert "gute PV-Prognose" in erg.grund
 

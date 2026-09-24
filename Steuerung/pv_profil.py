@@ -10,6 +10,7 @@ und kann mit der heutigen Solax-Prognose skaliert werden.
 import asyncio
 import csv
 import logging
+import math
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -60,8 +61,9 @@ def _parse_float(val) -> Optional[float]:
     if val is None:
         return None
     try:
-        return float(val.replace(",", ".").replace(" ", ""))
-    except (ValueError, AttributeError):
+        wert = float(val.replace(",", ".").replace(" ", ""))
+        return wert if math.isfinite(wert) else None
+    except (ValueError, TypeError, AttributeError, OverflowError):
         return None
 
 

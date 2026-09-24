@@ -26,6 +26,12 @@ def test_safe_float_invalid_inputs():
     # Wrong types
     assert safe_float([], default=0.0) == 0.0
     assert safe_float({}, default=0.0) == 0.0
+    assert safe_float(True, default=7.0) == 7.0
+
+    # Nicht-endliche Werte duerfen nicht in Mess- oder Steuerpfade gelangen
+    assert safe_float(float("nan"), default=7.0) == 7.0
+    assert safe_float(float("inf"), default=7.0) == 7.0
+    assert safe_float("-Infinity", default=7.0) == 7.0
 
 def test_safe_float_logging(caplog):
     import logging
@@ -46,3 +52,28 @@ def test_safe_float_logging(caplog):
     with caplog.at_level(logging.ERROR):
         safe_float("invalid_num", field_name="test_field")
         assert "API: Cannot convert test_field='invalid_num'" in caplog.text
+
+
+def test_api_csv_parser_verwirft_nicht_endliche_werte():
+    """Nicht-endliche CSV-Werte duerfen das /status-Payload nicht verunreinigen."""
+    from api import _parse_zeitstempel, _to_float
+
+    assert _to_float("123.5") == 123.5
+    assert _to_float("nan") is None
+    assert _to_float("inf") is None
+    assert _to_float("-Infinity") is None
+    assert _parse_zeitstempel("inf") is None
+    assert _parse_zeitstempel("-Infinity") is None
+
+
+def test_api_csv_parser_ignoriert_leerwerte_ohne_logspam(caplog):
+    """Leere historische CSV-Spalten duerfen keine Warnflut erzeugen."""
+    import logging
+
+    from api import _to_float
+
+    with caplog.at_level(logging.WARNING):
+        assert _to_float(None) is None
+        assert _to_float("") is None
+        assert _to_float("   ") is None
+    assert not caplog.records

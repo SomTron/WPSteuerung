@@ -362,10 +362,13 @@ class TestSommerModus:
         """Erstellt einen Mock-State mit voller Priority-Config inkl. Sommer-Modus."""
         state = MagicMock()
         state.local_tz = pytz.timezone("Europe/Berlin")
+        state.last_forecast_update = datetime.now(state.local_tz)
         now = datetime.now(state.local_tz)
 
         state.solar.feedinpower = 500.0
-        state.solar.forecast_today = 2500.0
+        state.solar.forecast_today = 2.5
+        state.solar.forecast_tomorrow = 3.0
+        state.solar.forecast_day2 = 2.8
         state.solar.forecast_tomorrow = 3000.0
         state.solar.forecast_day2 = 2800.0
 

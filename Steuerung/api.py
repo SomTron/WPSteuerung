@@ -103,7 +103,9 @@ def build_mode_payload(state, priority_info_override=None):
         "bath_active": bool(getattr(state, 'bademodus_aktiv', False)),
         "nightsperre_active": (bool(info.get("nachtsperre_aktiv", False))
                                if isinstance(info, dict) else False),
-        "active_rule": (getattr(control, 'active_rule_name', None) or ""),
+        "active_rule": (getattr(control, 'effective_rule_name', None) or getattr(control, 'active_rule_name', None) or ""),
+        "requested_rule": (getattr(control, 'requested_rule_name', None) or ""),
+        "effective_source": (getattr(control, 'effective_source', None) or "Netz"),
         "active_rule_sensor": (getattr(control, 'active_rule_sensor', None) or ""),
         "blocking_reason": (getattr(control, 'blocking_reason', None) or ""),
         "soll_einschalten": bool(getattr(control, '_soll_einschalten', False)),

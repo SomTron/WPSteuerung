@@ -290,6 +290,7 @@ def test_solar_negative_zeitstempel_ist_stale():
 
     tz = pytz.timezone("Europe/Berlin")
     state = SimpleNamespace(
+        local_tz=tz,
         solar=SimpleNamespace(last_api_call=datetime.now(tz) + timedelta(minutes=2))
     )
     assert pcl._solar_daten_veraltet(state) is True

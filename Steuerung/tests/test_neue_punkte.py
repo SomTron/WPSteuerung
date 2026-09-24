@@ -98,6 +98,7 @@ class TestDynamischeBatteriereserve:
             kompressor_ein=False, now_hour=12,
             nachtsperre_start=22, nachtsperre_ende=6,
             forecast_wh_qm=500.0,  # schlechter Tag
+            battery_power=1000.0,
         )
         # SOC 75 < Reserve 80 -> keine Aktion
         assert erg.einschalten is not True
@@ -108,6 +109,7 @@ class TestDynamischeBatteriereserve:
             kompressor_ein=False, now_hour=12,
             nachtsperre_start=22, nachtsperre_ende=6,
             forecast_wh_qm=2500.0,  # guter Tag -> Reserve 65%
+            battery_power=1000.0,
         )
         assert erg.einschalten is True
         assert "70" in erg.grund or "EIN" in erg.grund
@@ -119,6 +121,7 @@ class TestDynamischeBatteriereserve:
             kompressor_ein=False, now_hour=12,
             nachtsperre_start=22, nachtsperre_ende=6,
             forecast_wh_qm=3000.0,
+            battery_power=1000.0,
         )
         # min_soc_absolut=10: effektive Reserve = max(20-15, 10)=10 -> SOC 11 reicht
         assert erg.einschalten is True

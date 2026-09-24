@@ -66,6 +66,34 @@ async def test_aktive_sperre_blockiert_mit_lesbarem_grund():
 
 
 @pytest.mark.asyncio
+async def test_json_mindestpause_verhindert_kurzen_neustart():
+    """Die JSON-Fachkonfiguration darf eine alte 3-Minuten-INI-Pause nicht verkuerzen."""
+    state = baue_state()
+    state.priority_config = SimpleNamespace(
+        zyklus=SimpleNamespace(mindestpausenzeit_minuten=30),
+        sicherheit=SimpleNamespace(
+            max_temp_c=48.0,
+            boiler_max_ein_abstand_k=2.0,
+            start_vorhersage_aktiv=False,
+        ),
+        taktschutz=SimpleNamespace(aktiv=False),
+    )
+    state.sensors = SimpleNamespace(t_unten=40.0, t_mittig=40.0)
+    state.stats.last_compressor_off_time = datetime.now(TZ) - timedelta(minutes=1)
+    mock_set = AsyncMock(return_value=True)
+
+    result = await pcl.handle_compressor_on(
+        state, None, regelfuehler=36.0, einschaltpunkt=38.0, ausschaltpunkt=48.0,
+        min_laufzeit=timedelta(minutes=60), min_pause=timedelta(minutes=3),
+        t_oben=40.0, t_mittig=40.0, set_kompressor_status_func=mock_set,
+    )
+
+    assert result is False
+    mock_set.assert_not_called()
+    assert state.control.blocking_reason.startswith("Min. Pause")
+
+
+@pytest.mark.asyncio
 async def test_abgelaufene_sperre_blockiert_nicht():
     """Nach Ablauf der Sperre startet der Kompressor normal."""
     state = baue_state(lockout_until=datetime.now(TZ) - timedelta(minutes=1))

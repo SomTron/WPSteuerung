@@ -1,6 +1,9 @@
 """Regressionen fuer Zustandsuebernahme und shutdown-sichere Zyklen."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 import pytz
 
@@ -42,3 +45,35 @@ def test_restore_persisted_compressor_pause_ignoriert_alten_snapshot(tmp_path, m
 
     assert main.restore_persisted_compressor_pause(state) is False
     assert state.stats.last_compressor_off_time is None
+
+
+@pytest.mark.asyncio
+async def test_periodic_tasks_akzeptiert_naiven_vpn_timestamp(monkeypatch):
+    """Ein alter naiver Snapshot darf den Main-Loop nicht abbrechen."""
+    from main import check_periodic_tasks
+
+    state = _state()
+    state.config = SimpleNamespace()
+    state.last_forecast_update = None
+    state.last_forecast_attempt = None
+    state.priority_config = SimpleNamespace(
+        sommer_modus=SimpleNamespace(aktiv=False),
+        legionellen=SimpleNamespace(aktiv=False),
+    )
+    state.solar = SimpleNamespace()
+    calls = []
+    monkeypatch.setattr(main, "check_vpn_status", AsyncMock(side_effect=lambda s: calls.append(s)))
+    monkeypatch.setattr(
+        main,
+        "get_solar_forecast",
+        AsyncMock(return_value=(None, None, None, None, None, None, None, None)),
+    )
+    monkeypatch.setattr(main, "FORECAST_RETRY_INTERVAL_MIN", 15)
+    monkeypatch.setattr(main, "VPN_CHECK_INTERVAL_SEC", 60)
+
+    result = await check_periodic_tasks(
+        object(), state, datetime.now() - timedelta(minutes=1)
+    )
+    assert isinstance(result, datetime)
+    assert result.tzinfo is not None
+    assert len(calls) == 1

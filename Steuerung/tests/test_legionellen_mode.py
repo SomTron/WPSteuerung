@@ -111,6 +111,7 @@ class TestEvaluateLegionellen:
         result = evaluate_legionellen(
             legionellen_config, temp_dict, now,
             legionellen_last_done=last_done,
+            pv_leistung=500.0,
         )
         assert result.aktiv is True
         assert result.einschalten is True
@@ -131,6 +132,7 @@ class TestEvaluateLegionellen:
         now = datetime(2025, 3, 21, 10, 0, 0)
         result = evaluate_legionellen(
             legionellen_config, temp_dict, now,
+            pv_leistung=500.0,
         )
         assert result.aktiv is True
         assert result.einschalten is True
@@ -160,7 +162,7 @@ class TestEvaluateLegionellen:
         assert result.einschalten is True
         assert "heize weiter" in result.grund
 
-    def test_aktiv_ziel_erreicht_schaltet_aus(self, legionellen_config, temp_dict):
+    def test_aktiv_ziel_erreicht_wartet_probezeit(self, legionellen_config, temp_dict):
         """Ziel erreicht (z.B. >= 60 Grad unten) -> sofort AUS."""
         from priority_control import evaluate_legionellen
         now = datetime(2025, 3, 21, 11, 0, 0)
@@ -170,8 +172,112 @@ class TestEvaluateLegionellen:
             legionellen_aktiv=True,
             legionellen_started_at=datetime(2025, 3, 21, 10, 0, 0),
         )
-        assert result.einschalten is False
-        assert "AUS" in result.grund
+        assert result.einschalten is True
+        assert "Probezeit" in result.grund
+
+
+def test_legionellen_start_erfordert_pv_oder_batterie():
+    from priority_control import evaluate_legionellen
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6, start_uhr=8,
+        pv_start_min_watt=500.0,
+        batterie_start_min_watt=50.0,
+        batterie_start_min_soc_prozent=90.0,
+    )
+    now = datetime(2025, 6, 13, 8, 0)
+    temps = {"oben": 45.0, "unten": 35.0, "mittig": 40.0}
+
+    ohne_quelle = evaluate_legionellen(cfg, temps, now)
+    assert ohne_quelle.einschalten is None
+    assert "wartet auf PV/Batterie" in ohne_quelle.grund
+
+    mit_pv = evaluate_legionellen(cfg, temps, now, pv_leistung=500.0)
+    assert mit_pv.einschalten is True
+    assert "mit PV" in mit_pv.grund
+
+    mit_batterie = evaluate_legionellen(
+        cfg, temps, now, battery_power=50.0, soc=90.0
+    )
+    assert mit_batterie.einschalten is True
+    assert "mit Batterie" in mit_batterie.grund
+
+    zu_wenig_soc = evaluate_legionellen(
+        cfg, temps, now, battery_power=50.0, soc=89.9
+    )
+    assert zu_wenig_soc.einschalten is None
+
+
+def test_legionellen_wartet_auf_pv_erzeugung_nicht_nur_netzteil():
+    from priority_control import evaluate_legionellen
+
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6, start_uhr=8,
+        pv_start_min_watt=500.0,
+    )
+    result = evaluate_legionellen(
+        cfg,
+        {"oben": 45.0, "unten": 35.0, "mittig": 40.0},
+        datetime(2025, 6, 13, 8, 0),
+        pv_leistung=900.0,
+        pv_acpower=0.0,
+    )
+    assert result.einschalten is None
+    assert "PV-Erzeugung" in result.grund
+
+
+def test_legionellen_akzeptiert_pv_erzeugung():
+    from priority_control import evaluate_legionellen
+
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6, start_uhr=8,
+        pv_start_min_watt=500.0,
+    )
+    result = evaluate_legionellen(
+        cfg,
+        {"oben": 45.0, "unten": 35.0, "mittig": 40.0},
+        datetime(2025, 6, 13, 8, 0),
+        pv_leistung=0.0,
+        pv_acpower=600.0,
+    )
+    assert result.einschalten is True
+    assert "mit PV" in result.grund
+
+
+def test_legionellen_start_mit_veralteten_solardaten_gesperrt():
+    from priority_control import evaluate_legionellen
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6, start_uhr=8,
+    )
+    result = evaluate_legionellen(
+        cfg,
+        {"oben": 45.0, "unten": 35.0, "mittig": 40.0},
+        datetime(2025, 6, 13, 8, 0),
+        pv_leistung=500.0,
+        solar_stale=True,
+    )
+    assert result.einschalten is None
+    assert "veraltet" in result.grund
+
+
+def test_laufende_legionellen_wartet_nicht_auf_neue_quelle():
+    from priority_control import evaluate_legionellen
+    result = evaluate_legionellen(
+        LegionellenConfig(aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0),
+        {"oben": 50.0, "unten": 45.0, "mittig": 48.0},
+        datetime(2025, 6, 13, 9, 0),
+        legionellen_aktiv=True,
+        legionellen_started_at=datetime(2025, 6, 13, 8, 0),
+        pv_leistung=0.0,
+        battery_power=0.0,
+        soc=0.0,
+    )
+    assert result.einschalten is True
+    assert "heize weiter" in result.grund
+
 
 
 # ============================================================
@@ -416,15 +522,16 @@ class TestLegionellenWochenendeNachholung:
 
     def test_wochenende_vor_sperre_fenster_offen(self, legionellen_config, temp_dict):
         """Sa 08:30: Start faellig (8:00), wird aber von der Sperre gehalten.
-        Die Regel meldet trotzdem EIN-Wunsch -> gewinnt um 9:00 sofort."""
+        Ohne Startfreigabe darf die Regel keinen Hardware-Start ausloesen."""
         from priority_control import evaluate_legionellen
         erg = evaluate_legionellen(
             self._cfg_start8(legionellen_config), temp_dict,
             self._samstag(8, 30),
             wochenende_cfg=self._weekend_cfg(),
         )
-        assert erg.einschalten is True
+        assert erg.einschalten is None
         assert "Wochenende-Sperre" in erg.grund
+        assert "PV-/Batterie-Quelle" in erg.grund
 
     def test_wochenende_nachholung_nach_sperre(self, legionellen_config, temp_dict):
         """Sa 09:05: Nach der Sperre wird sofort nachgeholt (Fenster bis 16U)."""
@@ -433,6 +540,7 @@ class TestLegionellenWochenendeNachholung:
             self._cfg_start8(legionellen_config), temp_dict,
             self._samstag(9, 5),
             wochenende_cfg=self._weekend_cfg(),
+            pv_leistung=500.0,
         )
         assert erg.aktiv is True
         assert erg.einschalten is True
@@ -470,9 +578,10 @@ class TestLegionellenWochenendeNachholung:
         erg = evaluate_legionellen(
             self._cfg_start8(legionellen_config), temp_dict, now,
             wochenende_cfg=self._weekend_cfg(),
+            pv_leistung=500.0,
         )
         assert erg.einschalten is True
-        assert "Starte Erhitzung" in erg.grund
+        assert "Starte mit PV" in erg.grund
 
     def test_integration_samstag_9_gewinner_legionellen(self, legionellen_config):
         """End-to-End: Sa 08:30 blockt die Wochenende-Sperre (100); Sa 09:00
@@ -490,14 +599,16 @@ class TestLegionellenWochenendeNachholung:
         temp = {"oben": 45.0, "unten": 35.0, "mittig": 40.0, "verd": 30.0}
 
         vor = pc.bewerte_alle_regeln(
-            config=config, temp_dict=temp, pv_leistung=0.0, kompressor_ein=False,
-            now=self._samstag(8, 30),
+            config=config, temp_dict=temp, pv_leistung=500.0, kompressor_ein=False,
+            now=self._samstag(8, 30), battery_power=None, soc=None,
+            solar_stale=False,
         )
         assert vor[0].name == "Wochenende"          # Sperre blockt trotz EIN-Wunsch
 
         nach = pc.bewerte_alle_regeln(
-            config=config, temp_dict=temp, pv_leistung=0.0, kompressor_ein=False,
-            now=self._samstag(9, 0),
+            config=config, temp_dict=temp, pv_leistung=500.0, kompressor_ein=False,
+            now=self._samstag(9, 0), battery_power=None, soc=None,
+            solar_stale=False,
         )
         assert nach[0].name == "Legionellen"        # Nachholung um 09:00
         assert nach[0].einschalten is True

@@ -10,6 +10,8 @@ Infos
 
 # Haltbarer Zustands-Schnappschuss (Laufzeit, nie committen)
 last_state.txt
+Steuerung/legionellen_plan.json
+legionellen_plan.json
 
 # Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
 letzter_lauf.json
