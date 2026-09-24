@@ -138,7 +138,7 @@ async def test_verification_failure(mock_state):
 
          # No drop (20 -> 20), not cold start (< 15)
          is_running, error_msg = await verify_compressor_running(
-            mock_state, None, current_t_verd=20.0, current_t_unten=30.3
+            mock_state, None, current_t_verd=20.0, current_t_unten=30.0
         )
          
          assert is_running is False
@@ -197,8 +197,8 @@ async def test_legionellen_echter_stillstand_wird_weiter_erkannt(mock_state):
 
 
 @pytest.mark.asyncio
-async def test_normalmodus_braucht_unten_delta_weiterhin(mock_state):
-    """Regression: Ohne Legionellen zaehlt der untere Fuehler weiterhin mit."""
+async def test_unten_delta_gilt_als_betriebsbeweis(mock_state):
+    """Ein klarer Temperaturanstieg am Boiler belegt aktive Waermeerzeugung."""
     now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
     mock_state.kompressor_verification_start_time = now - timedelta(minutes=15)
     mock_state.kompressor_verification_start_t_verd = 20.0
@@ -211,9 +211,30 @@ async def test_normalmodus_braucht_unten_delta_weiterhin(mock_state):
                 return now
         m.setattr("safety_logic.datetime", MockDateTime)
 
-        # Verdampfer ok, aber unten-Delta 0.1 < 0.2 -> Fehler ("Unterer Fühler")
         is_running, error_msg = await verify_compressor_running(
-            mock_state, None, current_t_verd=18.0, current_t_unten=47.3
+            mock_state, None, current_t_verd=18.0, current_t_unten=47.5
         )
-        assert is_running is False
-        assert "Unterer Fühler" in error_msg
+        assert is_running is True
+        assert error_msg is None
+
+
+@pytest.mark.asyncio
+async def test_steigender_verdampfer_widerlegt_positives_boilerdelta_nicht(mock_state):
+    """Regression Log 20.09.: Verdampfer stieg, aber der Boiler stieg klar."""
+    now = datetime(2023, 1, 1, 12, 15, 0, tzinfo=mock_state.local_tz)
+    mock_state.kompressor_verification_start_time = now - timedelta(minutes=15)
+    mock_state.kompressor_verification_start_t_verd = 20.0
+    mock_state.kompressor_verification_start_t_unten = 30.0
+
+    with pytest.MonkeyPatch.context() as m:
+        class MockDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now
+        m.setattr("safety_logic.datetime", MockDateTime)
+
+        is_running, error_msg = await verify_compressor_running(
+            mock_state, None, current_t_verd=22.9, current_t_unten=31.3
+        )
+        assert is_running is True
+        assert error_msg is None

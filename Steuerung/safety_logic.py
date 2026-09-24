@@ -189,7 +189,13 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
 
     unten_ok = True if nur_verdampfer else unten_delta >= COMPRESSOR_UNTEN_DELTA_MIN
 
-    if verd_ok and unten_ok:
+    # Im Normalbetrieb genuegt ein plausibles Aktivitaetssignal. Log 20.09.:
+    # Der Verdampfer stieg sensorbedingt um ~2.9 K, waehrend der Boiler
+    # zugleich klar um >1 K stieg. Ein UND-Zwang wertete das als Stillstand.
+    # Im Legionellenmodus bleibt der Verdampfer alleiniger Beweis, weil der
+    # untere Fuehler dort saettigen kann.
+    betriebsbeweis = verd_ok if nur_verdampfer else (verd_ok or unten_ok)
+    if betriebsbeweis:
         state.kompressor_verification_failed = False
         state.kompressor_verification_error_count = 0
         return True, None

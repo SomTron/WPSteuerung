@@ -108,8 +108,11 @@ def _solar_daten_veraltet(state) -> bool:
     try:
         jetzt = datetime.now(getattr(last_api_call, "tzinfo", None))
         alter_min = (jetzt - last_api_call).total_seconds() / 60.0
-    except (TypeError, ValueError):
-        return False
+    except (TypeError, ValueError) as exc:
+        # Fehlerhafte Zeitdaten sind nicht frisch. Fail-safe: Solarregeln
+        # pausieren, statt mit einem unkontrollierbaren Zustand zu arbeiten.
+        logging.debug("Alter der Solax-Daten nicht bestimmbar; stale=%s", exc)
+        return True
     return alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN
 
 
@@ -585,7 +588,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             entscheidungs_log.schreibe_eintrag(
                 gewinner_name=gewinner.name if gewinner else None,
                 gewinner_grund=gewinner.grund if gewinner else "",
-                soll_einschalten=bool(should_on),
+                soll_einschalten=bool(soll_an_hardware),
                 kompressor_laeuft=bool(state.control.kompressor_ein),
                 feedin_watt=pv_leistung,
                 batpower_watt=getattr(state.solar, "batpower", None),
@@ -664,7 +667,14 @@ def _extract_einschaltpunkt(
     elif name == "Forecast":
         return config.forecast.t_vorheiz_ab_c
     elif name == "AdaptivePV":
-        return config.adaptive_pv.base_threshold_watt
+        adaptive_cfg = getattr(config, "adaptive_pv", None)
+        direct = getattr(adaptive_cfg, "einschalten_bis_c", None)
+        if isinstance(direct, (int, float)) and not isinstance(direct, bool):
+            return float(direct)
+        t_max = getattr(adaptive_cfg, "tmax_c", None)
+        if isinstance(t_max, (int, float)) and not isinstance(t_max, bool):
+            return float(t_max) - 3.0
+        return config.sicherheit.max_temp_c
     elif name == "CalcStart":
         return config.calculated_start.solltemperatur_c
     elif name.startswith("MinTemp-"):
@@ -1354,6 +1364,16 @@ async def handle_compressor_on(
         secs = int(rest.total_seconds() % 60)
         state.control.blocking_reason = f"Neustartsperre (noch {mins}m {secs}s)"
         return False
+
+    # Die JSON-Pareto-Konfiguration ist die fachliche Mindestpause. Die alte
+    # INI-Sicht MIN_PAUSE kann aelter sein (Beispiel: 3 Min) und darf die
+    # dokumentierten 30 Min nicht verkuerzen. Grosse INI-Werte bleiben wirksam.
+    _zyklus_cfg = getattr(getattr(state, "priority_config", None), "zyklus", None)
+    json_pause_min = getattr(_zyklus_cfg, "mindestpausenzeit_minuten", None)
+    if isinstance(json_pause_min, (int, float)) and not isinstance(json_pause_min, bool):
+        json_pause = timedelta(minutes=max(int(json_pause_min), 0))
+        if json_pause > min_pause:
+            min_pause = json_pause
 
     # Die Prioritaeten-Engine hat bereits entschieden
     # Wir muessen nur noch Mindestlaufzeit/-pause und Basis-Sicherheit pruefen
