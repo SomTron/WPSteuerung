@@ -31,6 +31,7 @@ import re
 
 from utils import HEIZUNGSDATEN_CSV, to_naive
 from logic_utils import forecast_kwh_m2_to_wh_m2
+from status_snapshot import build_status_snapshot
 
 try:
     from priority_control_logic import _is_nachtsperre_aktiv
@@ -194,14 +195,30 @@ def serve_index_html():
     """Serve the main dashboard HTML page (direct URL)."""
     return serve_index()
 
-# Global state reference (will be injected from main.py)
+# Global state references. /status liest nur aus dem Snapshot; Schreib-/Config-
+# Routen behalten den echten Main-Loop-State fuer die Queue.
 shared_state = None
+control_state = None
 control_funcs = None
 
+
 def init_api(state, funcs):
-    global shared_state, control_funcs
-    shared_state = state
+    global shared_state, control_state, control_funcs
+    control_state = state
+    shared_state = build_status_snapshot(state)
     control_funcs = funcs
+
+
+def update_status_snapshot(state) -> None:
+    """API-Snapshot atomar durch eine konsistente Kopie ersetzen."""
+    global shared_state
+    shared_state = build_status_snapshot(state)
+
+
+def _control_state():
+    if getattr(shared_state, "_is_status_snapshot", False):
+        return control_state
+    return shared_state
 
 def _solar_stale_status() -> bool:
     """True, wenn Solax-Daten aelter als der Stale-Schwellwert sind."""
@@ -785,11 +802,12 @@ def update_config(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
     _check_api_key(x_api_key)
-    if not shared_state:
+    state = _control_state()
+    if not state:
         raise HTTPException(status_code=503, detail="System not initialized")
     
     # Access Pydantic model sections
-    section_obj = getattr(shared_state.config, config.section, None)
+    section_obj = getattr(state.config, config.section, None)
     if not section_obj:
         raise HTTPException(status_code=404, detail=f"Section {config.section} not found")
     
@@ -829,7 +847,8 @@ async def control_system(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
     _check_api_key(x_api_key)
-    if not shared_state:
+    state = _control_state()
+    if not state:
         raise HTTPException(status_code=503, detail="System not initialized")
 
     if cmd.command == "set_mode":
@@ -843,9 +862,9 @@ async def control_system(
         mode = cmd.params["mode"]
         active = cmd.params["active"]
         if mode == "bademodus":
-            shared_state.bademodus_aktiv = active
+            state.bademodus_aktiv = active
         else:
-            shared_state.urlaubsmodus_aktiv = active
+            state.urlaubsmodus_aktiv = active
         return {"status": "success", "message": f"{mode} set to {active}"}
 
     if not control_funcs:
@@ -863,7 +882,7 @@ async def control_system(
     if "set_kompressor" not in control_funcs:
         raise HTTPException(status_code=503, detail="Control function not available")
     await control_funcs["set_kompressor"](
-        shared_state, cmd.command == "force_on", force=True,
+        state, cmd.command == "force_on", force=True,
         end_grund="api_manuell" if cmd.command == "force_off" else None,
     )
     return {"status": "success", "message": f"{cmd.command} accepted"}
@@ -875,18 +894,19 @@ def export_config(
 ):
     """Exportkonfiguration ohne Secrets."""
     _check_api_key(x_api_key)
-    if not shared_state:
+    state = _control_state()
+    if not state:
         raise HTTPException(status_code=503, detail="System not initialized")
 
     try:
         return {
             "config_ini": _redact_config(
-                shared_state.config.model_dump()
-                if hasattr(shared_state.config, "model_dump") else {}
+                state.config.model_dump()
+                if hasattr(state.config, "model_dump") else {}
             ),
             "priority_config": _redact_config(
-                shared_state.priority_config.model_dump()
-                if hasattr(shared_state.priority_config, "model_dump") else {}
+                state.priority_config.model_dump()
+                if hasattr(state.priority_config, "model_dump") else {}
             ),
         }
     except Exception as exc:
@@ -900,7 +920,7 @@ async def handle_command(
 ):
     """Legacy-Kommandoroute; für set_mode bleibt /control kanonisch."""
     _check_api_key(x_api_key)
-    if not shared_state:
+    if not _control_state():
         raise HTTPException(status_code=503, detail="System not initialized")
 
     if cmd.command == "set_mode":

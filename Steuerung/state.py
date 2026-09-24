@@ -61,6 +61,7 @@ class ControlState:
         self.effective_rule_name: Optional[str] = None
         self.effective_source: Optional[str] = None
         self.manual_force_on_pending: bool = False
+        self.consecutive_control_errors: int = 0
         self._rate_messungen: deque = deque(maxlen=5)
         self._rate_confidence: float = 0.0
         self._last_start_anticipation: dict = {}
@@ -145,6 +146,7 @@ class State:
         self.session = None
         self.last_forecast_update: Optional[datetime] = None
         self.last_forecast_attempt: Optional[datetime] = None
+        self.last_data_update_ok: Optional[bool] = None
         self.letzter_lauf: dict = {}
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None

@@ -181,6 +181,22 @@ async def test_retry_faehrt_bei_spaetem_erfolg():
 
 
 @pytest.mark.asyncio
+async def test_ungueltiges_realtime_schema_ueberschreibt_snapshot_nicht():
+    state = baue_state()
+    state.solar.last_api_data = {"acpower": 111, "feedinpower": 222}
+    session = MagicMock()
+    session.get.return_value = MockResponse(
+        json_data={"success": True, "result": {"acpower": "not-a-number"}}
+    )
+
+    result = await get_solax_data(session, state)
+
+    assert result is None
+    assert state.solar.last_api_data == {"acpower": 111, "feedinpower": 222}
+    assert state.solar.last_api_call is None
+
+
+@pytest.mark.asyncio
 async def test_kein_token_oder_sn_gibt_none():
     """Fehlende Config (Token/SN) soll direkt None zurueckgeben, ohne API-Call."""
     state = baue_state()

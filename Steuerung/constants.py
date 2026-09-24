@@ -58,6 +58,9 @@ LEGIONELLEN_VERIFY_NUR_VERDAMPFER: bool = True
 # Einheitliche Frischegrenze für Solax-Livedaten und API/Regelung.
 SOLAR_DATA_STALE_THRESHOLD_MIN: int = 15
 SOLAR_API_TIMEOUT_SEC: int = 10
+# Hintergrund-Refresh bleibt hart begrenzt; niemals den 10-s-Hauptloop blockieren.
+SOLAR_REFRESH_DEADLINE_SEC: int = 15
+SOLAR_REFRESH_INTERVAL_SEC: int = 60
 
 # --- Bademodus ---
 BADEMODUS_HYSTERESIS: float = 4.0

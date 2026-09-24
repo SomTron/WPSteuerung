@@ -16,6 +16,7 @@ from state import State
 from sensors import SensorManager
 from hardware import HardwareManager
 from hardware_mock import MockHardwareManager
+from hardware_actuator import CompressorActuator
 from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
@@ -26,7 +27,7 @@ from telegram_ui import send_welcome_message, escape_markdown
 from telegram_api import start_healthcheck_task, create_robust_aiohttp_session
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
-from api import app, init_api
+from api import app, init_api, update_status_snapshot
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_and_fix_csv_header, rotiere_csv_monatlich
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
@@ -38,13 +39,24 @@ from logic_utils import (
     normalize_forecast_wh_qm,
     SOMMER_AKTIVIERT, SOMMER_DEAKTIVIERT_PROGNOSE, SOMMER_DEAKTIVIERT_DATEN,
 )
-from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, FORECAST_RETRY_INTERVAL_MIN, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN, MEMORY_LOG_INTERVAL_SEC
+from constants import (
+    VPN_CHECK_INTERVAL_SEC,
+    FORECAST_UPDATE_INTERVAL_HOURS,
+    FORECAST_RETRY_INTERVAL_MIN,
+    MAIN_LOOP_INTERVAL_SEC,
+    COMPRESSOR_VERIFICATION_ERROR_THRESHOLD,
+    SOLAR_DATA_STALE_THRESHOLD_MIN,
+    SOLAR_REFRESH_DEADLINE_SEC,
+    SOLAR_REFRESH_INTERVAL_SEC,
+    MEMORY_LOG_INTERVAL_SEC,
+)
 
 # Global objects
 config_manager = ConfigManager()
 state = None
 sensor_manager = None
 hardware_manager = None
+compressor_actuator = None
 stop_event = threading.Event()
 
 # Referenzen auf Hintergrund-Tasks halten (ohne Referenz kÃ¶nnen sie vom
@@ -105,14 +117,16 @@ def _record_hardware_change(state, now, status):
 
 
 async def _set_hardware_state(state, status: bool) -> bool:
-    """Schreibt den Kompressor unter einem asyncio-Lock und in einem Thread."""
-    if hardware_manager is None:
-        return False
-    lock = getattr(state, "gpio_lock", None)
-    if lock is not None:
-        async with lock:
-            return await asyncio.to_thread(hardware_manager.set_compressor_state, status) is not False
-    return await asyncio.to_thread(hardware_manager.set_compressor_state, status) is not False
+    """Schreibt den Kompressor ausschließlich über den zentralen Aktuator."""
+    global compressor_actuator
+    if compressor_actuator is None or compressor_actuator.hardware is not hardware_manager:
+        # Kompatibler Fallback für isolierte Tests vor setup_application().
+        if hardware_manager is None:
+            return False
+        compressor_actuator = CompressorActuator(
+            hardware_manager, getattr(state, "gpio_lock", None)
+        )
+    return await compressor_actuator.set_state(status)
 
 
 async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, end_grund=None):
@@ -204,7 +218,7 @@ def run_api():
 
 async def setup_application():
     """Initialisiert Konfiguration, Hardware, Sensoren und API."""
-    global state, sensor_manager, hardware_manager
+    global state, sensor_manager, hardware_manager, compressor_actuator
     
     # 1. Config laden
     config_manager.load_config()
@@ -240,6 +254,9 @@ async def setup_application():
         logging.info("Using mock hardware (non-Raspberry Pi platform)")
     
     hardware_manager.init_gpio()
+    compressor_actuator = CompressorActuator(
+        hardware_manager, getattr(state, "gpio_lock", None)
+    )
     if not await _set_hardware_state(state, False):
         raise RuntimeError("Kompressor-GPIO konnte nicht fail-safe auf AUS gesetzt werden")
     logging.info("Kompressor-Hardware fail-safe initialisiert: AUS")
@@ -314,8 +331,11 @@ async def setup_application():
     # Start Healthcheck Task
     hc_task = asyncio.create_task(start_healthcheck_task(session, state))
 
+    # Solar-Live-Daten laufen außerhalb des sicherheitskritischen 10-s-Loops.
+    solar_task = asyncio.create_task(solar_refresh_loop(session, state))
+
     # Referenzen halten und Crash-Fruehwarnung aktivieren
-    for task in (tg_task, hc_task):
+    for task in (tg_task, hc_task, solar_task):
         task.add_done_callback(_log_task_exception)
         background_tasks.append(task)
     
@@ -360,7 +380,22 @@ def handle_day_transition(state, now):
         state.stats.last_completed_cycle = None
         state.stats.last_day = current_date
 
-async def update_system_data(session, state):
+async def solar_refresh_loop(session, state) -> None:
+    """Hintergrund-Refresh für Solax; harte Deadline, nie im 10-s-Regelloop."""
+    while True:
+        try:
+            await asyncio.wait_for(
+                get_solax_data(session, state),
+                timeout=SOLAR_REFRESH_DEADLINE_SEC,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Solax-Hintergrund-Refresh fehlgeschlagen")
+        await asyncio.sleep(SOLAR_REFRESH_INTERVAL_SEC)
+
+
+async def update_system_data(session, state, refresh_solar: bool = True):
     """Liest Sensoren und PV-Daten."""
     # 1. Sensoren lesen
     temps = await sensor_manager.get_all_temperatures()
@@ -372,17 +407,18 @@ async def update_system_data(session, state):
     # als Durchschnitt (siehe API-/Frontend-Vertrag).
     state.sensors.t_boiler = temps.get("oben")
     
-    # 2. PV-Daten aktualisieren
-    # (get_solax_data aktualisiert bei Erfolg last_api_data/last_api_call selbst)
-    # get_solax_data hat eigenes Retry-Handling (aiohttp.ClientError, asyncio.TimeoutError),
-    # hier nur als Sicherheitsnetz fuer unerwartete Exceptions
-    try:
-        await get_solax_data(session, state)
-    except asyncio.TimeoutError as e:
-        logging.error(f"Solax-API-Timeout trotz Retry: {e}")
-    except Exception as e:
-        logging.error(f"Unerwarteter Fehler beim Solax-API-Abruf: {type(e).__name__}: {e}", exc_info=True)
-        # Fallback: Sensordaten sind trotzdem verfuegbar, PV bleibt auf letztem Stand
+    # 2. PV-Daten aktualisieren. Im Produktivbetrieb übernimmt der
+    # Hintergrund-Task; der Parameter bleibt fuer direkte Tests/Diagnose.
+    if refresh_solar:
+        try:
+            await asyncio.wait_for(
+                get_solax_data(session, state),
+                timeout=SOLAR_REFRESH_DEADLINE_SEC,
+            )
+        except asyncio.TimeoutError:
+            logging.exception("Solax-API-Timeout trotz Retry")
+        except Exception:
+            logging.exception("Unerwarteter Fehler beim Solax-API-Abruf")
 
     # Stale-Schutz ZUERST prüfen. Ein fehlender oder ungültiger Zeitstempel
     # darf niemals dazu führen, dass last_api_data wieder als frisch übernommen wird.
@@ -1263,37 +1299,139 @@ def _logge_speicher(state, letzter_log):
     return jetzt
 
 
-async def main_loop():
-    session = await setup_application()
-
-    # Versionsmarker: Welche Repo-Version dieses Log erzeugt hat (GitHub-Rev).
-    # Damit laesst sich bei spaeteren Analysen der genaue Steuerungsstand
-    # jedes Logs rekonstruieren.
-    logging.info(f"Start WPSteuerung | GitHub-Rev: {_git_revision()}")
-    
-    # Send Startup Message
-    if state.bot_token and state.chat_id:
+def _markiere_sensor_update_fehler(state) -> None:
+    """Bei fehlgeschlagenem Datenupdate fail-safe ungültige Sensorwerte markieren."""
+    for name in ("t_oben", "t_unten", "t_mittig", "t_verd", "t_boiler"):
         try:
-            await send_welcome_message(session, state.chat_id, state.bot_token, state)
-            logging.info("Startup message sent.")
-        except Exception as e:
-            logging.error(f"Failed to send startup message: {e}")
-
-    # Diagnose: unsauber beendeten Vorlauf melden (OOM-Kill/Crash/Reset) und
-    # die Speicher-Baseline direkt mitschreiben - so ist ein OOM nie "still".
-    await _melde_unsauberen_lauf(session, state)
-    letzter_speicher_log = _logge_speicher(state, None)
-
-    # API-Schreibbefehle werden vor den Sicherheitsprüfungen nicht verworfen:
-    # werden nach Druck- und Sensorprüfung ausgeführt, set_mode sofort.
-    last_vpn_check = datetime.now(state.local_tz) - timedelta(minutes=1)
-    
+            setattr(state.sensors, name, None)
+        except Exception:
+            pass
     try:
-        while not stop_event.is_set():
-            now = datetime.now(state.local_tz)
+        state.last_data_update_ok = False
+    except Exception:
+        pass
 
+
+async def _run_data_phase(session, state) -> bool:
+    """Sensor-/Solar-Update isoliert ausführen; niemals Control überspringen."""
+    try:
+        await update_system_data(session, state, refresh_solar=False)
+        state.last_data_update_ok = True
+        return True
+    except Exception:
+        logging.exception("Fehler in der Daten-Update-Phase")
+        _markiere_sensor_update_fehler(state)
+        return False
+
+
+async def _run_periodic_phase(session, state, last_vpn_check):
+    """VPN/Forecast und weitere optionale Aufgaben dürfen Control nicht blockieren."""
+    try:
+        return await check_periodic_tasks(session, state, last_vpn_check)
+    except Exception:
+        logging.exception("Fehler in der periodischen Aufgabenphase")
+        return last_vpn_check
+
+
+async def _run_api_health_phase(session, state) -> None:
+    """API-Health ist Diagnose und niemals Teil des sicherheitskritischen Pfads."""
+    try:
+        now_local = datetime.now(state.local_tz)
+        letzte_warnung = getattr(state, "_last_api_health_warning", None)
+        faellig = (
+            letzte_warnung is None
+            or (now_local - letzte_warnung).total_seconds() >= 600
+        )
+    except Exception:
+        faellig = True
+    if not faellig:
+        return
+    try:
+        await check_api_health(session, state)
+    except Exception:
+        logging.exception("Fehler im API-Health-Check")
+    try:
+        state._last_api_health_warning = datetime.now(state.local_tz)
+    except Exception:
+        logging.debug("API-Health-Zeitstempel konnte nicht gespeichert werden", exc_info=True)
+
+
+async def _run_control_phase(session, state, data_update_ok: bool) -> None:
+    """Regelung ausführen und bei unerwarteten Regelfehlern fail-safe ausschalten."""
+    if not data_update_ok:
+        state.control.blocking_reason = "Sensor-Update fehlgeschlagen"
+        if getattr(state.control, "kompressor_ein", False):
             try:
-                # Tageswechsel und Laufzeit
+                await set_kompressor_status(
+                    state, False, force=True, end_grund="sensor_update_fehler"
+                )
+            except Exception:
+                logging.exception("Fail-safe-Ausschalten nach Sensor-Update-Fehler fehlgeschlagen")
+        return
+    try:
+        await run_logic_step(session, state, learning_engine=state.learning_engine)
+        state.control.consecutive_control_errors = 0
+    except Exception:
+        state.control.consecutive_control_errors = (
+            getattr(state.control, "consecutive_control_errors", 0) + 1
+        )
+        state.control.manual_force_on_pending = False
+        state.control.blocking_reason = "Regelungsfehler"
+        logging.exception(
+            "Fehler in der sicherheitskritischen Regelphase (%d aufeinanderfolgende Fehler)",
+            state.control.consecutive_control_errors,
+        )
+        if getattr(state.control, "kompressor_ein", False):
+            try:
+                await set_kompressor_status(
+                    state, False, force=True, end_grund="regelungsfehler"
+                )
+            except Exception:
+                logging.exception("Fail-safe-Ausschalten nach Regelungsfehler fehlgeschlagen")
+
+
+async def _run_logging_phase(state) -> None:
+    """Diagnose-/CSV-Logging isoliert; ein Fehler darf die Regelung nie stoppen."""
+    try:
+        await log_system_state(state)
+    except Exception:
+        logging.exception("Fehler in der Logging-/CSV-Phase")
+
+
+async def _run_status_snapshot_phase(state) -> None:
+    """API liest nur aus einem konsistenten Snapshot des aktuellen Loops."""
+    try:
+        update_status_snapshot(state)
+    except Exception:
+        logging.exception("Status-Snapshot konnte nicht aktualisiert werden")
+
+
+async def main_loop():
+    session = None
+    try:
+        session = await setup_application()
+
+        # Versionsmarker: Welche Repo-Version dieses Log erzeugt hat (GitHub-Rev).
+        # Damit laesst sich bei spaeteren Analysen der genaue Steuerungsstand
+        # jedes Logs rekonstruieren.
+        logging.info(f"Start WPSteuerung | GitHub-Rev: {_git_revision()}")
+
+        # Send Startup Message
+        if state.bot_token and state.chat_id:
+            try:
+                await send_welcome_message(session, state.chat_id, state.bot_token, state)
+                logging.info("Startup message sent.")
+            except Exception:
+                logging.exception("Failed to send startup message")
+
+        # Diagnose: unsauber beendeten Vorlauf melden (OOM-Kill/Crash/Reset).
+        await _melde_unsauberen_lauf(session, state)
+        letzter_speicher_log = _logge_speicher(state, None)
+        last_vpn_check = datetime.now(state.local_tz) - timedelta(minutes=1)
+
+        while not stop_event.is_set():
+            try:
+                now = datetime.now(state.local_tz)
                 handle_day_transition(state, now)
 
                 # Urlaubsmodus: automatisches Beenden nach Ablauf von urlaubsmodus_ende
@@ -1308,44 +1446,27 @@ async def main_loop():
                     state.urlaubsmodus_start = None
                     logging.info("Urlaubsmodus automatisch beendet (Endzeitpunkt erreicht).")
                 if state.control.kompressor_ein and state.stats.last_compressor_on_time:
-                    state.stats.current_runtime = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
+                    state.stats.current_runtime = safe_timedelta(
+                        now, state.stats.last_compressor_on_time, state.local_tz
+                    )
                 else:
                     state.stats.current_runtime = timedelta()
-
-                # Daten-Update & Periodische Tasks
-                await update_system_data(session, state)
-                last_vpn_check = await check_periodic_tasks(session, state, last_vpn_check)
-                letzter_speicher_log = _logge_speicher(state, letzter_speicher_log)
-
-# API-Health-Monitoring (alle 10 Minuten)
-                # Robust gegen fehlende/ungueltige Attribute (z.B. Test-Mocks):
-                # Ein Fehler im Health-Check darf den Loop NICHT blockieren.
-                try:
-                    now_local = datetime.now(state.local_tz)
-                    letzte_warnung = getattr(state, "_last_api_health_warning", None)
-                    faellig = (
-                        letzte_warnung is None
-                        or (now_local - letzte_warnung).total_seconds() >= 600
-                    )
-                except Exception:
-                    faellig = True
-                if faellig:
-                    try:
-                        await check_api_health(session, state)
-                    except Exception as e:
-                        logging.error(f"API-Health-Check fehlgeschlagen: {e}", exc_info=True)
-                    try:
-                        state._last_api_health_warning = datetime.now(state.local_tz)
-                    except Exception:
-                        pass
-                # Logik & Logging
-                await run_logic_step(session, state, learning_engine=state.learning_engine)
-                await log_system_state(state)
             except Exception:
-                # Transienter Fehler (Sensor, API, ...) darf die Regelung nicht komplett beenden
-                logging.exception("Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort")
+                # Tageswechsel/Statistik ist nicht sicherheitskritisch.
+                logging.exception("Fehler in der Tageswechsel-/Laufzeitphase")
 
-            # In kurzen Abschnitten schlafen, damit ein Stop-Signal zuegig reagiert
+            data_update_ok = await _run_data_phase(session, state)
+            last_vpn_check = await _run_periodic_phase(session, state, last_vpn_check)
+            try:
+                letzter_speicher_log = _logge_speicher(state, letzter_speicher_log)
+            except Exception:
+                logging.exception("Fehler in der Speicher-Diagnosephase")
+            await _run_api_health_phase(session, state)
+            await _run_control_phase(session, state, data_update_ok)
+            await _run_logging_phase(state)
+            await _run_status_snapshot_phase(state)
+
+            # In kurzen Abschnitten schlafen, damit ein Stop-Signal zuegig reagiert.
             remaining = MAIN_LOOP_INTERVAL_SEC
             while remaining > 0 and not stop_event.is_set():
                 step = min(remaining, 0.5)
@@ -1354,18 +1475,23 @@ async def main_loop():
 
     except asyncio.CancelledError:
         pass
-    except Exception as e:
-        logging.critical(f"Unbehandelter Fehler in Main Loop: {e}", exc_info=True)
+    except Exception:
+        logging.critical("Unbehandelter Fehler in Main Loop", exc_info=True)
     finally:
         logging.info("Shutting down...")
         # Sauberes Ende markieren, damit der naechste Start einen kontrollierten
         # Stopp von einem OOM-Kill/Crash unterscheiden kann.
-        startup_diagnose.markiere_sauberes_ende()
-        # Hintergrund-Tasks kontrolliert beenden, BEVOR die Session geschlossen wird
-        for task in background_tasks:
+        try:
+            startup_diagnose.markiere_sauberes_ende()
+        except Exception:
+            logging.debug("Laufstatus konnte beim Shutdown nicht geschrieben werden", exc_info=True)
+        # Hintergrund-Tasks kontrolliert beenden, BEVOR die Session geschlossen wird.
+        tasks = list(background_tasks)
+        background_tasks.clear()
+        for task in tasks:
             task.cancel()
-        if background_tasks:
-            await asyncio.gather(*background_tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         # Bei einem laufenden Prozess muss der GPIO-AUS auch als echter
         # Abschluss mit technischem Grund verbucht werden. Sonst erzeugt der
         # naechste Start einen scheinbar neuen Zyklus und verliert die Pause.
@@ -1374,16 +1500,23 @@ async def main_loop():
                 await set_kompressor_status(
                     state, False, force=True, end_grund="dienst_neustart"
                 )
-            except Exception as exc:
-                logging.error("Kompressor konnte beim Shutdown nicht sauber beendet werden: %s", exc)
+            except Exception:
+                logging.exception("Kompressor konnte beim Shutdown nicht sauber beendet werden")
         if state is not None:
             try:
                 write_last_state_snapshot(state)
-            except Exception as exc:
-                logging.debug("Letzter Zustands-Snapshot beim Shutdown fehlgeschlagen: %s", exc)
+            except Exception:
+                logging.debug("Letzter Zustands-Snapshot beim Shutdown fehlgeschlagen", exc_info=True)
         if hardware_manager:
-            hardware_manager.cleanup()
-        await session.close()
+            try:
+                hardware_manager.cleanup()
+            except Exception:
+                logging.exception("GPIO-Cleanup beim Shutdown fehlgeschlagen")
+        if session is not None:
+            try:
+                await session.close()
+            except Exception:
+                logging.exception("HTTP-Session beim Shutdown konnte nicht geschlossen werden")
 
 
 if __name__ == "__main__":
