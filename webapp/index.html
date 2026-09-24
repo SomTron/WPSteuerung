@@ -1176,11 +1176,25 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ command, params })
                 });
-                const result = await response.json();
+                let result;
+                try {
+                    result = await response.json();
+                } catch (_parseError) {
+                    result = null;
+                }
+                if (!response.ok) {
+                    throw new Error(result?.detail || result?.message || ('API-Fehler ' + response.status));
+                }
                 console.log('Control result:', result);
                 await fetchStatus();
             } catch (error) {
                 console.error('Fehler beim Senden des Befehls:', error);
+                const errorPanel = document.getElementById('error-panel');
+                const errorMsg = document.getElementById('error-message');
+                if (errorPanel && errorMsg) {
+                    errorMsg.textContent = error.message || 'Unbekannter API-Fehler';
+                    errorPanel.style.display = 'block';
+                }
             }
         }
 
@@ -1511,8 +1525,8 @@
                     const forecastValues = Object.values(pvp.forecast_stunden);
                     const forecastSum = forecastValues.reduce((a,b) => a+b, 0);
                     const forecastPeak = Math.max(...forecastValues);
-                    el('pv-forecast').textContent = 
-                        `Summe: ${forecastSum.toFixed(0)} Wh/qm, Peak: ${forecastPeak.toFixed(0)} W`;
+                    el('pv-forecast').textContent =
+                        `Summe: ${forecastSum.toFixed(0)} Wh/m², Peak: ${forecastPeak.toFixed(0)} W/m²`;
                     el('forecast-info-row').style.display = 'flex';
                 }
                 
@@ -1614,13 +1628,18 @@
             }
 
             // Energie
+            const fmtForecast = value => {
+                if (value == null || value === '') return 'N/A';
+                const number = Number(value);
+                return Number.isFinite(number) ? number.toFixed(2) + ' kWh/m²' : 'N/A';
+            };
             document.getElementById('energy-soc').textContent = energy.soc ?? 0;
             document.getElementById('energy-battery').textContent = energy.battery_power ?? 0;
             document.getElementById('energy-feedin').textContent = energy.feed_in ?? 0;
             document.getElementById('energy-ac').textContent = energy.ac_power ?? 'N/A';
-            document.getElementById('energy-forecast-today').textContent = energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : 'N/A';
-            document.getElementById('energy-forecast-tomorrow').textContent = energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : 'N/A';
-            document.getElementById('energy-forecast-day2').textContent = energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : 'N/A';
+            document.getElementById('energy-forecast-today').textContent = fmtForecast(energy.forecast_today);
+            document.getElementById('energy-forecast-tomorrow').textContent = fmtForecast(energy.forecast_tomorrow);
+            document.getElementById('energy-forecast-day2').textContent = fmtForecast(energy.forecast_day2);
 
             // System
             document.getElementById('system-update').textContent = system.last_update;

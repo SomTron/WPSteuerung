@@ -8,7 +8,7 @@ Dieses Repository enthält Hilfsskripte zur komfortablen Wartung und Aktualisier
     - Live-Logs, Error-Log und 24-h-Fehler-/OOM-Diagnose
     - verifizierte Dienst-Steuerung (Start/Stopp/Neustart inkl. PID, `NRestarts` und Journal)
     - Produktionsstatus mit Kompressor, Temperatur-CSV-Datenalter, Zykluszähler und Analyse-Timer
-    - Zyklus-/Entscheidungshistorie und bestätigungspflichtige, öffentliche Catbox-Uploads
+    - Zyklus-/Entscheidungshistorie und bestätigungspflichtige, öffentliche Catbox-Uploads inkl. Lerndaten
 - **`rpi-deploy.sh`**: Sicheres Deployment:
     - aktualisiert nur per `git pull --ff-only`
     - validiert Zielbranch und verweigert Updates aus detached HEAD
@@ -42,7 +42,7 @@ einer eigenen Commit-/Stash-Auflösung wird das Update erneut gestartet.
 
 ### Datenschutz beim Upload
 
-Optionen 9, 14, 16 und 18 nutzen dieselbe Upload-Routine. Vor jeder Übertragung
+Optionen 9, 14, 16, 18 und 21 nutzen dieselbe Upload-Routine. Vor jeder Übertragung
 muss die öffentliche, nicht authentifizierte Catbox-URL ausdrücklich bestätigt
 werden. Standardlimit sind 200 MiB (`WPS_UPLOAD_MAX_BYTES`), Verbindung 15 s und
 Gesamtlaufzeit 300 s. Temporäre Dateien werden nach dem Versuch gelöscht.

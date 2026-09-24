@@ -28,6 +28,7 @@ LOG_FILE="${WPS_LOG_FILE:-/var/log/wps/heizungssteuerung.log}"
 ERROR_LOG_FILE="${WPS_ERROR_LOG_FILE:-/var/log/wps/error.log}"
 HEATING_CSV="${WPS_HEATING_CSV:-$TARGET_DIR/csv log/heizungsdaten.csv}"
 CYCLE_CSV="${WPS_CYCLE_CSV:-$TARGET_DIR/csv log/zyklen.csv}"
+LEARNING_JSON="${WPS_LEARNING_JSON:-$TARGET_DIR/learning_data.json}"
 [ -f "$LOG_FILE" ] || LOG_FILE="$TARGET_DIR/heizungssteuerung.log"
 [ -f "$ERROR_LOG_FILE" ] || ERROR_LOG_FILE="$TARGET_DIR/error.log"
 
@@ -608,6 +609,7 @@ while true; do
     printf "18) ☁️  Upload zyklen.csv to Catbox\n"
     printf "19) 🩺  Lauf-Status / letzte Abstuerze (letzter_lauf.json)\n"
     printf "20) ⏰  Auto-Analyse (Status, Testlauf, Timer, Journal)\n"
+    printf "21) 🧠  Upload learning_data.json to Catbox\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -807,6 +809,10 @@ except Exception as ex:
             wait_for_key
             ;;
         20) analysis_menu ;;
+        21)
+            upload_file "$LEARNING_JSON" "learning_data.json"
+            wait_for_key
+            ;;
         19)
             LAUF_JSON="$TARGET_DIR/letzter_lauf.json"
             printf "${CYAN}=== Lauf-Status / letzte Abstuerze ===${NC}\\n"
