@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import re
 
 from utils import HEIZUNGSDATEN_CSV, to_naive
+from logic_utils import forecast_kwh_m2_to_wh_m2
 
 try:
     from priority_control_logic import _is_nachtsperre_aktiv
@@ -206,7 +207,7 @@ def _solar_stale_status() -> bool:
         return True
     try:
         last_api_call = getattr(shared_state.solar, 'last_api_call', None)
-        if last_api_call is None:
+        if not isinstance(last_api_call, datetime):
             return True
         jetzt = datetime.now(getattr(last_api_call, 'tzinfo', None))
         return (jetzt - last_api_call).total_seconds() / 60.0 > SOLAR_DATA_STALE_THRESHOLD_MIN
@@ -563,10 +564,12 @@ def get_status():
     taktschutz_info: dict = {}
     try:
         cfg_ts = getattr(shared_state.priority_config, "taktschutz", None)
-        hist = getattr(shared_state.control, "_wechsel_historie", None)
-        wechsel_h = len(hist) if hist else 0
+        hardware_hist = getattr(shared_state.control, "_hardware_wechsel_historie", None)
+        regel_hist = getattr(shared_state.control, "_wechsel_historie", None)
         taktschutz_info = {
-            "wechsel_pro_stunde": wechsel_h,
+            "wechsel_pro_stunde": len(hardware_hist) if hardware_hist else 0,
+            "hardware_schaltvorgaenge_pro_stunde": len(hardware_hist) if hardware_hist else 0,
+            "regelwechsel_pro_stunde": len(regel_hist) if regel_hist else 0,
             "max_wechsel": getattr(cfg_ts, "max_wechsel_pro_stunde", 8),
             "aktiv_cfg": getattr(cfg_ts, "aktiv", True),
         }
@@ -615,11 +618,7 @@ def get_status():
 
             # Forecast und historische Einspeisung auf dieselbe flächenbezogene
             # Energie beziehen. FeedinPower wird dafür durch die PV-Fläche geteilt.
-            forecast_today_wh_m2 = None
-            try:
-                forecast_today_wh_m2 = float(forecast_today) * 1000.0
-            except (TypeError, ValueError, OverflowError):
-                forecast_today_wh_m2 = None
+            forecast_today_wh_m2 = forecast_kwh_m2_to_wh_m2(forecast_today)
             try:
                 pv_area = float(
                     getattr(getattr(shared_state.priority_config, "wp", None), "pv_array_size_qm", 10.0)
@@ -698,6 +697,8 @@ def get_status():
             "forecast_tomorrow": getattr(shared_state.solar, 'forecast_tomorrow', None),
             "solar_stale": solar_stale,
             "forecast_day2": getattr(shared_state.solar, 'forecast_day2', None),
+            "forecast_stale": bool(getattr(shared_state, "forecast_stale", False)),
+            "forecast_age_s": getattr(shared_state, "forecast_age_s", None),
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),
             "sunset": getattr(shared_state.solar, 'sunset_today', ''),
         },
@@ -727,12 +728,14 @@ def get_status():
         "pv_profil": pv_profil_info,
         "status_indikatoren": {
             "solar_stale": solar_stale,
+            "forecast_stale": bool(getattr(shared_state, "forecast_stale", False)),
+            "forecast_age_s": getattr(shared_state, "forecast_age_s", None),
             "verdampfer_shutdowns_stunde": getattr(shared_state.control, 'verdampfer_shutdowns', []),
         },
         "learning_engine": {
-            "zapfungen_heute": getattr(shared_state, 'learning_engine', None) and getattr(shared_state.learning_engine, '_today_usage_count', 0) if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else 0,
-            "gelerntes_morgenfenster": getattr(shared_state, 'learning_engine', None) and getattr(shared_state.learning_engine, '_learned_morning_window', None) if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else None,
-            "gelerntes_abendfenster": getattr(shared_state, 'learning_engine', None) and getattr(shared_state.learning_engine, '_learned_evening_window', None) if hasattr(shared_state, 'learning_engine') and shared_state.learning_engine else None,
+            "zapfungen_heute": getattr(getattr(shared_state, "learning_engine", None), "_today_usage_count", 0),
+            "gelerntes_morgenfenster": getattr(getattr(shared_state, "learning_engine", None), "_learned_morning_window", None),
+            "gelerntes_abendfenster": getattr(getattr(shared_state, "learning_engine", None), "_learned_evening_window", None),
         },
         "debug_info": {
             "solar_power": getattr(shared_state.solar, 'acpower', None),
@@ -828,6 +831,13 @@ async def control_system(
         raise HTTPException(status_code=503, detail="System not initialized")
 
     if cmd.command == "set_mode":
+        enqueue = (control_funcs or {}).get("enqueue_control")
+        if enqueue is not None:
+            try:
+                enqueue(cmd.command, cmd.params or {})
+            except RuntimeError as exc:
+                raise HTTPException(status_code=429, detail=str(exc)) from exc
+            return {"status": "queued", "message": f"{cmd.params['mode']} queued"}
         mode = cmd.params["mode"]
         active = cmd.params["active"]
         if mode == "bademodus":
@@ -839,21 +849,22 @@ async def control_system(
     if not control_funcs:
         raise HTTPException(status_code=503, detail="System not initialized")
 
-    if cmd.command == "force_on":
-        # Example: Force compressor ON
-        # This requires exposing the set_kompressor_status_func or similar in control_funcs
-        if "set_kompressor" in control_funcs:
-            await control_funcs["set_kompressor"](shared_state, True, force=True)
-            return {"status": "success", "message": "Compressor forced ON"}
-        raise HTTPException(status_code=503, detail="Control function not available")
+    enqueue = control_funcs.get("enqueue_control")
+    if enqueue is not None:
+        try:
+            enqueue(cmd.command, cmd.params or {})
+        except RuntimeError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        return {"status": "queued", "message": f"{cmd.command} queued for main loop"}
 
-    elif cmd.command == "force_off":
-        if "set_kompressor" in control_funcs:
-            await control_funcs["set_kompressor"](
-                shared_state, False, force=True, end_grund="api_manuell"
-            )
-            return {"status": "success", "message": "Compressor forced OFF"}
+    # Kompatibilitäts-Fallback für API-Tests/Entwicklung ohne Main-Loop-Queue.
+    if "set_kompressor" not in control_funcs:
         raise HTTPException(status_code=503, detail="Control function not available")
+    await control_funcs["set_kompressor"](
+        shared_state, cmd.command == "force_on", force=True,
+        end_grund="api_manuell" if cmd.command == "force_off" else None,
+    )
+    return {"status": "success", "message": f"{cmd.command} accepted"}
 
 
 @app.get("/config/export")

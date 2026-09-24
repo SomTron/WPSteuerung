@@ -52,13 +52,17 @@ class HardwareManager(HardwareInterface):
                 logging.error(f"Fehler bei LCD Init: {e}")
                 self.lcd = None
 
-    def set_compressor_state(self, state: bool):
-        """Schaltet den Kompressor an (True) oder aus (False)."""
-        if self.gpio_initialized and GPIO:
-            try:
-                GPIO.output(self.GIO21_PIN, GPIO.HIGH if state else GPIO.LOW)
-            except Exception as e:
-                logging.error(f"Fehler beim Schalten des Kompressors: {e}")
+    def set_compressor_state(self, state: bool) -> bool:
+        """Schaltet den Kompressor und bestätigt den Erfolg der GPIO-Schaltung."""
+        if not (self.gpio_initialized and GPIO):
+            logging.error("GPIO-Schaltung nicht möglich: GPIO nicht initialisiert")
+            return False
+        try:
+            GPIO.output(self.GIO21_PIN, GPIO.HIGH if state else GPIO.LOW)
+            return True
+        except Exception as e:
+            logging.error(f"Fehler beim Schalten des Kompressors: {e}")
+            return False
 
     def read_pressure_sensor(self) -> bool:
         """Liest den Druckschalter. True = OK (Geschlossen?), False = Fehler (Offen?)."""

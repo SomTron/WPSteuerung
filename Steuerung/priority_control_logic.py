@@ -15,6 +15,7 @@ from typing import Callable
 from utils import safe_timedelta
 from constants import (
     CONFIG_CHECK_INTERVAL_SEC,
+    FORECAST_MAX_AGE_HOURS,
 )
 
 try:
@@ -113,7 +114,55 @@ def _solar_daten_veraltet(state) -> bool:
         # pausieren, statt mit einem unkontrollierbaren Zustand zu arbeiten.
         logging.debug("Alter der Solax-Daten nicht bestimmbar; stale=%s", exc)
         return True
-    return alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN
+    return alter_min < 0 or alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN
+
+
+def _forecast_daten_veraltet(state) -> bool:
+    """Forecast ist nach der Update-Frist nicht mehr vertrauenswürdig."""
+    updated = getattr(state, "last_forecast_update", None)
+    if updated is None:
+        # Ohne erfolgreichen Abruf darf kein bereits gesetzter Forecast als
+        # aktuell verwendet werden. Das schützt auch In-Memory-/Test-States.
+        hat_forecast = any(
+            getattr(state.solar, name, None) is not None
+            for name in ("forecast_today", "forecast_tomorrow", "forecast_day2")
+        )
+        state.forecast_stale = bool(hat_forecast)
+        state.forecast_age_s = None
+        if hat_forecast:
+            logging.debug("Forecast-Daten ohne Aktualisierungszeitpunkt -> stale")
+        return hat_forecast
+    if not isinstance(updated, datetime):
+        state.forecast_age_s = None
+        return True
+    try:
+        age = safe_timedelta(
+            datetime.now(state.local_tz), updated, state.local_tz
+        ).total_seconds()
+        state.forecast_age_s = max(0, int(age))
+        stale = age < 0 or age > FORECAST_MAX_AGE_HOURS * 3600
+        state.forecast_stale = stale
+        return stale
+    except (TypeError, ValueError):
+        state.forecast_age_s = None
+        state.forecast_stale = True
+        return True
+
+
+def _set_stale_forecast(state) -> None:
+    """Alle prognoseabhängigen Felder neutralisieren, nie alte Werte weitergeben."""
+    state.forecast_stale = True
+    if check_log_throttle(state, "_log_forecast_stale", interval_minutes=30):
+        logging.warning(
+            "Forecast veraltet/ungültig -> Prognose-Regeln werden nicht mehr gesteuert"
+        )
+    for name in (
+        "forecast_today",
+        "forecast_tomorrow",
+        "forecast_day2",
+        "forecast_hourly_wm2",
+    ):
+        setattr(state.solar, name, None)
 
 
 def _gelerntes_morgenfenster(learning_engine):
@@ -282,6 +331,11 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         )
 
     # Forecast-Daten aus State holen
+    forecast_stale = _forecast_daten_veraltet(state)
+    if forecast_stale:
+        _set_stale_forecast(state)
+    else:
+        state.forecast_stale = False
     # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
     forecast_wh_qm = getattr(state.solar, "forecast_tomorrow", None)
     forecast_wh_qm = normalize_forecast_wh_qm(forecast_wh_qm)
@@ -590,6 +644,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 t_unten=t_unten,
                 t_oben=getattr(state.sensors, "t_oben", None),
                 stale_s=stale_s,
+                diagnostics={
+                    "forecast_stale": bool(getattr(state, "forecast_stale", False)),
+                    "forecast_age_s": getattr(state, "forecast_age_s", None),
+                    "rate_confidence": getattr(state.control, "_rate_confidence", None),
+                    "start_anticipation": getattr(state.control, "_last_start_anticipation", {}),
+                },
             )
         except Exception as e:  # pragma: no cover
             logging.debug(f"Entscheidungslog-Fehler: {e}")
@@ -800,7 +860,7 @@ def _gewinner_debounce(state, modus):
 
 
 def _taktschutz_blockiert(state, cfg) -> float:
-    """Prueft Taktschutz (Punkt D): zu viele Wechsel/h -> zusaetzliche Pause.
+    """Prueft echte Hardware-Schaltvorgaenge und wendet die Zusatzpause an.
     Returns: zusaetzliche Pause in Sekunden (0 = keine Blockade).
 
     Meldungen erscheinen nur beim Uebergang (Episode startet/endet), nicht
@@ -809,7 +869,13 @@ def _taktschutz_blockiert(state, cfg) -> float:
     ts_cfg = getattr(cfg, "taktschutz", None)
     if ts_cfg is None or not getattr(ts_cfg, "aktiv", False):
         return 0.0
-    hist = getattr(state.control, "_wechsel_historie", deque())
+    # Regelwechsel bleiben diagnostisch erhalten, fuehren aber nicht mehr zur
+    # Hardware-Pause. Produktiv zaehlt nur die in set_kompressor_status()
+    # aufgezeichnete Hardware-Historie. Der Fallback dient alten States/Tests.
+    hardware_hist = getattr(state.control, "_hardware_wechsel_historie", None)
+    hist = hardware_hist if isinstance(hardware_hist, deque) else getattr(
+        state.control, "_wechsel_historie", deque()
+    )
     kontrolle = getattr(state, "control", None)
 
     def _merker(wert):
@@ -884,36 +950,67 @@ def _zyklus_id(state) -> str:
 
 
 def _rate_fuer_entscheidung(state, t_unten):
-    """Aktuelle unten-Heizrate (°C/h) fuer EIN/AUS-Vorhersagen (3.1).
+    """Robuste Heizrate (Median der jüngsten Messfenster) + Confidence.
 
-    Misst live ueber state.control._rate_messung (mind. ~2 min Abstand),
-    faellt auf die gelernte Rate des letzten Zyklus (Learning-Engine) und
-    zuletzt auf rate_fallback_c_h zurueck. Bei Abkuehlung/None wird nur der
-    Messpunkt aktualisiert und der naechsthoehere Fallback verwendet.
+    Ein einzelner Sensor-Tick kann die Startentscheidung stark verfälschen.
+    Deshalb werden bis zu fünf positive Live-Messungen gespeichert und der
+    Median der letzten drei Werte verwendet. Die Confidence ist 0.1 bei
+    Fallback, 0.4 bei gelernter Rate und bis 1.0 bei mindestens drei
+    plausiblen Live-Messungen.
     """
     jetzt = datetime.now(state.local_tz)
     messung = getattr(state.control, "_rate_messung", None)
-    rate = None
-    if isinstance(t_unten, (int, float)):
-        if messung is not None and isinstance(messung, dict):
+    samples = getattr(state.control, "_rate_messungen", None)
+    if not isinstance(samples, deque):
+        samples = deque(maxlen=5)
+        state.control._rate_messungen = samples
+
+    live_rate = None
+    if isinstance(t_unten, (int, float)) and not isinstance(t_unten, bool):
+        if isinstance(messung, dict):
             try:
                 dt_h = (jetzt - messung["ts"]).total_seconds() / 3600.0
-                if 0.03 <= dt_h <= 2.0:
-                    diff = t_unten - messung["unten"]
-                    if diff > 0.05:
-                        rate = diff / dt_h
-            except (KeyError, TypeError):
+                diff = t_unten - messung["unten"]
+                if 0.03 <= dt_h <= 2.0 and diff > 0.05:
+                    live_rate = diff / dt_h
+            except (KeyError, TypeError, ValueError, OverflowError):
                 pass
         state.control._rate_messung = {"ts": jetzt, "unten": t_unten}
-    if rate is None or rate <= 0:
+
+    if live_rate is not None:
+        samples.append((jetzt, float(live_rate)))
+        # Zeitfenster begrenzen; die Schleife ist robust gegen Mock-Zeitstempel.
+        while len(samples) > 5:
+            samples.popleft()
+
+    werte = [float(r) for _, r in samples if isinstance(r, (int, float)) and r > 0]
+    if werte:
+        # Die Reihenfolge ist zeitlich (deque). Den Median der jüngsten drei
+        # Werte bilden, nicht die drei größten historischen Raten.
+        werte = werte[-3:]
+        n = len(werte)
+        middle = n // 2
+        rate = werte[middle] if n % 2 else (werte[middle - 1] + werte[middle]) / 2.0
+        confidence = min(1.0, 0.4 + 0.2 * n)
+    else:
         engine = getattr(state, "learning_engine", None)
         zyklen = getattr(getattr(engine, "data", None), "cycles", None)
+        learned = None
         if zyklen and isinstance(zyklen[-1], dict):
-            rate = zyklen[-1].get("rate_unten_c_h")
-    _cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
-    fallback = float(getattr(_cfg, "rate_fallback_c_h", 12.0)) if _cfg is not None else 12.0
-    if not isinstance(rate, (int, float)) or rate <= 0:
-        rate = fallback
+            learned = zyklen[-1].get("rate_unten_c_h")
+        if isinstance(learned, (int, float)) and learned > 0:
+            rate = float(learned)
+            confidence = 0.4
+        else:
+            cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+            fallback = getattr(cfg, "rate_fallback_c_h", 12.0)
+            try:
+                rate = float(fallback) if float(fallback) > 0 else 12.0
+            except (TypeError, ValueError, OverflowError):
+                rate = 12.0
+            confidence = 0.1
+
+    state.control._rate_confidence = round(float(confidence), 2)
     return float(rate)
 
 
@@ -1349,11 +1446,22 @@ async def handle_compressor_on(
                 state, min_laufzeit, getattr(state.control, "active_rule_name", None)
             )
             minz_min = float(minz.total_seconds() / 60.0)
+            rate_confidence = float(getattr(state.control, "_rate_confidence", 0.1))
+            state.control._last_start_anticipation = {
+                "blocked": erwartet_min + puffer_min < minz_min,
+                "hub_k": round(hub_k, 2),
+                "rate_c_h": round(rate_var, 2),
+                "rate_confidence": round(rate_confidence, 2),
+                "expected_min": round(erwartet_min, 1),
+                "effective_min": round(minz_min, 1),
+                "buffer_min": round(puffer_min, 1),
+            }
             if erwartet_min + puffer_min < minz_min:
                 state.control.blocking_reason = (
                     f"Start-Antizipation: hub zur Obergrenze nur {hub_k:.1f}K "
-                    f"(Rate {rate_var:.0f}C/h -> {erwartet_min:.0f}min < "
-                    f"{minz_min:.0f}min Mindestlaufzeit + {puffer_min:.0f}min Reserve)"
+                    f"(Rate {rate_var:.0f}C/h, Confidence {rate_confidence:.0%} -> "
+                    f"{erwartet_min:.0f}min < {minz_min:.0f}min Mindestlaufzeit + "
+                    f"{puffer_min:.0f}min Reserve)"
                 )
                 if check_log_throttle(state, "log_start_vorhersage_block", 10):
                     logging.info(

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections import deque
 import hashlib
 import pytz
 from datetime import datetime, timedelta, date
@@ -28,7 +29,7 @@ class SolarState:
         self.forecast_today: Optional[float] = None
         self.forecast_tomorrow: Optional[float] = None
         self.forecast_day2: Optional[float] = None  # Übermorgen-Prognose (Sommer-Modus)
-        self.forecast_hourly_wm2: Optional[Dict[int, float]] = None  # Stündliche Strahlung (W/m²)
+        self.forecast_hourly_wm2: Optional[Dict[int, float]] = None  # W/m²
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
 
@@ -50,24 +51,19 @@ class ControlState:
         self.last_alert_type: Optional[str] = None
         self.komfort_aktiv: bool = False
         self._soll_einschalten: bool = False
-        # Debounce-Schaltverzug: Letzte per Gewinner-Debounce bestaetigte
-        # Schaltempfehlung (wird an die Hardware uebergeben).
         self._soll_einschalten_bestaetigt: bool = False
-        # Merker, welche Regel den aktuell laufenden Kompressor-Lauf gestartet
-        # hat - Basis fuer die PV-Mindestlaufzeit-Entkopplung.
         self._lauf_start_regel: Optional[str] = None
-        # Schichtungs-Warmstart: Dynamische Obergrenze fuer die obere Schicht
-        # (z.B. nach Legionellenmodus). Gesetzt von der Abweichungs-Regel via
-        # regel_dict; handle_compressor_off stoppt den Lauf bei Erreichen.
         self.schichtung_oben_max: Optional[float] = None
         self.schichtung_oben_start: Optional[float] = None
+        self.zyklus_id: int = 0
+        self._hardware_wechsel_historie: deque = deque(maxlen=32)
+        self._rate_messungen: deque = deque(maxlen=5)
+        self._rate_confidence: float = 0.0
+        self._last_start_anticipation: dict = {}
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
         # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).
         # Ersetzt den alten Hack, last_compressor_off_time in die Zukunft zu setzen.
         self.restart_lockout_until: Optional[datetime] = None
-        # Fortlaufende Zyklus-ID je Kompressor-Lauf (fuer eindeutige Event-Kodierung
-        # in den Logs - Empfehlung "Log-Anreicherung"). Wird bei jedem EIN erhoeht.
-        self.zyklus_id: int = 0
 
 class StatsState:
     def __init__(self, now):
@@ -100,7 +96,6 @@ class State:
         self.solar = SolarState()
         self.control = ControlState(self.config)
         self.stats = StatsState(now)
-        # Laufzeit-Snapshot fuer die persistente Zyklus-CSV (nicht serialisiert).
         self._cycle_log: Optional[dict] = None
         
         # Urlaubs/Bademodus (Legacy/Simple Group)
@@ -115,36 +110,33 @@ class State:
         self.sommer_modus_aktiv: bool = False
         self.sommer_modus_zaehler: int = 0
         self.sommer_letzter_bewertungstag: Optional[date] = None  # Kalendertag der letzten guten Bewertung (Serienschutz)
-        
-        # Legionellenprophylaxe-Felder
+
+        # Legionellen-Lifecycle und Lernstatus
         self.legionellen_aktiv: bool = False
-        self.legionellen_last_done: Optional[date] = None  # Letzte Durchfuehrung (Datum)
-        self.legionellen_started_at: Optional[datetime] = None  # Startzeit der aktiven Prophylaxe
-        self.legionellen_target_reached_at: Optional[datetime] = None  # Zeitpunkt der Zielerreichung
-        self.legionellen_wochennummer: Optional[int] = None  # In welcher Kalenderwoche wurde zuletzt gemacht?
-        self.legionellen_planned_day: Optional[str] = None  # Geplanter Wochentag
-        self.legionellen_planned_tag: Optional[int] = None  # Geplanter Wochentag (0=Mo..6=So) - fuer Start-Gate
-        self.legionellen_planned_time: Optional[str] = None  # Geplante Uhrzeit
-        self.legionellen_end_time: Optional[datetime] = None  # Zeitpunkt des letzten Legionellen-Endes
-        self.legionellen_planned_reason: Optional[str] = None  # Grund fuer die Wahl
+        self.legionellen_last_done: Optional[date] = None
+        self.legionellen_started_at: Optional[datetime] = None
+        self.legionellen_target_reached_at: Optional[datetime] = None
+        self.legionellen_wochennummer: Optional[int] = None
+        self.legionellen_planned_day: Optional[str] = None
+        self.legionellen_planned_tag: Optional[int] = None
+        self.legionellen_planned_time: Optional[str] = None
+        self.legionellen_end_time: Optional[datetime] = None
+        self.legionellen_planned_reason: Optional[str] = None
         self.legionellen_telegram_start_sent: bool = False
         self.legionellen_telegram_done_sent: bool = False
-        self.legionellen_temp_override: Optional[float] = None  # Uebersteuert max_temp_c waehrend aktiver Prophylaxe
-
-        # Learning Engine tracking
-        self.learning_engine: Optional[object] = None  # Placeholder for learning engine instance
-        self._today_usage_count: int = 0  # Zapfungen heute
-        self._learned_morning_window: Optional[dict] = None  # Gelerntes Morgenfenster
-        self._learned_evening_window: Optional[dict] = None  # Gelerntes Abendfenster
+        self.legionellen_temp_override: Optional[float] = None
+        self.forecast_stale: bool = False
+        self.forecast_age_s: Optional[int] = None
+        self.learning_engine: Optional[object] = None
+        self._today_usage_count: int = 0
+        self._learned_morning_window: Optional[dict] = None
+        self._learned_evening_window: Optional[dict] = None
 
         # System/Internal
         self.gpio_lock = asyncio.Lock()
         self.session = None
         self.last_forecast_update: Optional[datetime] = None
-        # Letzter Prognose-VERSUCH (auch Fehlversuch) - Retry-Throttle gegen
-        # API-/Log-Spam, wenn Open-Meteo nicht erreichbar ist.
         self.last_forecast_attempt: Optional[datetime] = None
-        # Startup-Diagnose: Info ueber den vorigen Lauf (unsauber beendet?)
         self.letzter_lauf: dict = {}
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None
@@ -163,15 +155,11 @@ class State:
 
         # --- Safety & Error Handling ---
         self.verdampfer_blocked: bool = False
-        self.verdampfer_shutdowns: list = []  # Zeitstempel der Verdampfer-Abschaltungen
         self.last_sensor_error_time: Optional[datetime] = None
         self.last_pressure_error_time: Optional[datetime] = None
+        self.verdampfer_shutdowns: list = []
         self._last_config_check: Optional[datetime] = now
         self.last_config_hash: Optional[str] = None
-
-        # --- API-Health-Monitoring ---
-        # Zaehlt API-Fehler pro Typ fuer systematisches Monitoring
-        # Struktur: {api_name: {"errors": [(timestamp, error_type), ...], "last_alert": timestamp}}
         self.api_errors: dict = {}
         self._last_api_health_warning: Optional[datetime] = None
 

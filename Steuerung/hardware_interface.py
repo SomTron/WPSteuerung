@@ -15,13 +15,8 @@ class HardwareInterface(ABC):
         pass
     
     @abstractmethod
-    def set_compressor_state(self, state: bool) -> None:
-        """
-        Set compressor state.
-        
-        Args:
-            state: True to turn on, False to turn off
-        """
+    def set_compressor_state(self, state: bool) -> bool:
+        """Setzt den Kompressor und liefert True nur bei erfolgreicher Schaltung."""
         pass
     
     @abstractmethod

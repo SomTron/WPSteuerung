@@ -223,6 +223,25 @@ def test_config_export_redigiert_secrets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_control_befehle_werden_via_queue_angenommen():
+    from types import SimpleNamespace
+
+    original_state, original_funcs, original_key = api.shared_state, api.control_funcs, api.API_KEY
+    commands = []
+    try:
+        api.API_KEY = "test-secret"
+        api.shared_state = SimpleNamespace()
+        api.control_funcs = {"enqueue_control": lambda command, params: commands.append((command, params))}
+        result = await api.control_system(
+            api.ControlCommand(command="force_on"), "test-secret"
+        )
+        assert result["status"] == "queued"
+        assert commands == [("force_on", {})]
+    finally:
+        api.shared_state, api.control_funcs, api.API_KEY = original_state, original_funcs, original_key
+
+
+@pytest.mark.asyncio
 async def test_control_ohne_set_kompressor_liefert_503():
     """Fehlt die Steuerfunktion, muss /control einen Fehler liefern statt
     still mit HTTP 200 und 'null' zu antworten."""

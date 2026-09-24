@@ -5,19 +5,19 @@ from pydantic import BaseModel, Field, ValidationError
 from constants import API_SERVER_HOST, API_SERVER_PORT
 
 class HeizungssteuerungConfig(BaseModel):
-    MIN_LAUFZEIT: int = Field(default=15, description="Minimale Laufzeit in Minuten")
-    MIN_PAUSE: int = Field(default=20, description="Minimale Pause in Minuten")
+    MIN_LAUFZEIT: int = Field(default=60, description="Minimale Laufzeit in Minuten")
+    MIN_PAUSE: int = Field(default=30, description="Minimale Pause in Minuten")
     NACHTABSENKUNG_START: str = Field(default="19:30")
     NACHTABSENKUNG_END: str = Field(default="08:00")
     VERDAMPFERTEMPERATUR: float = Field(default=6.0)
     VERDAMPFER_RESTART_TEMP: float = Field(default=9.0)
-    SICHERHEITS_TEMP: float = Field(default=52.0)
+    SICHERHEITS_TEMP: float = Field(default=58.0)
     NACHTABSENKUNG: float = Field(default=0.0)
     EINSCHALTPUNKT_ERHOEHT: int = Field(default=42)
     AUSSCHALTPUNKT_ERHOEHT: int = Field(default=48)
     TEMP_OFFSET: int = Field(default=3)
     EINSCHALTPUNKT: int = Field(default=42)
-    AUSSCHALTPUNKT: int = Field(default=45)
+    AUSSCHALTPUNKT: int = Field(default=48)
     UEBERGANGSMODUS_MORGENS_ENDE: str = Field(default="10:00")
     UEBERGANGSMODUS_ABENDS_START: str = Field(default="17:00")
     API_HOST: str = Field(default=API_SERVER_HOST)

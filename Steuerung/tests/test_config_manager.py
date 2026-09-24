@@ -23,7 +23,8 @@ class TestDefaults:
     def test_fehlende_datei_liefert_defaults(self, tmp_path):
         cm = ConfigManager(config_path=str(tmp_path / "gibts_nicht.ini"))
         c = cm.get()
-        assert c.Heizungssteuerung.MIN_LAUFZEIT == 15
+        assert c.Heizungssteuerung.MIN_LAUFZEIT == 60
+        assert c.Heizungssteuerung.MIN_PAUSE == 30
         assert c.Heizungssteuerung.API_PORT == 8000
         assert c.Telegram.BOT_TOKEN == ""
         assert c.Solarueberschuss.BATPOWER_THRESHOLD == 600.0
@@ -31,7 +32,7 @@ class TestDefaults:
     def test_leere_datei_ist_kein_fehler(self, tmp_path):
         pfad = schreibe_ini(tmp_path / "config.ini", "")
         cm = ConfigManager(config_path=pfad)
-        assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 15
+        assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 60
 
 
 # ── Parsing ───────────────────────────────────────────────────────────
@@ -77,7 +78,7 @@ class TestParsing:
                             "[Heizungssteuerung]\n"
                             "NEUER_SCHLUESSEL_OHNE_FELD = 1\n")
         cm = ConfigManager(config_path=pfad)
-        assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 15
+        assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 60
 
     def test_get_liefert_dasselbe_objekt(self, tmp_path):
         cm = ConfigManager(config_path=str(tmp_path / "fehlt.ini"))
@@ -138,7 +139,7 @@ class TestValidierung:
                             "[Heizungssteuerung]\nMIN_LAUFZEIT = nicht_zahl\n")
         c = ConfigManager(config_path=pfad).get()
         assert c.Telegram.BOT_TOKEN == "gueltig"                # andere Sektion laedt
-        assert c.Heizungssteuerung.MIN_LAUFZEIT == 15           # nur dieses Feld -> Default
+        assert c.Heizungssteuerung.MIN_LAUFZEIT == 60           # nur dieses Feld -> Default
 
     def test_feldweiser_fallback_innerhalb_einer_sektion(self, tmp_path):
         """Ein kaputter Wert kapt nur sich selbst, Geschwisterwerte laden weiter."""
@@ -148,7 +149,7 @@ class TestValidierung:
                             "SICHERHEITS_TEMP = 58.5\n"
                             "MIN_PAUSE = 35\n")
         c = ConfigManager(config_path=pfad).get().Heizungssteuerung
-        assert c.MIN_LAUFZEIT == 15                             # Default (fehlerhaft)
+        assert c.MIN_LAUFZEIT == 60                             # Default (fehlerhaft)
         assert c.SICHERHEITS_TEMP == 58.5                       # geladen
         assert c.MIN_PAUSE == 35                                # geladen
 

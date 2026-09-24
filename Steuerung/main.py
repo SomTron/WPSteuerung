@@ -1,8 +1,10 @@
 import asyncio
+from collections import deque
 
 import logging
 import threading
 import signal
+from queue import Empty, Full, Queue
 import uvicorn
 import aiofiles
 import os
@@ -47,6 +49,25 @@ stop_event = threading.Event()
 # Referenzen auf Hintergrund-Tasks halten (ohne Referenz kÃ¶nnen sie vom
 # Garbage Collector eingesammelt werden, wÃ¤hrend sie noch laufen!)
 background_tasks = []
+control_command_queue: Queue = Queue(maxsize=16)
+
+
+def enqueue_control_command(command: str, params=None) -> None:
+    """Thread-sichere Übergabe manueller API-Befehle an den Main-Loop."""
+    try:
+        control_command_queue.put_nowait((command, params or {}))
+    except Full as exc:
+        raise RuntimeError("Steuerbefehl-Queue ist voll") from exc
+
+
+def _pop_control_commands():
+    commands = []
+    while True:
+        try:
+            commands.append(control_command_queue.get_nowait())
+        except Empty:
+            break
+    return commands
 
 def _log_task_exception(task):
     """Loggt unerwartete Fehler aus Hintergrund-Tasks (verhindert stillen Absturz)."""
@@ -67,6 +88,21 @@ def handle_exit(signum, frame):
     logging.info(f"Signal {signum} empfangen. Beende Programm...")
     stop_event.set()
 
+def _record_hardware_change(state, now, status):
+    """Zeichnet nur echte Hardware-Übergänge für den Taktschutz auf."""
+    try:
+        hist = getattr(state.control, "_hardware_wechsel_historie", None)
+        if not isinstance(hist, deque):
+            hist = deque(maxlen=32)
+            state.control._hardware_wechsel_historie = hist
+        cutoff = now - timedelta(hours=1)
+        while hist and isinstance(hist[0][0], datetime) and hist[0][0] < cutoff:
+            hist.popleft()
+        hist.append((now, bool(status)))
+    except Exception:
+        logging.debug("Hardware-Wechselhistorie nicht aktualisierbar", exc_info=True)
+
+
 async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, end_grund=None):
     """
     Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
@@ -79,11 +115,15 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
         # Laufzeit noch Start-Snapshot/Historieneintrag ueberschreiben.
         if was_ein:
             if force:
-                hardware_manager.set_compressor_state(True)
+                if not hardware_manager.set_compressor_state(True):
+                    return False
             return True
-        
-        hardware_manager.set_compressor_state(True)
+
+        if not hardware_manager.set_compressor_state(True):
+            state.control.blocking_reason = "Kompressor-Einschalten fehlgeschlagen"
+            return False
         state.control.kompressor_ein = True
+        _record_hardware_change(state, now, True)
         
         # Statistiken aktualisieren + Zyklus-ID je Kompressor-Lauf inkrementieren
         state.stats.last_compressor_on_time = now
@@ -100,13 +140,20 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
         return True
     else:
         # Ausschalten
-        if not was_ein and not force:
+        if not was_ein:
+            # Idempotenter manueller Off-Befehl: keine neue Pause, keine
+            # Statistikänderung und kein künstliches Verlängern der Sperre.
+            if force:
+                return await asyncio.to_thread(hardware_manager.set_compressor_state, False)
             return True
 
-        hardware_manager.set_compressor_state(False)
+        if not await asyncio.to_thread(hardware_manager.set_compressor_state, False):
+            state.control.blocking_reason = "Kompressor-Ausschalten fehlgeschlagen"
+            return False
         state.control.kompressor_ein = False
+        _record_hardware_change(state, now, False)
         
-        # Statistiken aktualisieren
+        # Statistiken nur bei einem echten Übergang EIN -> AUS aktualisieren.
         state.stats.last_compressor_off_time = now
         if was_ein and state.stats.last_compressor_on_time:
             elapsed = safe_timedelta(now, state.stats.last_compressor_on_time, state.local_tz)
@@ -180,17 +227,18 @@ async def setup_application():
         logging.info("Using mock hardware (non-Raspberry Pi platform)")
     
     hardware_manager.init_gpio()
-    # Nach einem SIGKILL/OOM kann der GPIO-Pin nicht zuverlaessig als LOW
-    # vorliegen. Der neue Prozessor startet deshalb fail-safe mit AUS; die
-    # Regel entscheidet danach ueber die wiederhergestellte Mindestpause.
-    hardware_manager.set_compressor_state(False)
+    if not hardware_manager.set_compressor_state(False):
+        raise RuntimeError("Kompressor-GPIO konnte nicht fail-safe auf AUS gesetzt werden")
     logging.info("Kompressor-Hardware fail-safe initialisiert: AUS")
     await hardware_manager.init_lcd()
     
     sensor_manager = SensorManager()
     
     # 5. API init
-    control_funcs = {"set_kompressor": set_kompressor_status}
+    control_funcs = {
+        "set_kompressor": set_kompressor_status,
+        "enqueue_control": enqueue_control_command,
+    }
     init_api(state, control_funcs)
     
     # Start API Thread
@@ -307,6 +355,8 @@ async def update_system_data(session, state):
     state.sensors.t_mittig = temps.get("mittig")
     state.sensors.t_unten = temps.get("unten")
     state.sensors.t_verd = temps.get("verd")
+    # t_boiler ist der obere Boiler-Fühler; die WebApp bezeichnet ihn nicht
+    # als Durchschnitt (siehe API-/Frontend-Vertrag).
     state.sensors.t_boiler = temps.get("oben")
     
     # 2. PV-Daten aktualisieren
@@ -321,24 +371,30 @@ async def update_system_data(session, state):
         logging.error(f"Unerwarteter Fehler beim Solax-API-Abruf: {type(e).__name__}: {e}", exc_info=True)
         # Fallback: Sensordaten sind trotzdem verfuegbar, PV bleibt auf letztem Stand
 
-    # Stale-Schutz ZUERST pruefen: Bei API-Ausfaellen bleibt last_api_data als
-    # letzter guter Stand stehen und wuerde sonst stundenalt die PV-Regeln
-    # steuern (Kompressor laeuft dann auf Netzstrom im Glauben, es sei PV).
+    # Stale-Schutz ZUERST prüfen. Ein fehlender oder ungültiger Zeitstempel
+    # darf niemals dazu führen, dass last_api_data wieder als frisch übernommen wird.
     alter_min = None
-    try:
-        if state.solar.last_api_call:
+    last_api_call = getattr(state.solar, "last_api_call", None)
+    if isinstance(last_api_call, datetime):
+        try:
             alter_min = safe_timedelta(
-                datetime.now(state.local_tz), state.solar.last_api_call, state.local_tz
+                datetime.now(state.local_tz), last_api_call, state.local_tz
             ).total_seconds() / 60
-    except (TypeError, ValueError):
-        alter_min = None  # ungueltige Zeitstempel -> Frische nicht bewertbar
+        except (TypeError, ValueError):
+            alter_min = None
+    else:
+        alter_min = None
 
-    if alter_min is not None and alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN:
+    frisch = alter_min is not None and 0 <= alter_min <= SOLAR_DATA_STALE_THRESHOLD_MIN
+    if not frisch:
         if check_log_throttle(state, "_log_solar_stale", interval_minutes=5):
-            logging.warning(
-                f"Solar-Daten veraltet ({alter_min:.0f} min > "
-                f"{SOLAR_DATA_STALE_THRESHOLD_MIN} min) - PV-Werte auf 0 gesetzt"
-            )
+            if alter_min is not None and alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN:
+                logging.warning(
+                    f"Solar-Daten veraltet ({alter_min:.0f} min > "
+                    f"{SOLAR_DATA_STALE_THRESHOLD_MIN} min) - PV-Werte auf 0 gesetzt"
+                )
+            else:
+                logging.warning("Solar-Datenzeitstempel fehlt/ungültig - PV-Werte auf 0 gesetzt")
         state.solar.feedinpower = 0.0
         state.solar.batpower = 0.0
         state.solar.soc = 0.0
@@ -405,7 +461,7 @@ async def check_api_health(session, state):
         data["last_alert"] = now
 async def check_periodic_tasks(session, state, last_vpn_check):
     """FÃ¼hrt zeitgesteuerte Hintergrundaufgaben aus."""
-    now_dt = datetime.now()
+    now_dt = datetime.now(state.local_tz)
     now_local = datetime.now(state.local_tz)
     
     # 1. VPN Check
@@ -588,6 +644,22 @@ async def check_and_send_alerts(session, state):
 
 async def run_logic_step(session, state, learning_engine=None):
     """Fuehrt einen Schritt der Steuerungslogik aus (Pareto-Prioritaeten)."""
+    # Manuelle API-Befehle werden nur hier im Main-Loop verarbeitet.
+    manual_force_on = False
+    for command, params in _pop_control_commands():
+        if command == "set_mode":
+            mode = params.get("mode")
+            active = bool(params.get("active"))
+            if mode == "bademodus":
+                state.bademodus_aktiv = active
+            elif mode == "urlaubsmodus":
+                state.urlaubsmodus_aktiv = active
+        elif command == "force_off":
+            await set_kompressor_status(state, False, force=True, end_grund="api_manuell")
+            return
+        elif command == "force_on":
+            manual_force_on = True
+
     # 1. Druckschalter & Config
     if not await pcl.check_pressure_and_config(
             session, state, handle_pressure_check, set_kompressor_status
@@ -610,6 +682,9 @@ async def run_logic_step(session, state, learning_engine=None):
     # Hinweis: pcl.check_safety_limits delegiert intern bereits an
     # safety_logic.check_sensors_and_safety â€“ ein zweiter Aufruf waere redundant.
     if await pcl.check_safety_limits(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
+        if manual_force_on:
+            await set_kompressor_status(state, True, force=True, end_grund="api_manuell")
+            return True
         # 4. Prioritaeten-Engine: Regel bewerten
         result = await pcl.determine_mode_and_setpoints(state, state.sensors.t_unten, state.sensors.t_mittig, learning_engine=learning_engine)
         

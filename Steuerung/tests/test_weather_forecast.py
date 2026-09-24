@@ -14,6 +14,7 @@ Abgedeckt:
 import os
 import sys
 from datetime import datetime, timedelta
+from constants import FORECAST_MAX_AGE_HOURS
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytz
@@ -243,15 +244,67 @@ class TestForecastCsvMigration:
 
 # --- 4) Integration main.check_periodic_tasks ----------------------------------
 
-def test_normalize_forecast_wh_qm():
+@pytest.mark.asyncio
+async def test_forecast_ohne_aktualisierungszeitpunkt_wird_stale():
+    from types import SimpleNamespace
+    import priority_control_logic as pcl
+
+    state = SimpleNamespace(
+        local_tz=__import__('pytz').timezone('Europe/Berlin'),
+        solar=SimpleNamespace(
+            forecast_today=3.1,
+            forecast_tomorrow=2.5,
+            forecast_day2=2.0,
+        ),
+        last_forecast_update=None,
+        forecast_stale=False,
+    )
+    assert pcl._forecast_daten_veraltet(state) is True
+    pcl._set_stale_forecast(state)
+    assert state.forecast_stale is True
+    assert state.solar.forecast_today is None
+
+
+def test_forecast_stale_und_altes_datenalter_setzen_flags():
+    from datetime import timedelta
+    from types import SimpleNamespace
+    import pytz
+    import priority_control_logic as pcl
+
+    tz = pytz.timezone("Europe/Berlin")
+    state = SimpleNamespace(
+        local_tz=tz,
+        last_forecast_update=datetime.now(tz) - timedelta(hours=13),
+        solar=SimpleNamespace(forecast_today=3000.0),
+    )
+    assert pcl._forecast_daten_veraltet(state) is True
+    assert state.forecast_stale is True
+    assert state.forecast_age_s > FORECAST_MAX_AGE_HOURS * 3600 - 2
+
+
+def test_solar_negative_zeitstempel_ist_stale():
+    from datetime import timedelta
+    from types import SimpleNamespace
+    import pytz
+    import priority_control_logic as pcl
+
+    tz = pytz.timezone("Europe/Berlin")
+    state = SimpleNamespace(
+        solar=SimpleNamespace(last_api_call=datetime.now(tz) + timedelta(minutes=2))
+    )
+    assert pcl._solar_daten_veraltet(state) is True
+
+
     from logic_utils import normalize_forecast_wh_qm
 
-    assert normalize_forecast_wh_qm(3.1) == pytest.approx(3100.0)
-    assert normalize_forecast_wh_qm(3100.0) == pytest.approx(3100.0)
-    assert normalize_forecast_wh_qm(0) == 0
-    assert normalize_forecast_wh_qm(float("nan")) is None
-    assert normalize_forecast_wh_qm(float("inf")) is None
-    assert normalize_forecast_wh_qm(-1) is None
+    assert normalize_forecast_wh_qm(3.1, value_unit="kwh_m2") == pytest.approx(3100.0)
+    assert normalize_forecast_wh_qm(3100.0, value_unit="wh_m2") == pytest.approx(3100.0)
+    assert normalize_forecast_wh_qm(0, value_unit="kwh_m2") == 0
+    assert normalize_forecast_wh_qm(float("nan"), value_unit="kwh_m2") is None
+    assert normalize_forecast_wh_qm(float("inf"), value_unit="kwh_m2") is None
+    assert normalize_forecast_wh_qm(-1, value_unit="kwh_m2") is None
+    with pytest.raises(ValueError):
+        normalize_forecast_wh_qm(1.0, value_unit="unbekannt")
 
 
     """Test ob main.py check_periodic_tasks() mit 7 Werten umgehen kann."""

@@ -115,7 +115,7 @@ async def test_set_kompressor_status_schreibt_einen_zyklus(monkeypatch, tmp_path
     monkeypatch.setattr(cycle_logging, "CYCLE_CSV", pfad)
     monkeypatch.setattr(
         main, "hardware_manager",
-        SimpleNamespace(set_compressor_state=lambda value: None),
+        SimpleNamespace(set_compressor_state=lambda value: True),
     )
     state = SimpleNamespace(
         local_tz=timezone.utc,
@@ -151,3 +151,46 @@ async def test_set_kompressor_status_schreibt_einen_zyklus(monkeypatch, tmp_path
     assert len(rows) == 1
     assert rows[0]["quelle"] == "pv"
     assert rows[0]["end_grund"] == "boiler_max"
+    assert len(state.control._hardware_wechsel_historie) == 2
+    assert [entry[1] for entry in state.control._hardware_wechsel_historie] == [True, False]
+
+
+
+@pytest.mark.asyncio
+async def test_gpio_fehler_laesst_state_aus(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main, "hardware_manager",
+        SimpleNamespace(set_compressor_state=lambda value: False),
+    )
+    state = SimpleNamespace(
+        local_tz=timezone.utc,
+        control=SimpleNamespace(kompressor_ein=False, blocking_reason=None),
+    )
+
+    assert await main.set_kompressor_status(state, True) is False
+    assert state.control.kompressor_ein is False
+    assert "fehlgeschlagen" in state.control.blocking_reason
+
+
+@pytest.mark.asyncio
+async def test_redundantes_force_off_veraendert_pause_nicht(monkeypatch):
+    import main
+
+    off_time = datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        main, "hardware_manager",
+        SimpleNamespace(set_compressor_state=lambda value: True),
+    )
+    state = SimpleNamespace(
+        local_tz=timezone.utc,
+        control=SimpleNamespace(kompressor_ein=False, blocking_reason=None),
+        stats=SimpleNamespace(last_compressor_off_time=off_time),
+    )
+
+    assert await main.set_kompressor_status(
+        state, False, force=True, end_grund="api_manuell"
+    ) is True
+    assert state.stats.last_compressor_off_time == off_time
+    assert state.control.kompressor_ein is False

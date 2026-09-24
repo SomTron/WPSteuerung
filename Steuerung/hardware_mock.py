@@ -32,17 +32,19 @@ class MockHardwareManager(HardwareInterface):
         self.lcd_content = ["", "", "", ""]
         logging.info("Mock LCD initialized")
     
-    def set_compressor_state(self, state: bool) -> None:
-        """Mock compressor control with state tracking."""
-        if self.gpio_initialized:
-            old_state = self.compressor_state
-            self.compressor_state = state
-            self.gpio_history.append({
-                "pin": self.GIO21_PIN,
-                "state": state,
-                "previous": old_state
-            })
-            logging.debug(f"Mock compressor: {old_state} -> {state}")
+    def set_compressor_state(self, state: bool) -> bool:
+        """Mock-Schaltung mit demselben Erfolgsvertrag wie echtes GPIO."""
+        if not self.gpio_initialized:
+            return False
+        old_state = self.compressor_state
+        self.compressor_state = bool(state)
+        self.gpio_history.append({
+            "pin": self.GIO21_PIN,
+            "state": bool(state),
+            "previous": old_state
+        })
+        logging.debug(f"Mock compressor: {old_state} -> {bool(state)}")
+        return True
     
     def read_pressure_sensor(self) -> bool:
         """Mock pressure sensor reading."""

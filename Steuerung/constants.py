@@ -25,6 +25,7 @@ MAIN_LOOP_INTERVAL_SEC: int = 10
 SOLAR_UPDATE_INTERVAL_SEC: int = 300
 FORECAST_UPDATE_INTERVAL_MIN: int = 60
 FORECAST_UPDATE_INTERVAL_HOURS: int = 6
+FORECAST_MAX_AGE_HOURS: int = 12
 # Nach einem FEHLGESCHLAGENEN Prognose-Abruf (Netz/DNS weg) erst nach dieser
 # Zeit erneut fragen. Ohne Throttle wuerde der 10-s-Loop die Open-Meteo-API
 # dauerhaft anfragen und das Log fluten (beobachtet im Pi-Log 12.09.).
@@ -54,9 +55,8 @@ COMPRESSOR_VERIFICATION_ERROR_THRESHOLD: int = 2
 LEGIONELLEN_VERIFY_NUR_VERDAMPFER: bool = True
 
 # --- Solar Data Freshness ---
-SOLAR_DATA_MAX_AGE_HOURS: int = 12
-SOLAR_DATA_MAX_AGE_MIN: int = 15
-SOLAR_DATA_STALE_THRESHOLD_MIN: int = 30
+# Einheitliche Frischegrenze für Solax-Livedaten und API/Regelung.
+SOLAR_DATA_STALE_THRESHOLD_MIN: int = 15
 SOLAR_API_TIMEOUT_SEC: int = 10
 
 # --- Bademodus ---

@@ -1,6 +1,6 @@
 import logging
 import math
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, tzinfo
 from typing import Optional
 from utils import safe_timedelta
 from constants import TEMP_MIN_VALID, TEMP_MAX_VALID, REDUCTION_MIN, REDUCTION_MAX, SOLAR_WINDOW_HOURS
@@ -17,14 +17,8 @@ def is_valid_temperature(temp: Optional[float], min_temp: float = TEMP_MIN_VALID
         return False
     return True
 
-def normalize_forecast_wh_qm(value):
-    """Open-Meteo-kWh/m² robust in die interne Wh/m²-Einheit umrechnen.
-
-    State und Weather-Forecast speichern Tageswerte in kWh/m². Die
-    Prioritätsregeln verwenden historisch Wh/m² (z.B. 3000 Wh). Die
-    Umrechnung happens an der Integrationsgrenze, damit keine einzelne
-    Regel eine eigene, widersprüchliche Einheitenannahme pflegen muss.
-    """
+def forecast_kwh_m2_to_wh_m2(value):
+    """Wandelt Open-Meteo-kWh/m² explizit in die interne Wh/m²-Einheit um."""
     if value is None:
         return None
     try:
@@ -33,16 +27,41 @@ def normalize_forecast_wh_qm(value):
         return None
     if not math.isfinite(wert) or wert < 0:
         return None
-    if 0 < wert < 100:
-        return wert * 1000.0
-    return wert
+    return wert * 1000.0
+
+
+def normalize_forecast_wh_qm(value, value_unit="kwh_m2"):
+    """Normalisiert einen Forecast anhand seiner expliziten Einheit.
+
+    Die alte Heuristik ("Werte < 100 sind kWh/m²") konnte einen echten
+    niedrigen Wh/m²-Wert falsch um thousandfach vergrößern. Die Quelle
+    der Tageswerte ist Open-Meteo und liefert kWh/m²; bereits normalisierte
+    Werte müssen explizit mit ``value_unit='wh_m2'`` übergeben werden.
+    """
+    if value_unit == "wh_m2":
+        if value is None:
+            return None
+        try:
+            wert = float(value)
+        except (TypeError, ValueError):
+            return None
+        return wert if math.isfinite(wert) and wert >= 0 else None
+    if value_unit != "kwh_m2":
+        raise ValueError(f"Unbekannte Forecast-Einheit: {value_unit}")
+    return forecast_kwh_m2_to_wh_m2(value)
 
 
 def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0) -> bool:
     """Prüft, ob eine Log-Nachricht gesendet werden soll (Throttling)."""
     last_time = getattr(state, attribute_name, None)
-    now = datetime.now(state.local_tz)
-    if last_time is None or safe_timedelta(now, last_time, state.local_tz) > timedelta(minutes=interval_minutes):
+    # Mock-/Partial-States dürfen keinen MagicMock als Zeitstempel liefern.
+    if not isinstance(last_time, datetime):
+        last_time = None
+    local_tz = getattr(state, "local_tz", None)
+    if not isinstance(local_tz, tzinfo):
+        local_tz = None
+    now = datetime.now(local_tz)
+    if last_time is None or safe_timedelta(now, last_time, local_tz) > timedelta(minutes=interval_minutes):
         setattr(state, attribute_name, now)
         return True
     return False

@@ -92,6 +92,7 @@ def schreibe_eintrag(
     t_unten: Optional[float] = None,
     t_oben: Optional[float] = None,
     stale_s: Optional[int] = None,
+    diagnostics: Optional[Dict] = None,
 ) -> bool:
     """Haengt einen Zyklus-Eintrag ans JSONL-Log (nur bei Aenderung/Herzschlag).
 
@@ -113,6 +114,7 @@ def schreibe_eintrag(
         "t_unten": round(float(t_unten), 2) if t_unten is not None else None,
         "t_oben": round(float(t_oben), 2) if t_oben is not None else None,
         "stale_s": stale_s,
+        "diagnostics": dict(diagnostics) if isinstance(diagnostics, dict) else {},
     }
     try:
         global _cache_pfad, _cache_zeile

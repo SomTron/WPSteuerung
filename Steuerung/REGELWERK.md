@@ -11,7 +11,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 
 | Ziel | Umsetzung |
 |---|---|
-| **Nie wärmer als 48 °C (normal) / 60 °C (Legionellen)** | `sicherheit.max_temp_c = 48` im Normalbetrieb; während Legionellenprophylaxe temporär auf `legionellen_max_temp_c = 60` angehoben |
+| **Nie wärmer als 48 °C (normal) / 65 °C (Legionellen)** | `sicherheit.max_temp_c = 48` im Normalbetrieb; während Legionellenprophylaxe temporär auf `legionellen_max_temp_c = 65` angehoben |
 | **Nachts so wenig wie möglich laufen** | Nachtsperre 19–8 Uhr: keine Einschaltungen außer expliziten Garantien |
 | **Strom-Priorität: PV direkt > Batterie > Netz** | PV-Regeln + AdaptivePV reagieren auf echte Netzeinspeisung; Batterie-Regel nutzt nur SOC-Überschuss ohne Netzkauf; sonst läuft nichts |
 | **Boiler als PV-Buffer** | Bei Überschuss heizen bis 48 °C; bei schlechter Prognose morgen → heute vorheizen; bei guter Prognose → heute sparen |
@@ -26,7 +26,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 |---|---|---|---|
 | 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre) | `notfallschutz` |
 | 100 | Wochenende | Wochenend-Vorheizen ab `fruehestens_uhr` | `wochenende` |
-| 90 | Legionellen | Legionellenprophylaxe 1×/Woche (60 °C, 30 min Probezeit); **temporär hebt Boiler-Limit von 48 auf 60 °C** | `legionellen` |
+| 90 | Legionellen | Legionellenprophylaxe 1×/Woche (Ziel 60 °C, Limit 65 °C); **temporär hebt Boiler-Limit von 48 auf 65 °C** | `legionellen` |
 | 85 | **Einspeisung** | PV-Shaping am Netzlimit (7500 W) – gratis Strom nutzen | `einspeisung` |
 | 82 | CalcStart | Berechneter Start für gelernte Zapf-Zeit (17:00) | `calculated_start` |
 | 78 | **AdaptivePV** | Exklusive PV-Schwelle, sobald Forecast vorhanden | `adaptive_pv` |
@@ -294,15 +294,17 @@ Regeln laufen; alle Setpoints in der Statusanzeige zeigen die effektiven Werte.
 
 ### 4.4 Taktschutz
 
-Zählt **echte Regelwechsel** im letzten 60-min-Fenster (`_wechsel_historie`).
-Ab `max_wechsel_pro_stunde` (8) wird die Mindestpause auf
+Zählt **echte Hardware-Schaltvorgänge** im letzten 60-min-Fenster
+(`_hardware_wechsel_historie`). Reine Gewinnerwechsel werden separat als
+`_wechsel_historie` diagnostisch aufgezeichnet, lösen aber keine zusätzliche
+Pause aus. Ab `max_wechsel_pro_stunde` (8) wird die Mindestpause auf
 `zusatz_pause_minuten` (15 min) verlängert; das harte Boiler-Maximum und die
 Sicherheitsabschaltung gehen weiterhin vor.
 
-Wichtig: Gezählt werden nur tatsächliche Wechsel des Gewinners (z. B.
-`Abweichung` → `PV_unten`) – **nicht** jeder Loop-Durchlauf (~13 s). Ein
-stabiler Gewinner über Stunden produziert also genau einen Eintrag; erst
-wirkliches Takten des Kompressors aktiviert die Zusatzpause.
+Wichtig: Gezählt werden nur tatsächliche Hardware-Schaltvorgänge (z. B.
+`AUS → EIN` oder `EIN → AUS`) – **nicht** jeder Loop-Durchlauf (~13 s). Ein
+stabiler Gewinner über Stunden bleibt im hardware_seitigen Histogramm daher
+ohne zusätzliche Takteinträge.
 
 Zusätzlich flattersicher:
 
@@ -317,7 +319,16 @@ Zusätzlich flattersicher:
   Episode gemeldet, „Taktschutz beendet" beim Verlassen – nicht mehr bei jedem
   Durchlauf. Die Meldung „verlängert Pause" erscheint max. alle 30 min.
 
-### 4.5 Hartes Boiler-Maximum & Ein-Sperre in Limitnaehe
+### 4.5 Forecast-Frische und Heizraten
+
+Forecast-Daten werden nach 12 Stunden ohne erfolgreichen Abruf als stale
+markiert und für Prognose-, PV-Warte-, Sommer- und Legionellenregeln
+neutralisiert. Die Start-Antizipation verwendet den Median der jüngsten drei
+positiven Live-Heizraten. Der Status und das Entscheidungslog enthalten
+`rate_confidence`, erwartete Laufzeit, Mindestlaufzeit und Puffer.
+
+
+### 4.6 Hartes Boiler-Maximum & Ein-Sperre in Limitnaehe
 
 Zwei voneinander unabhaengige Schutzebenen am Bezugsfuehler
 (`boiler_max_fuehler`, default `unten`) gegen das Limit `max_temp_c` (48 C):

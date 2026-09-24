@@ -238,6 +238,10 @@ class BatterieConfig(BaseModel):
     einschalten_bei_c: float = Field(default=42.0, description="Einschalten bei (°C)")
     ausschalten_bei_c: float = Field(default=47.0, description="Ausschalten bei (°C)")
     min_soc_prozent: float = Field(default=90.0, description="Batterie mind. so voll (%)")
+    min_batterieleistung_watt: float = Field(
+        default=50.0,
+        description="Mindestentladeleistung (W) für Batterie-Heizen; 0=keine zusätzliche Prüfung",
+    )
     max_netzbezug_watt: float = Field(
         default=-50.0,
         description="Heizen nur wenn Einspeisung >= Wert (W); <0 = kleiner Netzkauftoleranz",
@@ -262,17 +266,6 @@ class BatterieConfig(BaseModel):
         description="Harte Untergrenze der dynamischen SOC-Reserve (%)",
     )
 
-    # Dynamische Reserve (Punkt C): Bei gutem Morgen-Forecast darf die
-    # Batterie tiefer entladen werden als min_soc_prozent.
-    entlastung_max_prozent: float = Field(
-        default=15.0,
-        description="Maximale Absenkung der SOC-Reserve bei Top-Forecast (%-Punkte)",
-    )
-    min_soc_absolut: float = Field(
-        default=10.0,
-        description="Harte Untergrenze der dynamischen SOC-Reserve (%)",
-    )
-
 
     @model_validator(mode="after")
     def _plausibel(self):
@@ -281,6 +274,8 @@ class BatterieConfig(BaseModel):
             raise ValueError("batterie: einschalten_bei_c < ausschalten_bei_c erforderlich")
         if not (0.0 <= self.min_soc_prozent <= 100.0):
             raise ValueError("batterie: min_soc_prozent ausserhalb 0-100")
+        if self.min_batterieleistung_watt < 0:
+            raise ValueError("batterie: min_batterieleistung_watt darf nicht negativ sein")
         return self
 
 

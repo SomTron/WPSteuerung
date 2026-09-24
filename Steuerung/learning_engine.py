@@ -688,11 +688,13 @@ class LearningEngine:
         if self._kalibriert_datum == heute or now.hour < cfg.forecast_kalibrierung_ab_stunde:
             return
         self._kalibriert_datum = heute
-        # Open-Meteo liefert die Tagesprognose in kWh/m2 (typisch 5,0),
-        # intern wird sie in Wh/m2 erwartet. Sonst wird jeder Tag als
-        # "keine brauchbare Prognose" verworfen und die Kalibrierung bleibt N/A.
-        if forecast_today_wh_qm is not None and 0 < forecast_today_wh_qm < 100:
-            forecast_today_wh_qm *= 1000.0
+        # Forecast-Werte werden an der Integrationsgrenze ausdrücklich
+        # normalisiert. Keine Größen-Heuristik: 50 Wh/m² sind ein gültiger
+        # niedriger Tageswert und dürfen nicht zu 50.000 Wh/m² werden.
+        from logic_utils import normalize_forecast_wh_qm
+        forecast_today_wh_qm = normalize_forecast_wh_qm(
+            forecast_today_wh_qm, value_unit="wh_m2"
+        )
         if forecast_today_wh_qm is None or forecast_today_wh_qm < 1000:
             logging.info("Learning: Kalibrierung uebersprungen "
                          "(keine brauchbare Tagesprognose)")

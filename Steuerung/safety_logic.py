@@ -24,13 +24,15 @@ async def handle_critical_compressor_error(session, state, error_context: str):
         session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN)
 
 
-async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten):
-    """Prueft auf Sensorfehler und setzt Zeitstempel bei Fehlern."""
+async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten, t_mittig=None):
+    """Prueft alle für die Regelung benötigten Boiler-Sensoren."""
     errors = []
     if not is_valid_temperature(t_boiler_oben):
         errors.append(f"T_Oben invalid: {t_boiler_oben}")
     if not is_valid_temperature(t_boiler_unten):
         errors.append(f"T_Unten invalid: {t_boiler_unten}")
+    if not is_valid_temperature(t_mittig):
+        errors.append(f"T_Mittig invalid: {t_mittig}")
     
     if errors:
         error_msg = ", ".join(errors)
@@ -47,7 +49,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
     state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd = t_oben, t_unten, t_mittig, t_verd
     state.sensors.t_boiler = t_oben if t_oben is not None else ((t_mittig if t_mittig is not None else t_unten))
     
-    if not await check_for_sensor_errors(session, state, t_oben, t_unten):
+    if not await check_for_sensor_errors(session, state, t_oben, t_unten, t_mittig):
         state.control.ausschluss_grund = "Sensorfehler"
         state.control.blocking_reason = "Sensor-Fehler"
         if state.control.kompressor_ein:

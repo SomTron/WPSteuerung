@@ -307,7 +307,7 @@ Gewinner-Regel aus deren Konfiguration abgeleitet (Anzeige + Abschaltung):
 | `MinTemp-*` | `eintrag.min_temp_c` | `eintrag.min_temp_c + hysterese_k` |
 | `Batterie` | `batterie.einschalten_bei_c` (42) | `batterie.ausschalten_bei_c` (47) |
 | `Einspeisung` | `ausschalten_bei_c − 6.0` (42, Anzeige-Wert) | `einspeisung.ausschalten_bei_c` (48) |
-| `Legionellen` | `target_temp_c − 5.0` (55, Anzeige-Wert) | `legionellen.target_temp_c` (60) |
+| `Legionellen` | `target_temp_c − 5.0` (55, Anzeige-Wert) | `legionellen.legionellen_max_temp_c` (65) |
 | Default | `sicherheit.max_temp_c` (48) | `sicherheit.max_temp_c` (48) |
 
 (Werte in Klammern = Defaults aus `json_config.py` / `wp_steuerung_parameter.json`)
@@ -347,10 +347,11 @@ Einschaltungen bzw. erzwingen Abschaltungen):
 | **Überhitzungsschutz** | Sofort-Abschaltung bei `t_oben ≥ ueberhitzung_c`; Warnung ab `max_temp_c + 2`. **Legionellen-Bypass:** Während aktiver Legionellenfahrt wird `ueberhitzung_c` dynamisch auf `legionellen_max_temp_c` angehoben | `sicherheit.ueberhitzung_c` (58) / `legionellen.legionellen_max_temp_c` (65) |
 | **Kompressor-Verifikation** | Nach dem EIN wird geprüft, ob t_verd/t_unten plausibel fallen/steigen; sonst Fehler + Neustartsperre | `main.py` |
 | **Neustartsperre** | Nach Verifizierungsfehler keine Neueinschaltung für X Minuten | `setze_neustartsperre(minuten=10)` |
-| **Taktschutz** | > `max_wechsel_pro_stunde` Gewinner-Wechsel/h → Zusatzpause `zusatz_pause_minuten` | `taktschutz.*` |
+| **Taktschutz** | Echte Hardware-Schaltvorgänge werden separat von reinen Gewinnerwechseln gezählt; erst `max_wechsel_pro_stunde` löst die Zusatzpause aus | `taktschutz.*` |
 | **Mindestlaufzeit** | Laufender Lauf wird nicht vor Ablauf unterbrochen (außer Sicherheit/Boiler-Max). **PV-Läufe** (von `PV_*`/`AdaptivePV`/`Einspeisung` gestartet) dürfen nach Ablauf der Hardware-Schutzzeit `pv_min_laufzeit_minuten` (10–15 min) bei PV-Einbruch abschalten – ohne 60 min Netzbezug zu erzwingen | `zyklus.mindestlaufzeit_minuten` (60) / `zyklus.pv_min_laufzeit_minuten` (10) |
 | **Mindestpause** | Kein Neustart vor Ablauf nach dem AUS | `zyklus.mindestpausenzeit_minuten` (30) |
-| **Solar-stale** | PV-/Batterie-/Forecast-/AdaptivePV-Regeln pausiert bei veralteten Solardaten (Notfallschutz/Garantien bleiben) | `SOLAR_DATA_STALE_THRESHOLD_MIN` |
+| **Solar-stale** | PV-/Batterie-/Forecast-/AdaptivePV-Regeln pausieren bei fehlendem/ungültigem Zeitstempel oder nach 15 min ohne Solax-Daten (Notfallschutz/Garantien bleiben) | `SOLAR_DATA_STALE_THRESHOLD_MIN` |
+| **Forecast-stale** | Nach 12 h ohne erfolgreichen Open-Meteo-Abruf werden alle prognoseabhängigen Felder neutralisiert; Status/Log enthalten `forecast_stale` und `forecast_age_s` | `FORECAST_MAX_AGE_HOURS` |
 ---
 
 ## 5. Die Regelbausteine im Detail
@@ -824,13 +825,15 @@ Konfigurationsschlüsseln.
 
 | Befehl | Wirkung | Beispiele |
 |---|---|---|
-| `force_on` | Kompressor **sofort** einschalten (Hardware `set_compressor_state(True, force=True)`) | `{"command": "force_on"}` |
-| `force_off` | Kompressor **sofort** ausschalten | `{"command": "force_off"}` |
+| `force_on` | Kompressor **nach den Sicherheitsprüfungen** einschalten; der API-Befehl wird vom Main-Loop serialisiert verarbeitet | `{"command": "force_on"}` |
+| `force_off` | Kompressor **sofort** ausschalten; bei bereits AUS wird die OFF-Zeit nicht künstlich erneuert | `{"command": "force_off"}` |
 | `set_mode` | Bedienmodus setzen/ändern | `{"command":"set_mode","params":{"mode":"bademodus","active":true}}` |
 
 Erlaubte Modusnamen: `bademodus`, `urlaubsmodus` (`ALLOWED_MODES`). Andere Werte
 werden mit `400 Bad Request` abgelehnt. Die API-Clients (Webapp z. B.) rufen
 `toggleMode()` für die Schalter auf.
+
+Schreib- und Exportbefehle benötigen `WPS_API_KEY`. Die API legt manuelle Befehle in eine begrenzte Queue; der Main-Loop verarbeitet sie nach Druck-, Sensor- und Sicherheitsprüfungen. So schreiben API und Regelung nicht gleichzeitig auf den GPIO.
 
 ### 6.2 Hardware-Steuerungstyp
 

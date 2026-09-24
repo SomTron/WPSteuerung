@@ -3,7 +3,7 @@ import asyncio
 import aiohttp
 from datetime import datetime, timedelta
 import pytz
-from constants import DEFAULT_TIMEZONE
+from constants import DEFAULT_TIMEZONE, SOLAR_DATA_STALE_THRESHOLD_MIN
 
 API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
 
@@ -15,9 +15,9 @@ async def get_solax_data(session, state):
     local_tz = pytz.timezone(DEFAULT_TIMEZONE)
     now = datetime.now(local_tz)
 
-    # Freshness-Konstanten
-    CACHE_TTL = timedelta(minutes=5)        # Cache für 5 Minuten
-    MAX_DATA_AGE = timedelta(minutes=30)    # Daten älter als 30 min gelten als stale
+    # Frische-Cache: kurze API-Sperre, aber fail-safe nach 15 Minuten.
+    CACHE_TTL = timedelta(minutes=5)
+    MAX_DATA_AGE = timedelta(minutes=SOLAR_DATA_STALE_THRESHOLD_MIN)
 
     # Stelle sicher, dass state.solar.last_api_call zeitzonenbewusst ist
     if state.solar.last_api_call and state.solar.last_api_call.tzinfo is None:

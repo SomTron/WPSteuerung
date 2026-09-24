@@ -29,12 +29,12 @@ def baue_config(calcstart_aus=True):
     return config
 
 
-def bewerte(temp_dict, soc, feedin, kompressor_ein=False, now_hour=12, config=None):
+def bewerte(temp_dict, soc, feedin, kompressor_ein=False, now_hour=12, config=None, battery_power=1000.0):
     config = config or baue_config()
     return pc.evaluate_batterie(
         config.batterie, temp_dict, feedin, soc, kompressor_ein,
         now_hour, config.sicherheit.nachtsperre_start,
-        config.sicherheit.nachtsperre_ende,
+        config.sicherheit.nachtsperre_ende, battery_power=battery_power,
     )
 
 
@@ -50,6 +50,12 @@ def test_soc_zu_niedrig_nicht_einschalten():
     erg = bewerte({"unten": 41.0}, soc=80.0, feedin=0.0)
     assert erg.einschalten is None
     assert "Schonung" in erg.grund
+
+
+def test_keine_batterieentladung_kein_ein():
+    erg = bewerte({"unten": 41.0}, soc=95.0, feedin=0.0, battery_power=0.0)
+    assert erg.einschalten is None
+    assert "keine Entladung" in erg.grund
 
 
 def test_netzbezug_blockiert():

@@ -27,8 +27,10 @@ from json_config import (
     NotfallschutzConfig,
 )
 
-# Module-level throttle: Letzter Zeitstempel fuer gedrosselte Logs (alle 5 Min)
+# Module-level throttles: Letzte Zeitstempel fuer wiederholte Warnungen/Logs.
 _last_calcstart_log: Optional[datetime] = None
+_last_stale_warning: Optional[datetime] = None
+STALE_LOG_INTERVAL_MIN = 5
 
 @dataclass
 class RegelErgebnis:
@@ -355,6 +357,7 @@ def evaluate_batterie(
     nachtsperre_start: int,
     nachtsperre_ende: int,
     forecast_wh_qm: Optional[float] = None,
+    battery_power: Optional[float] = None,
 ) -> RegelErgebnis:
     "Batterie-Regel: Heizen mit Hausbatterie statt Netzstrom."
     result = RegelErgebnis(
@@ -368,6 +371,13 @@ def evaluate_batterie(
     if soc is None:
         result.aktiv = False
         result.grund = "SOC nicht verfuegbar"
+        return result
+    min_batpower = max(float(getattr(batt_cfg, "min_batterieleistung_watt", 0.0) or 0.0), 0.0)
+    if battery_power is None or battery_power < min_batpower:
+        result.grund = (
+            f"Batterie: Leistung {battery_power if battery_power is not None else 'n/a'}W "
+            f"< {min_batpower:.0f}W (keine Entladung nachgewiesen)"
+        )
         return result
     nachtsperre = _is_nachtsperre(now_hour, nachtsperre_start, nachtsperre_ende)
     if nachtsperre:
@@ -405,7 +415,7 @@ def evaluate_batterie(
         result.grund = (
             f"Batterie-Weiterlauf: SOC {soc:.0f}% >= {eff_min_soc:.0f}%, "
             f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
-            f"{batt_cfg.temperaturfuehler} {temp:.1f}C"
+            f"Batterie {battery_power:.0f}W, {batt_cfg.temperaturfuehler} {temp:.1f}C"
         )
         return result
     if strom_ok and temp <= batt_cfg.einschalten_bei_c:
@@ -413,13 +423,15 @@ def evaluate_batterie(
         result.grund = (
             f"Batterie: SOC {soc:.0f}% >= {eff_min_soc:.0f}%, "
             f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
-            f"{batt_cfg.temperaturfuehler} {temp:.1f}C -> EIN"
+            f"Batterie {battery_power:.0f}W, {batt_cfg.temperaturfuehler} {temp:.1f}C -> EIN"
         )
         return result
     if soc < soc_schwelle:
         result.grund = f"Batterie: SOC {soc:.0f}% < {soc_schwelle:.0f}% (Schonung)"
     elif feedin_watt < batt_cfg.max_netzbezug_watt:
         result.grund = f"Batterie: Netzbezug {feedin_watt:.0f}W < {batt_cfg.max_netzbezug_watt:.0f}W (kein Netzstrom!)"
+    elif battery_power < min_batpower:
+        result.grund = f"Batterie: Leistung {battery_power:.0f}W < {min_batpower:.0f}W"
     else:
         result.grund = f"Batterie: {temp:.1f}C in Hysterese ({batt_cfg.einschalten_bei_c}-{batt_cfg.ausschalten_bei_c}C)"
     return result
@@ -889,10 +901,9 @@ def evaluate_abweichung(
 def _forecast_effektiv_wh_qm(forecast_today, fc_ratio: float = 1.0) -> float:
     """Normiert die Tages-Prognose auf Wh/m2 und wendet die Kalibrierung an.
 
-    `state.solar.forecast_today` kann je nach Quelle in kWh/m2 (5,34) oder
-    Wh/m2 (5340) vorliegen - Werte unter 100 (typischer kWh-Bereich 0..15)
-    werden als kWh interpretiert und auf Wh umgerechnet, damit die
-    2.500-Wh-Schwelle des PV-Warten-Overlays in beiden Welten funktioniert.
+    `state.solar.forecast_today` wird an der Integrationsgrenze bereits
+    explizit in Wh/m² normalisiert. Der Parameter ist daher intern Wh/m².
+    Keine Größenheuristik mehr: die Quelle bestimmt die Einheit.
     """
     if forecast_today is None:
         return 0.0
@@ -900,8 +911,7 @@ def _forecast_effektiv_wh_qm(forecast_today, fc_ratio: float = 1.0) -> float:
         wert = float(forecast_today)
     except (TypeError, ValueError):
         return 0.0
-    if 0 < wert < 100:
-        wert *= 1000.0  # kWh/m2 -> Wh/m2
+    # Die Integrationsgrenze liefert Wh/m². Keine heuristische Umrechnung.
     return wert * fc_ratio
 
 
@@ -1726,6 +1736,7 @@ def bewerte_alle_regeln(
         nachtsperre_start,
         nachtsperre_ende,
         forecast_wh_qm=forecast_wh_qm,
+        battery_power=battery_power,
     )
     ergebnisse.append(ergebnis)
     # 3. Zeitfenster-Regel
@@ -1825,6 +1836,7 @@ def bewerte_alle_regeln(
     # Solar-Daten veraltet: PV-/Batterie-/Prognose-Regeln duerfen nicht
     # auf eingefrorenen Werten entscheiden. Garantien (MinTemp, Komfort)
     # und Abweichung (Netzstrom) bleiben bewusst aktiv.
+    global _last_stale_warning
     if solar_stale:
         _stale_namen = {
             "Einspeisung",
@@ -1841,9 +1853,29 @@ def bewerte_alle_regeln(
                 e.aktiv = False
                 e.einschalten = None
                 e.grund = "Solar-Daten veraltet -> Regel pausiert"
-        logging.warning(
-            "Solar-Daten veraltet: PV/Batterie/Einspeisung/CalcStart/Forecast/Zeitfenster pausiert"
-        )
+        jetzt = datetime.now()
+        if (
+            _last_stale_warning is None
+            or (jetzt - _last_stale_warning)
+            >= timedelta(minutes=STALE_LOG_INTERVAL_MIN)
+        ):
+            logging.warning(
+                "Solar-Daten veraltet: PV/Batterie/Einspeisung/"
+                "CalcStart/Forecast/Zeitfenster pausiert"
+            )
+            _last_stale_warning = jetzt
+    else:
+        # Nach Rueckkehr frischer Daten darf ein neues Stale-Ereignis sofort loggen.
+        _last_stale_warning = None
+
+    # Nach der Stale-Pausierung die Kandidatenliste neu aufbauen. Die zuvor
+    # gebaute Liste enthaelt dieselben Objekte, wurde aber vor der Mutation
+    # gefiltert und wuerde sonst eine pausierte Solarregel weiter gewaehlen.
+    aktive_regeln = [
+        e for e in aktive_regeln if e.aktiv and e.einschalten is not None
+    ]
+    if not aktive_regeln:
+        return None, ergebnisse
 
     # Nach Prioritaet sortieren (hoeher zuerst)
     aktive_regeln.sort(key=lambda e: e.prioritaet, reverse=True)
