@@ -220,6 +220,35 @@ def _control_state():
         return control_state
     return shared_state
 
+@app.get("/health")
+def health_status():
+    """Schneller, nicht-sensibler Healthcheck fuer Monitoring/Uptime."""
+    if not shared_state:
+        raise HTTPException(status_code=503, detail="System not initialized")
+    state = shared_state
+    try:
+        now = datetime.now(getattr(state, "local_tz", None))
+        heartbeat = getattr(state, "loop_heartbeat", None)
+        age_s = None if not isinstance(heartbeat, datetime) else max(
+            0.0, (now - heartbeat).total_seconds()
+        )
+    except (TypeError, ValueError):
+        age_s = None
+    raw_errors = getattr(getattr(state, "control", None), "consecutive_control_errors", 0)
+    errors = int(raw_errors) if isinstance(raw_errors, (int, float)) else 0
+    data_ok = getattr(state, "last_data_update_ok", None)
+    healthy = age_s is not None and age_s <= 30 and errors == 0 and data_ok is not False
+    return {
+        "status": "ok" if healthy else "degraded",
+        "loop_heartbeat_age_s": age_s,
+        "last_control_success": getattr(state, "last_control_success", None),
+        "last_sensor_success": getattr(state, "last_sensor_success", None),
+        "last_status_snapshot_at": getattr(state, "last_status_snapshot_at", None),
+        "consecutive_control_errors": errors,
+        "data_update_ok": data_ok,
+    }
+
+
 def _solar_stale_status() -> bool:
     """True, wenn Solax-Daten aelter als der Stale-Schwellwert sind."""
     if shared_state is None:
@@ -289,6 +318,35 @@ def _to_float(val):
     return number if math.isfinite(number) else None
 
 
+def _read_csv_tail(csv_path: str, max_rows: int = 25000):
+    """Liest einen CSV-Tail robust und zählt unvollständige/versehrte Zeilen."""
+    import csv
+    from collections import deque
+
+    with open(csv_path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, [])
+        raw_tail = deque(reader, maxlen=max_rows)
+
+    rows = []
+    invalid_rows = 0
+    null_bytes = 0
+    for fields in raw_tail:
+        if any("\x00" in field for field in fields):
+            null_bytes += 1
+            invalid_rows += 1
+            continue
+        if len(fields) != len(header):
+            invalid_rows += 1
+            continue
+        rows.append(dict(zip(header, fields)))
+    return rows, {
+        "invalid_rows": invalid_rows,
+        "null_bytes": null_bytes,
+        "header": header,
+    }
+
+
 def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     """Mittlere taegliche Einspeisung in Wh, zeitbasiert integriert.
 
@@ -303,7 +361,6 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     if not os.path.exists(csv_path):
         return None
 
-    import csv
     from pathlib import Path
 
     basis = Path(csv_path)
@@ -336,9 +393,12 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     letzte_delta_sec = None
     for datei in dateien:
         try:
-            with open(datei, "r", encoding="utf-8", errors="replace", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
+            try:
+                rows, _quality = _read_csv_tail(str(datei), max_rows=25000)
+            except OSError as exc:
+                logging.debug("PV-Historie: %s nicht lesbar (%s)", datei, exc)
+                continue
+            for row in rows:
                     ts = _parse_zeitstempel(row.get("Zeitstempel"))
                     feedin = _to_float(row.get("FeedinPower"))
                     if ts is None or feedin is None:
@@ -726,6 +786,8 @@ def get_status():
                 "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund or "",
             "last_update": datetime.now().strftime("%H:%M:%S"),
+            "loop_heartbeat": getattr(shared_state, "loop_heartbeat", None),
+            "consecutive_control_errors": getattr(shared_state.control, "consecutive_control_errors", 0),
         },
         "priority": priority_info,
         "regel_ergebnisse": regel_ergebnisse,
@@ -997,27 +1059,18 @@ def debug_csv(
 @app.get("/history")
 def get_history(hours: int = Query(default=24, ge=1, le=168)):
     """Get historical data from CSV. Hours must be between 1 and 168 (7 days)."""
-    import csv
-    from collections import deque
-
     csv_path = HEIZUNGSDATEN_CSV
     if not os.path.exists(csv_path):
         raise HTTPException(status_code=404, detail="No historical data available")
 
     try:
-        # Nur die letzten ~25k Zeilen lesen (126k komplett parsen = timeout auf Pi)
-        # und OHNE pandas auswerten: ein pandas-Import bindet ~70 MB RSS dauerhaft
-        # und hat am 15.09. mit zum OOM-Kill auf dem Pi gefuehrt.
         MAX_ROWS = 25000
-        with open(csv_path, "r", encoding="utf-8") as _f:
-            _header = _f.readline()
-            _tail = deque(_f, maxlen=MAX_ROWS)
-        reader = csv.DictReader([_header] + list(_tail))
+        rows, quality = _read_csv_tail(csv_path, max_rows=MAX_ROWS)
         cutoff = datetime.now() - timedelta(hours=hours)
 
         # Convert to JSON-friendly format
         data = []
-        for row in reader:
+        for row in rows:
             ts = _parse_zeitstempel(row.get("Zeitstempel"))
             if ts is None or ts < cutoff:
                 continue
@@ -1028,12 +1081,15 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
                 "t_unten": _to_float(row.get("T_Unten")),
                 "t_verd": _to_float(row.get("T_Verd")),
                 "kompressor": row.get("Kompressor") or "",
-                # Sollwerte aus CSV (None, wenn Spalte fehlt/leer)
                 "einschaltpunkt": _to_float(row.get("Einschaltpunkt")),
                 "ausschaltpunkt": _to_float(row.get("Ausschaltpunkt")),
             })
 
-        return {"data": data, "count": len(data)}
+        return {
+            "data": data,
+            "count": len(data),
+            "quality": quality,
+        }
     except Exception as e:
         logging.error(f"Error reading history: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")

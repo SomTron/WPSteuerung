@@ -6,6 +6,7 @@ import pytz
 from datetime import datetime, timedelta, date
 from typing import Optional, Dict
 from constants import DEFAULT_TIMEZONE
+from clock import Clock
 from json_config import WPSteuerungConfigManager, WPSteuerungConfig
 
 class SensorsState:
@@ -89,7 +90,8 @@ class State:
         self.config_manager = config_manager
         self.config = config_manager.get()
         self.local_tz = pytz.timezone(DEFAULT_TIMEZONE)
-        now = datetime.now(self.local_tz)
+        self.clock = Clock(self.local_tz)
+        now = self.clock.now()
 
         # --- JSON Priority Config (Pareto) ---
         self.priority_config_manager = WPSteuerungConfigManager("wp_steuerung_parameter.json")
@@ -147,6 +149,10 @@ class State:
         self.last_forecast_update: Optional[datetime] = None
         self.last_forecast_attempt: Optional[datetime] = None
         self.last_data_update_ok: Optional[bool] = None
+        self.loop_heartbeat: Optional[datetime] = None
+        self.last_control_success: Optional[datetime] = None
+        self.last_sensor_success: Optional[datetime] = None
+        self.last_status_snapshot_at: Optional[datetime] = None
         self.letzter_lauf: dict = {}
         self.vpn_ip: Optional[str] = None
         self.last_healthcheck_ping: Optional[datetime] = None

@@ -20,6 +20,8 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+from atomic_io import atomic_write_json
+
 # Liegt im Arbeitsverzeichnis der Steuerung (wie last_state.txt) und ist
 # per .gitignore von der Versionierung ausgenommen.
 LAUF_STATUS_DATEI = "letzter_lauf.json"
@@ -40,8 +42,7 @@ def _lese_status(pfad: Optional[str] = None) -> Optional[dict]:
 def _schreibe_status(daten: dict, pfad: Optional[str] = None) -> bool:
     ziel = pfad or LAUF_STATUS_DATEI
     try:
-        with open(ziel, "w", encoding="utf-8") as f:
-            json.dump(daten, f, ensure_ascii=False)
+        atomic_write_json(ziel, daten)
         return True
     except Exception as e:
         logging.debug(f"Lauf-Status konnte nicht geschrieben werden: {e}")

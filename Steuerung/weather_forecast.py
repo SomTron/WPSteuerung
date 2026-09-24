@@ -1,9 +1,11 @@
+import asyncio
 import logging
 import aiohttp
 import os
 import aiofiles
 from datetime import datetime, timedelta
 import pytz
+from atomic_io import atomic_write_text
 from constants import DEFAULT_TIMEZONE
 
 # Erwarteter Header der Forecast-CSV (8 Spalten inkl. Day2 seit Sommer-Modus)
@@ -22,8 +24,9 @@ async def _ensure_forecast_csv_header(csv_file):
     erwartete_felder = len(EXPECTED_FORECAST_HEADER.split(","))
 
     if not os.path.exists(csv_file):
-        async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
-            await f.write(EXPECTED_FORECAST_HEADER + "\n")
+        await asyncio.to_thread(
+            atomic_write_text, csv_file, EXPECTED_FORECAST_HEADER + "\n"
+        )
         return
 
     # Billiger Check: nur die erste Zeile lesen
@@ -43,8 +46,9 @@ async def _ensure_forecast_csv_header(csv_file):
         if len(felder) == erwartete_felder - 1:
             felder.insert(3, "")  # Altformat: Day2_kWh fehlte -> leeres Feld einfuegen
         neue_zeilen.append(",".join(felder))
-    async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
-        await f.write("\n".join(neue_zeilen) + "\n")
+    await asyncio.to_thread(
+        atomic_write_text, csv_file, "\n".join(neue_zeilen) + "\n"
+    )
     logging.info(
         "sonnen_prognose.csv: Header auf %d Spalten migriert (Day2_kWh ergaenzt)."
         % erwartete_felder

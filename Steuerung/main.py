@@ -17,6 +17,8 @@ from sensors import SensorManager
 from hardware import HardwareManager
 from hardware_mock import MockHardwareManager
 from hardware_actuator import CompressorActuator
+from atomic_io import atomic_write_text
+from clock import Clock
 from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
@@ -63,6 +65,22 @@ stop_event = threading.Event()
 # Garbage Collector eingesammelt werden, wÃ¤hrend sie noch laufen!)
 background_tasks = []
 control_command_queue: Queue = Queue(maxsize=16)
+
+
+def _state_now(state):
+    clock = getattr(state, "clock", None)
+    if isinstance(clock, Clock):
+        return clock.now()
+    local_tz = getattr(state, "local_tz", None)
+    return datetime.now(local_tz) if local_tz is not None else datetime.now()
+
+
+def _state_monotonic(state):
+    clock = getattr(state, "clock", None)
+    if isinstance(clock, Clock):
+        return clock.monotonic()
+    import time
+    return time.monotonic()
 
 
 def enqueue_control_command(command: str, params=None) -> None:
@@ -133,7 +151,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
     """
     Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
     """
-    now = datetime.now(state.local_tz)
+    now = _state_now(state)
     was_ein = state.control.kompressor_ein
 
     if status:
@@ -524,7 +542,7 @@ def _as_local_datetime(value, local_tz, default=None):
 
 async def check_periodic_tasks(session, state, last_vpn_check):
     """FÃ¼hrt zeitgesteuerte Hintergrundaufgaben aus."""
-    now_dt = datetime.now(state.local_tz)
+    now_dt = _state_now(state)
     now_local = now_dt
     
     # 1. VPN Check -- alte/ungültige Snapshots dürfen den Loop nicht beenden.
@@ -889,7 +907,7 @@ async def run_logic_step(session, state, learning_engine=None):
                 state.legionellen_temp_override = None
                 state.legionellen_started_at = None
                 state.legionellen_target_reached_at = None
-                state.legionellen_end_time = datetime.now(state.local_tz)
+                state.legionellen_end_time = _state_now(state)
                 state._last_was_legionellen = True
                 clear_plan(state, "Legionellenlauf manuell beendet", persist=True)
         elif command == "set_mode":
@@ -990,7 +1008,6 @@ def build_heizungsdaten_zeile(state):
     def fmt_csv(val):
         return str(val) if val is not None else "N/A"
 
-    local_tz = getattr(state, "local_tz", None)
     solax = getattr(state.solar, "last_api_data", None) or {}
 
     # Power Source
@@ -1005,7 +1022,7 @@ def build_heizungsdaten_zeile(state):
             power_source = "Batterie"
 
     return [
-        datetime.now(local_tz).strftime("%Y-%m-%d %H:%M:%S"),
+        _state_now(state).strftime("%Y-%m-%d %H:%M:%S"),
         fmt_csv(state.sensors.t_oben), fmt_csv(state.sensors.t_unten), fmt_csv(state.sensors.t_mittig),
         fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd),
         "1" if state.control.kompressor_ein else "0",
@@ -1057,12 +1074,12 @@ def restore_persisted_compressor_pause(state):
             # Der Snapshot lief waehrend eines aktiven Laufs. Der sichere
             # Fallback ist der Startzeitpunkt des neuen Prozesses; ein alter
             # AUS_seit-Marker darf hier nicht die Pause wieder veralten lassen.
-            zeit = datetime.now(state.local_tz)
+            zeit = _state_now(state)
         elif aus_seit_marker not in ("", "-"):
             zeit = datetime.strptime(aus_seit_marker, "%Y-%m-%d %H:%M:%S")
             if state.local_tz is not None:
                 zeit = state.local_tz.localize(zeit)
-        now = datetime.now(state.local_tz)
+        now = _state_now(state)
         if (now - zeit).total_seconds() > 24 * 3600:
             return False
         state.stats.last_compressor_off_time = zeit
@@ -1084,7 +1101,7 @@ def _fmt_temp(v):
 def write_last_state_snapshot(state):
     """Schreibt one Zeile (Overwrite) mit dem aktuellen Systemzustand."""
     try:
-        now = datetime.now(state.local_tz)
+        now = _state_now(state)
         komp = "EIN" if state.control.kompressor_ein else "AUS"
         rule = getattr(state.control, "active_rule_name", "") or "-"
         blocking = getattr(state.control, "blocking_reason", "") or "-"
@@ -1099,8 +1116,7 @@ def write_last_state_snapshot(state):
             f"PV={state.solar.acpower or 0.0:.0f}W | "
             f"SOC={state.solar.soc or 0.0:.0f}%\n"
         )
-        with open(LAST_STATE_FILE, "w", encoding="utf-8") as f:
-            f.write(line)
+        atomic_write_text(LAST_STATE_FILE, line)
     except Exception:
         # Diagnose-Datei ist optional - niemals den Haupt-Loop belasten.
         pass
@@ -1288,7 +1304,7 @@ async def _melde_unsauberen_lauf(session, state):
 
 def _logge_speicher(state, letzter_log):
     """Loggt stuendlich RSS/verfuegbaren Speicher (OOM-Nachvollziehbarkeit)."""
-    jetzt = datetime.now(state.local_tz)
+    jetzt = _state_now(state)
     if letzter_log is not None and (jetzt - letzter_log).total_seconds() < MEMORY_LOG_INTERVAL_SEC:
         return letzter_log
     try:
@@ -1317,6 +1333,7 @@ async def _run_data_phase(session, state) -> bool:
     try:
         await update_system_data(session, state, refresh_solar=False)
         state.last_data_update_ok = True
+        state.last_sensor_success = _state_now(state)
         return True
     except Exception:
         logging.exception("Fehler in der Daten-Update-Phase")
@@ -1371,6 +1388,7 @@ async def _run_control_phase(session, state, data_update_ok: bool) -> None:
     try:
         await run_logic_step(session, state, learning_engine=state.learning_engine)
         state.control.consecutive_control_errors = 0
+        state.last_control_success = _state_now(state)
     except Exception:
         state.control.consecutive_control_errors = (
             getattr(state.control, "consecutive_control_errors", 0) + 1
@@ -1401,6 +1419,7 @@ async def _run_logging_phase(state) -> None:
 async def _run_status_snapshot_phase(state) -> None:
     """API liest nur aus einem konsistenten Snapshot des aktuellen Loops."""
     try:
+        state.last_status_snapshot_at = _state_now(state)
         update_status_snapshot(state)
     except Exception:
         logging.exception("Status-Snapshot konnte nicht aktualisiert werden")
@@ -1427,11 +1446,13 @@ async def main_loop():
         # Diagnose: unsauber beendeten Vorlauf melden (OOM-Kill/Crash/Reset).
         await _melde_unsauberen_lauf(session, state)
         letzter_speicher_log = _logge_speicher(state, None)
-        last_vpn_check = datetime.now(state.local_tz) - timedelta(minutes=1)
+        last_vpn_check = _state_now(state) - timedelta(minutes=1)
 
         while not stop_event.is_set():
+            iteration_started = _state_monotonic(state)
             try:
-                now = datetime.now(state.local_tz)
+                now = _state_now(state)
+                state.loop_heartbeat = now
                 handle_day_transition(state, now)
 
                 # Urlaubsmodus: automatisches Beenden nach Ablauf von urlaubsmodus_ende
@@ -1467,7 +1488,8 @@ async def main_loop():
             await _run_status_snapshot_phase(state)
 
             # In kurzen Abschnitten schlafen, damit ein Stop-Signal zuegig reagiert.
-            remaining = MAIN_LOOP_INTERVAL_SEC
+            elapsed = _state_monotonic(state) - iteration_started
+            remaining = max(0.0, MAIN_LOOP_INTERVAL_SEC - elapsed)
             while remaining > 0 and not stop_event.is_set():
                 step = min(remaining, 0.5)
                 await asyncio.sleep(step)

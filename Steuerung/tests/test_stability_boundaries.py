@@ -1,12 +1,15 @@
 """Tests fuer Snapshot-, Aktuator- und Netzwerk-Grenzen."""
 import asyncio
-from datetime import timedelta
+import csv
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytz
 
+from atomic_io import atomic_write_json
+from clock import Clock
 from hardware_actuator import CompressorActuator
 from status_snapshot import build_status_snapshot
 
@@ -25,6 +28,58 @@ def _minimal_state():
         config=SimpleNamespace(),
         priority_config=SimpleNamespace(),
     )
+
+
+def test_atomic_json_ersetzt_datei_ohne_tmp_reste(tmp_path):
+    target = tmp_path / "status.json"
+    atomic_write_json(str(target), {"gut": True})
+    atomic_write_json(str(target), {"gut": False, "wert": 2})
+    assert target.read_text(encoding="utf-8").endswith("\n")
+    assert '"gut": false' in target.read_text(encoding="utf-8")
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_csv_tail_meldet_ungueltige_und_null_zeilen(tmp_path):
+    import api
+
+    target = tmp_path / "daten.csv"
+    with target.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Zeitstempel", "Wert"])
+        writer.writerow(["2026-09-24 10:00:00", "1"])
+        handle.write("2026-09-24 10:00:01,2\x00\n")
+        handle.write("2026-09-24 10:00:02\n")
+    rows, quality = api._read_csv_tail(str(target))
+    assert len(rows) == 1
+    assert quality["invalid_rows"] == 2
+    assert quality["null_bytes"] == 1
+
+
+def test_health_endpoint_zeigt_heartbeat_und_control_errors():
+    import api
+
+    state = _minimal_state()
+    state.control.consecutive_control_errors = 0
+    state.loop_heartbeat = datetime.now(state.local_tz)
+    state.last_control_success = state.loop_heartbeat
+    state.last_sensor_success = state.loop_heartbeat
+    state.last_status_snapshot_at = state.loop_heartbeat
+    state.last_data_update_ok = True
+    old_state, old_control, old_funcs = api.shared_state, api.control_state, api.control_funcs
+    try:
+        api.init_api(state, {})
+        result = api.health_status()
+    finally:
+        api.shared_state, api.control_state, api.control_funcs = old_state, old_control, old_funcs
+    assert result["status"] == "ok"
+    assert result["consecutive_control_errors"] == 0
+    assert result["data_update_ok"] is True
+
+
+def test_clock_liefert_aware_und_monotone_zeit():
+    clock = Clock(pytz.timezone("Europe/Berlin"))
+    assert clock.now().tzinfo is not None
+    assert clock.monotonic() <= clock.monotonic()
 
 
 def test_api_init_verwendet_status_snapshot():

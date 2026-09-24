@@ -40,6 +40,9 @@ def build_status_snapshot(state):
         "legionellen_planned_time", "legionellen_planned_reason",
         "legionellen_target_temp_c", "legionellen_max_duration_hours",
         "solar_stale", "forecast_stale", "forecast_age_s", "learning_engine",
+        "loop_heartbeat", "last_control_success", "last_sensor_success",
+        "last_status_snapshot_at", "last_data_update_ok",
+        "consecutive_control_errors",
         "last_api_call", "last_forecast_update", "last_forecast_attempt",
     )
     for name in root_fields:

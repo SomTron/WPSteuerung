@@ -11,7 +11,8 @@ class TelegramHandler(logging.Handler):
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.session = session
-        self.queue = asyncio.Queue()
+        self.queue = asyncio.Queue(maxsize=50)
+        self.dropped_messages = 0
         self.task = None
         self.loop = None
         self._loop_owner = False
@@ -59,7 +60,20 @@ class TelegramHandler(logging.Handler):
             if self.loop.is_closed():
                 return
 
-            self.queue.put_nowait(msg)
+            try:
+                self.queue.put_nowait(msg)
+            except asyncio.QueueFull:
+                # Alte Einträge sind weniger wert als aktuelle Alarme.
+                try:
+                    self.queue.get_nowait()
+                    self.queue.task_done()
+                except asyncio.QueueEmpty:
+                    pass
+                self.dropped_messages += 1
+                try:
+                    self.queue.put_nowait(msg)
+                except asyncio.QueueFull:
+                    self.dropped_messages += 1
 
             if not self.task or self.task.done():
                 self.task = self.loop.create_task(self.process_queue())
@@ -68,12 +82,17 @@ class TelegramHandler(logging.Handler):
 
     async def process_queue(self):
         while not self.queue.empty():
+            msg = None
             try:
                 msg = await self.queue.get()
                 await self.send_message(msg)
-                self.queue.task_done()
+            except asyncio.CancelledError:
+                raise
             except Exception:
-                pass
+                logging.exception("Telegram-Logging-Nachricht konnte nicht gesendet werden")
+            finally:
+                if msg is not None:
+                    self.queue.task_done()
     
     def close(self):
         if self.task and not self.task.done():
