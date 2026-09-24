@@ -13,12 +13,22 @@ def test_forecast_einheiten_werden_korrekt_angezeigt():
     assert "energy.forecast_today" in html
     assert "fmtForecast(energy.forecast_today)" in html
     assert "W/m²" in html
+    assert "pvp.peak_wm2" in html
+    assert "W/m²" in html
 
 
 def test_control_api_fehler_werden_nicht_als_erfolg_verschluckt():
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")
     assert "if (!response.ok)" in html
     assert "API-Fehler ' + response.status" in html
+
+
+def test_webapp_sortiert_regelhistorie_und_sendet_api_key():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "regelnDaten = (jd.data || []).sort" in html
+    assert "function apiHeaders(extra = {})" in html
+    assert "X-API-Key" in html
+    assert "headers: apiHeaders({ 'Content-Type': 'application/json' })" in html
 
 
 def test_service_worker_existiert_und_cachet_keine_daten_endpunkte():

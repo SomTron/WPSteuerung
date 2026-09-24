@@ -47,6 +47,20 @@ def test_stale_helper_hat_keine_eigene_route():
             )
 
 
+def test_stale_helper_behandelt_fehler_fail_safe():
+    """Ein kaputter Zeitstempel darf Solardaten nicht als frisch ausgeben."""
+    from types import SimpleNamespace
+
+    original = api.shared_state
+    try:
+        api.shared_state = SimpleNamespace(
+            solar=SimpleNamespace(last_api_call=object())
+        )
+        assert api._solar_stale_status() is True
+    finally:
+        api.shared_state = original
+
+
 def test_wichtige_routen_vorhanden():
     """Smoke-Check: Alle vom Webapp benoetigten Routen existieren."""
     pfade = {"/", "/index.html", "/status", "/history", "/history/regeln",
@@ -118,6 +132,94 @@ def test_keine_doppelt_registrierten_routen():
     pfade = [getattr(route, "path", None) for route in api.app.routes]
     doppelt = {p: c for p, c in Counter(pfade).items() if p and c > 1}
     assert not doppelt, f"Doppelt registrierte Routen: {doppelt}"
+
+
+def test_api_cors_ist_nicht_wildcard_und_ist_konfigurierbar():
+    from pathlib import Path
+
+    source = Path(api.__file__).read_text(encoding="utf-8-sig")
+    assert 'allow_origins=["*"]' not in source
+    assert "WPS_CORS_ORIGINS" in source
+    assert "X-API-Key" in source
+
+
+def test_api_key_ist_fuer_schreibzugriffe_erforderlich():
+    """Ohne konfigurierten Key werden Schreib-/Exportbefehle blockiert."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        api._check_api_key(None)
+    assert exc.value.status_code == 503
+
+
+def test_api_key_wird_falsch_oder_richtig_geprueft(monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
+    with pytest.raises(HTTPException) as exc:
+        api._check_api_key("wrong")
+    assert exc.value.status_code == 401
+    api._check_api_key("test-secret")
+
+
+@pytest.mark.asyncio
+async def test_control_set_mode_schaltet_und_validiert_aktiv(monkeypatch):
+    from types import SimpleNamespace
+
+    from pydantic import ValidationError
+
+    original_state, original_key = api.shared_state, api.API_KEY
+    try:
+        api.API_KEY = "test-secret"
+        api.shared_state = SimpleNamespace(bademodus_aktiv=False, urlaubsmodus_aktiv=False)
+        result = await api.control_system(
+            api.ControlCommand(command="set_mode", params={"mode": "bademodus", "active": True}),
+            "test-secret",
+        )
+        assert result["status"] == "success"
+        assert api.shared_state.bademodus_aktiv is True
+        with pytest.raises(ValidationError):
+            api.ControlCommand(command="set_mode", params={"mode": "bademodus", "active": "true"})
+    finally:
+        api.shared_state, api.API_KEY = original_state, original_key
+
+
+def test_regelhistorie_wird_chronologisch_sortiert():
+    from types import SimpleNamespace
+
+    original_log = api.entscheidungs_log
+    try:
+        api.entscheidungs_log = SimpleNamespace(historie=lambda **_: [
+            {"ts": "2026-09-01T12:02:00", "gewinner": "Neu", "kompressor_laeuft": True},
+            {"ts": "2026-09-01T12:01:00", "gewinner": "Alt", "kompressor_laeuft": False},
+        ])
+        data = api.get_history_regeln(hours=24, limit=10)
+    finally:
+        api.entscheidungs_log = original_log
+    assert [x["regel"] for x in data["data"]] == ["Alt", "Neu"]
+
+
+def test_config_export_redigiert_secrets(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
+    original_state = api.shared_state
+    try:
+        api.shared_state = SimpleNamespace(
+            config=SimpleNamespace(model_dump=lambda: {
+                "Telegram": {"BOT_TOKEN": "secret-token", "CHAT_ID": "123"},
+                "SolaxCloud": {"TOKEN_ID": "secret-solax", "SN": "serial"},
+            }),
+            priority_config=SimpleNamespace(model_dump=lambda: {"wp": {"leistung_watt": 600}}),
+        )
+        data = api.export_config("test-secret")
+    finally:
+        api.shared_state = original_state
+
+    assert data["config_ini"]["Telegram"]["BOT_TOKEN"] == "***"
+    assert data["config_ini"]["SolaxCloud"]["TOKEN_ID"] == "***"
+    assert data["config_ini"]["SolaxCloud"]["SN"] == "***"
+    assert "secret-token" not in str(data)
 
 
 @pytest.mark.asyncio

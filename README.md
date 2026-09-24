@@ -97,6 +97,22 @@ nano Steuerung/richtige_config.ini
 
 ---
 
+## 🔐 API-Schutz für Schreibzugriffe
+
+Für einen produktiven API-Port sollte auf dem Raspberry Pi eine Datei mit einem zufälligen Schlüssel und den erlaubten Browser-Origins angelegt werden:
+
+```ini
+# /etc/wpssteuerung/api.env
+WPS_API_KEY=ein_langer_zufaelliger_schluessel
+WPS_CORS_ORIGINS=https://deine-domain.example
+```
+
+Danach `systemctl daemon-reload && systemctl restart wpsteuerung` ausführen. Ohne `WPS_API_KEY` bleiben Status-/Historieabfragen sichtbar, Schreib- und Exportbefehle liefern aber bewusst HTTP 503. Die WebApp kann den Schlüssel einmalig im Browser hinterlegen:
+
+```javascript
+localStorage.setItem('wp_api_key', 'DEIN_KEY');
+```
+
 ## 📦 System-Management (Updater)
 
 Für eine einfache Wartung und Updates nutzen Sie die Skripte im `Updater/` Verzeichnis:

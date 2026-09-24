@@ -18,6 +18,8 @@ ExecStart=/home/patrik/WPSteuerung/.venv/bin/python main.py
 # loggt auch native Crashes (z. B. Segfault) mit Traceback in den Journal.
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONFAULTHANDLER=1
+# Optionale Schreibschutz-/CORS-Konfiguration, nicht im Git-Repository speichern.
+EnvironmentFile=-/etc/wpssteuerung/api.env
 Restart=always
 RestartSec=10
 

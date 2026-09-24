@@ -2,15 +2,15 @@
 Standalone API Server für Entwicklung und Tests
 Kann auf dem PC ausgeführt werden, ohne Raspberry Pi Hardware
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
+import os
 from datetime import datetime, timedelta
 import random
 from fastapi.staticfiles import StaticFiles
-import os
 
 # Data Models
 class ConfigUpdate(BaseModel):
@@ -22,20 +22,32 @@ class ControlCommand(BaseModel):
     command: str  # "force_on", "force_off", "set_mode"
     params: Optional[Dict[str, Any]] = None
 
+API_KEY = (os.environ.get("WPS_API_KEY") or "").strip()
+
+
+def _check_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
+    if not API_KEY:
+        raise HTTPException(status_code=503, detail="WPS_API_KEY nicht konfiguriert")
+    if not x_api_key or x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Ungueltiger API-Key")
+
+
 app = FastAPI(
     title="WPSteuerung API", 
     description="API for Heat Pump Control - Development Mode", 
     version="1.0.0"
 )
 
-# CORS Middleware hinzufügen
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In Produktion spezifische Origins angeben
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS: im Entwicklungsserver standardmäßig keine fremden Origins.
+_allowed_origins = [x.strip() for x in (os.environ.get("WPS_CORS_ORIGINS") or "").split(",") if x.strip()]
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "X-API-Key"],
+    )
 
 # Statische Dateien (PWA) servieren
 if os.path.exists("webapp"):
@@ -123,7 +135,11 @@ def get_status():
     }
 
 @app.post("/config")
-def update_config(config: ConfigUpdate):
+def update_config(
+    config: ConfigUpdate,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    _check_api_key(x_api_key)
     """Update configuration (mock)"""
     logging.info(f"Config update request: {config.section}.{config.key} = {config.value}")
     return {
@@ -133,7 +149,11 @@ def update_config(config: ConfigUpdate):
     }
 
 @app.post("/control")
-def control_system(cmd: ControlCommand):
+def control_system(
+    cmd: ControlCommand,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    _check_api_key(x_api_key)
     """Control system (mock)"""
     if cmd.command == "force_on":
         mock_state.kompressor_ein = True

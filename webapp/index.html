@@ -803,6 +803,14 @@
         <script>
                 const API_BASE = window.location.origin;
         const API_CACHE_BUST = '?v=' + Date.now();
+        // Optionaler Schreibschutz. Den Key einmalig im Browser hinterlegen:
+        // localStorage.setItem('wp_api_key', 'DEIN_KEY');
+        function apiHeaders(extra = {}) {
+            const headers = Object.assign({}, extra);
+            const key = localStorage.getItem('wp_api_key');
+            if (key) headers['X-API-Key'] = key;
+            return headers;
+        }
 
         // IMMEDIATE DEBUG TEST - sollte sofort erscheinen wenn JS lädt
         const __debug = document.getElementById('debug-status');
@@ -897,10 +905,16 @@
                 // Regel-Historie parallel laden (fuer Overlay)
                 let regelnDaten = [];
                 try {
-                    const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000&v=${Date.now()}`);
+                    const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000&v=${Date.now()}`, {
+                        headers: apiHeaders()
+                    });
                     if (respR.ok) {
                         const jd = await respR.json();
-                        regelnDaten = jd.data || [];
+                        regelnDaten = (jd.data || []).sort((a, b) => {
+                            const ta = new Date(a.timestamp).getTime();
+                            const tb = new Date(b.timestamp).getTime();
+                            return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
+                        });
                     }
                 } catch (e) { console.warn('Regel-Historie nicht verfuegbar:', e); }
 
@@ -1173,7 +1187,7 @@
             try {
                 const response = await fetch(`${API_BASE}/control` + API_CACHE_BUST, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ command, params })
                 });
                 let result;
@@ -1515,10 +1529,11 @@
             // --- PV-Profil (Punkt E) ---
             const pvp = statusData.pv_profil || {};
             if (el('pv-peak') && pvp.stunden) {
-                el('pv-peak').textContent = (pvp.peak_watt ?? 0).toFixed(0) + ' W';
+                const peak = pvp.peak_wm2 ?? pvp.peak_watt ?? 0;
+                el('pv-peak').textContent = peak.toFixed(0) + ' W/m²';
                 const stunden = pvp.stunden;
-                el('pv-mittag').textContent = stunden['12'] != null ? stunden['12'].toFixed(0) + ' W' : 'N/A';
-                el('pv-abend').textContent = stunden['17'] != null ? stunden['17'].toFixed(0) + ' W' : 'N/A';
+                el('pv-mittag').textContent = stunden['12'] != null ? stunden['12'].toFixed(0) + ' W/m²' : 'N/A';
+                el('pv-abend').textContent = stunden['17'] != null ? stunden['17'].toFixed(0) + ' W/m²' : 'N/A';
                 
                 // Forecast-Daten anzeigen (falls verfügbar)
                 if (pvp.forecast_stunden) {

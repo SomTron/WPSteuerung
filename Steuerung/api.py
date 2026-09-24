@@ -3,7 +3,9 @@
 except ImportError:
     SOLAR_DATA_STALE_THRESHOLD_MIN = 15
 
+import hmac
 import logging
+import math
 
 try:
     import boiler_modell
@@ -17,7 +19,7 @@ try:
     import entscheidungs_log
 except ImportError:
     entscheidungs_log = None
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,7 +39,39 @@ except ImportError:
 # Allowed commands and modes for validation
 ALLOWED_COMMANDS = {"force_on", "force_off", "set_mode"}
 ALLOWED_MODES = {"bademodus", "urlaubsmodus"}
-ALLOWED_SECTIONS = {"Heizungssteuerung", "Telegram", "Hardware", "Sicherheitsgrenzen", "Solar"}
+ALLOWED_SECTIONS = {
+    "Heizungssteuerung", "Healthcheck", "SolaxCloud", "Telegram",
+    "Urlaubsmodus", "Solarueberschuss", "Logging", "Wetterprognose",
+}
+
+# WPS_API_KEY kann auf dem Pi als systemd-Environment gesetzt werden. Ohne
+# Schluessel bleiben nur die nicht-sensiblen Status-/Historienrouten offen;
+# Schreib- und Exportbefehle werden dann bewusst abgewiesen.
+API_KEY = (os.environ.get("WPS_API_KEY") or "").strip()
+_raw_origins = (os.environ.get("WPS_CORS_ORIGINS") or "").strip()
+CORS_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+
+def _check_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
+    """Prueft den optionalen Schluessel fuer schreibende/sensible Routen."""
+    if not API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Schreibzugriff ist deaktiviert: WPS_API_KEY nicht konfiguriert",
+        )
+    if not isinstance(x_api_key, str) or not x_api_key or not hmac.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="Ungueltiger oder fehlender API-Key")
+
+
+def _redact_config(value, key: str = ""):
+    """Exportiert Konfiguration ohne Telegram-/Solax-Geheimnisse."""
+    if isinstance(value, dict):
+        return {k: _redact_config(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_config(v, key) for v in value]
+    if key.upper() in {"BOT_TOKEN", "TOKEN_ID", "SN", "CHAT_ID", "API_KEY"}:
+        return "***" if value not in (None, "") else ""
+    return value
 
 def build_mode_payload(state, priority_info_override=None):
     """Baut das 'mode'-Objekt des /status Endpoints.
@@ -115,23 +149,28 @@ class ControlCommand(BaseModel):
 
     @model_validator(mode='after')
     def validate_mode_if_set_mode(self):
-        """Prueft, dass der Modus erlaubte Werte hat, wenn command=set_mode."""
-        if self.command == 'set_mode' and self.params:
-            mode = self.params.get('mode')
-            if mode and mode not in ALLOWED_MODES:
-                raise ValueError(f"Modus '{mode}' ist nicht erlaubt. Erlaubt: {', '.join(sorted(ALLOWED_MODES))}")
+        """Prueft set_mode streng: Modus und Boolean sind Pflicht."""
+        if self.command == "set_mode":
+            if not self.params or self.params.get("mode") not in ALLOWED_MODES:
+                raise ValueError(
+                    "set_mode benoetigt mode=bademodus|urlaubsmodus"
+                )
+            if type(self.params.get("active")) is not bool:
+                raise ValueError("active muss ein JSON-Boolean sein")
         return self
 
 app = FastAPI(title="WPSteuerung API", description="API for Heat Pump Control Android App", version="1.0.0")
 
-# CORS Middleware hinzufÃ¼gen
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # TODO: In Produktion spezifische Origins angeben (Sicherheitsrisiko!)
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS: Standardmaessig keine fremden Origins. Auf dem Pi koennen erlaubte
+# Origins explizit als WPS_CORS_ORIGINS="https://domain,http://localhost:..." gesetzt werden.
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "X-API-Key"],
+    )
 
 # Static files: Serve webapp directory
 _webapp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webapp")
@@ -163,14 +202,19 @@ def init_api(state, funcs):
 
 def _solar_stale_status() -> bool:
     """True, wenn Solax-Daten aelter als der Stale-Schwellwert sind."""
+    if shared_state is None:
+        return True
     try:
         last_api_call = getattr(shared_state.solar, 'last_api_call', None)
         if last_api_call is None:
             return True
         jetzt = datetime.now(getattr(last_api_call, 'tzinfo', None))
         return (jetzt - last_api_call).total_seconds() / 60.0 > SOLAR_DATA_STALE_THRESHOLD_MIN
-    except Exception:
-        return False
+    except Exception as exc:
+        # Bei fehlerhaftem Zeitstempel lieber stale als eine potentiell
+        # nicht existente Soladatenquelle als frisch ausgeben.
+        logging.warning("Solar-Stale-Status nicht ermittelbar: %s", exc)
+        return True
 
 
 # Cache fuer das historische 14-Tage-Mittel der Einspeisung (Wh/qm).
@@ -197,7 +241,7 @@ def _parse_zeitstempel(raw):
         return None
     try:
         return datetime(1899, 12, 30) + timedelta(days=float(text))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         pass
     try:
         dt = datetime.fromisoformat(text)
@@ -215,49 +259,109 @@ def _parse_zeitstempel(raw):
 
 
 def _to_float(val):
-    """CSV-Wert sicher in float umwandeln (None bei leer/ungueltig)."""
+    """CSV-Wert still in einen endlichen float umwandeln (sonst None)."""
     if val is None:
         return None
-    text = str(val).strip()
-    if not text:
-        return None
     try:
-        return float(text)
-    except ValueError:
+        number = float(str(val).strip())
+    except (ValueError, TypeError, OverflowError):
         return None
+    return number if math.isfinite(number) else None
 
 
-def _berechne_hist_wh_qm(csv_path: str):
-    """14-Tage-Mittel der taeglichen Einspeisung (Wh) - ohne Cache, ohne pandas.
+def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
+    """Mittlere taegliche Einspeisung in Wh, zeitbasiert integriert.
 
-    Liest nur Kopf + die letzten ~25k Zeilen (14 Tage bei 1-Min-Takt reichen)
-    und summiert FeedinPower je Kalendertag.
+    FeedinPower ist eine Momentanleistung in Watt. Daher wird jeder Wert mit
+    dem tatsaechlichen Abstand zum naechsten Sample multipliziert. Grosse Luecken
+    (Service-/SD-Karten-Ausfall) werden nicht als PV-Erzeugung gewertet. Die
+    Funktion liest aktuelle Datei und relevante Monatsarchive ohne pandas.
     """
+    if jetzt is None:
+        jetzt = datetime.now()
+    grenze = jetzt - timedelta(days=max(1, int(tage)))
     if not os.path.exists(csv_path):
         return None
+
     import csv
-    from collections import deque
+    from pathlib import Path
 
-    grenze = datetime.now() - timedelta(days=14)
-    with open(csv_path, "r", encoding="utf-8") as f:
-        kopf = f.readline()
-        zeilen = deque(f, maxlen=25000)
-    reader = csv.DictReader([kopf] + list(zeilen))
+    basis = Path(csv_path)
+    dateien = []
+    # Monatsarchive im Format heizungsdaten_YYYY-MM.csv einbeziehen.
+    for kandidat in basis.parent.glob(f"{basis.stem}_*.csv"):
+        monat = kandidat.stem.rsplit("_", 1)[-1]
+        try:
+            monat_dt = datetime.strptime(monat, "%Y-%m")
+        except ValueError:
+            continue
+        monats_ende = (monat_dt.replace(day=28) + timedelta(days=4)).replace(day=1)
+        if monats_ende > grenze and monat_dt <= jetzt and kandidat not in dateien:
+            dateien.append(kandidat)
+    if basis not in dateien:
+        dateien.append(basis)
+    # Archive zuerst, aktuelle Datei zuletzt; Cross-Month-Grenzen werden nur
+    # uebernommen, wenn der tatsaechliche Abstand plausibel ist.
+    dateien = sorted(
+        dateien,
+        key=lambda p: (0, p.stem.rsplit("_", 1)[-1])
+        if p != basis else (1, "9999-12"),
+    )
 
-    summen: dict = {}
-    for row in reader:
-        ts = _parse_zeitstempel(row.get("Zeitstempel"))
-        if ts is None or ts < grenze:
-            continue
-        feedin = _to_float(row.get("FeedinPower"))
-        if feedin is None:
-            continue
-        tag = ts.date()
-        summen[tag] = summen.get(tag, 0.0) + feedin
-    if not summen:
+    tages_energie: dict = {}
+    # 15 Minuten ist dasmaximum fuer einen regulaeren Takt; echte 10/14-Sekunden
+    # -Samples werden dadurch korrekt integriert, grosse Ausfallluecken nicht.
+    max_gap_sec = 900.0
+    previous = None
+    letzte_delta_sec = None
+    for datei in dateien:
+        try:
+            with open(datei, "r", encoding="utf-8", errors="replace", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    ts = _parse_zeitstempel(row.get("Zeitstempel"))
+                    feedin = _to_float(row.get("FeedinPower"))
+                    if ts is None or feedin is None:
+                        previous = None
+                        letzte_delta_sec = None
+                        continue
+                    if previous is not None:
+                        previous_ts, previous_feedin = previous
+                        delta_sec = (ts - previous_ts).total_seconds()
+                        tag = previous_ts.date()
+                        if previous_ts.date() != ts.date():
+                            # Letztes Sample des Vortages noch mit dem
+                            # plausiblen letzten Intervall abschliessen.
+                            if 0 < delta_sec <= max_gap_sec:
+                                wh = max(0.0, previous_feedin) * delta_sec / 3600.0
+                                tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
+                            elif delta_sec > max_gap_sec and letzte_delta_sec is not None:
+                                wh = max(0.0, previous_feedin) * letzte_delta_sec / 3600.0
+                                tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
+                            letzte_delta_sec = None
+                        elif 0 < delta_sec <= max_gap_sec:
+                            letzte_delta_sec = delta_sec
+                            # Nur tatsaechliche Einspeisung; negative Werte
+                            # sind Netzbezug und keine PV-Erzeugung.
+                            wh = max(0.0, previous_feedin) * delta_sec / 3600.0
+                            tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
+                        elif delta_sec > max_gap_sec:
+                            letzte_delta_sec = None
+                    previous = (ts, feedin)
+        except OSError as exc:
+            logging.debug("PV-Historie: %s nicht lesbar (%s)", datei, exc)
+
+        # Zwischen zwei Monatsdateien wird der letzte Wert nicht kuenstlich
+        # verlaengert. Nur der allerletzte Wert der gesamten Zeitreihe bekommt
+        # eine Intervallschatzung.
+        if datei == dateien[-1] and previous is not None and letzte_delta_sec is not None and 0 < letzte_delta_sec <= max_gap_sec:
+            wh = max(0.0, previous[1]) * letzte_delta_sec / 3600.0
+            tag = previous[0].date()
+            tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
+
+    tages_werte = [wh for tag, wh in tages_energie.items() if tag >= grenze.date()]
+    if not tages_werte:
         return None
-    # Integrierte Einspeisung pro Tag (Wh) bei 15-Min-Intervallen, dann Mittel
-    tages_werte = [w * 15 / 60 for w in summen.values()]
     return sum(tages_werte) / len(tages_werte)
 
 
@@ -503,35 +607,62 @@ def get_status():
         if _pv_profil_modul is not None:
             # Forecast-Scaling berechnen (heute vs historisch)
             forecast_today = getattr(shared_state.solar, 'forecast_today', None)
-            historisches_wh_qm = None
+            historische_einspeisung_wh = None
             if _pv_profil_modul is not None and hasattr(_pv_profil_modul, 'berechne_forecast_scaling'):
-                # Historischer Wert: 14-Tage-Durchschnitt der CSV
-                # (gecacht + nur 2 Spalten -> schont RAM/CPU beim 5-s-Polling)
-                historisches_wh_qm = _historisches_wh_qm(HEIZUNGSDATEN_CSV)
-            
-            # PV-Profil mit Forecast-Scaling
-            forecast_today_qm = forecast_today if isinstance(forecast_today, (int, float)) else None
-            if historisches_wh_qm and historisches_wh_qm > 0 and forecast_today_qm and forecast_today_qm > 0:
-                scaling = round(forecast_today_qm / historisches_wh_qm, 3)
+                # Historischer Wert: 14-Tage-Durchschnitt der CSV. Die Funktion
+                # integriert FeedinPower zeitbasiert und liefert Wh (Gesamtanlage).
+                historische_einspeisung_wh = _historisches_wh_qm(HEIZUNGSDATEN_CSV)
+
+            # Forecast und historische Einspeisung auf dieselbe flächenbezogene
+            # Energie beziehen. FeedinPower wird dafür durch die PV-Fläche geteilt.
+            forecast_today_wh_m2 = None
+            try:
+                forecast_today_wh_m2 = float(forecast_today) * 1000.0
+            except (TypeError, ValueError, OverflowError):
+                forecast_today_wh_m2 = None
+            try:
+                pv_area = float(
+                    getattr(getattr(shared_state.priority_config, "wp", None), "pv_array_size_qm", 10.0)
+                )
+            except (TypeError, ValueError, OverflowError):
+                pv_area = 10.0
+            if pv_area <= 0:
+                pv_area = 10.0
+            historical_wh_m2 = (
+                historische_einspeisung_wh / pv_area
+                if historische_einspeisung_wh is not None else None
+            )
+            scaling = None
+            if (
+                historical_wh_m2 is not None
+                and historical_wh_m2 > 0
+                and forecast_today_wh_m2 is not None
+                and forecast_today_wh_m2 > 0
+            ):
+                scaling = round(forecast_today_wh_m2 / historical_wh_m2, 3)
                 forecast_info["scaling"] = scaling
-                forecast_info["historical_wh_qm"] = round(historisches_wh_qm, 0)
-                forecast_info["forecast_vs_historical"] = f"{round((scaling-1)*100, 1)}%"
-            
-            profil = _pv_profil_modul.berechne_profil(forecast_scaling=scaling if 'scaling' in forecast_info else None)
+                forecast_info["historical_feed_in_wh"] = round(historische_einspeisung_wh, 0)
+                forecast_info["forecast_irradiation_wh_m2"] = round(forecast_today_wh_m2, 0)
+                forecast_info["forecast_vs_historical"] = f"{round((scaling - 1) * 100, 1)}%"
+
+            profil_total = _pv_profil_modul.berechne_profil(forecast_scaling=scaling)
+            profil = {hour: round(value / pv_area, 1) for hour, value in profil_total.items()}
             peak = _pv_profil_modul.get_peak_leistung(profil)
-            
-            # Forecast-skaliertes PV-Profil (stundenscharf)
+
+            # Forecast ist W/m²; das gelernte Profil ist ebenfalls W/m².
             forecast_hourly = getattr(shared_state.solar, 'forecast_hourly_wm2', None)
             if forecast_hourly and isinstance(forecast_hourly, dict):
-                # Skalieren mit historischem Profil, falls verfügbar
-                if 'scaling' in forecast_info:
-                    forecast_hourly = {k: round(v * scaling, 1) for k, v in forecast_hourly.items()}
+                try:
+                    forecast_hourly = {k: round(float(v), 1) for k, v in forecast_hourly.items()}
+                except (TypeError, ValueError, OverflowError):
+                    forecast_hourly = None
             else:
                 forecast_hourly = None
             
             pv_profil_info = {
                 "stunden": {str(k): v for k, v in sorted(profil.items())},
                 "peak_watt": peak,
+                "peak_wm2": peak,
                 "forecast_stunden": forecast_hourly,
                 "forecast_available": forecast_hourly is not None,
             }
@@ -614,12 +745,25 @@ def get_status():
 
 
 @app.get("/history/regeln")
-def get_history_regeln(hours: int = Query(default=24, ge=1, le=336), limit: int = Query(default=200, ge=1, le=1000)):
-    """Zeitverlauf der gewinnenden Regel fuer das Chart-Overlay."""
+def get_history_regeln(
+    hours: int = Query(default=24, ge=1, le=336),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    """Zeitverlauf der gewinnenden Regel, chronologisch fuer das Chart-Overlay."""
     try:
         eintraege = entscheidungs_log.historie(stunden=hours, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Regel-Historie nicht lesbar: {e}")
+
+    def _sort_key(e):
+        try:
+            return _parse_zeitstempel(e.get("ts")) or datetime.min
+        except (TypeError, ValueError):
+            return datetime.min
+
+    # Die Historie-API liefert normalerweise neueste zuerst. Das Frontend
+    # benoettigt fuer denstep-/Overlay-Abgleich dagegen aelteste zuerst.
+    eintraege = sorted(eintraege, key=_sort_key)
     return {
         "data": [
             {"timestamp": e.get("ts"), "regel": e.get("gewinner") or "Keine",
@@ -631,7 +775,11 @@ def get_history_regeln(hours: int = Query(default=24, ge=1, le=336), limit: int 
 
 
 @app.post("/config")
-def update_config(config: ConfigUpdate):
+def update_config(
+    config: ConfigUpdate,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    _check_api_key(x_api_key)
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
     
@@ -649,26 +797,48 @@ def update_config(config: ConfigUpdate):
         new_value = config.value
         
         if isinstance(current_value, bool):
-             new_value = config.value.lower() == 'true'
+            if config.value.strip().lower() not in {"true", "false", "1", "0"}:
+                raise ValueError("Boolean muss true/false oder 1/0 sein")
+            new_value = config.value.strip().lower() in {"true", "1"}
         elif isinstance(current_value, int):
              new_value = int(config.value)
         elif isinstance(current_value, float):
-             new_value = float(config.value)
+            new_value = float(config.value)
+            if not math.isfinite(new_value):
+                raise ValueError("Wert muss endlich sein")
              
         setattr(section_obj, config.key, new_value)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid value for {config.key}: {str(e)}")
 
-    # Trigger config save/reload not fully implemented yet for INI write-back
-    # shared_state.update_config() # This would reload from file, overwriting changes!
-    # Ideally we should write to file here. For now, in-memory update.
-    return {"status": "success", "message": f"Updated {config.section}.{config.key} to {new_value}"}
+    # Änderungen bleiben bewusst Runtime-only; ein Neustart lädt die Datei.
+    return {
+        "status": "success",
+        "persisted": False,
+        "message": f"Updated {config.section}.{config.key} to {new_value} (nur für diese Laufzeit)",
+    }
 
 @app.post("/control")
-async def control_system(cmd: ControlCommand):
-    if not shared_state or not control_funcs:
+async def control_system(
+    cmd: ControlCommand,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    _check_api_key(x_api_key)
+    if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
-    
+
+    if cmd.command == "set_mode":
+        mode = cmd.params["mode"]
+        active = cmd.params["active"]
+        if mode == "bademodus":
+            shared_state.bademodus_aktiv = active
+        else:
+            shared_state.urlaubsmodus_aktiv = active
+        return {"status": "success", "message": f"{mode} set to {active}"}
+
+    if not control_funcs:
+        raise HTTPException(status_code=503, detail="System not initialized")
+
     if cmd.command == "force_on":
         # Example: Force compressor ON
         # This requires exposing the set_kompressor_status_func or similar in control_funcs
@@ -687,35 +857,41 @@ async def control_system(cmd: ControlCommand):
 
 
 @app.get("/config/export")
-def export_config():
-    """Export the current full configuration as JSON."""
+def export_config(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Exportkonfiguration ohne Secrets."""
+    _check_api_key(x_api_key)
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
-    
+
     try:
-        # Export both INI-style and JSON priority configs
         return {
-            "config_ini": shared_state.config.model_dump() if hasattr(shared_state.config, 'model_dump') else {},
-            "priority_config": shared_state.priority_config.model_dump() if hasattr(shared_state.priority_config, 'model_dump') else {},
+            "config_ini": _redact_config(
+                shared_state.config.model_dump()
+                if hasattr(shared_state.config, "model_dump") else {}
+            ),
+            "priority_config": _redact_config(
+                shared_state.priority_config.model_dump()
+                if hasattr(shared_state.priority_config, "model_dump") else {}
+            ),
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error exporting config: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Konfiguration konnte nicht exportiert werden") from exc
 
 
 @app.post("/command")
-async def handle_command(cmd: ControlCommand):
-    """Handle incoming commands."""
+async def handle_command(
+    cmd: ControlCommand,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Legacy-Kommandoroute; für set_mode bleibt /control kanonisch."""
+    _check_api_key(x_api_key)
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
 
     if cmd.command == "set_mode":
-        mode = cmd.params.get("mode") if cmd.params else None
-        if mode == "bademodus":
-            shared_state.bademodus_aktiv = cmd.params.get("active", False) if cmd.params else False
-            return {"status": "success", "message": f"Bademodus set to {shared_state.bademodus_aktiv}"}
-        elif mode == "urlaubsmodus":
-            shared_state.urlaubsmodus_aktiv = cmd.params.get("active", False) if cmd.params else False
-            return {"status": "success", "message": f"Urlaubsmodus set to {shared_state.urlaubsmodus_aktiv}"}
+        return await control_system(cmd, x_api_key)
 
     raise HTTPException(status_code=400, detail="Unknown command")
 
@@ -736,7 +912,9 @@ def _csv_spaltentypen(kopf, daten):
 
 
 @app.get("/debug/csv")
-def debug_csv():
+def debug_csv(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
     """Debug: Zeigt CSV-Status und Daten an.
 
     Bewusst OHNE pandas und nur mit Kopf + Tail: ein pd.read_csv() ueber die

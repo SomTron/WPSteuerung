@@ -28,10 +28,10 @@ def _cache_leeren():
 
 
 def _csv_schreiben(pfad, tage=3, feedin=1000.0):
-    """Schreibt pro Tag 4 Viertelstunden-Zeilen (Summe je Tag = 1000 Wh)."""
+    """Schreibt je Tag 4 Viertelstunden-Zeilen (Summe je Tag = 1000 Wh)."""
     jetzt = datetime.now()
     zeilen = ["Zeitstempel,FeedinPower,BatPower,ACPower"]
-    for t in range(tage):
+    for t in reversed(range(tage)):
         tag = (jetzt - timedelta(days=t)).strftime("%Y-%m-%d")
         for minute in (0, 15, 30, 45):
             stunde = 12 if minute < 60 else 12
@@ -49,6 +49,38 @@ def test_berechnet_mittel_ohne_pandas(tmp_path):
 
     # 4x 1000 W * 15/60 h = 1000 Wh pro Tag
     assert wert == pytest.approx(1000.0)
+
+
+def test_integriert_echte_sample_abstaende_statt_fester_15_minuten(tmp_path):
+    """14-Sekunden-Takt darf nicht wie ein 15-Minuten-Takt behandelt werden."""
+    p = tmp_path / "hist.csv"
+    p.write_text(
+        "Zeitstempel,FeedinPower\n"
+        "2026-09-01 12:00:00,1000\n"
+        "2026-09-01 12:00:14,1000\n"
+        "2026-09-01 12:00:28,1000\n",
+        encoding="utf-8",
+    )
+
+    wert = api._berechne_hist_wh_qm(
+        str(p), tage=14, jetzt=api.datetime(2026, 9, 1, 12, 1)
+    )
+    # 3 Intervalle a 14 s; der letzte Wert wird mit dem letzten plausiblen
+    # Intervall geschaetzt: 1000 W * 42 s / 3600.
+    assert wert == pytest.approx(1000.0 * 42.0 / 3600.0)
+
+
+def test_grosse_zeitluecke_wird_nicht_integriert(tmp_path):
+    p = tmp_path / "hist.csv"
+    p.write_text(
+        "Zeitstempel,FeedinPower\n"
+        "2026-09-01 12:00:00,1000\n"
+        "2026-09-01 13:00:00,1000\n",
+        encoding="utf-8",
+    )
+    assert api._berechne_hist_wh_qm(
+        str(p), tage=14, jetzt=api.datetime(2026, 9, 1, 13, 1)
+    ) is None
 
 
 def test_excel_seriennummer_wird_erkannt():
