@@ -17,6 +17,27 @@ def is_valid_temperature(temp: Optional[float], min_temp: float = TEMP_MIN_VALID
         return False
     return True
 
+def normalize_forecast_wh_qm(value):
+    """Open-Meteo-kWh/m² robust in die interne Wh/m²-Einheit umrechnen.
+
+    State und Weather-Forecast speichern Tageswerte in kWh/m². Die
+    Prioritätsregeln verwenden historisch Wh/m² (z.B. 3000 Wh). Die
+    Umrechnung happens an der Integrationsgrenze, damit keine einzelne
+    Regel eine eigene, widersprüchliche Einheitenannahme pflegen muss.
+    """
+    if value is None:
+        return None
+    try:
+        wert = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(wert) or wert < 0:
+        return None
+    if 0 < wert < 100:
+        return wert * 1000.0
+    return wert
+
+
 def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0) -> bool:
     """Prüft, ob eine Log-Nachricht gesendet werden soll (Throttling)."""
     last_time = getattr(state, attribute_name, None)

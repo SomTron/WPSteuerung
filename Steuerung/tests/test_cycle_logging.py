@@ -28,6 +28,22 @@ def test_schema_entspricht_der_bestehenden_loganalyse():
     ]
 
 
+def test_altes_10_spalten_schema_wird_verlustfrei_migriert(tmp_path):
+    pfad = tmp_path / "zyklen.csv"
+    with open(pfad, "w", encoding="utf-8", newline="") as f:
+        f.write("start;ende;dauer_min;quelle;start_regel;end_grund;start_unten;max_unten;ueberschreitung_k;start_verd\n")
+        f.write("2026-09-01 10:00:00;2026-09-01 10:10:00;10.0;pv;AdaptivePV;regel_aus;40.0;44.0;0.0;18.0\n")
+
+    assert cycle_logging.ensure_cycle_csv(str(pfad), jetzt=datetime(2026, 9, 24)) is True
+    with open(pfad, encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f, delimiter=";"))
+    assert list(rows[0]) == CYCLE_CSV_HEADER
+    assert rows[0]["start_regel"] == "AdaptivePV"
+    assert rows[0]["max_unten"] == "44.0"
+    assert rows[0]["start_mittig"] == ""
+    assert rows[0]["start_oben"] == ""
+
+
 def test_abschluss_speichert_start_maxima_und_endgrund(tmp_path):
     state = _state("Batterie")
     state.sensors.t_oben = 48.0

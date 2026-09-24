@@ -49,6 +49,38 @@ def _zeitpunkt(value):
     return value or ""
 
 
+def _migriere_cycle_header(csv_path):
+    """Migriert olderige Zyklen-CSVs verlustfrei auf das aktuelle Schema."""
+    tmp_path = csv_path + ".tmp"
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f, delimiter=";")
+        rows = list(reader)
+
+    if not rows:
+        return False
+    old_header = [str(h).strip().lstrip("\ufeff") for h in rows[0]]
+    if old_header == CYCLE_CSV_HEADER:
+        return False
+    if "start" not in old_header or "ende" not in old_header:
+        logging.error(f"Zyklus-CSV hat unbekanntes Header: {old_header}")
+        return False
+
+    with open(tmp_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter=";")
+        writer.writerow(CYCLE_CSV_HEADER)
+        for row in rows[1:]:
+            if not any(str(cell).strip() for cell in row):
+                continue
+            old = dict(zip(old_header, row))
+            writer.writerow([old.get(field, "") for field in CYCLE_CSV_HEADER])
+    os.replace(tmp_path, csv_path)
+    logging.warning(
+        "Zyklus-CSV-Header migriert: %s -> %s (%s)",
+        len(old_header), len(CYCLE_CSV_HEADER), csv_path,
+    )
+    return True
+
+
 def ensure_cycle_csv(csv_path=CYCLE_CSV, jetzt=None):
     """Sichert Header und rotiert einen eventuell alten Monat."""
     if jetzt is None:
@@ -59,9 +91,16 @@ def ensure_cycle_csv(csv_path=CYCLE_CSV, jetzt=None):
         if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
             with open(csv_path, "w", encoding="utf-8", newline="") as f:
                 csv.writer(f, delimiter=";").writerow(CYCLE_CSV_HEADER)
+        else:
+            _migriere_cycle_header(csv_path)
         return True
     except Exception as exc:
         logging.error(f"Zyklus-CSV kann nicht vorbereitet werden ({csv_path}): {exc}")
+        try:
+            if os.path.exists(csv_path + ".tmp"):
+                os.remove(csv_path + ".tmp")
+        except OSError:
+            pass
         return False
 
 

@@ -144,12 +144,26 @@ class TestZapfung:
         assert fenster[0] <= 6.2   # Zapfungen ~07:05 minus 1h Vorlauf
         assert fenster[1] >= 7.5   # plus 45min Nachlauf
 
-    def test_kleiner_abfall_ist_keine_zapfung(self, engine):
+    def test_zeitlich_entprellte_zapfung(self, engine):
+        """Ein dauerhafter Abfall darf nur einmal als Zapfung gelten."""
         t = datetime(2026, 1, 15, 18, 0)
         engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
-        engine.update(t + timedelta(minutes=10),
-                      {"unten": 43.0, "mittig": 44.0, "oben": 45.5}, False)  # nur 0.5K
-        assert engine.get_info()["total_usage_events"] == 0
+        for minute in range(1, 8):
+            engine.update(
+                t + timedelta(minutes=minute),
+                {"unten": 42.0, "mittig": 44.0, "oben": 45.0},
+                False,
+            )
+        assert len(engine.data.usage_events) == 1
+
+        # Nach der Cooldown-Zeit ist ein neuer, eigenstaendiger Abfall wieder
+        # ein gueltiges Lernereignis.
+        engine.update(
+            t + timedelta(minutes=11),
+            {"unten": 41.0, "mittig": 44.0, "oben": 45.0},
+            False,
+        )
+        assert len(engine.data.usage_events) == 2
 
 
 # ── Persistenz ────────────────────────────────────────────────────────
@@ -215,7 +229,9 @@ class TestPersistenz:
                           {"unten": temp, "mittig": temp + 1, "oben": temp + 4}, False)
         assert len(engine.data.cycles) == 50
 
-        # Zapfungen: 101 Ereignisse im Fenster 16-23h
+        # Zapfungen: 101 Ereignisse im Fenster 16-23h. Fuer den
+        # Kapazitaets-Test wird die Entprellung bewusst deaktiviert.
+        engine.data.config.usage_event_cooldown_min = 0
         z = datetime(2026, 1, 20, 17, 0)
         oben = 46.0
         for i in range(102):

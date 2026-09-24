@@ -32,6 +32,7 @@ from cycle_logging import CYCLE_CSV, begin_cycle, ensure_cycle_csv, finish_cycle
 from logic_utils import (
     check_log_throttle,
     evaluate_sommer_modus,
+    normalize_forecast_wh_qm,
     SOMMER_AKTIVIERT, SOMMER_DEAKTIVIERT_PROGNOSE, SOMMER_DEAKTIVIERT_DATEN,
 )
 from constants import VPN_CHECK_INTERVAL_SEC, FORECAST_UPDATE_INTERVAL_HOURS, FORECAST_RETRY_INTERVAL_MIN, MAIN_LOOP_INTERVAL_SEC, COMPRESSOR_VERIFICATION_ERROR_THRESHOLD, SOLAR_DATA_STALE_THRESHOLD_MIN, MEMORY_LOG_INTERVAL_SEC
@@ -151,6 +152,11 @@ async def setup_application():
     
     # 2. State init
     state = State(config_manager)
+    # Nach einem sauberen Service-Restart die letzte AUS-Zeit aus dem
+    # Snapshot uebernehmen. Sonst waere die JSON-Mindestpause nach einem
+    # Neustart nicht mehr geschuetzt und ein Kompressor koennte erneut
+    # direkt nach dem vorherigen Lauf starten.
+    restore_persisted_compressor_pause(state)
     learning_engine = LearningEngine()
     state.learning_engine = learning_engine
     
@@ -174,6 +180,11 @@ async def setup_application():
         logging.info("Using mock hardware (non-Raspberry Pi platform)")
     
     hardware_manager.init_gpio()
+    # Nach einem SIGKILL/OOM kann der GPIO-Pin nicht zuverlaessig als LOW
+    # vorliegen. Der neue Prozessor startet deshalb fail-safe mit AUS; die
+    # Regel entscheidet danach ueber die wiederhergestellte Mindestpause.
+    hardware_manager.set_compressor_state(False)
+    logging.info("Kompressor-Hardware fail-safe initialisiert: AUS")
     await hardware_manager.init_lcd()
     
     sensor_manager = SensorManager()
@@ -435,13 +446,16 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             # Idee: Kommt sicher PV-Ueberschuss, ist Vorheizen/Buffern unnoetig ->
             # die Solltemperatur wird dann um temperatur_offset_c gesenkt (s. pcl).
             sommer_cfg = state.priority_config.sommer_modus
+            rad_today_wh = normalize_forecast_wh_qm(rad_today)
+            rad_tomorrow_wh = normalize_forecast_wh_qm(rad_tomorrow)
+            rad_day2_wh = normalize_forecast_wh_qm(rad_day2)
             if sommer_cfg.aktiv:
                 neuer_zaehler, ist_aktiv, bewertungstag, ereignis = evaluate_sommer_modus(
                     benoetigte_tage=sommer_cfg.benoetigte_tage,
                     mindest_prognose_wh=sommer_cfg.mindest_prognose_wh,
-                    rad_today=rad_today,
-                    rad_tomorrow=rad_tomorrow,
-                    rad_day2=rad_day2,
+                    rad_today=rad_today_wh,
+                    rad_tomorrow=rad_tomorrow_wh,
+                    rad_day2=rad_day2_wh,
                     heute=now_local.date(),
                     aktueller_zaehler=getattr(state, 'sommer_modus_zaehler', 0),
                     ist_aktiv=getattr(state, 'sommer_modus_aktiv', False),
@@ -486,12 +500,12 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                         for offset, tag_idx in [(0, aktueller_wochentag),
                                                  (1, (aktueller_wochentag + 1) % 7),
                                                  (2, (aktueller_wochentag + 2) % 7)]:
-                            if offset == 0 and rad_today is not None:
-                                tages_prognose[tag_idx] = rad_today
-                            elif offset == 1 and rad_tomorrow is not None:
-                                tages_prognose[tag_idx] = rad_tomorrow
-                            elif offset == 2 and rad_day2 is not None:
-                                tages_prognose[tag_idx] = rad_day2
+                            if offset == 0 and rad_today_wh is not None:
+                                tages_prognose[tag_idx] = rad_today_wh
+                            elif offset == 1 and rad_tomorrow_wh is not None:
+                                tages_prognose[tag_idx] = rad_tomorrow_wh
+                            elif offset == 2 and rad_day2_wh is not None:
+                                tages_prognose[tag_idx] = rad_day2_wh
 
                         bester_tag = legionellen_cfg.bevorzugter_tag
                         beste_prognose = tages_prognose.get(bester_tag, 0.0)
@@ -757,6 +771,56 @@ def build_heizungsdaten_zeile(state):
 LAST_STATE_FILE = os.path.join(os.getcwd(), "last_state.txt")
 
 
+def restore_persisted_compressor_pause(state):
+    """Uebernimmt den letzten bekannten AUS-Zeitpunkt aus ``last_state.txt``.
+
+    Der Snapshot wird bei jedem Loop geschrieben. Nach einem systemctl-
+    Neustart ist der RAM-State otherwise leer und die Mindestpause beginnt
+    erneut bei null. Ein alter Snapshot wird bewusst nur bis zu 24h genutzt;
+    danach ist eine Pause ohnehin nicht mehr wirksam.
+    """
+    try:
+        if not os.path.exists(LAST_STATE_FILE):
+            return False
+        with open(LAST_STATE_FILE, "r", encoding="utf-8") as f:
+            line = f.readline().strip()
+        if not line:
+            return False
+        zeit_text, _, rest = line.partition(" | ")
+        zeit = datetime.strptime(zeit_text, "%Y-%m-%d %H:%M:%S")
+        if state.local_tz is not None:
+            zeit = state.local_tz.localize(zeit)
+        if zeit.tzinfo is None:
+            zeit = zeit.replace(tzinfo=state.local_tz)
+        aus_seit_marker = ""
+        for feld in rest.split(" | "):
+            if feld.startswith("AUS_seit="):
+                aus_seit_marker = feld.split("=", 1)[1].strip()
+                break
+        if "Komp=EIN" in rest:
+            # Der Snapshot lief waehrend eines aktiven Laufs. Der sichere
+            # Fallback ist der Startzeitpunkt des neuen Prozesses; ein alter
+            # AUS_seit-Marker darf hier nicht die Pause wieder veralten lassen.
+            zeit = datetime.now(state.local_tz)
+        elif aus_seit_marker not in ("", "-"):
+            zeit = datetime.strptime(aus_seit_marker, "%Y-%m-%d %H:%M:%S")
+            if state.local_tz is not None:
+                zeit = state.local_tz.localize(zeit)
+        now = datetime.now(state.local_tz)
+        if (now - zeit).total_seconds() > 24 * 3600:
+            return False
+        state.stats.last_compressor_off_time = zeit
+        logging.info(
+            "Letzte AUS-Zeit aus last_state.txt uebernommen: %s (%s)",
+            zeit.isoformat(timespec="seconds"),
+            "Snapshot AUS" if "Komp=AUS" in rest else "Snapshot EIN, Neustart-Fallback",
+        )
+        return True
+    except (OSError, ValueError, TypeError) as exc:
+        logging.debug("Letzte Kompressorpause konnte nicht gelesen werden: %s", exc)
+        return False
+
+
 def _fmt_temp(v):
     return f"{v:.1f}" if isinstance(v, (int, float)) else "-"
 
@@ -771,6 +835,7 @@ def write_last_state_snapshot(state):
         line = (
             f"{now:%Y-%m-%d %H:%M:%S} | Komp={komp} | Regel={rule} | "
             f"Blocking={blocking} | "
+            f"AUS_seit={getattr(state.stats, 'last_compressor_off_time', None).strftime('%Y-%m-%d %H:%M:%S') if getattr(state.stats, 'last_compressor_off_time', None) is not None else '-'} | "
             f"T_oben={_fmt_temp(getattr(state.sensors, 't_oben', None))} | "
             f"T_mittig={_fmt_temp(getattr(state.sensors, 't_mittig', None))} | "
             f"T_unten={_fmt_temp(getattr(state.sensors, 't_unten', None))} | "
@@ -1079,6 +1144,21 @@ async def main_loop():
             task.cancel()
         if background_tasks:
             await asyncio.gather(*background_tasks, return_exceptions=True)
+        # Bei einem laufenden Prozess muss der GPIO-AUS auch als echter
+        # Abschluss mit technischem Grund verbucht werden. Sonst erzeugt der
+        # naechste Start einen scheinbar neuen Zyklus und verliert die Pause.
+        if state is not None and getattr(state.control, "kompressor_ein", False) is True:
+            try:
+                await set_kompressor_status(
+                    state, False, force=True, end_grund="dienst_neustart"
+                )
+            except Exception as exc:
+                logging.error("Kompressor konnte beim Shutdown nicht sauber beendet werden: %s", exc)
+        if state is not None:
+            try:
+                write_last_state_snapshot(state)
+            except Exception as exc:
+                logging.debug("Letzter Zustands-Snapshot beim Shutdown fehlgeschlagen: %s", exc)
         if hardware_manager:
             hardware_manager.cleanup()
         await session.close()

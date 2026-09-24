@@ -89,12 +89,15 @@ class TestDebounceSchaltverzug:
             grund="Soll 44.0C - unten 40.0C = +4.0K -> EIN",
         )
         with patch("priority_control_logic.bewerte_alle_regeln",
-                   return_value=(gewinner, [gewinner])):
+                   return_value=(gewinner, [gewinner])), \
+             patch("priority_control_logic.entscheidungs_log.schreibe_eintrag") as log:
             res = await pcl.determine_mode_and_setpoints(state, 40.0, 43.0)
 
         # Debounce noch nicht bestaetigt -> kein Schaltsignal an HW
         assert res["soll_einschalten"] is False
         assert state.control.previous_modus == "Keine Regel aktiv"
+        # Der Log muss ebenfalls die wirksame, nicht die unbestätigte Rohempfehlung speichern.
+        assert log.call_args.kwargs["soll_einschalten"] is False
 
     @pytest.mark.asyncio
     async def test_zweite_bestaetigte_bewertung_schaltet(self):
@@ -186,6 +189,21 @@ class TestPvMindestlaufzeitEntkoppelt:
         )
         assert erg is False  # Mindestlaufzeit noch nicht erreicht
         assert "Mindestlaufzeit" in (state.control.blocking_reason or "")
+
+    def test_json_mindestlaufzeit_gewinnt_gegen_altes_ini(self):
+        """Ein 15-min-INI darf den JSON-Fachwert 60 min nicht verkuerzen."""
+        state = self._state(lauf_start_regel="Abweichung")
+        effektiv = pcl._effektive_mindestlaufzeit(
+            state, timedelta(minutes=15), "Abweichung"
+        )
+        assert effektiv == timedelta(minutes=60)
+
+    def test_pv_mindestlaufzeit_bleibt_kurzer(self):
+        state = self._state(lauf_start_regel="AdaptivePV")
+        effektiv = pcl._effektive_mindestlaufzeit(
+            state, timedelta(minutes=60), "AdaptivePV"
+        )
+        assert effektiv == timedelta(minutes=10)
 
 
 # ============================================================

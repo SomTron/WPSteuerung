@@ -40,6 +40,10 @@ class LearningConfig:
     target_hour_ewma_alpha: float = 0.15
     target_hour_min_samples: int = 3
     max_usage_events: int = 100
+    # ── Zapfung: ein Abfallvorgang darf nicht bei jedem 10-s-Sample neu zählen ──
+    usage_event_cooldown_min: int = 10
+
+
     max_usage_per_half_day: int = 2
 
     # ── Gelernte Fenster ──
@@ -181,6 +185,14 @@ class LearningEngine:
         self.data_path = data_path
         self.data = self._load()
         self._last_compressor_state = False
+        # Nach einem Neustart keine laufende Abkühlung doppelt als neue
+        # Zapfung zählen. Die zuletzt persistierte Event-Zeit ist der Startwert.
+        self._last_usage_event_time: Optional[datetime] = None
+        for event in reversed(self.data.usage_events):
+            parsed = self._parse_ts(event.get("timestamp"))
+            if parsed is not None:
+                self._last_usage_event_time = parsed
+                break
         self._cycle_start_time: Optional[datetime] = None
         self._cycle_start_temps: Optional[Dict[str, float]] = None
         self._last_temps: Optional[Dict[str, Optional[float]]] = None
@@ -874,6 +886,20 @@ class LearningEngine:
         if self._last_temp_time is None:
             return
 
+        # Ein einziger Zapfvorgang erzeugt ueber mehrere Loop-Samples hinweg
+        # viele Temperaturabfaelle. Ohne Entprellung wurden daraus bis zu 17
+        # Events und die Lernzeit/-fenster wurden mit einem einzigen Vorgang
+        # mehrfach gewichtet. Nur ein Event je konfigurierbarem Zeitfenster
+        # zaehlen; die Rohdaten bleiben im Event selbst fuer die WebApp.
+        cooldown_s = max(0, int(self.data.config.usage_event_cooldown_min)) * 60
+        if self._last_usage_event_time is not None:
+            try:
+                seit_event = to_naive(now) - to_naive(self._last_usage_event_time)
+                if 0 <= seit_event.total_seconds() < cooldown_s:
+                    return
+            except (TypeError, ValueError):
+                pass
+
         # Gewichteten Gesamt-Abfall berechnen
         # unten hat das hoechste Gewicht (1.0), mitte (0.5), oben (0.25)
         # da unten der Hauptindikator fuer Warmwasserentnahme ist
@@ -896,6 +922,7 @@ class LearningEngine:
             drop_gesamt_k=round(drop_gesamt, 2),
         )
         self.data.usage_events.append(asdict(event))
+        self._last_usage_event_time = now
         if len(self.data.usage_events) > self.data.config.max_usage_events:
             self.data.usage_events = self.data.usage_events[-self.data.config.max_usage_events:]
 

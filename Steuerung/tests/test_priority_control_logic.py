@@ -452,7 +452,22 @@ class TestSommerModus:
             assert config.abweichung.solltemperatur_c == 37.0,                 f"Solltemperatur sollte 37.0C sein, ist {config.abweichung.solltemperatur_c}C"
 
     @pytest.mark.asyncio
-    async def test_sommer_modus_inaktiv_kein_offset(self, mock_state_sommer):
+    async def test_forecast_werte_an_der_regelgrenze_normalisiert(self, mock_state_sommer):
+        """kWh aus Open-Meteo werden vor allen Regeln in Wh/m² übergeben."""
+        import priority_control_logic as pcl
+
+        mock_state_sommer.solar.forecast_today = 2.5
+        mock_state_sommer.solar.forecast_tomorrow = 3.0
+        mock_state_sommer.solar.forecast_day2 = 2.0
+        with patch("priority_control_logic.bewerte_alle_regeln") as mock_bewerte:
+            mock_bewerte.return_value = (None, [])
+            await pcl.determine_mode_and_setpoints(mock_state_sommer, 39.0, 42.0)
+
+        kwargs = mock_bewerte.call_args.kwargs
+        assert kwargs["forecast_wh_qm"] == pytest.approx(3000.0)
+        assert kwargs["forecast_today_wh_qm"] == pytest.approx(2500.0)
+        assert kwargs["forecast_day2_wh_qm"] == pytest.approx(2000.0)
+
         """Sommer-Modus: state.sommer_modus_aktiv=False -> kein Offset."""
         import priority_control_logic as pcl
 

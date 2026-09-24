@@ -25,7 +25,7 @@ try:
     import entscheidungs_log
 except ImportError:
     entscheidungs_log = None
-from logic_utils import check_log_throttle
+from logic_utils import check_log_throttle, normalize_forecast_wh_qm
 from safety_logic import (
     handle_critical_compressor_error,
 )
@@ -284,18 +284,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # Forecast-Daten aus State holen
     # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
     forecast_wh_qm = getattr(state.solar, "forecast_tomorrow", None)
-    if forecast_wh_qm is not None:
-        try:
-            forecast_wh_qm = float(forecast_wh_qm)
-        except (TypeError, ValueError):
-            forecast_wh_qm = None
+    forecast_wh_qm = normalize_forecast_wh_qm(forecast_wh_qm)
     # CalcStart braucht die HEUTE-Prognose (PV-Erwartung zum Warten/Heizen)
     forecast_today_wh = getattr(state.solar, "forecast_today", None)
-    if forecast_today_wh is not None:
-        try:
-            forecast_today_wh = float(forecast_today_wh)
-        except (TypeError, ValueError):
-            forecast_today_wh = None
+    forecast_today_wh = normalize_forecast_wh_qm(forecast_today_wh)
     # Stundenscharfe Forecast-Daten in Watt (W/mÂ² -> W)
     hourly_forecast_watt = None
     hourly_mw2 = getattr(state.solar, "forecast_hourly_wm2", None)
@@ -397,7 +389,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         legionellen_aktiv=bool(state.legionellen_aktiv),
         legionellen_last_done=state.legionellen_last_done,
         legionellen_started_at=state.legionellen_started_at,
-        forecast_day2_wh_qm=getattr(state.solar, "forecast_day2", None),
+        forecast_day2_wh_qm=normalize_forecast_wh_qm(
+            getattr(state.solar, "forecast_day2", None)
+        ),
         wochenende_cfg=state.priority_config.wochenende,  # fuer Wochenende-Nachholung
         legionellen_planned_tag=getattr(state, "legionellen_planned_tag", None),
     )
@@ -972,6 +966,35 @@ def _ist_pv_gesteuerter_lauf(name) -> bool:
     return name in ("Einspeisung", "AdaptivePV") or name.startswith("PV_")
 
 
+def _effektive_mindestlaufzeit(state, min_laufzeit, regel_name=None) -> timedelta:
+    """Effektive Mindestlaufzeit fuer den aktuellen Lauf.
+
+    Die JSON-Fachkonfiguration ist die fuehrende Quelle: Netz-/Batterie-
+    laeufe duerfen nicht auf einen veralteten INI-Wert verkuerzt werden.
+    PV-/Einspeisungslaeufe duerfen dagegen nach der konfigurierten
+    Hardware-Schutzzeit enden. PV_Mindestlaufzeit wird nur fuer PV_Regeln
+    verwendet; Batterie bleibt bewusst im Schutzbereich der vollen
+    Mindestlaufzeit.
+    """
+    basis = min_laufzeit if isinstance(min_laufzeit, timedelta) else timedelta()
+    # Ohne benannte aktive Regel (z.B. in alten/vereinfachten Test-States)
+    # bleibt der uebergebene Basiswert erhalten. Im Produktivbetrieb wird
+    # active_rule_name vor handle_compressor_on gesetzt.
+    if regel_name is None:
+        return basis
+    if _ist_pv_gesteuerter_lauf(regel_name):
+        cfg = getattr(getattr(state, "priority_config", None), "zyklus", None)
+        wert = getattr(cfg, "pv_min_laufzeit_minuten", None)
+        if isinstance(wert, (int, float)) and not isinstance(wert, bool):
+            return timedelta(minutes=max(float(wert), 0.0))
+
+    cfg = getattr(getattr(state, "priority_config", None), "zyklus", None)
+    json_wert = getattr(cfg, "mindestlaufzeit_minuten", None)
+    if isinstance(json_wert, (int, float)) and not isinstance(json_wert, bool):
+        return max(basis, timedelta(minutes=max(float(json_wert), 0.0)))
+    return basis
+
+
 def _effektive_ueberhitzung_schwelle(state) -> float:
     """Ueberhitzungsschwelle inkl. Legionellen-Bypass.
 
@@ -1072,18 +1095,11 @@ async def handle_compressor_off(
         and regelfuehler is not None
         and regelfuehler >= ausschaltpunkt
     ):
+        lauf_regel = getattr(state.control, "_lauf_start_regel", None)
+        minz = _effektive_mindestlaufzeit(state, min_laufzeit, lauf_regel)
         rate_var = _rate_fuer_entscheidung(state, float(t_max))
         rate_schwelle = float(getattr(_sic_cfg, "overshoot_rate_schwelle_c_h", 12.0))
         reserve_k = float(getattr(_sic_cfg, "overshoot_reserve_k", 0.8))
-        minz = min_laufzeit
-        if _ist_pv_gesteuerter_lauf(
-            getattr(state.control, "_lauf_start_regel", None)
-        ):
-            _zykl_cfg = getattr(getattr(state, "priority_config", None), "zyklus", None)
-            pv_min = getattr(_zykl_cfg, "pv_min_laufzeit_minuten", 10)
-            if not isinstance(pv_min, (int, float)):
-                pv_min = 10
-            minz = timedelta(minutes=max(int(pv_min), 0))
         elapsed_var = safe_timedelta(
             datetime.now(state.local_tz),
             state.stats.last_compressor_on_time,
@@ -1164,15 +1180,13 @@ async def handle_compressor_off(
         # Hardware-Schutzzeit (zyklus.pv_min_laufzeit_minuten, 10-15 min) ein
         # PV-Einbruch zum Abschalten - die volle Mindestlaufzeit (60 min) darf
         # dann keinen Netzbezug erzwingen.
-        min_laufzeit_eff = min_laufzeit
-        if _ist_pv_gesteuerter_lauf(
-            getattr(state.control, "_lauf_start_regel", None)
-        ):
-            _zyklus = getattr(getattr(state, "priority_config", None), "zyklus", None)
-            pv_min = getattr(_zyklus, "pv_min_laufzeit_minuten", 10)
-            if not isinstance(pv_min, (int, float)):
-                pv_min = 10
-            min_laufzeit_eff = timedelta(minutes=max(int(pv_min), 0))
+        # Fuer die Abschaltung zaehlt die Regel, die den Lauf gestartet hat.
+        # Ein spaeterer Gewinner (z.B. Komfort) darf die Hardware-Schutzzeit
+        # eines PV-Laufs nicht wieder auf den vollen INI-Wert zuruecksetzen.
+        lauf_regel = getattr(state.control, "_lauf_start_regel", None) or regel_name
+        min_laufzeit_eff = _effektive_mindestlaufzeit(
+            state, min_laufzeit, lauf_regel
+        )
 
         elapsed = safe_timedelta(
             datetime.now(state.local_tz),
@@ -1210,12 +1224,16 @@ async def handle_compressor_off(
 
     # Regel-basiertes Ausschalten
     if regelfuehler is not None and regelfuehler >= ausschaltpunkt:
+        lauf_regel = getattr(state.control, "_lauf_start_regel", None) or regel_name
+        min_laufzeit_eff = _effektive_mindestlaufzeit(
+            state, min_laufzeit, lauf_regel
+        )
         elapsed = safe_timedelta(
             datetime.now(state.local_tz),
             state.stats.last_compressor_on_time,
             state.local_tz,
         )
-        if elapsed >= min_laufzeit:
+        if elapsed >= min_laufzeit_eff:
             if await set_kompressor_status_func(
                 state, False, force=True, t_boiler_oben=t_oben,
                 end_grund="regel_aus",
@@ -1229,7 +1247,7 @@ async def handle_compressor_off(
                 return True
             await handle_critical_compressor_error(session, state, "")
         else:
-            remaining_min = int((min_laufzeit - elapsed).total_seconds() // 60)
+            remaining_min = int((min_laufzeit_eff - elapsed).total_seconds() // 60)
             state.control.blocking_reason = (
                 f"Warte auf Mindestlaufzeit (noch {remaining_min}m)"
             )
@@ -1327,7 +1345,10 @@ async def handle_compressor_on(
         if hub_k > 0:
             erwartet_min = hub_k / max(rate_var, 1.0) * 60.0
             puffer_min = float(getattr(_sic_cfg, "start_vorhersage_puffer_min", 1.0))
-            minz_min = float(min_laufzeit.total_seconds() / 60.0)
+            minz = _effektive_mindestlaufzeit(
+                state, min_laufzeit, getattr(state.control, "active_rule_name", None)
+            )
+            minz_min = float(minz.total_seconds() / 60.0)
             if erwartet_min + puffer_min < minz_min:
                 state.control.blocking_reason = (
                     f"Start-Antizipation: hub zur Obergrenze nur {hub_k:.1f}K "

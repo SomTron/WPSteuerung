@@ -243,7 +243,17 @@ class TestForecastCsvMigration:
 
 # --- 4) Integration main.check_periodic_tasks ----------------------------------
 
-class TestMainCheckPeriodicTasks:
+def test_normalize_forecast_wh_qm():
+    from logic_utils import normalize_forecast_wh_qm
+
+    assert normalize_forecast_wh_qm(3.1) == pytest.approx(3100.0)
+    assert normalize_forecast_wh_qm(3100.0) == pytest.approx(3100.0)
+    assert normalize_forecast_wh_qm(0) == 0
+    assert normalize_forecast_wh_qm(float("nan")) is None
+    assert normalize_forecast_wh_qm(float("inf")) is None
+    assert normalize_forecast_wh_qm(-1) is None
+
+
     """Test ob main.py check_periodic_tasks() mit 7 Werten umgehen kann."""
 
     def _baue_state(self):
@@ -294,6 +304,30 @@ class TestMainCheckPeriodicTasks:
                 assert state.solar.forecast_day2 == 1.5
                 assert state.solar.sunrise_today == "06:15"
                 assert state.solar.sunset_today == "20:15"
+
+    @pytest.mark.asyncio
+    async def test_check_periodic_tasks_reicht_sommer_modus_wh_werte(self):
+        from main import check_periodic_tasks
+        state = self._baue_state()
+        state.priority_config.sommer_modus.benoetigte_tage = 1
+
+        with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
+            mock_forecast.return_value = (2.5, 3.0, 2.0, "06:15", "20:15", "06:16", "20:14", {})
+            with patch("main.check_vpn_status", new_callable=AsyncMock), patch(
+                "main.evaluate_sommer_modus",
+                return_value=(1, True, datetime.now().date(), "aktiviert"),
+            ) as mock_sommer:
+                await check_periodic_tasks(
+                    AsyncMock(), state, datetime.now() - timedelta(hours=2)
+                )
+
+        kwargs = mock_sommer.call_args.kwargs
+        assert kwargs["rad_today"] == pytest.approx(2500.0)
+        assert kwargs["rad_tomorrow"] == pytest.approx(3000.0)
+        assert kwargs["rad_day2"] == pytest.approx(2000.0)
+        # Der State bleibt als kWh/m²-Versorgung erhalten.
+        assert state.solar.forecast_today == 2.5
+        assert state.solar.forecast_tomorrow == 3.0
 
     @pytest.mark.asyncio
     async def test_check_periodic_tasks_handles_none_values(self):
