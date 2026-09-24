@@ -35,16 +35,27 @@
             --shadow: rgba(0, 212, 255, 0.2);
         }
 
+        html {
+            width: 100%;
+            min-width: 0;
+            overflow-x: hidden;
+        }
+
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
             color: var(--text-primary);
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
             min-height: 100vh;
             padding: 20px;
             overflow-x: hidden;
         }
 
         .container {
+            width: 100%;
+            min-width: 0;
             max-width: 1400px;
             margin: 0 auto;
         }
@@ -140,8 +151,9 @@
 
                 .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
             gap: 20px;
+            min-width: 0;
             margin-bottom: 30px;
         }
 
@@ -154,6 +166,8 @@
         }
 
         .card {
+            width: 100%;
+            min-width: 0;
             background: var(--bg-card);
             border-radius: 20px;
             padding: 24px;
@@ -172,6 +186,8 @@
             align-items: center;
             justify-content: space-between;
             gap: 12px;
+            min-width: 0;
+            flex-wrap: wrap;
             margin-bottom: 20px;
         }
 
@@ -246,6 +262,7 @@
             align-items: center;
             justify-content: space-between;
             gap: 12px;
+            min-width: 0;
             margin-bottom: 20px;
             flex-wrap: wrap;
         }
@@ -394,6 +411,8 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 8px;
+            min-width: 0;
             padding: 12px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         }
@@ -403,13 +422,19 @@
         }
 
         .info-label {
+            min-width: 0;
             color: var(--text-secondary);
             font-size: 0.9rem;
+            overflow-wrap: anywhere;
         }
 
         .info-value {
+            min-width: 0;
             color: var(--text-primary);
             font-weight: 600;
+            text-align: right;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .badge {
@@ -480,11 +505,15 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 8px;
+            min-width: 0;
             margin-bottom: 4px;
         }
 
         .rule-name {
+            min-width: 0;
             font-weight: 600;
+            overflow-wrap: anywhere;
         }
 
         .rule-prio {
@@ -493,8 +522,10 @@
         }
 
         .rule-detail {
+            min-width: 0;
             color: var(--text-secondary);
             font-size: 0.8rem;
+            overflow-wrap: anywhere;
         }
 
         .rule-decision {
@@ -766,6 +797,141 @@
         }
 
     .progress-bar { position: relative; }
+
+    /* ===== Mobile Layout =====
+       Das Dashboard selbst bleibt immer innerhalb der Viewportbreite.
+       Nur der optionale horizontale Chart-Modus scrollt intern. */
+    @media (max-width: 600px) {
+        body {
+            padding: 10px;
+        }
+
+        header {
+            margin-bottom: 24px;
+        }
+
+        h1 {
+            font-size: clamp(1.6rem, 8vw, 2rem);
+            overflow-wrap: anywhere;
+        }
+
+        .subtitle {
+            padding: 0 4px;
+            font-size: 0.85rem;
+        }
+
+        .status-bar {
+            gap: 6px;
+            margin-top: 10px;
+        }
+
+        .status-indicator,
+        .status-badge {
+            max-width: 100%;
+            text-align: center;
+            overflow-wrap: anywhere;
+        }
+
+        .status-indicator {
+            padding: 7px 10px;
+            font-size: 0.8rem;
+        }
+
+        .status-badge {
+            padding: 6px 10px;
+            font-size: 0.78rem;
+        }
+
+        .grid {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .card {
+            padding: 16px;
+            border-radius: 16px;
+        }
+
+        .card-header {
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .card-title {
+            min-width: 0;
+            font-size: 1.05rem;
+            overflow-wrap: anywhere;
+        }
+
+        .card-icon {
+            width: 40px;
+            height: 40px;
+            flex: 0 0 40px;
+            font-size: 20px;
+        }
+
+        .button-group {
+            width: 100%;
+        }
+
+        .btn {
+            min-width: 0;
+            padding: 12px 10px;
+        }
+
+        .info-row {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .info-value {
+            width: 100%;
+            text-align: left;
+        }
+
+        .chart-header-row {
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .chart-toolbar,
+        .time-range-group {
+            width: 100%;
+            min-width: 0;
+        }
+
+        .time-range-group {
+            justify-content: flex-start;
+            gap: 3px;
+        }
+
+        .time-btn {
+            flex: 1 1 auto;
+            min-width: 0;
+            padding: 6px;
+            font-size: 0.7rem;
+        }
+
+        .chart-wrapper,
+        .chart-inner {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+        }
+
+        .chart-info {
+            font-size: 0.72rem;
+            line-height: 1.35;
+        }
+
+        /* Nur in diesem Modus darf der Chart selbst breiter als das Handy sein. */
+        .chart-wrapper.horizontal-mode {
+            max-width: 100%;
+            overflow-x: auto;
+        }
+    }
 </style>
 </head>
 

@@ -31,6 +31,15 @@ def test_webapp_sortiert_regelhistorie_und_sendet_api_key():
     assert "headers: apiHeaders({ 'Content-Type': 'application/json' })" in html
 
 
+def test_mobile_layout_verhindert_globales_horizontales_scrolling():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "@media (max-width: 600px)" in html
+    assert "grid-template-columns: minmax(0, 1fr)" in html
+    assert "overflow-wrap: anywhere" in html
+    assert "min-width: 0" in html
+    assert ".chart-wrapper.horizontal-mode" in html
+
+
 def test_service_worker_existiert_und_cachet_keine_daten_endpunkte():
     worker = WEBAPP / "service-worker.js"
     assert worker.exists()
