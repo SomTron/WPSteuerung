@@ -107,6 +107,45 @@
             font-weight: 600;
         }
 
+        .quick-status {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 8px;
+            width: min(100%, 960px);
+            margin: 18px auto 0;
+        }
+
+        .quick-status-item {
+            min-width: 0;
+            padding: 10px 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            background: rgba(22, 33, 62, 0.72);
+            text-align: left;
+        }
+
+        .quick-status-label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text-secondary);
+            font-size: 0.68rem;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        .quick-status-value {
+            display: block;
+            min-width: 0;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+
+        .quick-status-value.is-on { color: var(--accent-success); }
+        .quick-status-value.is-off { color: var(--text-secondary); }
+        .quick-status-value.is-warning { color: var(--accent-warning); }
+
         .badge-compressor {
             background: rgba(81, 207, 102, 0.2);
             color: var(--accent-success);
@@ -209,7 +248,18 @@
             flex: 1;
         }
 
-                .btn-small {
+        .btn,
+        .btn-icon {
+            min-height: 44px;
+            min-width: 44px;
+        }
+
+        .time-btn {
+            min-height: 44px;
+        }
+
+        .btn-small {
+            min-height: 44px;
             padding: 8px 16px;
             border: none;
             border-radius: 8px;
@@ -219,6 +269,11 @@
             transition: all 0.3s ease;
             background: linear-gradient(135deg, var(--accent-primary), #0099ff);
             color: white;
+        }
+
+        .chart-toolbar .btn-icon {
+            min-width: 44px;
+            min-height: 44px;
         }
 
         .btn-small:hover {
@@ -359,6 +414,7 @@
 
         .toggle-switch {
             display: flex;
+            min-height: 44px;
             align-items: center;
             justify-content: space-between;
             padding: 16px;
@@ -569,8 +625,32 @@
         }
 
         .loading {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            padding: 4px 0;
+        }
+
+        .skeleton {
+            min-height: 120px;
+            border-radius: 18px;
+            background: linear-gradient(100deg, rgba(255, 255, 255, 0.035) 30%, rgba(255, 255, 255, 0.10) 50%, rgba(255, 255, 255, 0.035) 70%);
+            background-size: 200% 100%;
+            animation: skeleton-shimmer 1.4s ease-in-out infinite;
+        }
+
+        .skeleton.wide { grid-column: 1 / -1; min-height: 260px; }
+
+        @keyframes skeleton-shimmer {
+            from { background-position: 200% 0; }
+            to { background-position: -200% 0; }
+        }
+
+        .loading-copy {
+            grid-column: 1 / -1;
             text-align: center;
-            padding: 40px;
+            color: var(--text-secondary);
+            padding: 8px 0;
         }
 
         .spinner {
@@ -703,6 +783,17 @@
             font-size: 0.75rem;
         }
 
+        .chart-scroll-hint {
+            display: none;
+            margin: 0 0 8px;
+            color: var(--accent-primary);
+            font-size: 0.78rem;
+        }
+
+        .chart-wrapper.horizontal-mode .chart-scroll-hint {
+            display: block;
+        }
+
     
         /* ===== Chart-Styles für Zoom/Horizontal/Fullscreen ===== */
         .chart-toolbar {
@@ -802,6 +893,14 @@
        Das Dashboard selbst bleibt immer innerhalb der Viewportbreite.
        Nur der optionale horizontale Chart-Modus scrollt intern. */
     @media (max-width: 600px) {
+        .loading {
+            grid-template-columns: 1fr;
+        }
+
+        .skeleton.wide {
+            min-height: 190px;
+        }
+
         body {
             padding: 10px;
         }
@@ -824,6 +923,16 @@
             gap: 6px;
             margin-top: 10px;
         }
+
+        .quick-status {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+
+        .quick-status-item {
+            padding: 8px 9px;
+        }
+
 
         .status-indicator,
         .status-badge {
@@ -926,6 +1035,10 @@
             line-height: 1.35;
         }
 
+        .chart-scroll-hint {
+            font-size: 0.72rem;
+        }
+
         /* Nur in diesem Modus darf der Chart selbst breiter als das Handy sein. */
         .chart-wrapper.horizontal-mode {
             max-width: 100%;
@@ -949,14 +1062,23 @@
                 <span class="status-badge badge-night" id="header-nightsperre" style="display:none">🌙 Nacht</span>
                 <span class="status-badge badge-info" id="header-rule" style="display:none"></span>
             </div>
+            <div class="quick-status" aria-label="Aktueller Betriebsstatus">
+                <div class="quick-status-item"><span class="quick-status-label">Kompressor</span><span class="quick-status-value is-off" id="quick-compressor">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Regel</span><span class="quick-status-value" id="quick-rule">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Modus</span><span class="quick-status-value" id="quick-mode">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Solar</span><span class="quick-status-value" id="quick-solar">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Boiler</span><span class="quick-status-value" id="quick-boiler">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Aktualisiert</span><span class="quick-status-value" id="quick-updated">—</span></div>
+            </div>
             <span class="status-badge badge-info" style="font-size: 12px;">v1.4.0</span>
         </header>
 
         <div id="app">
-            <div class="loading">
-                <div class="spinner"></div>
-                <p style="margin-top: 20px; color: var(--text-secondary);">Lade Daten...</p>
-                <p id="debug-status" style="margin-top: 10px; font-size: 12px; color: #ff9800;"></p>
+            <div class="loading" aria-label="Daten werden geladen">
+                <div class="skeleton wide"></div>
+                <div class="skeleton"></div>
+                <div class="skeleton"></div>
+                <div class="loading-copy">Betriebsdaten werden geladen …</div>
             </div>
             <div id="error-panel" style="display: none; margin-top: 20px; padding: 15px; background: #ff4444; color: white; border-radius: 8px;">
                 <strong>⚠️ Fehler beim Laden</strong>
@@ -971,16 +1093,16 @@
         const API_CACHE_BUST = '?v=' + Date.now();
         // Optionaler Schreibschutz. Den Key einmalig im Browser hinterlegen:
         // localStorage.setItem('wp_api_key', 'DEIN_KEY');
+        const NO_DATA = '—';
+        const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
+        const valueOrDash = (value) => value === null || value === undefined || value === '' ? NO_DATA : value;
+
         function apiHeaders(extra = {}) {
             const headers = Object.assign({}, extra);
             const key = localStorage.getItem('wp_api_key');
             if (key) headers['X-API-Key'] = key;
             return headers;
         }
-
-        // IMMEDIATE DEBUG TEST - sollte sofort erscheinen wenn JS lädt
-        const __debug = document.getElementById('debug-status');
-        if (__debug) __debug.textContent = '🟢 Script loaded!';
 
         let statusData = null;
         let chart = null;
@@ -990,43 +1112,36 @@
         let isLoadingHistory = false;
 
         async function fetchStatus() {
-            // Update debug status
-            const debugEl = document.getElementById('debug-status');
-            if (debugEl) debugEl.textContent = 'API Request...';
+            const errorPanel = document.getElementById('error-panel');
+            const errorMsg = document.getElementById('error-message');
 
             try {
                 const response = await fetch(`${API_BASE}/status` + API_CACHE_BUST);
-                if (!response.ok) throw new Error('API Fehler ' + response.status);
-                
-                if (debugEl) debugEl.textContent = 'Parsing JSON...';
-                statusData = await response.json();
-                
-                if (debugEl) debugEl.textContent = 'Ready: ' + Object.keys(statusData).length + ' sections';
+                if (!response.ok) throw new Error('API-Fehler ' + response.status);
 
-                                // Nur beim ersten Mal oder wenn die Struktur sich aendert
+                statusData = await response.json();
+
+                // Nur beim ersten Mal oder wenn die Struktur sich aendert
                 if (!document.getElementById('compressor-card')) {
-                    if (debugEl) debugEl.textContent = 'renderApp() called...';
                     renderApp();
                     // Nach dem ersten Rendering auch die dynamischen Werte befuellen.
                     updateValues();
-                    if (debugEl) debugEl.textContent = 'renderApp() done!';
                 } else {
-                    if (debugEl) debugEl.textContent = 'updateValues() called...';
                     updateValues();
                     updateSollwertLabel();
                     highlightActiveSensor();
-                    if (debugEl) debugEl.textContent = 'updateValues() done!';
                 }
 
                 updateHeader();
+                updateQuickStatus();
                 updateConnectionStatus(true);
+                if (errorPanel && errorMsg) {
+                    errorPanel.style.display = 'none';
+                    errorMsg.textContent = '';
+                }
             } catch (error) {
-                if (debugEl) debugEl.textContent = 'ERROR: ' + error.message;
                 console.error('Fehler beim Abrufen der Daten:', error);
                 updateConnectionStatus(false);
-                // Zeige Fehler auf der Seite an (für Handy ohne Console)
-                const errorPanel = document.getElementById('error-panel');
-                const errorMsg = document.getElementById('error-message');
                 if (errorPanel && errorMsg) {
                     errorMsg.textContent = error.message || 'Unbekannter Fehler';
                     errorPanel.style.display = 'block';
@@ -1337,6 +1452,24 @@
             if (mode.active_rule) { hRule.textContent = mode.active_rule; hRule.style.display = ''; } else { hRule.style.display = 'none'; }
         }
 
+        function updateQuickStatus() {
+            if (!statusData) return;
+            const { temperatures, compressor, mode, energy, system } = statusData;
+            const set = (id, value, state = '') => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = value;
+                el.className = 'quick-status-value' + (state ? ' ' + state : '');
+            };
+            const running = compressor.status === 'EIN';
+            set('quick-compressor', running ? 'EIN' : 'AUS', running ? 'is-on' : 'is-off');
+            set('quick-rule', mode.active_rule || NO_DATA);
+            set('quick-mode', mode.current || 'Normal');
+            set('quick-solar', energy.solar_stale ? 'Daten veraltet' : (isFiniteNumber(energy.feed_in) ? Math.round(energy.feed_in) + ' W' : NO_DATA), energy.solar_stale ? 'is-warning' : '');
+            set('quick-boiler', isFiniteNumber(temperatures.boiler) ? temperatures.boiler.toFixed(1) + ' °C' : NO_DATA);
+            set('quick-updated', system.last_update || NO_DATA);
+        }
+
         function updateConnectionStatus(connected) {
             const statusEl = document.getElementById('connection-status');
             const dotEl = document.querySelector('.status-dot');
@@ -1365,7 +1498,6 @@
                 if (!response.ok) {
                     throw new Error(result?.detail || result?.message || ('API-Fehler ' + response.status));
                 }
-                console.log('Control result:', result);
                 await fetchStatus();
             } catch (error) {
                 console.error('Fehler beim Senden des Befehls:', error);
@@ -1406,17 +1538,17 @@
             btn.onclick = function() { sendControl(isRunning ? 'force_off' : 'force_on'); };
 
             // Temperaturen
-            document.getElementById('temp-boiler').textContent = temperatures.boiler?.toFixed(1) || 'N/A';
-            document.getElementById('temp-oben').textContent = temperatures.oben?.toFixed(1) || 'N/A';
-            document.getElementById('temp-mittig').textContent = temperatures.mittig?.toFixed(1) || 'N/A';
-            document.getElementById('temp-unten').textContent = temperatures.unten?.toFixed(1) || 'N/A';
-            document.getElementById('temp-verdampfer').textContent = temperatures.verdampfer?.toFixed(1) || 'N/A';
+            document.getElementById('temp-boiler').textContent = temperatures.boiler?.toFixed(1) || NO_DATA;
+            document.getElementById('temp-oben').textContent = temperatures.oben?.toFixed(1) || NO_DATA;
+            document.getElementById('temp-mittig').textContent = temperatures.mittig?.toFixed(1) || NO_DATA;
+            document.getElementById('temp-unten').textContent = temperatures.unten?.toFixed(1) || NO_DATA;
+            document.getElementById('temp-verdampfer').textContent = temperatures.verdampfer?.toFixed(1) || NO_DATA;
 
             // Sollwerte
-            document.getElementById('setpoint-ein').textContent = setpoints?.einschaltpunkt ?? 'N/A';
-            document.getElementById('setpoint-aus').textContent = setpoints?.ausschaltpunkt ?? 'N/A';
-            document.getElementById('setpoint-sicherheit').textContent = setpoints?.sicherheits_temp ?? 'N/A';
-            document.getElementById('setpoint-verdampfer').textContent = setpoints?.verdampfertemperatur ?? 'N/A';
+            document.getElementById('setpoint-ein').textContent = setpoints?.einschaltpunkt ?? NO_DATA;
+            document.getElementById('setpoint-aus').textContent = setpoints?.ausschaltpunkt ?? NO_DATA;
+            document.getElementById('setpoint-sicherheit').textContent = setpoints?.sicherheits_temp ?? NO_DATA;
+            document.getElementById('setpoint-verdampfer').textContent = setpoints?.verdampfertemperatur ?? NO_DATA;
 
             // Aktive Regel
             const ruleName = mode.active_rule || 'Keine';
@@ -1505,7 +1637,7 @@
                 [['winter', 'learn-rate-winter'], ['transition', 'learn-rate-transition'], ['summer', 'learn-rate-summer']].forEach(function(p) {
                     const hr = (lrn.heat_rates || {})[p[0]] || {};
                     document.getElementById(p[1]).textContent =
-                        (hr.avg != null ? Number(hr.avg).toFixed(2) + ' °C/h' : 'N/A') +
+                        (hr.avg != null ? Number(hr.avg).toFixed(2) + ' °C/h' : NO_DATA) +
                         ' (n=' + (hr.count ?? 0) + ')';
                 });
                                 document.getElementById('learn-counts').textContent =
@@ -1544,14 +1676,14 @@
                     fcEl.textContent = 'sammelt Daten (' + nFc + '/3 Tage)';
                     fcEl.style.color = 'var(--text-secondary)';
                 } else {
-                    // Noch keine Kalibrierungsdaten -> Hinweis statt N/A
+                    // Noch keine Kalibrierungsdaten -> verständlicher Hinweis
                     fcEl.textContent = 'noch keine Daten (ab 3 Tagen)';
                     fcEl.style.color = 'var(--text-secondary)';
                 }
             }
 
             // Forecast-Kalibrierung: Separate Dashboard-Karte ebenfalls befuellen.
-            // Ohne diesen Block bleiben calib-factor/calib-samples dauerhaft N/A.
+            // Ohne diesen Block bleiben die Kalibrierungswerte leer.
             const calibFactorEl = document.getElementById('calib-factor');
             const calibSamplesEl = document.getElementById('calib-samples');
             const calibStatusEl = document.getElementById('calib-status');
@@ -1654,12 +1786,12 @@
             if (el('kpi-heute-kwh')) {
                 el('kpi-heute-kwh').textContent = (heute.energie_kwh ?? 0).toFixed(1);
                 el('kpi-heute-pv').textContent = heute.anteil_pv_batterie_prozent != null
-                    ? heute.anteil_pv_batterie_prozent + ' %' : 'N/A';
+                    ? heute.anteil_pv_batterie_prozent + ' %' : NO_DATA;
                 el('kpi-heute-netz').textContent = (heute.netz_kwh ?? 0).toFixed(2) + ' kWh';
                 el('kpi-heute-kosten').textContent = (heute.kosten_netz_eur ?? 0).toFixed(2) + ' EUR';
                 el('kpi-heute-laufzeit').textContent = Math.round(heute.laufzeit_min ?? 0) + ' min';
                 el('kpi-woche-pv').textContent = woche.anteil_pv_batterie_prozent != null
-                    ? woche.anteil_pv_batterie_prozent + ' % (' + (woche.energie_kwh ?? 0).toFixed(1) + ' kWh)' : 'N/A';
+                    ? woche.anteil_pv_batterie_prozent + ' % (' + (woche.energie_kwh ?? 0).toFixed(1) + ' kWh)' : NO_DATA;
                 el('kpi-woche-kosten').textContent = (woche.kosten_netz_eur ?? 0).toFixed(2) + ' EUR';
             }
 
@@ -1668,7 +1800,7 @@
             if (el('boiler-liter')) {
                 el('boiler-liter').textContent = Math.round(boiler.liter_warm ?? 0);
                 el('boiler-anteil').textContent = boiler.anteil_prozent != null
-                    ? boiler.anteil_prozent.toFixed(1) + ' % von ' + Math.round(boiler.volumen_l ?? 150) + ' L' : 'N/A';
+                    ? boiler.anteil_prozent.toFixed(1) + ' % von ' + Math.round(boiler.volumen_l ?? 150) + ' L' : NO_DATA;
                 el('boiler-bar').style.width = Math.min(boiler.anteil_prozent ?? 0, 100) + '%';
             }
 
@@ -1698,8 +1830,8 @@
                 const peak = pvp.peak_wm2 ?? pvp.peak_watt ?? 0;
                 el('pv-peak').textContent = peak.toFixed(0) + ' W/m²';
                 const stunden = pvp.stunden;
-                el('pv-mittag').textContent = stunden['12'] != null ? stunden['12'].toFixed(0) + ' W/m²' : 'N/A';
-                el('pv-abend').textContent = stunden['17'] != null ? stunden['17'].toFixed(0) + ' W/m²' : 'N/A';
+                el('pv-mittag').textContent = stunden['12'] != null ? stunden['12'].toFixed(0) + ' W/m²' : NO_DATA;
+                el('pv-abend').textContent = stunden['17'] != null ? stunden['17'].toFixed(0) + ' W/m²' : NO_DATA;
                 
                 // Forecast-Daten anzeigen (falls verfügbar)
                 if (pvp.forecast_stunden) {
@@ -1810,22 +1942,22 @@
 
             // Energie
             const fmtForecast = value => {
-                if (value == null || value === '') return 'N/A';
+                if (value == null || value === '') return NO_DATA;
                 const number = Number(value);
-                return Number.isFinite(number) ? number.toFixed(2) + ' kWh/m²' : 'N/A';
+                return Number.isFinite(number) ? number.toFixed(2) + ' kWh/m²' : NO_DATA;
             };
             document.getElementById('energy-soc').textContent = energy.soc ?? 0;
             document.getElementById('energy-battery').textContent = energy.battery_power ?? 0;
             document.getElementById('energy-feedin').textContent = energy.feed_in ?? 0;
-            document.getElementById('energy-ac').textContent = energy.ac_power ?? 'N/A';
+            document.getElementById('energy-ac').textContent = energy.ac_power ?? NO_DATA;
             document.getElementById('energy-forecast-today').textContent = fmtForecast(energy.forecast_today);
             document.getElementById('energy-forecast-tomorrow').textContent = fmtForecast(energy.forecast_tomorrow);
             document.getElementById('energy-forecast-day2').textContent = fmtForecast(energy.forecast_day2);
 
             // System
-            document.getElementById('system-update').textContent = system.last_update;
-            document.getElementById('system-sunrise').textContent = energy.sunrise || 'N/A';
-            document.getElementById('system-sunset').textContent = energy.sunset || 'N/A';
+            document.getElementById('system-update').textContent = system.last_update || NO_DATA;
+            document.getElementById('system-sunrise').textContent = energy.sunrise || NO_DATA;
+            document.getElementById('system-sunset').textContent = energy.sunset || NO_DATA;
             if (priority) {
                 document.getElementById('system-wp-leistung').textContent = (priority.wp_leistung || 0) + ' W';
                 document.getElementById('system-nachtsperre').textContent = priority.nachtsperre_aktiv ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : 'Inaktiv';
@@ -1890,7 +2022,7 @@
                     decisionHtml + '</div>';
             }).join('') : '<div class="rule-detail">Keine Konfiguration geladen</div>';
 
-            const nachtsperreTxt = priority ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : 'N/A';
+            const nachtsperreTxt = priority ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : '—';
 
                         document.getElementById('app').innerHTML = `
                 <div class="grid grid-wide">
@@ -1916,6 +2048,7 @@
                             </div>
                         </div>
                         <div class="chart-wrapper" id="chart-wrapper">
+                            <div class="chart-scroll-hint">Chart horizontal scrollen</div>
                             <div class="chart-info">
                                 <kbd>Mausrad</kbd> zoomen &middot; <kbd>Ziehen</kbd> pan &middot; <kbd>⟲</kbd> reset
                             </div>
@@ -1953,14 +2086,14 @@
                             <div class="card-title">Temperaturen</div>
                         </div>
                         <div class="temp-display">
-                            <span class="temp-value" id="temp-boiler">${temperatures.boiler?.toFixed(1) || 'N/A'}</span>
+                            <span class="temp-value" id="temp-boiler">${temperatures.boiler?.toFixed(1) || NO_DATA}</span>
                             <span class="temp-unit">°C</span>
                         </div>
                         <div class="temp-label">Boiler (Durchschnitt)</div>
-                        <div class="info-row"><span class="info-label">Oben</span><span class="info-value"><span id="temp-oben">${temperatures.oben?.toFixed(1) || 'N/A'}</span> °C</span></div>
-                        <div class="info-row"><span class="info-label">Mitte</span><span class="info-value"><span id="temp-mittig">${temperatures.mittig?.toFixed(1) || 'N/A'}</span> °C</span></div>
-                        <div class="info-row"><span class="info-label">Unten</span><span class="info-value"><span id="temp-unten">${temperatures.unten?.toFixed(1) || 'N/A'}</span> °C</span></div>
-                        <div class="info-row"><span class="info-label">Verdampfer</span><span class="info-value"><span id="temp-verdampfer">${temperatures.verdampfer?.toFixed(1) || 'N/A'}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Oben</span><span class="info-value"><span id="temp-oben">${temperatures.oben?.toFixed(1) || NO_DATA}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Mitte</span><span class="info-value"><span id="temp-mittig">${temperatures.mittig?.toFixed(1) || NO_DATA}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Unten</span><span class="info-value"><span id="temp-unten">${temperatures.unten?.toFixed(1) || NO_DATA}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Verdampfer</span><span class="info-value"><span id="temp-verdampfer">${temperatures.verdampfer?.toFixed(1) || NO_DATA}</span> °C</span></div>
                     </div>
 
                     <!-- Aktive Regel (Pareto) -->
@@ -1974,10 +2107,10 @@
                         </div>
                         <div class="info-row"><span class="info-label">Fuehler</span><span class="info-value" id="rule-sensor">${mode.active_rule_sensor || ''}</span></div>
                         <div class="info-row"><span class="info-label">Entscheidung</span><span class="info-value" id="rule-decision"></span></div>
-                        <div class="info-row"><span class="info-label">Einschaltpunkt</span><span class="info-value"><span id="setpoint-ein">${setpoints?.einschaltpunkt ?? 'N/A'}</span> °C</span></div>
-                        <div class="info-row"><span class="info-label">Ausschaltpunkt</span><span class="info-value"><span id="setpoint-aus">${setpoints?.ausschaltpunkt ?? 'N/A'}</span> °C</span></div>
-                        <div class="info-row"><span class="info-label">Sicherheit</span><span class="info-value"><span id="setpoint-sicherheit">${setpoints?.sicherheits_temp ?? 'N/A'}</span> °C</span></div>
-                        <div class="info-row"><span class="info-label">Min. Verdampfer</span><span class="info-value"><span id="setpoint-verdampfer">${setpoints?.verdampfertemperatur ?? 'N/A'}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Einschaltpunkt</span><span class="info-value"><span id="setpoint-ein">${setpoints?.einschaltpunkt ?? NO_DATA}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Ausschaltpunkt</span><span class="info-value"><span id="setpoint-aus">${setpoints?.ausschaltpunkt ?? NO_DATA}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Sicherheit</span><span class="info-value"><span id="setpoint-sicherheit">${setpoints?.sicherheits_temp ?? NO_DATA}</span> °C</span></div>
+                        <div class="info-row"><span class="info-label">Min. Verdampfer</span><span class="info-value"><span id="setpoint-verdampfer">${setpoints?.verdampfertemperatur ?? NO_DATA}</span> °C</span></div>
                     </div>
 
                                         <!-- Prioritaets-Regeln -->
@@ -2037,11 +2170,11 @@
                         <div class="temp-label">Batterie</div>
                         <div class="info-row"><span class="info-label">Batterie-Leistung</span><span class="info-value"><span id="energy-battery">${energy.battery_power ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label">Einspeisung</span><span class="info-value"><span id="energy-feedin">${energy.feed_in ?? 0}</span> W</span></div>
-                        <div class="info-row"><span class="info-label">AC-Leistung</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? 'N/A'}</span> W</span></div>
+                        <div class="info-row"><span class="info-label">AC-Leistung</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? NO_DATA}</span> W</span></div>
                         <div class="info-row" id="energy-stale-row" style="display:none;color:#ff6b6b"><span class="info-label">⚠ Solar-Daten</span><span class="info-value">veraltet -> PV-Regeln pausiert</span></div>
-                        <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : 'N/A'}</span></div>
-                        <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : 'N/A'}</span></div>
-                        <div class="info-row"><span class="info-label">Prognose Uebermorgen</span><span class="info-value" id="energy-forecast-day2">${energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : NO_DATA}</span></div>
+                        <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : NO_DATA}</span></div>
+                        <div class="info-row"><span class="info-label">Prognose Uebermorgen</span><span class="info-value" id="energy-forecast-day2">${energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : NO_DATA}</span></div>
                     </div>
 
                     <!-- Letzte Entscheidungen -->
@@ -2066,11 +2199,11 @@
                             <span class="temp-unit">kWh</span>
                         </div>
                         <div class="temp-label">WP-Energie heute</div>
-                        <div class="info-row"><span class="info-label">Anteil PV/Batterie</span><span class="info-value" id="kpi-heute-pv">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Anteil PV/Batterie</span><span class="info-value" id="kpi-heute-pv">—</span></div>
                         <div class="info-row"><span class="info-label">Netzanteil heute</span><span class="info-value" id="kpi-heute-netz">0.00 kWh</span></div>
                         <div class="info-row"><span class="info-label">Netzkosten heute</span><span class="info-value" id="kpi-heute-kosten">0.00 EUR</span></div>
                         <div class="info-row"><span class="info-label">Laufzeit heute</span><span class="info-value" id="kpi-heute-laufzeit">0 min</span></div>
-                        <div class="info-row"><span class="info-label">7 Tage: PV/Batterie-Anteil</span><span class="info-value" id="kpi-woche-pv">N/A</span></div>
+                        <div class="info-row"><span class="info-label">7 Tage: PV/Batterie-Anteil</span><span class="info-value" id="kpi-woche-pv">—</span></div>
                         <div class="info-row"><span class="info-label">7 Tage: Netzkosten</span><span class="info-value" id="kpi-woche-kosten">0.00 EUR</span></div>
                     </div>
 
@@ -2080,19 +2213,19 @@
                             <div class="card-icon blue">🧠</div>
                             <div class="card-title">Selbstlernen</div>
                         </div>
-                        <div class="info-row"><span class="info-label">Gelernte Zapf-Zeit</span><span class="info-value" id="learn-target">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Abend-Fenster (gelernt)</span><span class="info-value" id="learn-fenster">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Heizrate Winter</span><span class="info-value" id="learn-rate-winter">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Heizrate Uebergang</span><span class="info-value" id="learn-rate-transition">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Gelernte Zapf-Zeit</span><span class="info-value" id="learn-target">—</span></div>
+                        <div class="info-row"><span class="info-label">Abend-Fenster (gelernt)</span><span class="info-value" id="learn-fenster">—</span></div>
+                        <div class="info-row"><span class="info-label">Heizrate Winter</span><span class="info-value" id="learn-rate-winter">—</span></div>
+                        <div class="info-row"><span class="info-label">Heizrate Uebergang</span><span class="info-value" id="learn-rate-transition">—</span></div>
                         <div class="info-row"><span class="info-label">Heizrate Sommer</span><span class="info-value" id="learn-rate-summer">N/A</span></div>
                         <div class="info-row"><span class="info-label">Lern-Basis</span><span class="info-value" id="learn-counts">-</span></div>
                         <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">CalcStart richtet die Vorheizung an der gelernten Zapf-Zeit aus; MinTemp-Fenster folgen dem gelernten Abend-Fenster.</div>
-                        <div class="info-row"><span class="info-label">Komfort-Verletzungen (7T)</span><span class="info-value" id="learn-komfort">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Morgen-Zapf-Zeit (gelernt)</span><span class="info-value" id="learn-morgen">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Forecast-Kalibrierung</span><span class="info-value" id="learn-fc-ratio">N/A</span></div>
-                        <div class="info-row"><span class="info-label">WW-Quellen (Laufzeit)</span><span class="info-value" id="learn-quellen" style="font-size:0.75rem">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Zu fr&uuml;h geheizt (14T)</span><span class="info-value" id="learn-zufrueh">N/A</span></div>
-                                                <div class="info-row"><span class="info-label">Letzte Zapfung</span><span class="info-value" id="learn-letzte-zapfung" style="font-size:0.75rem">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Komfort-Verletzungen (7T)</span><span class="info-value" id="learn-komfort">—</span></div>
+                        <div class="info-row"><span class="info-label">Morgen-Zapf-Zeit (gelernt)</span><span class="info-value" id="learn-morgen">—</span></div>
+                        <div class="info-row"><span class="info-label">Forecast-Kalibrierung</span><span class="info-value" id="learn-fc-ratio">—</span></div>
+                        <div class="info-row"><span class="info-label">WW-Quellen (Laufzeit)</span><span class="info-value" id="learn-quellen" style="font-size:0.75rem">—</span></div>
+                        <div class="info-row"><span class="info-label">Zu fr&uuml;h geheizt (14T)</span><span class="info-value" id="learn-zufrueh">—</span></div>
+                                                <div class="info-row"><span class="info-label">Letzte Zapfung</span><span class="info-value" id="learn-letzte-zapfung" style="font-size:0.75rem">—</span></div>
                                             </div>
 
                     <!-- PV-Ueberschuss-Profil (gelernt) -->
@@ -2116,7 +2249,7 @@
                             <span class="temp-unit">L</span>
                         </div>
                         <div class="temp-label">Warmwasser &gt; 40&deg;C</div>
-                        <div class="info-row"><span class="info-label">Fuellstand</span><span class="info-value" id="boiler-anteil">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Fuellstand</span><span class="info-value" id="boiler-anteil">—</span></div>
                         <div class="progress-bar" style="height:10px;background:#333;border-radius:5px;overflow:hidden;margin-top:8px">
                             <div id="boiler-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#ff9800,#ffc107);transition:width .5s"></div>
                         </div>
@@ -2139,12 +2272,12 @@
                             <div class="card-icon green">☀️</div>
                             <div class="card-title">PV-Profil (gelernt vs Forecast)</div>
                         </div>
-                        <div class="info-row"><span class="info-label">Peak-Leistung (&empty;)</span><span class="info-value" id="pv-peak">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Mittags-Erwartung</span><span class="info-value" id="pv-mittag">N/A</span></div>
-                        <div class="info-row"><span class="info-label">Abend-Erwartung (17h)</span><span class="info-value" id="pv-abend">N/A</span></div>
+                        <div class="info-row"><span class="info-label">Peak-Leistung (&empty;)</span><span class="info-value" id="pv-peak">—</span></div>
+                        <div class="info-row"><span class="info-label">Mittags-Erwartung</span><span class="info-value" id="pv-mittag">—</span></div>
+                        <div class="info-row"><span class="info-label">Abend-Erwartung (17h)</span><span class="info-value" id="pv-abend">—</span></div>
                         <div class="info-row" id="forecast-info-row" style="display:none">
                             <span class="info-label">Forecast (stundenscharf)</span>
-                            <span class="info-value" id="pv-forecast">N/A</span>
+                            <span class="info-value" id="pv-forecast">—</span>
                         </div>
                         <canvas id="pv-profil-chart" height="90" style="margin-top:8px"></canvas>
                         <div class="info-row" style="margin-top:8px;">
@@ -2164,19 +2297,19 @@
                         </div>
                         <div class="info-row">
                             <span class="info-label">Kalibrierungsfaktor</span>
-                            <span class="info-value" id="calib-factor">N/A</span>
+                            <span class="info-value" id="calib-factor">—</span>
                         </div>
                         <div class="info-row">
                             <span class="info-label">Samples</span>
-                            <span class="info-value" id="calib-samples">N/A</span>
+                            <span class="info-value" id="calib-samples">—</span>
                         </div>
                         <div class="info-row" id="calib-status-row" style="display:none">
                             <span class="info-label">Status</span>
-                            <span class="info-value" id="calib-status">N/A</span>
+                            <span class="info-value" id="calib-status">—</span>
                         </div>
                         <div class="info-row" id="calib-deviation-row" style="display:none">
                             <span class="info-label">Abweichung (heute)</span>
-                            <span class="info-value" id="calib-deviation">N/A</span>
+                            <span class="info-value" id="calib-deviation">—</span>
                         </div>
                     </div>
 
@@ -2186,9 +2319,9 @@
                             <div class="card-icon blue">ℹ️</div>
                             <div class="card-title">System</div>
                         </div>
-                        <div class="info-row" id="system-update-row"><span class="info-label">Letztes Update</span><span class="info-value" id="system-update">${system.last_update}</span></div>
-                        <div class="info-row"><span class="info-label">Sonnenaufgang</span><span class="info-value" id="system-sunrise">${energy.sunrise || 'N/A'}</span></div>
-                        <div class="info-row"><span class="info-label">Sonnenuntergang</span><span class="info-value" id="system-sunset">${energy.sunset || 'N/A'}</span></div>
+                        <div class="info-row" id="system-update-row"><span class="info-label">Letztes Update</span><span class="info-value" id="system-update">${system.last_update || NO_DATA}</span></div>
+                        <div class="info-row"><span class="info-label">Sonnenaufgang</span><span class="info-value" id="system-sunrise">${energy.sunrise || NO_DATA}</span></div>
+                        <div class="info-row"><span class="info-label">Sonnenuntergang</span><span class="info-value" id="system-sunset">${energy.sunset || NO_DATA}</span></div>
                         <div class="info-row"><span class="info-label">WP Leistung</span><span class="info-value" id="system-wp-leistung">${priority?.wp_leistung || 0} W</span></div>
                         <div class="info-row"><span class="info-label">Nachtsperre</span><span class="info-value" id="system-nachtsperre">${nachtsperreTxt}</span></div>
                     </div>
@@ -2272,7 +2405,6 @@
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('service-worker.js')
-                .then(reg => console.log('Service Worker registered'))
                 .catch(err => console.error('Service Worker registration failed:', err));
         }
     </script>

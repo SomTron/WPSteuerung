@@ -40,6 +40,31 @@ def test_mobile_layout_verhindert_globales_horizontales_scrolling():
     assert ".chart-wrapper.horizontal-mode" in html
 
 
+def test_quick_status_und_skeleton_sind_vorhanden():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert 'class="quick-status"' in html
+    assert 'id="quick-compressor"' in html
+    assert 'id="quick-rule"' in html
+    assert 'class="skeleton wide"' in html
+    assert "Betriebsdaten werden geladen" in html
+
+
+def test_debug_texte_sind_nicht_mehr_sichtbar_und_leerwerte_einheitlich():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    for debug_text in ("Script loaded!", "API Request...", "Parsing JSON...", "renderApp() called...", "updateValues() called..."):
+        assert debug_text not in html
+    assert "const NO_DATA = '—'" in html
+    assert "errorPanel.style.display = 'none'" in html
+
+
+def test_touch_ziele_und_chart_hinweis_sind_vorhanden():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "min-height: 44px" in html
+    assert "min-width: 44px" in html
+    assert "chart-scroll-hint" in html
+    assert "Chart horizontal scrollen" in html
+
+
 def test_service_worker_existiert_und_cachet_keine_daten_endpunkte():
     worker = WEBAPP / "service-worker.js"
     assert worker.exists()
