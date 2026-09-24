@@ -50,6 +50,11 @@ jobs:
           sh -n Updater/rpi-deploy.sh
           echo "compileall + sh -n OK"
 
+      - name: Produktionsverträge prüfen
+        run: |
+          python -c "import sys; sys.path.insert(0, 'Steuerung'); import api, api_server, runtime_validation, api_contract; assert api_server.app is api.app; runtime_validation.validate_startup_dependencies()"
+          echo "production contracts OK"
+
       - name: Test-Sammlung pruefen (Diagnose)
         run: |
           python -m pytest Steuerung/tests -m "not integration" --collect-only -q

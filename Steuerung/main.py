@@ -23,6 +23,11 @@ from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
 import priority_control_logic as pcl
+from runtime_validation import (
+    RuntimeContractError,
+    validate_runtime_contract,
+    validate_startup_dependencies,
+)
 import startup_diagnose
 from telegram_handler import telegram_task
 from telegram_ui import send_welcome_message, escape_markdown
@@ -238,11 +243,18 @@ async def setup_application():
     """Initialisiert Konfiguration, Hardware, Sensoren und API."""
     global state, sensor_manager, hardware_manager, compressor_actuator
     
+    # 0. Sicherheitsvertrag und Import-Smoke-Test vor jedem Hardwarezugriff.
+    validate_startup_dependencies()
     # 1. Config laden
     config_manager.load_config()
     
     # 2. State init
     state = State(config_manager)
+    try:
+        validate_runtime_contract(state)
+    except RuntimeContractError:
+        logging.critical("Runtime-Vertrag ungültig - Starte nicht mit Hardware", exc_info=True)
+        raise
     load_plan(state)
     # Nach einem sauberen Service-Restart die letzte AUS-Zeit aus dem
     # Snapshot uebernehmen. Sonst waere die JSON-Mindestpause nach einem

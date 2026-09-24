@@ -70,6 +70,12 @@ def test_wichtige_routen_vorhanden():
         assert p in vorhandene, f"Route {p} fehlt"
 
 
+def test_status_route_enthaelt_api_contract():
+    """Statusantwort signalisiert ihre Version explizit."""
+    assert api.API_CONTRACT_VERSION == "1.0.0"
+    assert api.app.version == api.API_CONTRACT_VERSION
+
+
 def test_status_liefert_dict_keine_primitiven():
     """get_status() muss ein dict liefern (Frontend destrukturiert Felder)."""
     from types import SimpleNamespace

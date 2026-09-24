@@ -32,6 +32,11 @@ import re
 from utils import HEIZUNGSDATEN_CSV, to_naive
 from logic_utils import forecast_kwh_m2_to_wh_m2
 from status_snapshot import build_status_snapshot
+from api_contract import (
+    API_CONTRACT_VERSION,
+    with_contract_metadata,
+    validate_status_shape,
+)
 
 try:
     from priority_control_logic import _is_nachtsperre_aktiv
@@ -163,7 +168,11 @@ class ControlCommand(BaseModel):
                 raise ValueError("active muss ein JSON-Boolean sein")
         return self
 
-app = FastAPI(title="WPSteuerung API", description="API for Heat Pump Control Android App", version="1.0.0")
+app = FastAPI(
+    title="WPSteuerung API",
+    description="API for Heat Pump Control Android App",
+    version=API_CONTRACT_VERSION,
+)
 
 # CORS: Standardmaessig keine fremden Origins. Auf dem Pi koennen erlaubte
 # Origins explizit als WPS_CORS_ORIGINS="https://domain,http://localhost:..." gesetzt werden.
@@ -747,7 +756,7 @@ def get_status():
     except Exception as e:
         logging.debug(f"PV-Profil/Forecast nicht verfuegbar: {e}")
 
-    return {
+    response = with_contract_metadata({
         "temperatures": {
             "oben": shared_state.sensors.t_oben,
             "mittig": shared_state.sensors.t_mittig,
@@ -825,7 +834,9 @@ def get_status():
             "kompressor_on": getattr(shared_state.control, 'kompressor_ein', False),
             "active_rule": getattr(shared_state.control, 'active_rule_name', None),
         },
-    }
+    })
+    validate_status_shape(response)
+    return response
 
 
 @app.get("/history/regeln")

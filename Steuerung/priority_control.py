@@ -10,7 +10,7 @@ import logging
 import math
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
-from dataclasses import dataclass
+from rule_types import RegelErgebnis
 
 from json_config import (
     WPSteuerungConfig,
@@ -32,20 +32,6 @@ from json_config import (
 _last_calcstart_log: Optional[datetime] = None
 _last_stale_warning: Optional[datetime] = None
 STALE_LOG_INTERVAL_MIN = 5
-
-@dataclass
-class RegelErgebnis:
-    """Ergebnis einer einzelnen Regelbewertung."""
-
-    name: str
-    prioritaet: int
-    aktiv: bool
-    einschalten: Optional[bool] = (
-        None  # True = Einschalten, False = Ausschalten, None = Keine Aktion
-    )
-    grund: str = ""
-    regel_dict: Optional[Dict] = None  # Fuer API/Status-Anzeige
-
 
 def _parse_sensor(
     temp_dict: Dict[str, Optional[float]], sensor_name: str
