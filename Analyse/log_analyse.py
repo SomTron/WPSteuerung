@@ -16,6 +16,10 @@ import os
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+try:
+    from analysis_core import build_cycle_quality, classify_end_reason, classify_source, parse_timestamp, read_cycles
+except ImportError:
+    from Analyse.analysis_core import build_cycle_quality, classify_end_reason, classify_source, parse_timestamp, read_cycles
 
 # --------------------------------------------------------------------------- #
 # Konfiguration
@@ -65,7 +69,8 @@ RE_SENSOR = re.compile(
 RE_STATUS = re.compile(r"Status: (EIN|AUS)\s*(?:\|(.*))?$")
 RE_COMP_EIN = re.compile(r"Kompressor EIN")
 RE_COMP_EIN_VERIF = re.compile(r"t_verd=([\d.]+), t_unten=([\d.]+)")
-RE_COMP_AUS = re.compile(r"Kompressor AUS(?: \(cycle=[^)]*\))?.*?\. Laufzeit: (\d+):(\d+):([\d.]+)")
+RE_COMP_AUS = re.compile(r"Kompressor AUS(?: \(cycle=[^)]*\))?.*?Laufzeit: (\d+):(\d+):([\d.]+)")
+RE_REASON_CODE = re.compile(r"(?:reason_code|end_grund_code|reason|code)=([A-Za-z0-9_:-]+)")
 RE_WECHSEL = re.compile(r"Wechsel zu Regel: (.+?)(?: \((EIN|AUS)\))?$")
 RE_LEARN = re.compile(r"Learning: Heizzyklus - (\d+)min, unten ([\d.]+)->([\d.]+)C = ([\d.]+)C/h")
 RE_FORECAST = re.compile(r"Today=([\d.]+) kWh/m²?.*?Tomorrow=([\d.]+) kWh/m²?")
@@ -134,6 +139,39 @@ def _code_klassifiziere(warnung: str) -> str:
         return "WARN_DRUCKSCHALTER"
     return "SONSTIGES"
 # ------------------------------------------------------------- Parser ---- #
+def _cycle_csv_as_parsed(cycle_path):
+    """Konvertiert die bevorzugte zyklen.csv in das interne Analyseformat."""
+    rows, quality = read_cycles(cycle_path)
+    parsed_cycles = []
+    for row in rows:
+        start = parse_timestamp(row.get("start"))
+        end = parse_timestamp(row.get("ende"))
+        if start is None:
+            continue
+        source, source_quality = classify_source(row)
+        reason, reason_quality = classify_end_reason(row)
+        parsed_cycles.append({
+            "start_ts": start, "end_ts": end,
+            "dauer_min": float(row["dauer_min"]) if row.get("dauer_min") else None,
+            "start_regel": row.get("start_regel") or "",
+            "source_at_start": row.get("source_at_start") or source,
+            "source_quality": source_quality,
+            "end_grund": reason,
+            "end_grund_raw": row.get("end_grund") or "",
+            "end_grund_quality": reason_quality,
+            "quelle": source, "start_t_unten": float(row["start_unten"]) if row.get("start_unten") else None,
+            "start_t_mittig": float(row["start_mittig"]) if row.get("start_mittig") else None,
+            "start_t_oben": float(row["start_oben"]) if row.get("start_oben") else None,
+            "max_unten": float(row["max_unten"]) if row.get("max_unten") else None,
+            "max_mittig": float(row["max_mittig"]) if row.get("max_mittig") else None,
+            "max_oben": float(row["max_oben"]) if row.get("max_oben") else None,
+            "ueberschreitung_k": float(row["ueberschreitung_k"]) if row.get("ueberschreitung_k") else None,
+            "start_t_verd": float(row["start_verd"]) if row.get("start_verd") else None,
+        })
+    quality = build_cycle_quality(parsed_cycles, quality)
+    return parsed_cycles, quality
+
+
 def parse_log(pfad):
     """Parst das Log und liefert strukturierte Daten fuer die Analyse."""
     pv_kontext, soc_kontext, feedin_kontext = [None], [None], [None]
@@ -251,7 +289,8 @@ def parse_log(pfad):
                 if offener_zyklus is None:
                     mvf = RE_COMP_EIN_VERIF.search(msg)
                     offener_zyklus = {
-                        "start_ts": ts, "start_regel": None, "start_t_verd": None,
+                        "start_ts": ts, "start_regel": None, "source_at_start": None,
+                        "start_t_verd": None,
                         "start_t_unten": None, "start_t_mittig": None, "start_t_oben": None,
                         "end_ts": None, "dauer_min": None,
                         "end_grund": None, "end_regel": None,
@@ -273,45 +312,59 @@ def parse_log(pfad):
                         if zts <= ts and zregel[0] in ("CYCLE_START_WE", "WECHSEL"):
                             offener_zyklus["start_regel"] = zregel[1]
                             break
+                    source, source_quality = classify_source({
+                        "start_regel": offener_zyklus.get("start_regel"),
+                        "feedin_w": feedin_kontext[0],
+                    })
+                    offener_zyklus["source_at_start"] = source
+                    offener_zyklus["source_quality"] = source_quality
                 continue
 
-            if "Kompressor AUS. Laufzeit" in msg:
+            if "Kompressor AUS" in msg and "Laufzeit:" in msg:
                 mm = RE_COMP_AUS.search(msg)
                 if offener_zyklus is not None and mm is not None:
                     offener_zyklus["end_ts"] = ts
                     d = int(mm.group(1)) * 60 + int(mm.group(2)) + int(float(mm.group(3))) / 60.0
                     offener_zyklus["dauer_min"] = round(d, 1)
                     offener_zyklus["end_sensoren"] = dict(last_sensoren)
-                    grund = None
-                    if "BOILERMAX AUS" in msg:
-                        grund = "boiler_max"
+                    code_match = RE_REASON_CODE.search(msg)
+                    if code_match:
+                        end_grund = code_match.group(1).lower()
+                        end_quality = "direct"
+                    else:
+                        end_grund = None
+                        end_quality = "legacy_text"
+                    if end_grund is None and "BOILERMAX AUS" in msg:
+                        end_grund = "boiler_max"
                     ra = RE_REGEL_AUS.search(msg)
-                    if grund is None and ra:
-                        grund = "regel:" + ra.group(1)
-                    if grund is None and "Keine Regel aktiv" in msg:
-                        grund = "keine_regel"
-                    if grund is None:
+                    if end_grund is None and ra:
+                        end_grund = "regel_aus"
+                    if end_grund is None and "Keine Regel aktiv" in msg:
+                        end_grund = "keine_regel"
+                    if end_grund is None:
                         for hts, hmsg in reversed(letzte_zeilen):
                             if hts >= ts - timedelta(seconds=120) and hts <= ts:
                                 if "BOILERMAX AUS" in hmsg:
-                                    grund = "boiler_max"
+                                    end_grund = "boiler_max"
                                 elif "Legionellenprophylaxe ABGEBROCHEN" in hmsg:
-                                    grund = "legionellen_timeout"
+                                    end_grund = "legionellen_timeout"
                                 elif "Kompressor-Verifizierung fehlgeschlagen" in hmsg:
-                                    grund = "verifizierung_fehler"
+                                    end_grund = "verifizierung_fehler"
                                 elif RE_REGEL_AUS.search(hmsg):
-                                    grund = "regel:" + RE_REGEL_AUS.search(hmsg).group(1)
-                                if grund:
+                                    end_grund = "regel_aus"
+                                if end_grund:
                                     break
-                    if grund is None:
-                        # Letzter 'Wechsel zu Regel' nahe am AUS als Endgrund nutzen
+                    if end_grund is None:
                         for zts, (code, name, _, _) in reversed(ereignisse):
                             if zts >= ts - timedelta(seconds=120) and zts <= ts \
                                     and code in ("CYCLE_END_WE", "WECHSEL"):
-                                grund = "keine_regel" if name == "Keine Regel aktiv" \
+                                end_grund = "keine_regel" if name == "Keine Regel aktiv" \
                                     else "wechsel:" + name
                                 break
-                    offener_zyklus["end_grund"] = grund or "unbekannt"
+                    offener_zyklus["end_grund"] = end_grund or "unbekannt"
+                    offener_zyklus["end_grund_quality"] = (
+                        "missing" if not end_grund or end_grund == "unbekannt" else end_quality
+                    )
                     zyklen.append(offener_zyklus)
                     offener_zyklus = None
                 continue
@@ -373,12 +426,13 @@ def parse_log(pfad):
 
     # Zyklus-Anreicherung: Quelle, max_* (unten/mittig/oben), T-Ueberschreitung
     for z in zyklen:
-        if z["start_regel"] in ("AdaptivePV", "Einspeisung", "PV_mitte", "PV_unten"):
-            z["quelle"] = "pv"
-        elif z["start_regel"] == "Batterie":
-            z["quelle"] = "batterie"
-        else:
-            z["quelle"] = "netz"
+        source, source_quality = classify_source({
+            "source_at_start": z.get("source_at_start"),
+            "start_regel": z.get("start_regel"),
+            "feedin_w": z.get("feedin_w"),
+        })
+        z["quelle"] = source
+        z["source_quality"] = source_quality
         fenster_ende = z["end_ts"] + timedelta(minutes=8) if z["end_ts"] else None
         for snap in snapshots:
             if z["start_ts"] <= snap["ts"] <= (fenster_ende or snap["ts"]):
@@ -398,9 +452,26 @@ def parse_log(pfad):
         else:
             z["ueberschreitung_k"] = None
 
-    return {"snapshots": snapshots, "zyklen": zyklen, "ereignisse": ereignisse,
-            "forecast_pro_tag": forecast_pro_tag, "gelernter_zyklus": gelernter_zyklus,
-            "stats": stats, "git_version": git_version}
+    return {
+        "snapshots": snapshots,
+        "zyklen": zyklen,
+        "ereignisse": ereignisse,
+        "forecast_pro_tag": forecast_pro_tag,
+        "gelernter_zyklus": gelernter_zyklus,
+        "stats": stats,
+        "git_version": git_version,
+        "quality": {
+            "unknown_end_grund": sum(
+                z.get("end_grund_quality") == "missing" for z in zyklen
+            ),
+            "end_grund_quality": dict(Counter(
+                z.get("end_grund_quality", "unknown") for z in zyklen
+            )),
+            "source_quality": dict(Counter(
+                z.get("source_quality", "unknown") for z in zyklen
+            )),
+        },
+    }
 
 
 # ------------------------------------------------------- Auswertungen ---- #
@@ -539,17 +610,18 @@ def export_csve(parsed, out, outdir):
     os.makedirs(outdir, exist_ok=True)
 
     # 1) Zyklus-Tabelle (Temperaturen unten/mittig/oben jeweils Start + Max)
-    felder = ["start", "ende", "dauer_min", "quelle", "start_regel", "end_grund",
-              "start_unten", "start_mittig", "start_oben",
-              "max_unten", "max_mittig", "max_oben",
-              "ueberschreitung_k", "start_verd"]
+    felder = ["start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund",
+              "end_grund_quality", "start_unten", "start_mittig", "start_oben",
+              "max_unten", "max_mittig", "max_oben", "ueberschreitung_k", "start_verd"]
     zyklen = []
     for z in parsed["zyklen"]:
         zyklen.append({
             "start": z["start_ts"].strftime("%Y-%m-%d %H:%M:%S"),
             "ende": (z["end_ts"].strftime("%Y-%m-%d %H:%M:%S") if z["end_ts"] else ""),
             "dauer_min": z["dauer_min"], "quelle": z["quelle"],
+            "source_at_start": z.get("source_at_start", ""),
             "start_regel": z["start_regel"], "end_grund": z["end_grund"],
+            "end_grund_quality": z.get("end_grund_quality", "unknown"),
             "start_unten": z["start_t_unten"], "start_mittig": z["start_t_mittig"],
             "start_oben": z["start_t_oben"],
             "max_unten": z["max_unten"], "max_mittig": z["max_mittig"],
@@ -619,6 +691,10 @@ def erzeuge_bericht(parsed, out, outdir, stats_roh):
     ap(f"- Zeilen gesamt (Rohdatei): **{gesamt}**  ")
     ap(f"- Davon Regel-Detailzeilen (15er-Bloecke): **{regelzeilen}** = "
        f"**{100.0 * regelzeilen / gesamt:.1f} %** (Redundanz)")
+    quality = parsed.get("quality", {})
+    ap(f"- Unbekannte Abschlussgründe: **{quality.get('unknown_end_grund', 0)}**  ")
+    ap(f"- Abschlussgrund-Qualität: `{quality.get('end_grund_quality', {})}`  ")
+    ap(f"- Quellenqualität: `{quality.get('source_quality', {})}`  ")
     ap(f"- Regel-Bewertungs-Bloecke: **{parsed['stats'].get('snapshots')}**  ")
     ap(f"- Level: INFO {stats_roh.get('level_INFO', 0)} / "
        f"DEBUG {stats_roh.get('level_DEBUG', 0)} / "
@@ -737,6 +813,8 @@ def _parse_args(argv=None):
                         help="Pfad zur heizungssteuerung*.log (Default: siehe Kopf)")
     parser.add_argument("--out", default=AUSGABE_DIR,
                         help="Ausgabe-Verzeichnis fuer Bericht + CSVs")
+    parser.add_argument("--cycles", default=None,
+                        help="Optionale zyklen.csv als primaere Zyklusquelle")
     return parser.parse_args(argv)
 
 
@@ -754,6 +832,18 @@ def main(argv=None):
         return 1
 
     parsed = parse_log(LOG_PFAD)
+    cycle_path = args.cycles
+    if cycle_path is None:
+        sibling = os.path.join(os.path.dirname(os.path.abspath(LOG_PFAD)), "zyklen.csv")
+        cycle_path = sibling if os.path.exists(sibling) else None
+    if cycle_path and os.path.exists(cycle_path):
+        parsed["zyklen"], cycle_quality = _cycle_csv_as_parsed(cycle_path)
+        parsed["cycle_quality"] = cycle_quality
+        parsed["quality"].update({
+            "unknown_end_grund": cycle_quality.get("unknown_end_grund", 0),
+            "end_grund_quality": cycle_quality.get("end_grund_quality", {}),
+            "source_quality": cycle_quality.get("source_quality", {}),
+        })
     out = analysiere(parsed)
     os.makedirs(AUSGABE_DIR, exist_ok=True)
     export_csve(parsed, out, AUSGABE_DIR)

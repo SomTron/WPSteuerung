@@ -19,6 +19,10 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+try:
+    from analysis_core import build_cycle_quality, classify_end_reason, classify_source, heating_intervals, parse_timestamp, read_cycles
+except ImportError:
+    from Analyse.analysis_core import build_cycle_quality, classify_end_reason, classify_source, heating_intervals, parse_timestamp, read_cycles
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -53,7 +57,7 @@ def _an(r):
 
 
 def zyklus_analyse(zeilen):
-    """Findet Kompressor-Zyklen -> (zyklen, takt_wechsel, verschenkte_pv_wh)."""
+    """Findet Kompressor-Zyklen mit zeitbasierten Abständen."""
     zyklen, lauf = [], None
     verpasste_pv_wh = 0.0
     takt_wechsel = 0
@@ -62,27 +66,31 @@ def zyklus_analyse(zeilen):
 
     for t, r in zeilen:
         an = _an(r)
-        dt = (t - letzte_t).total_seconds() / 3600 if letzte_t else 0
-        if dt > 1:            # Luecke (Neustart) nicht als Laufzeit zaehlen
-            dt = 0
+        delta_s = (t - letzte_t).total_seconds() if letzte_t else 0
+        # Nur kurze, plausible Messabstaende integrieren. Grosse Luecken
+        # werden als Datenqualitaetsereignis behandelt, nicht als Leistung.
+        dt_h = delta_s / 3600 if 0 < delta_s <= 120 else 0
         unten = _f(r.get("T_Unten"))
         feedin = _f(r.get("FeedinPower"), 0.0)
+        source, source_quality = classify_source(r)
 
         if an and lauf is None:
-            lauf = {"start": t, "quelle": r.get("PowerSource") or "?",
-                    "unten_start": unten, "unten_max": unten}
+            lauf = {
+                "start": t, "quelle": source, "source_quality": source_quality,
+                "unten_start": unten, "unten_max": unten,
+            }
             if vorher_an is False:
                 takt_wechsel += 1
-        elif an and lauf is not None:
-            if unten is not None:
-                lauf["unten_max"] = max(lauf["unten_max"] or unten, unten)
+        elif an and lauf is not None and unten is not None:
+            lauf["unten_max"] = max(lauf["unten_max"] or unten, unten)
         elif not an and lauf is not None:
             lauf["dauer_min"] = round((t - lauf["start"]).total_seconds() / 60, 1)
+            lauf["dauer_quality"] = "direct" if delta_s <= 120 else "gap"
             zyklen.append(lauf)
             lauf = None
 
-        if not an and feedin is not None and feedin >= PV_VERPASST_W:
-            verpasste_pv_wh += feedin * dt
+        if not an and dt_h and feedin is not None and feedin >= PV_VERPASST_W:
+            verpasste_pv_wh += feedin * dt_h
 
         letzte_t = t
         vorher_an = an
@@ -90,8 +98,30 @@ def zyklus_analyse(zeilen):
     return zyklen, takt_wechsel, verpasste_pv_wh
 
 
+def _cycle_rows_for_analysis(basis):
+    """Liest die bevorzugte Zyklusquelle und liefert normalisierte Zeilen."""
+    rows, quality = read_cycles(os.path.join(basis, "zyklen.csv"))
+    normalized = []
+    for row in rows:
+        start = parse_timestamp(row.get("start"))
+        end = parse_timestamp(row.get("ende"))
+        if start is None:
+            continue
+        source, source_quality = classify_source(row)
+        reason, reason_quality = classify_end_reason(row)
+        normalized.append({
+            "start": start, "end": end, "dauer_min": _f(row.get("dauer_min")),
+            "quelle": source, "source_quality": source_quality,
+            "start_regel": row.get("start_regel") or "", "end_grund": reason,
+            "end_grund_quality": reason_quality, "unten_start": _f(row.get("start_unten")),
+            "unten_max": _f(row.get("max_unten")),
+        })
+    return normalized, quality
+
+
 def analyse_csv(basis):
     pfad = os.path.join(basis, "heizungsdaten.csv")
+    cycle_rows, cycle_quality = _cycle_rows_for_analysis(basis)
     if not os.path.exists(pfad):
         return
     zeilen = []
@@ -107,29 +137,43 @@ def analyse_csv(basis):
     print(TRENNER)
     print(f"A) heizungsdaten.csv: {len(zeilen)} Zeilen")
     print(f"   Zeitraum: {zeilen[0][0]} .. {zeilen[-1][0]}")
-    deltas = [(zeilen[i + 1][0] - zeilen[i][0]).total_seconds()
-              for i in range(len(zeilen) - 1)]
-    deltas = [d for d in deltas if 0 < d < 3600]
-    if deltas:
-        print(f"   Takt: Median {statistics.median(deltas):.0f} s, max {max(deltas):.0f} s")
+    times = [t for t, _r in zeilen]
+    interval_quality = heating_intervals(times)
+    if interval_quality["count"]:
+        print(
+            f"   Takt: Median {interval_quality['median_s']:.0f} s, "
+            f"Lücken 2–15 min: {interval_quality['gaps_120_900']}, "
+            f"Lücken >15 min: {interval_quality['gaps_gt_900']}, "
+            f"max {interval_quality['max_s']:.0f} s"
+        )
 
-    zyklen, takt_wechsel, pv_wh = zyklus_analyse(zeilen)
+    if cycle_rows:
+        zyklen = cycle_rows
+        takt_wechsel = None
+        pv_wh = 0.0
+        cycle_quality = build_cycle_quality(zyklen, cycle_quality)
+        print(f"   Zyklusquelle: zyklen.csv (Schema {cycle_quality.get('schema')})")
+        print(f"   Abschlussgründe ohne belastbare Quelle: {cycle_quality.get('unknown_end_grund', 0)}")
+    else:
+        zyklen, takt_wechsel, pv_wh = zyklus_analyse(zeilen)
     if not zyklen:
         print("   Keine abgeschlossenen Zyklen gefunden.")
         return
 
-    dauern = [z["dauer_min"] for z in zyklen]
-    kurz = [z for z in zyklen if z["dauer_min"] < KURZZYKLUS_MIN]
-    uebersch = [z for z in zyklen if (z["unten_max"] or 0) >= OVERSHOOT_C]
+    dauern = [z["dauer_min"] for z in zyklen if z.get("dauer_min") is not None]
+    kurz = [z for z in zyklen if (z.get("dauer_min") or 0) < KURZZYKLUS_MIN]
+    uebersch = [z for z in zyklen if (z.get("unten_max") or 0) >= OVERSHOOT_C]
     print(f"\n   Zyklen: {len(zyklen)} | Median {statistics.median(dauern):.0f} min | "
           f"min {min(dauern):.0f} | max {max(dauern):.0f} | Summe {sum(dauern) / 60:.1f} h")
     print(f"   Kurzzyklen <{KURZZYKLUS_MIN:.0f} min: {len(kurz)} "
           f"({100 * len(kurz) / len(zyklen):.0f} %)")
     print(f"   Zyklen mit T_unten >= {OVERSHOOT_C} C: {len(uebersch)}")
     print(f"   Quellen beim Einschalten: {Counter(z['quelle'] for z in zyklen).most_common()}")
+    print(f"   Quellenqualität: {dict(Counter(z.get('source_quality', 'missing') for z in zyklen))}")
     print(f"   Verschenkte PV (Einspeisung >= {PV_VERPASST_W:.0f} W bei WP AUS): "
           f"{pv_wh / 1000:.1f} kWh")
-    print(f"   Taktwechsel (AUS->EIN): {takt_wechsel}")
+    if takt_wechsel is not None:
+        print(f"   Taktwechsel (AUS->EIN): {takt_wechsel}")
     un = [z["unten_start"] for z in zyklen if z["unten_start"] is not None]
     if un:
         print(f"   T_unten beim Einschalten: Median {statistics.median(un):.1f} C")
@@ -148,19 +192,22 @@ def analyse_csv(basis):
         print(f"   {d} | {e['n']:3d} | {e['min']:7.0f} | {e['kurz']:3d} | "
               f"{e['over']:3d} | {dict(e['q'])}")
 
-    morgen = defaultdict(lambda: [0, 0])
-    for t, r in zeilen:
-        if not (MORGEN[0] <= t.hour < MORGEN[1]):
+    morgen = defaultdict(lambda: [0.0, 0.0])
+    for (previous, previous_row), (current, _current_row) in zip(zeilen, zeilen[1:]):
+        if not (MORGEN[0] <= previous.hour < MORGEN[1]):
             continue
-        feedin = _f(r.get("FeedinPower"), 0.0)
+        delta_s = (current - previous).total_seconds()
+        if not 0 < delta_s <= 120:
+            continue
+        feedin = _f(previous_row.get("FeedinPower"), 0.0)
         if feedin is not None and feedin < NETZKAUF_W:
-            morgen[t.date().isoformat()][0] += 1
-            if _an(r):
-                morgen[t.date().isoformat()][1] += 1
+            morgen[previous.date().isoformat()][0] += delta_s / 60
+            if _an(previous_row):
+                morgen[previous.date().isoformat()][1] += delta_s / 60
     print("\n   Morgendlicher Netzbezug (6-12h): Datum | Minuten | davon WP an")
     for d in sorted(morgen)[-10:]:
         m, wp = morgen[d]
-        print(f"   {d} | {m * TAKT_SEK / 60:6.0f} min | {wp * TAKT_SEK / 60:6.0f} min")
+        print(f"   {d} | {m:6.0f} min | {wp:6.0f} min")
 
 
 def analyse_entscheidungen(basis):
@@ -186,14 +233,21 @@ def analyse_entscheidungen(basis):
     an = [e for e in eintraege if e.get("kompressor_laeuft")]
     print(f"   WP laeuft: {len(an)} Eintraege ({100 * len(an) / len(eintraege):.0f} %)")
     klasse = Counter()
+    quality = Counter()
     for e in an:
-        feedin = e.get("feedin_w")
-        if isinstance(feedin, (int, float)):
-            klasse["pv_batterie" if feedin >= NETZKAUF_W else "netz"] += 1
+        source, source_quality = classify_source(e)
+        klasse[source] += 1
+        quality[source_quality] += 1
     print(f"   Stromquelle waehrend Lauf: {klasse.most_common()}")
+    print(f"   Quellenqualität: {dict(quality)}")
     print("   Top-AUS-Gruende:")
-    for g, n in Counter((e.get("grund") or "")[:50] for e in eintraege
-                        if not e.get("kompressor_laeuft")).most_common(8):
+    reason_counter = Counter()
+    for e in eintraege:
+        if e.get("kompressor_laeuft"):
+            continue
+        reason, reason_quality = classify_end_reason(e)
+        reason_counter[f"{reason} [{reason_quality}]"] += 1
+    for g, n in reason_counter.most_common(8):
         print(f"     {n:4d}x {g}")
 
 
