@@ -28,7 +28,14 @@ def _infer_reason_code(name: str, enabled: bool, action: Optional[bool], reason:
 
 @dataclass
 class RegelErgebnis:
-    """Ergebnis einer einzelnen Regelbewertung."""
+    """Ergebnis einer einzelnen Regelbewertung.
+
+    `reason_code` wird aus dem Grundtext abgeleitet. Wird das Ergebnis nach
+    der Erzeugung veraendert (`grund` oder `einschalten`), wird der Code neu
+    abgeleitet - unabhaengig davon, in welcher Reihenfolge veraendert wird.
+    Wer einen bestimmten Code erzwingen will, nutzt `set_reason_code()`;
+    dieser bleibt dann gegenueber weiteren Aenderungen stabil.
+    """
 
     name: str
     prioritaet: int
@@ -37,20 +44,35 @@ class RegelErgebnis:
     grund: str = ""
     regel_dict: Optional[Dict] = None
     reason_code: Optional[str] = None
+    # Vom Aufrufer bewusst gesetzt -> keine automatische Ableitung mehr.
+    reason_code_gesetzt: bool = False
 
     def __post_init__(self) -> None:
         if self.reason_code is None:
             self.reason_code = _infer_reason_code(
                 self.name, self.aktiv, self.einschalten, self.grund
             )
+        else:
+            # Explizit beim Erzeugen uebergeben -> gilt als gesetzt.
+            object.__setattr__(self, "reason_code_gesetzt", True)
+
+    def set_reason_code(self, code: Optional[str]) -> None:
+        """Setzt den Code fest und sperrt ihn gegenueber Re-Inferenz."""
+        object.__setattr__(self, "reason_code", code)
+        object.__setattr__(self, "reason_code_gesetzt", True)
 
     def __setattr__(self, name, value):
         object.__setattr__(self, name, value)
-        if name == "grund" and self.__dict__.get("reason_code") in (None, "no_action"):
-            object.__setattr__(self, "reason_code", _infer_reason_code(
-                self.name, self.aktiv, self.einschalten, value
-            ))
-        elif name == "einschalten" and self.__dict__.get("reason_code") in (None, "no_action"):
-            object.__setattr__(self, "reason_code", _infer_reason_code(
-                self.name, self.aktiv, value, self.grund
-            ))
+        if name == "reason_code_gesetzt":
+            return
+        if self.__dict__.get("reason_code_gesetzt"):
+            return
+        if name in ("grund", "einschalten"):
+            # Bewusst aus beiden Feldern neu ableiten, damit die Reihenfolge
+            # der Zuweisungen das Ergebnis nicht beeinflusst.
+            object.__setattr__(
+                self, "reason_code",
+                _infer_reason_code(
+                    self.name, self.aktiv, self.einschalten, self.grund
+                ),
+            )

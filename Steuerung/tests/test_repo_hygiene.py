@@ -44,3 +44,30 @@ def test_keine_merge_konfliktmarker():
                 if zeile.startswith(KONFLIKT_MARKER):
                     treffer.append(f"{os.path.relpath(pfad, REPO_ROOT)}:{nr}: {zeile.strip()}")
     assert not treffer, "Unaufgeloeste Merge-Konflikte:\n" + "\n".join(treffer)
+
+
+def test_keine_leeren_python_dateien():
+    """Regression: `constants_clean.py` lag als 0-Byte-Datei im Repo.
+
+    Eine leere Datei wird von ruff und compileall stillschweigend
+    akzeptiert, sieht aber wie ein Modul aus und verwirrt beim Import.
+    """
+    leer = []
+    for pfad in _python_dateien():
+        if os.path.getsize(pfad) == 0:
+            leer.append(os.path.relpath(pfad, REPO_ROOT))
+    assert not leer, "Leere Python-Dateien (nicht verwaist):\n" + "\n".join(leer)
+
+
+def test_keine_python_dateien_mit_bom():
+    """Regression: `test_legionellen_plan.py` trug eine unsichtbare BOM.
+
+    Ein BOM am Dateianfang fuehrt beim Parsen zu
+    `SyntaxError: invalid non-printable character U+FEFF`.
+    """
+    mit_bom = []
+    for pfad in _python_dateien():
+        with open(pfad, "rb") as f:
+            if f.read(3) == b"\xef\xbb\xbf":
+                mit_bom.append(os.path.relpath(pfad, REPO_ROOT))
+    assert not mit_bom, "Dateien mit UTF-8-BOM:\n" + "\n".join(mit_bom)

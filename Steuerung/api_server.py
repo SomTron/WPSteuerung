@@ -1,4 +1,4 @@
-﻿"""Development entrypoint using the production FastAPI contract.
+"""Development entrypoint using the production FastAPI contract.
 
 The former standalone mock app duplicated models and routes.  Keep only a
 small bootstrap here so development and production cannot drift apart.

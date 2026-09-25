@@ -1,4 +1,4 @@
-﻿try:
+try:
     from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
 except ImportError:
     SOLAR_DATA_STALE_THRESHOLD_MIN = 15

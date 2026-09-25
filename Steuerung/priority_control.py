@@ -204,7 +204,10 @@ def evaluate_pv_regel(
 
     # 5. Keine Bedingung erfuellt
     result.einschalten = None
-    result.reason_code = "pv_unterbrechung"
+    # Bewusst gesetzt: der Text enthaelt weder ' < ' noch 'keine Aktion'
+    # und wuerde sonst als 'no_action' abgeleitet. Genau an diesem Code
+    # erkennt die PV-Weiterlauf-Logik, dass der Lauf weiterlaeuft.
+    result.set_reason_code("pv_unterbrechung")
     result.grund = (
         f"Keine Bedingung erfuellt (PV={pv_leistung:.0f}W, {sensor_name}={temp:.1f}C)"
     )
@@ -508,7 +511,7 @@ def evaluate_einspeisung(
         )
         return result
 
-    result.reason_code = "pv_unterbrechung"
+    result.set_reason_code("pv_unterbrechung")
     result.grund = f"Einspeisung {feedin_watt:.0f}W < {einsp_cfg.einspeisegrenze_watt:.0f}W -> keine Aktion"
     return result
 
@@ -1331,7 +1334,7 @@ def evaluate_adaptive_pv(
         quelle_ok = False
         quelle_text = "Batterie verfuegbar; AdaptivePV steuert ausschliesslich PV"
     if not quelle_ok:
-        result.reason_code = "waiting_source"
+        result.set_reason_code("waiting_source")
         result.grund = f"AdaptivePV wartet auf PV: {quelle_text}"
         return result
 
@@ -1361,7 +1364,7 @@ def evaluate_adaptive_pv(
         )
         return result
 
-    result.reason_code = "pv_unterbrechung"
+    result.set_reason_code("pv_unterbrechung")
     result.grund = f"AdaptivePV: PV {pv_leistung:.0f}W < {schwelle:.0f}W"
     return result
 
@@ -1794,7 +1797,7 @@ def evaluate_legionellen(
         )
         return result
     if legionellen_planned_date is not None and now.date() > legionellen_planned_date:
-        result.reason_code = "planned_day_missed"
+        result.set_reason_code("planned_day_missed")
         result.grund = (
             f"Legionellen: geplanter Termin {legionellen_planned_date} ist verstrichen; "
             "naechster geeigneter PV-Tag wird geplant"
@@ -1836,7 +1839,7 @@ def evaluate_legionellen(
         )
         return result
     if now.hour > spaeteste_start_h:
-        result.reason_code = "planned_day_missed"
+        result.set_reason_code("planned_day_missed")
         result.grund = (
             f"Legionellen: Startfenster {frueheste_start_h:g}:00-"
             f"{spaeteste_start_h:g}:00 verpasst; naechster geeigneter PV-Tag"
@@ -1851,7 +1854,7 @@ def evaluate_legionellen(
     )
     if not quelle_ok:
         result.einschalten = None
-        result.reason_code = "waiting_source"
+        result.set_reason_code("waiting_source")
         result.grund = f"Legionellen wartet auf PV/Batterie: {quelle_text}"
         return result
     result.einschalten = True
@@ -1880,7 +1883,7 @@ def _wochentag_name(tag: int) -> str:
 
 def _marke_regel_ursache(result, code: str) -> RegelErgebnis:
     """Setzt einen stabilen Grundcode ohne Änderung des Lesetexts."""
-    result.reason_code = code
+    result.set_reason_code(code)
     return result
 
 
@@ -2168,7 +2171,7 @@ def bewerte_alle_regeln(
             ):
                 e.aktiv = False
                 e.einschalten = None
-                e.reason_code = "data_stale"
+                e.set_reason_code("data_stale")
                 e.grund = "Solar-Daten veraltet -> Regel pausiert"
         jetzt = now
         if (
