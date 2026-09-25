@@ -219,7 +219,14 @@ def tail_log(
 
                 # Zeilen extrahieren (letzte lines Stueck)
                 lines_in_buf = buffer.split(b"\n")
-                if len(lines_in_buf) > lines:
+                # Der abschliessende Zeilenumbruch erzeugt ein leeres
+                # Element am Ende. Es muss VOR dem Abschneiden entfernt
+                # werden - sonst nimmt `[-lines:]` einen Platzhalter mit und
+                # es kommt konsequent eine Zeile zu wenig zurueck
+                # (lines=1 lieferte 0 Zeilen).
+                if lines_in_buf and lines_in_buf[-1] == b"":
+                    lines_in_buf = lines_in_buf[:-1]
+                if len(lines_in_buf) >= lines:
                     result = lines_in_buf[-lines:]
                     break
                 result = lines_in_buf
