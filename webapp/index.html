@@ -1087,6 +1087,59 @@
                 <p id="error-message" style="margin-top: 10px; font-size: 14px;"></p>
                 <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: white; color: #ff4444; border: none; border-radius: 4px; cursor: pointer;">Neu laden</button>
             </div>
+
+            <!-- Letzter Fehler + Historie -->
+            <div class="card" id="card-last-error" style="margin-top: 20px;">
+                <div class="card-header">
+                    <h2>⚠️ Letzter Fehler</h2>
+                    <button class="btn-icon" id="btn-error-history"
+                            title="Fehlerhistorie mit Zeitstempel anzeigen"
+                            aria-label="Fehlerhistorie anzeigen">🗒️</button>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Letzter Fehler</span>
+                    <span class="info-value" id="last-error-text">Lade …</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Zeitpunkt</span>
+                    <span class="info-value" id="last-error-time">—</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Stufe</span>
+                    <span class="info-value" id="last-error-level">—</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Fehler (24 h)</span>
+                    <span class="info-value" id="error-count-24h">—</span>
+                </div>
+            </div>
+
+            <!-- Fehlerhistorie (ein-/ausklappbar) -->
+            <div class="card" id="card-error-history" style="margin-top: 20px; display: none;">
+                <div class="card-header">
+                    <h2>🗒️ Fehlerhistorie</h2>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="error-history-limit" class="time-btn" style="min-width:0;">
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="200">200</option>
+                        </select>
+                        <button class="btn-icon" id="btn-error-history-refresh" title="Aktualisieren">🔄</button>
+                        <button class="btn-icon" id="btn-error-history-close" title="Schließen">✕</button>
+                    </div>
+                </div>
+                <div id="error-history-meta" class="info-row" style="display:none;">
+                    <span class="info-label">Quelle</span>
+                    <span class="info-value" id="error-history-source">—</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Abgedeckt</span>
+                    <span class="info-value" id="error-history-range">—</span>
+                </div>
+                <div id="error-history-list" style="max-height: 420px; overflow-y: auto;">
+                    <div class="skeleton wide"></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1154,6 +1207,177 @@
             el.textContent = healthy ? 'Steuerung ok' : 'Steuerung eingeschränkt';
             el.className = 'status-badge ' + (healthy ? 'badge-compressor' : 'badge-compressor off');
             el.style.display = '';
+        }
+
+        // --- Fehleranzeige -----------------------------------------------------
+        // Letzter Fehler mit Zeitstempel sowie Historie auf Knopfdruck.
+        // Wird zusammen mit dem Health-Polling aktualisiert, damit das
+        // 5-Sekunden-Status-Polling nicht zusaetzlich belastet wird.
+        const ERROR_INTERVAL_MS = 60000;
+        let errorRequestActive = false;
+        let errorLastCheckedAt = 0;
+        let errorData = null;
+        const ERROR_STUFE_BADGE = {
+            'kritisch': 'badge badge-danger',
+            'fehler': 'badge badge-danger',
+            'warnung': 'badge badge-warning',
+            'info': 'badge badge-info',
+        };
+
+        function formatErrorTime(iso) {
+            if (!iso) return NO_DATA;
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return String(iso);
+            const pad = (n) => String(n).padStart(2, '0');
+            const heute = new Date();
+            const gleichTag = d.toDateString() === heute.toDateString();
+            const zeit = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+            if (gleichTag) return 'heute ' + zeit;
+            return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + zeit;
+        }
+
+        function updateLastErrorCard() {
+            const txt = document.getElementById('last-error-text');
+            const zeit = document.getElementById('last-error-time');
+            const stufe = document.getElementById('last-error-level');
+            const anzahl = document.getElementById('error-count-24h');
+            if (!txt || !zeit || !stufe || !anzahl) return;
+
+            if (errorData === null) { txt.textContent = 'Lade …'; return; }
+            if (errorData.error) {
+                txt.textContent = 'Fehlerhistorie nicht abrufbar';
+                zeit.textContent = NO_DATA;
+                stufe.textContent = NO_DATA;
+                stufe.className = 'info-value';
+                anzahl.textContent = NO_DATA;
+                return;
+            }
+            const letzter = errorData.letzter_fehler;
+            if (!letzter) {
+                txt.textContent = 'Keine Fehler im Log';
+                zeit.textContent = NO_DATA;
+                stufe.textContent = '✓';
+                stufe.className = 'info-value badge badge-compressor';
+                anzahl.textContent = '0';
+                return;
+            }
+            txt.textContent = letzter.message;
+            zeit.textContent = formatErrorTime(letzter.timestamp);
+            stufe.textContent = (letzter.stufe || '').toUpperCase();
+            stufe.className = 'info-value ' + (ERROR_STUFE_BADGE[letzter.stufe] || 'badge badge-info');
+            // Zaehler der letzten 24 h aus der gelieferten Historie ableiten.
+            const grenze = Date.now() - 24 * 3600 * 1000;
+            const letzte24 = (errorData.eintraege || []).filter((e) => {
+                const d = new Date(e.timestamp);
+                return !isNaN(d.getTime()) && d.getTime() >= grenze;
+            });
+            anzahl.textContent = String(letzte24.length);
+        }
+
+        function renderErrorHistory() {
+            const liste = document.getElementById('error-history-list');
+            const quelle = document.getElementById('error-history-source');
+            if (!liste) return;
+            if (!errorData || errorData.error) {
+                liste.innerHTML = '<div class="info-row"><span class="info-value">'
+                    + (errorData && errorData.error ? errorData.error : 'Lade …')
+                    + '</span></div>';
+                return;
+            }
+            if (quelle) quelle.textContent = errorData.quelle || NO_DATA;
+            const eintraege = errorData.eintraege || [];
+            const von = document.getElementById('error-history-range');
+            if (von) {
+                // Es wird nur ein Tail des Logs gelesen (RAM-Schutz). Der
+                // abgedeckte Zeitraum wird offen ausgewiesen, statt eine
+                // vollstaendige Historie vorzutaeuschen.
+                if (errorData.zeitraum_von) {
+                    von.textContent = formatErrorTime(errorData.zeitraum_von)
+                        + ' – ' + formatErrorTime(errorData.zeitraum_bis)
+                        + (errorData.vollstaendig ? '' : ' (Log-Tail)');
+                } else {
+                    von.textContent = NO_DATA;
+                }
+            }
+            if (!eintraege.length) {
+                liste.innerHTML = '<div class="info-row"><span class="info-value">'
+                    + 'Keine Fehler ab Stufe WARNING gefunden.</span></div>';
+                return;
+            }
+            // textContent statt innerHTML fuer den Text, damit Logeintrae
+            // aus externen Quellen kein HTML einschleusen koennen.
+            liste.textContent = '';
+            eintraege.forEach((e) => {
+                const zeile = document.createElement('div');
+                zeile.className = 'info-row';
+                zeile.style.alignItems = 'flex-start';
+
+                const zeitEl = document.createElement('span');
+                zeitEl.className = 'info-label';
+                zeitEl.style.minWidth = '128px';
+                zeitEl.style.whiteSpace = 'nowrap';
+                zeitEl.textContent = formatErrorTime(e.timestamp);
+
+                const badge = document.createElement('span');
+                badge.className = ERROR_STUFE_BADGE[e.stufe] || 'badge badge-info';
+                badge.style.minWidth = '86px';
+                badge.style.textAlign = 'center';
+                badge.textContent = (e.stufe || '').toUpperCase();
+
+                const text = document.createElement('span');
+                text.className = 'info-value';
+                text.style.wordBreak = 'break-word';
+                text.style.whiteSpace = 'normal';
+                text.textContent = e.message || NO_DATA;
+
+                zeile.appendChild(zeitEl);
+                zeile.appendChild(badge);
+                zeile.appendChild(text);
+                liste.appendChild(zeile);
+            });
+        }
+
+        async function fetchErrors(force = false) {
+            if (errorRequestActive) return;
+            if (!force && (Date.now() - errorLastCheckedAt < ERROR_INTERVAL_MS)) return;
+            errorRequestActive = true;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+            const histo = document.getElementById('card-error-history');
+            const offen = histo && histo.style.display !== 'none';
+            try {
+                const limitSel = document.getElementById('error-history-limit');
+                const limit = (offen && limitSel) ? limitSel.value : '100';
+                const response = await fetch(`${API_BASE}/errors?limit=${limit}&ts=${Date.now()}`, {
+                    signal: controller.signal,
+                    cache: 'no-store',
+                    headers: apiHeaders()
+                });
+                if (!response.ok) throw new Error(await responseError(response, 'Fehler-API ' + response.status));
+                errorData = await response.json();
+                errorLastCheckedAt = Date.now();
+                updateLastErrorCard();
+                if (offen) renderErrorHistory();
+            } catch (error) {
+                errorData = { error: error.name === 'AbortError'
+                    ? 'Zeitüberschreitung' : (error.message || 'unbekannt') };
+                updateLastErrorCard();
+            } finally {
+                clearTimeout(timeoutId);
+                errorRequestActive = false;
+            }
+        }
+
+        function toggleErrorHistory(anzeigen) {
+            const karte = document.getElementById('card-error-history');
+            if (!karte) return;
+            const soll = anzeigen !== undefined
+                ? anzeigen : karte.style.display === 'none';
+            karte.style.display = soll ? 'block' : 'none';
+            if (soll) {
+                fetchErrors(true).then(renderErrorHistory);
+                karte.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
         }
 
         async function fetchHealth(force = false) {
@@ -1284,6 +1508,7 @@
                 updateQuickStatus();
                 fetchHealth();
                 fetchAnalysis();
+                fetchErrors();
                 updateConnectionStatus(true);
                 if (errorPanel && errorMsg) {
                     errorPanel.style.display = 'none';
@@ -2659,13 +2884,26 @@
                     errorPanel.style.display = 'block';
                 }
             }).then(() => {
-                // Nach dem ersten Fetch Historie und Analyse laden
+                // Nach dem ersten Fetch Historie, Analyse und Fehler laden
                 loadHistory(currentHistoryHours);
                 fetchAnalysis(true);
+                fetchErrors(true);
             });
 
             startStatusPolling();
             startAnalysisPolling();
+
+            // Fehlerhistorie: Karten-Button oeffnet/schliesst die Liste.
+            const btnHisto = document.getElementById('btn-error-history');
+            if (btnHisto) btnHisto.addEventListener('click', () => toggleErrorHistory());
+            const btnHistoClose = document.getElementById('btn-error-history-close');
+            if (btnHistoClose) btnHistoClose.addEventListener('click', () => toggleErrorHistory(false));
+            const btnHistoRefresh = document.getElementById('btn-error-history-refresh');
+            if (btnHistoRefresh) {
+                btnHistoRefresh.addEventListener('click', () => fetchErrors(true).then(renderErrorHistory));
+            }
+            const selLimit = document.getElementById('error-history-limit');
+            if (selLimit) selLimit.addEventListener('change', () => fetchErrors(true).then(renderErrorHistory));
         });
 
         document.addEventListener('visibilitychange', () => {
@@ -2673,12 +2911,14 @@
                 fetchStatus();
                 startStatusPolling();
                 startAnalysisPolling();
+                fetchErrors();
             }
         });
         window.addEventListener('online', () => {
             fetchStatus();
             startStatusPolling();
             startAnalysisPolling();
+            fetchErrors(true);
         });
         window.addEventListener('offline', () => showOfflineState(false));
 

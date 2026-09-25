@@ -145,3 +145,50 @@ def test_analyse_qualitaetskarte_und_abruf_sind_im_webapp_und_service_worker():
     text = worker.read_text(encoding="utf-8")
     assert "url.pathname === '/status'" in text
     assert "url.pathname.startsWith('/history')" in text
+
+
+# ------------------------------------------------------------- Fehlerhistorie
+
+
+def test_webapp_hat_letzten_fehler_mit_zeitstempel():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert 'id="card-last-error"' in html
+    assert 'id="last-error-text"' in html
+    assert 'id="last-error-time"' in html
+    assert 'id="last-error-level"' in html
+    assert 'id="error-count-24h"' in html
+
+
+def test_webapp_hat_knopf_fuer_die_fehlerhistorie():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert 'id="btn-error-history"' in html
+    assert 'id="card-error-history"' in html
+    assert "toggleErrorHistory" in html
+    # Der Knopf muss auch wirklich verdrahtet sein.
+    assert "btnHisto.addEventListener" in html
+
+
+def test_webapp_rendert_fehlerhistorie_mit_zeitstempel():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "renderErrorHistory" in html
+    assert "formatErrorTime" in html
+    # Zeitstempel je Zeile, nicht nur als Ueberschrift.
+    assert "formatErrorTime(e.timestamp)" in html
+
+
+def test_webapp_fragt_die_fehler_api_ab():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "/errors?limit=" in html
+    assert "fetchErrors" in html
+
+
+def test_webapp_benutzt_textcontent_fuer_fehlertexte():
+    """Logeintrae duerfen kein HTML einschleusen (XSS)."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "text.textContent = e.message" in html
+
+
+def test_webapp_belastet_das_status_polling_nicht():
+    """Die Fehlerhistorie wird separat, nicht alle 5 s, abgerufen."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "const ERROR_INTERVAL_MS = 60000;" in html

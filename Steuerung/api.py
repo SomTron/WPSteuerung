@@ -314,6 +314,146 @@ def health_status():
     }
 
 
+# --- Fehlerhistorie ---------------------------------------------------------
+#
+# `error.log` enthaelt alle WARNING+-Ereignisse (rotierend, siehe
+# logging_config). Die WebApp zeigt daraus das letzte Ereignis mit
+# Zeitstempel und ueber einen Button die vollstaendige Historie.
+#
+# Es wird bewusst nur der TAIL gelesen: /status laeuft alle 5 s, ein
+# vollstaendiges Lesen wuerde auf dem Pi RAM und CPU kosten. Die
+# Cache-TTL ist kurz, damit ein neuer Fehler schnell sichtbar wird.
+
+ERROR_LOG_DATEI = os.environ.get(
+    "WPS_ERROR_LOG_FILE", "/var/log/wps/error.log"
+)
+ERROR_TAIL_BYTES = int(os.environ.get("WPS_ERROR_TAIL_BYTES", 512 * 1024))
+ERROR_CACHE_TTL_SEC = 15
+_ERROR_CACHE: dict = {"zeit": None, "eintraege": None}
+
+# Format: "2026-09-25 14:03:22 +0200 ERROR - Nachricht"
+_RE_FEHLERZEILE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\s*[+-]\d{4})?)\s+"
+    r"(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)\s*-\s*(?P<msg>.*)$"
+)
+_STUFEN_RANG = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+
+
+def _fehler_einstufung(level: str) -> str:
+    """Faehrt Log-Level zu einer kompakten, fuer die UI brauchbaren Stufe."""
+    if level == "CRITICAL":
+        return "kritisch"
+    if level == "ERROR":
+        return "fehler"
+    if level == "WARNING":
+        return "warnung"
+    return "info"
+
+
+def _parse_fehlerzeilen(text: str) -> list:
+    """Wandelt error.log-Zeilen in strukturierte Eintraege (neueste zuerst)."""
+    eintraege = []
+    for zeile in text.splitlines():
+        treffer = _RE_FEHLERZEILE.match(zeile.strip())
+        if not treffer:
+            continue
+        roh_ts = treffer.group("ts").replace("T", " ")
+        ts = None
+        for fmt in ("%Y-%m-%d %H:%M:%S %z", "%Y-%m-%d %H:%M:%S"):
+            try:
+                ts = datetime.strptime(roh_ts, fmt)
+                break
+            except ValueError:
+                continue
+        level = treffer.group("level")
+        nachricht = treffer.group("msg").strip()
+        if not nachricht:
+            continue
+        eintraege.append(
+            {
+                "timestamp": ts.isoformat() if ts else roh_ts,
+                "level": level,
+                "stufe": _fehler_einstufung(level),
+                "message": nachricht[:500],
+            }
+        )
+    eintraege.reverse()
+    return eintraege
+
+
+def _read_error_tail(max_bytes: int = ERROR_TAIL_BYTES) -> list:
+    """Liest den Tail des Fehlerlogs robust - auch waehrend des Schreibens."""
+    try:
+        groesse = os.path.getsize(ERROR_LOG_DATEI)
+    except OSError:
+        return []
+    try:
+        with open(
+            ERROR_LOG_DATEI, "rb"
+        ) as handle:
+            if groesse > max_bytes:
+                handle.seek(groesse - max_bytes)
+                handle.readline()  # angebrochene erste Zeile verwerfen
+            daten = handle.read()
+    except OSError:
+        return []
+    text = daten.decode("utf-8", errors="replace")
+    return _parse_fehlerzeilen(text)
+
+
+def fehler_historie(limit: int = 100, nur_ab_warnung: bool = True):
+    """Strukturierte Fehlerhistorie fuer die WebApp (neueste zuerst)."""
+    jetzt = datetime.now()
+    eintraege = _ERROR_CACHE.get("eintraege")
+    geholt = _ERROR_CACHE.get("zeit")
+    if (
+        eintraege is None
+        or geholt is None
+        or (jetzt - geholt).total_seconds() > ERROR_CACHE_TTL_SEC
+    ):
+        try:
+            eintraege = _read_error_tail()
+        except Exception as exc:  # Diagnose darf die API nie ausfallen lassen
+            logging.warning("Fehlerlog nicht lesbar: %s", exc)
+            eintraege = []
+        _ERROR_CACHE["eintraege"] = eintraege
+        _ERROR_CACHE["zeit"] = jetzt
+
+    if nur_ab_warnung:
+        eintraege = [e for e in eintraege if _STUFEN_RANG.get(e["level"], 0) >= 30]
+    begrenzt = eintraege[: max(1, min(int(limit), 500))]
+    # Es wird bewusst nur ein Tail gelesen (RAM-Schutz auf dem Pi). Deshalb
+    # wird der tatsaechlich abgedeckte Zeitraum mitgeliefert, damit die WebApp
+    # keine vollstaendige Historie vortaeuschen muss.
+    zeiten = [e["timestamp"] for e in begrenzt]
+    return {
+        "eintraege": begrenzt,
+        "anzahl": len(begrenzt),
+        "gesamt_geprueft": len(eintraege),
+        "quelle": os.path.basename(ERROR_LOG_DATEI),
+        "abgerufen": jetzt.isoformat(timespec="seconds"),
+        "letzter_fehler": begrenzt[0] if begrenzt else None,
+        "zeitraum_von": zeiten[-1] if zeiten else None,
+        "zeitraum_bis": zeiten[0] if zeiten else None,
+        "vollstaendig": False,
+        "tail_bytes": ERROR_TAIL_BYTES,
+    }
+
+
+@app.get("/errors")
+def errors_endpoint(
+    limit: int = 100,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    """Fehlerhistorie mit Zeitstempel.
+
+    Nur Fehler ab Stufe WARNING - die WebApp blendet reine
+    Steuerungs-Informationen ohnehin aus.
+    """
+    limit = max(1, min(int(limit or 100), 500))
+    return fehler_historie(limit=limit, nur_ab_warnung=True)
+
+
 def _solar_stale_status() -> bool:
     """True, wenn Solax-Daten aelter als der Stale-Schwellwert sind."""
     if shared_state is None:

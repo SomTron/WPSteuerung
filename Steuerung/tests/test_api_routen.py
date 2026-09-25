@@ -324,3 +324,114 @@ async def test_control_ohne_set_kompressor_liefert_503():
         assert exc.value.status_code == 503
     finally:
         api.shared_state, api.control_funcs = original_state, original_funcs
+
+
+# ------------------------------------------------------------- Fehlerhistorie
+
+
+FEHLERLOG = """\
+2026-09-25 12:00:01 +0200 INFO - Steuerung laeuft
+2026-09-25 12:01:02 +0200 WARNING - Solar-Daten veraltet | STALE
+2026-09-25 12:02:03 +0200 ERROR - Sensorfehler: T_Oben invalid
+2026-09-25 12:03:04 +0200 CRITICAL - Kompressor bleibt bei Boiler-Maximum eingeschaltet!
+Fehler im Loop-Durchlauf - fahre mit naechstem Zyklus fort
+"""
+
+
+def test_parse_fehlerzeilen_liest_stufe_und_zeit():
+    eintraege = api._parse_fehlerzeilen(FEHLERLOG)
+    # Neueste zuerst
+    assert eintraege[0]["level"] == "CRITICAL"
+    assert eintraege[0]["stufe"] == "kritisch"
+    assert eintraege[1]["level"] == "ERROR"
+    assert eintraege[1]["stufe"] == "fehler"
+    assert eintraege[2]["stufe"] == "warnung"
+    # Multiline-Traceback-Reste ohne Level werden verworfen.
+    assert len(eintraege) == 4
+    assert "eingeschaltet" in eintraege[0]["message"]
+
+
+def test_parse_fehlerzeilen_behaelt_den_rohen_text_bei_kaputtem_datum():
+    text = "kaputt ERROR - Testnachricht\n"
+    eintraege = api._parse_fehlerzeilen(text)
+    assert eintraege == []
+
+
+def test_fehlerstufen_sind_kompakt():
+    assert api._fehler_einstufung("CRITICAL") == "kritisch"
+    assert api._fehler_einstufung("ERROR") == "fehler"
+    assert api._fehler_einstufung("WARNING") == "warnung"
+    assert api._fehler_einstufung("INFO") == "info"
+
+
+def test_fehler_historie_liefert_letzten_fehler_und_anzahl(tmp_path, monkeypatch):
+    log = tmp_path / "error.log"
+    log.write_text(FEHLERLOG, encoding="utf-8")
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(log))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    daten = api.fehler_historie(limit=10, nur_ab_warnung=True)
+
+    assert daten["anzahl"] == 3          # WARNING/ERROR/CRITICAL, ohne INFO
+    assert daten["letzter_fehler"]["level"] == "CRITICAL"
+    assert daten["quelle"] == "error.log"
+    assert "timestamp" in daten["letzter_fehler"]
+
+
+def test_fehler_historie_begrenzt_die_anzahl(tmp_path, monkeypatch):
+    zeilen = "".join(
+        f"2026-09-25 12:{i % 60:02d}:00 +0200 ERROR - Fehler {i}\n"
+        for i in range(50)
+    )
+    log = tmp_path / "error.log"
+    log.write_text(zeilen, encoding="utf-8")
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(log))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    assert api.fehler_historie(limit=5)["anzahl"] == 5
+
+
+def test_fehler_historie_ueberlebt_fehlende_datei(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(tmp_path / "fehlt.log"))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    daten = api.fehler_historie(limit=10)
+    assert daten["eintraege"] == []
+    assert daten["letzter_fehler"] is None
+
+
+def test_fehler_historie_ignoriert_infolgezeilen(tmp_path, monkeypatch):
+    """INFO-Zeilen sind keine Fehler und stoeren die 24-h-Anzeige nicht."""
+    zeilen = "".join(
+        f"2026-09-25 12:00:{i:02d} +0200 INFO - Status {i}\n" for i in range(20)
+    )
+    log = tmp_path / "error.log"
+    log.write_text(zeilen, encoding="utf-8")
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(log))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    assert api.fehler_historie(limit=50, nur_ab_warnung=True)["anzahl"] == 0
+
+
+def test_fehler_historie_meldet_den_abgedeckten_zeitraum(tmp_path, monkeypatch):
+    """Es wird nur ein Tail gelesen - das muss die Antwort auch sagen."""
+    log = tmp_path / "error.log"
+    log.write_text(FEHLERLOG, encoding="utf-8")
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(log))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    daten = api.fehler_historie(limit=10)
+    assert daten["vollstaendig"] is False
+    assert daten["zeitraum_von"] is not None
+    assert daten["zeitraum_bis"] is not None
+    # Neuester Eintrag zuerst: bis >= von
+    assert daten["zeitraum_bis"] >= daten["zeitraum_von"]
+
+
+def test_fehler_historie_ohne_eintraege_hat_keinen_zeitraum(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(tmp_path / "fehlt.log"))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    daten = api.fehler_historie(limit=10)
+    assert daten["zeitraum_von"] is None
+    assert daten["zeitraum_bis"] is None
