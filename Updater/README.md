@@ -92,6 +92,55 @@ unter `.git/wp-manager-backups/<Zeitstempel>-<PID>/`:
 Es werden weder `git reset --hard` noch automatisches Stashen verwendet. Nach
 einer eigenen Commit-/Stash-Auflösung wird das Update erneut gestartet.
 
+### Neue Optionen: Health und Analyse-Qualitaet
+
+| Option | Zweck |
+|---|---|
+| `22` | Steuerungs-Health ueber den API-Endpunkt `/health` (Loop-Alter, Regelfehler, GPIO, Snapshot-Persistenz) |
+| `23` | Analyse-Qualitaet aus `quality_report.json` (Schema, unbekannte Codes, Szenarien, Probleme) |
+
+Beide Ausgaben kommen aus `manager_health.py` (nur Standardbibliothek). Der Bericht
+wird unter `WPS_QUALITY_REPORT` erwartet; fehlt die Variable, sucht der Manager
+den neuesten `quality_report.json` unter `logs/`.
+
+Exit-Codes von `manager_health.py`:
+
+```text
+0 = gesund / Qualitaet gruen
+1 = nicht erreichbar bzw. nicht lesbar
+2 = Daten vorhanden, aber nicht gruen (degraded / Warnung)
+```
+
+Konfiguration optional:
+
+```bash
+export WPS_API_BASE=http://127.0.0.1:8000
+export WPS_API_KEY=...
+export WPS_QUALITY_REPORT=/pfad/quality_report.json
+```
+
+### Korrektheits- und Haertungsdetails
+
+- **KPI-Anzeige (Option 15)**: Die KPI-Funktion benoetigt WP-Leistung und
+  Strompreis. Der parameterlose Aufruf war ein `TypeError` und schlug immer fehl.
+  Beide Werte werden jetzt aus `wp_steuerung_parameter.json` gelesen.
+- **Kein Shell-Quoting-Risiko**: Python-Code bekommt Pfade und Parameter ueber
+  Umgebungsvariablen (`WPS_STEER_DIR`). Ein Pfad mit Anfuehrungszeichen kann den
+  Aufruf nicht mehr zerstoeren. Der Startbericht liegt in `startup_report.py`.
+- **Detached-HEAD-Schutz**: Option 10 verweigert das Update, wenn HEAD keinem
+  Branch zugeordnet ist, und weist auf fehlendes Upstream hin.
+- **Backup umfasst untracked Dateien**: zusaetzlich `untracked-files.tar.gz`,
+  weil `git diff HEAD` neue Dateien nicht enthaelt.
+- **Preflight**: `python3` und `git` sind Pflicht; fehlen sie, gibt es eine
+  klare Meldung statt eines Syntaxfehlers. `curl`/`gzip` werden nur fuer Uploads
+  gemeldet.
+- **Ctrl+C**: bricht mit sauberer Zeile und Exitcode 130 ab.
+- **Service-Stopp**: verlangt eine Bestaetigung, weil der Dienst Heizung, Solar
+  und Legionellenprophylaxe steuert.
+- **Pager**: `more` wird ueber `zeige` aufgerufen, damit die Ausgabe auch ohne
+  Pager funktioniert.
+- **BOM-Toleranz**: `quality_report.json` wird mit `utf-8-sig` gelesen.
+
 ### Datenschutz beim Upload
 
 Optionen 9, 14, 16, 18 und 21 nutzen dieselbe Upload-Routine. Vor jeder Übertragung

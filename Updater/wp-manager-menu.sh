@@ -74,6 +74,42 @@ is_number() {
     esac
 }
 
+# Voraussetzungen einmal pruefen. Ohne python3/git ist der Manager nicht
+# arbeitsfaehig; curl/gzip werden nur fuer die Upload-Optionen gebraucht.
+preflight() {
+    fehlend=""
+    for tool in python3 git; do
+        command -v "$tool" >/dev/null 2>&1 || fehlend="$fehlend $tool"
+    done
+    if [ -n "$fehlend" ]; then
+        printf "%s\n" "WP-Manager FEHLER" >&2
+        printf "Fehlende Pflichtprogramme:%s\n" "$fehlend" >&2
+        printf "Bitte nachinstallieren, dann erneut starten.\n" >&2
+        exit 1
+    fi
+    for tool in curl gzip; do
+        command -v "$tool" >/dev/null 2>&1 || \
+            printf "Hinweis: '%s' fehlt - die Upload-Optionen (9/14/16/18/21) sind dann nicht nutzbar.\n" "$tool" >&2
+    done
+    return 0
+}
+
+# Strg+C im Menue soll eine saubere Zeile hinterlassen und nicht mitten in
+# einer Ausgabe abbrechen.
+menu_abbruch() {
+    printf "\n\nMenue abgebrochen. Auf Wiedersehen.\n"
+    exit 130
+}
+
+# Pager mit Fallback: 'more' fehlt auf manchen Systemen.
+zeige() {
+    if command -v more >/dev/null 2>&1; then
+        more
+    else
+        cat
+    fi
+}
+
 status_value() {
     printf '%s\n' "$MANAGER_STATUS" | sed -n "s/^$1=//p" | head -n 1
 }
@@ -93,6 +129,17 @@ backup_local_changes() {
     mkdir -p "$backup_dir" || return 1
     git -C "$repo" status --porcelain=v1 > "$backup_dir/status.txt" || return 1
     git -C "$repo" diff --binary HEAD -- > "$backup_dir/tracked-changes.patch" || return 1
+    # Untracked Dateien (z.B. neue Logs) sind nicht im Patch enthalten.
+    # Sie werden deshalb zusaetzlich als Tarball gesichert.
+    if git -C "$repo" ls-files --others --exclude-standard -z \
+        | timeout 30 tar -C "$repo" --null -T - -czf "$backup_dir/untracked-files.tar.gz" 2>/dev/null; then
+        printf 'untracked Dateien: %s (siehe untracked-files.tar.gz)\n' \
+            "$(tar -tzf "$backup_dir/untracked-files.tar.gz" 2>/dev/null | wc -l | tr -d ' ')" \
+            > "$backup_dir/untracked-info.txt"
+    else
+        printf 'keine untracked Dateien oder tar nicht verfuegbar\n' \
+            > "$backup_dir/untracked-info.txt"
+    fi
     printf '%s\n' "$backup_dir"
 }
 
@@ -111,6 +158,17 @@ safe_manager_update() {
         printf "Bitte Änderungen committen/stashen oder manuell sichern.\n"
         return 1
     fi
+    branch=$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    if [ -z "$branch" ]; then
+        printf "${RED}Update blockiert: HEAD ist detached (kein Branch ausgecheckt).${NC}\n"
+        printf "Bitte vorher auf einen Branch wechseln, z.B.:\n"
+        printf "   git -C %s switch entwicklung\n" "$repo"
+        return 1
+    fi
+    if ! git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+        printf "${YELLOW}Hinweis: Branch '%s' hat kein Upstream.${NC}\n" "$branch"
+    fi
+    printf "Aktualisiere Branch '%s' (nur Fast-Forward)...\n" "$branch"
     old_commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null) || return 1
     git -C "$repo" pull --ff-only || return 1
     new_commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null) || return 1
@@ -273,6 +331,9 @@ upload_file() {
     printf "${GREEN}✓ Upload erfolgreich.${NC}\nURL: ${BLUE}%s${NC}\n" "$upload_url"
 }
 
+preflight
+trap menu_abbruch INT TERM
+
 if [ ! -d "$TARGET_DIR" ]; then
     printf "${RED}Error: $TARGET_DIR not found!${NC}\n"
     exit 1
@@ -291,19 +352,45 @@ query_logs_by_time() {
 query_logs_by_duration() {
     hours="$1"
     maxlines="${2:-200}"
-    python3 -c "
-from datetime import datetime, timedelta
+    if ! is_number "$hours" || [ "$hours" -eq 0 ]; then
+        printf "${RED}Ungueltige Stundenzahl: %s${NC}\n" "$hours"
+        return 1
+    fi
+    if ! is_number "$maxlines" || [ "$maxlines" -eq 0 ]; then
+        printf "${RED}Ungueltige Zeilenzahl: %s${NC}\n" "$maxlines"
+        return 1
+    fi
+    # Zielverzeichnis und Parameter ueber die Umgebung uebergeben: so kann
+    # ein Pfad mit Anfuehrungszeichen den Python-Code nicht zerstoeren.
+    WPS_STEER_DIR="$TARGET_DIR" WPS_QUERY_HOURS="$hours" WPS_QUERY_LINES="$maxlines" \
+    python3 -c '
+import os
 import sys
-sys.path.insert(0, '$TARGET_DIR')
-from log_query import query_logs, tail_log
-#timezone-awareive für Vergleich mit Log-Zeitstempeln
-target = datetime.now().replace(tzinfo=None) - timedelta(hours=${hours})
-result, meta = query_logs(after=target, lines=${maxlines})
-for line in result:
-    sys.stdout.write(line)
-if not result:
-    print('Keine Logs in den letzten ${hours} Stunde(n) gefunden.')
-" 2>&1 | more
+from datetime import datetime, timedelta
+
+ziel = os.environ.get("WPS_STEER_DIR", ".")
+sys.path.insert(0, ziel)
+stunden = int(os.environ.get("WPS_QUERY_HOURS", "2"))
+zeilen = int(os.environ.get("WPS_QUERY_LINES", "200"))
+
+try:
+    from log_query import query_logs
+except Exception as exc:
+    print("log_query nicht verfuegbar: %s" % exc)
+    raise SystemExit(1)
+
+grenze = datetime.now().replace(tzinfo=None) - timedelta(hours=stunden)
+try:
+    ergebnis, _meta = query_logs(after=grenze, lines=zeilen)
+except Exception as exc:
+    print("Logabfrage fehlgeschlagen: %s" % exc)
+    raise SystemExit(1)
+
+for zeile in ergebnis:
+    sys.stdout.write(zeile)
+if not ergebnis:
+    print("Keine Logs in den letzten %d Stunde(n) gefunden." % stunden)
+' 2>&1 | zeige
     wait_for_key
 }
 
@@ -318,6 +405,136 @@ finde_zyklen_csv() {
     ls -1t "$REPO_ROOT"/logs/analyse_*/zyklen.csv 2>/dev/null | head -n1
 }
 
+
+# Entscheidungs-Log: Pfad und Parameter kommen aus der Umgebung, damit
+# Sonderzeichen im Pfad den Python-Code nicht zerstoeren. Zusaetzlich wird
+# das API ausgewertet - die KPI-Funktion erwartet Leistung und Strompreis.
+show_entcheidungs_log() {
+    ENT_LOG_FILE="${WPS_ENT_LOG_FILE:-$TARGET_DIR/entscheidungs_log.jsonl}"
+    if [ ! -f "$ENT_LOG_FILE" ]; then
+        printf "${RED}entscheidungs_log.jsonl nicht gefunden: %s${NC}\n" "$ENT_LOG_FILE"
+        return 1
+    fi
+    printf "${CYAN}Wie viele Entscheidungen anzeigen? (Default 30):${NC} "
+    read ent_lines
+    ent_lines="${ent_lines:-30}"
+    if ! is_number "$ent_lines" || [ "$ent_lines" -eq 0 ]; then
+        printf "${RED}Ungueltige Zeilenzahl - verwende Standardwert 30.${NC}\n"
+        ent_lines=30
+        sleep 1
+    fi
+    WPS_STEER_DIR="$TARGET_DIR" WPS_ENT_LINES="$ent_lines" python3 -c '
+import json
+import os
+import sys
+from pathlib import Path
+
+ziel = os.environ.get("WPS_STEER_DIR", ".")
+sys.path.insert(0, ziel)
+zeilen = int(os.environ.get("WPS_ENT_LINES", "30"))
+
+try:
+    import entscheidungs_log as el
+except Exception as exc:
+    print("entscheidungs_log nicht ladbar: %s" % exc)
+    raise SystemExit(1)
+
+try:
+    eintraege = el.historie(72, limit=zeilen)
+except Exception as exc:
+    print("Historie nicht lesbar: %s" % exc)
+    raise SystemExit(1)
+
+print("Letzte %d Entscheidungen (72 h):" % len(eintraege))
+print("-" * 78)
+for e in eintraege:
+    laeuft = "EIN" if e.get("kompressor_laeuft") else "AUS"
+    soll = "EIN" if e.get("soll_einschalten") else "AUS"
+    f = e.get("feedin_w")
+    f_txt = ("%.0fW" % f) if isinstance(f, (int, float)) else "-"
+    print("%s | %s | soll=%s | WP=%s | feedin=%s | SOC=%s | unten=%sC | %s" % (
+        e.get("ts", "?"), e.get("gewinner", "-"), soll, laeuft, f_txt,
+        e.get("soc"), e.get("t_unten"), str(e.get("grund", ""))[:60]))
+print("-" * 78)
+
+# Die KPI-Funktion benoetigt WP-Leistung und Strompreis als Pflichtargumente.
+leistung, preis = 600.0, 0.35
+try:
+    daten = json.loads((Path(ziel) / "wp_steuerung_parameter.json").read_text(encoding="utf-8"))
+    leistung = float(daten.get("wp", {}).get("leistung_watt", leistung))
+    preis = float(daten.get("kpi", {}).get("strompreis_eur_kwh", preis))
+except Exception:
+    pass
+
+try:
+    k = el.kpis(leistung, preis)
+    print("KPIs heute:    %s" % k.get("heute"))
+    print("KPIs 7 Tage:  %s" % k.get("sieben_tage"))
+except TypeError as exc:
+    print("KPI-Aufruf inkompatibel: %s" % exc)
+except Exception as exc:
+    print("KPI-Abfrage fehlgeschlagen: %s" % exc)
+' 2>&1 | zeige
+    wait_for_key
+}
+
+# Health-Endpunkt der laufenden Steuerung abfragen.
+show_control_health() {
+    printf "${CYAN}=== Steuerungs-Health (API) ===${NC}\n"
+    printf "API-Basis: %s\n" "${WPS_API_BASE:-http://127.0.0.1:8000}"
+    if [ -n "${WPS_API_KEY:-}" ]; then
+        printf "API-Key:    gesetzt\n"
+    else
+        printf "${YELLOW}API-Key:    nicht gesetzt (WPS_API_KEY) - Schreibzugriffe sind deaktiviert.${NC}\n"
+    fi
+    if python3 "$SCRIPT_DIR/manager_health.py" health; then
+        :
+    else
+        rc=$?
+        if [ "$rc" -eq 2 ]; then
+            printf "${YELLOW}Hinweis: Status ist nicht 'ok' (siehe oben).${NC}\n"
+        else
+            printf "${RED}Health-Abfrage nicht moeglich.${NC}\n"
+            printf "Laeuft der Dienst? Pruefe Option 13 und den API-Port.\n"
+        fi
+    fi
+    wait_for_key
+}
+
+# Analyse-Qualitaetsbericht anzeigen.
+show_analysis_quality() {
+    REPORT="${WPS_QUALITY_REPORT:-}"
+    if [ -z "$REPORT" ]; then
+        REPORT=$(finde_qualitaets_report)
+    fi
+    if [ -z "$REPORT" ]; then
+        printf "${YELLOW}Kein quality_report.json gefunden.${NC}\n"
+        printf "Der Bericht entsteht nach einem Analyse-Lauf (Option 20.2).\n"
+        return 1
+    fi
+    printf "${CYAN}Bericht: %s${NC}\n" "$REPORT"
+    WPS_QUALITY_REPORT="$REPORT" python3 "$SCRIPT_DIR/manager_health.py" quality
+    rc=$?
+    if [ "$rc" -eq 2 ]; then
+        printf "${YELLOW}Hinweis: Qualitaetsstufe ist nicht gruen (siehe Probleme oben).${NC}\n"
+    elif [ "$rc" -ne 0 ]; then
+        printf "${RED}Qualitaetsbericht nicht lesbar.${NC}\n"
+    fi
+    wait_for_key
+}
+
+# Neuesten Qualitaetsbericht suchen (Analyse-Ordner, dann Projektwurzel).
+finde_qualitaets_report() {
+    for basis in "$REPO_ROOT/logs" "$TARGET_DIR/logs" "$REPO_ROOT"; do
+        [ -d "$basis" ] || continue
+        treffer=$(find "$basis" -name 'quality_report.json' -type f 2>/dev/null | head -n 1)
+        if [ -n "$treffer" ]; then
+            printf '%s\n' "$treffer"
+            return 0
+        fi
+    done
+    return 1
+}
 
 wait_for_key() {
     printf "\n${YELLOW}Drücke Enter, um ins Menü zurückzukehren...${NC}"
@@ -395,7 +612,9 @@ analysis_menu() {
         printf "3) Timer installieren / reparieren / aktivieren\n"
         printf "4) Timer deaktivieren\n"
         printf "5) Journal der Analyse (letzte 80 Zeilen)\n"
-        printf "0) Zurueck zum Hauptmenue\n"
+        printf "22) 🩺  Steuerungs-Health (API /health)\n"
+    printf "23) 📈  Analyse-Qualitaet (quality_report.json)\n"
+    printf "0) Zurueck zum Hauptmenue\n"
         printf "Choice: "
         read analysis_choice
         case "$analysis_choice" in
@@ -630,7 +849,7 @@ while true; do
             ;;
         2)
             if [ -f "$LOG_FILE" ]; then
-                tail -n 200 "$LOG_FILE" | more
+                tail -n 200 "$LOG_FILE" | zeige
             else
                 printf "${RED}Logdatei nicht gefunden: %s${NC}\n" "$LOG_FILE"
             fi
@@ -638,7 +857,7 @@ while true; do
             ;;
         3)
             if [ -f "$ERROR_LOG_FILE" ] && [ -s "$ERROR_LOG_FILE" ]; then
-                tail -n 200 "$ERROR_LOG_FILE" | more
+                tail -n 200 "$ERROR_LOG_FILE" | zeige
             elif [ -f "$ERROR_LOG_FILE" ]; then
                 printf "${GREEN}error.log ist leer – keine Fehler!${NC}\n"
             else
@@ -653,6 +872,13 @@ while true; do
             wait_for_key
             ;;
         6)
+            printf "${YELLOW}Der Dienst steuert Heizung, Solar und Legionellenprophylaxe.${NC}\n"
+            printf "Trotzdem jetzt stoppen? (j/N): "
+            read stop_reply
+            case "$stop_reply" in
+                [Jj]*) ;;
+                *) printf "Abbruch - Dienst laeuft weiter.\n"; wait_for_key; continue ;;
+            esac
             printf "${CYAN}Stoppe Service und verifiziere...${NC}\n"
             verify_service_action stop wpsteuerung
             wait_for_key
@@ -727,46 +953,7 @@ while true; do
             upload_file "$LOG_FILE" "heizungssteuerung.log"
             wait_for_key
             ;;
-        15)
-            ENT_LOG_FILE="${WPS_ENT_LOG_FILE:-$TARGET_DIR/entscheidungs_log.jsonl}"
-            if [ ! -f "$ENT_LOG_FILE" ]; then
-                printf "${RED}entscheidungs_log.jsonl nicht gefunden: %s${NC}\\n" "$ENT_LOG_FILE"
-                wait_for_key
-            else
-                printf "${CYAN}Wie viele Entscheidungen anzeigen? (Default 30):${NC} "
-                read ent_lines
-                ent_lines="${ent_lines:-30}"
-                if ! is_number "$ent_lines"; then
-                    printf "${RED}'%s' ist keine Zahl – verwende Standardwert 30.${NC}\\n" "$ent_lines"
-                    ent_lines=30
-                    sleep 1
-                fi
-                python3 -c "
-import sys
-sys.path.insert(0, '$TARGET_DIR')
-from entscheidungs_log import historie, kpis
-rows = historie(72, limit=${ent_lines})
-print('Letzte %d Entscheidungen (72 h):' % len(rows))
-print('-' * 70)
-for e in rows:
-    laeuft = 'EIN' if e.get('kompressor_laeuft') else 'AUS'
-    soll = 'EIN' if e.get('soll_einschalten') else 'AUS'
-    f = e.get('feedin_w')
-    f_txt = ('%.0fW' % f) if isinstance(f, (int, float)) else '-'
-    print('%s | %s | soll=%s | WP=%s | feedin=%s | SOC=%s | unten=%sC | %s' % (
-        e.get('ts', '?'), e.get('gewinner', '-'), soll, laeuft, f_txt,
-        e.get('soc'), e.get('t_unten'), str(e.get('grund', ''))[:60]))
-print('-' * 70)
-try:
-    k = kpis()
-    print('KPIs heute: %s' % k.get('heute'))
-    print('KPIs 7 Tage: %s' % k.get('sieben_tage'))
-except Exception as ex:
-    print('KPI-Abfrage fehlgeschlagen: %s' % ex)
-" 2>&1 | more
-                wait_for_key
-            fi
-            ;;
+        15) show_entcheidungs_log ;;
         16)
             ENT_LOG_FILE="${WPS_ENT_LOG_FILE:-$TARGET_DIR/entscheidungs_log.jsonl}"
             upload_file "$ENT_LOG_FILE" "entscheidungs_log.jsonl"
@@ -831,49 +1018,14 @@ except Exception as ex:
             printf "${CYAN}--- Bewertung (startup_diagnose) ---${NC}\n"
             (
                 cd "$TARGET_DIR" || exit 1
-                python3 -c "
-import sys
-sys.path.insert(0, '$TARGET_DIR')
-try:
-    import startup_diagnose as sd
-except Exception as ex:
-    print('startup_diagnose nicht verfuegbar: %s' % ex)
-    raise SystemExit(0)
-
-info = sd.pruefe_lauf_start_grund()
-if sd.lauf_ist_aktiv():
-    print('OK: Die Steuerung laeuft gerade - die Statusdatei gehoert zum aktiven Prozess.')
-elif info.get('erster_start'):
-    print('Kein Vorlauf verzeichnet (erster Start seit Einfuehrung der Diagnose).')
-elif info.get('unsauber'):
-    print('WARNUNG: Letzter Lauf wurde NICHT sauber beendet.')
-    print('  Vorheriger Start:      %s' % (info.get('vorheriger_start') or '?'))
-    print('  Letztes sauberes Ende: %s' % (info.get('vorheriges_ende') or 'kein Eintrag'))
-    if info.get('oom_hinweis'):
-        print('  Kernel-Log: %s' % info['oom_hinweis'])
-        print('  => Verdacht: OOM-Kill (Speicher).')
-    else:
-        print('  Kein OOM-Hinweis im Kernel-Log lesbar -> Crash / harter Reset / Strom?')
-else:
-    print('OK: Letzter Lauf wurde sauber beendet.')
-print()
-print('Speicher jetzt: %s' % sd.formatiere_speicher(sd.speicher_werte()))
-" 2>&1 | more
+                WPS_STEER_DIR="$TARGET_DIR" python3 "$SCRIPT_DIR/startup_report.py" \
+                    2>&1 | zeige
             )
 
-            printf "\\n${CYAN}--- Service / System ---${NC}\\n"
-            printf "Neustarts durch systemd: %s\\n" "$(systemctl show wpsteuerung -p NRestarts --value 2>/dev/null)"
-            free -m 2>/dev/null | awk 'NR==1 || NR==2'
-            if command -v vcgencmd >/dev/null 2>&1; then
-                printf "Throttling (Strom/Temp): %s  ${DIM}(0x0 = unauffaellig)${NC}\\n" "$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
-            fi
-            OOM_COUNT=$(journalctl -k --since '24 hours ago' --no-pager 2>/dev/null \
-                | grep -Eic 'Out of memory|Killed process' || true)
-            [ -z "$OOM_COUNT" ] && OOM_COUNT="n/a"
-            printf "OOM-Ereignisse im Kernel-Journal (letzte 24 h): %s\\n" "$OOM_COUNT"
-            printf "${DIM}Bei fehlender Journal-Berechtigung oder leerem Journal ist die Anzahl nur ein Hinweis.${NC}\\n"
             wait_for_key
             ;;
+        22) show_control_health ;;
+        23) show_analysis_quality ;;
         0) exit 0 ;;
         *)
             printf "${RED}Ungültige Auswahl: '%s'${NC}\n" "$choice"

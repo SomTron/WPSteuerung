@@ -179,3 +179,70 @@ def test_upload_ist_bestaetigungspflichtig_begrenzt_und_bereinigt():
     assert "--max-time 300" in manager
     assert "trap 'rm -rf \"$temp_dir\"' 0 1 2 3 15" in manager
     assert 'rm -rf "$temp_dir"' in manager
+
+
+# ------------------- Korrektheits- und Härtungsverträge -------------------
+
+def test_kpis_werden_mit_pflichtparametern_aufgerufen():
+    """kpis() braucht Leistung und Strompreis - ohne Parameter: TypeError."""
+    manager, _ = _updater_scripts()
+    assert "kpis(leistung, preis)" in manager
+    # Der fehlerhafte parameterlose Aufruf darf nicht mehr vorkommen.
+    assert "kpis()" not in manager
+
+
+def test_inline_python_bekommt_pfade_ueber_umgebung_statt_interpolation():
+    manager, _ = _updater_scripts()
+    # Kein Einbetten von Shell-Variablen in den Python-Code mehr.
+    assert "sys.path.insert(0, '$TARGET_DIR')" not in manager
+    assert "WPS_STEER_DIR" in manager
+    assert "os.environ.get(\"WPS_STEER_DIR\"" in manager
+
+
+def test_manager_update_prueft_detached_head_und_upstream():
+    manager, _ = _updater_scripts()
+    assert "symbolic-ref --quiet --short HEAD" in manager
+    assert "Update blockiert: HEAD ist detached" in manager
+    assert "@{u}" in manager
+
+
+def test_backup_sichert_auch_untracked_dateien():
+    manager, _ = _updater_scripts()
+    assert "untracked-files.tar.gz" in manager
+    assert "--others --exclude-standard" in manager
+
+
+def test_preflight_meldet_fehlende_pflichtprogramme():
+    manager, _ = _updater_scripts()
+    assert "preflight()" in manager
+    assert "preflight\n" in manager
+    assert "Fehlende Pflichtprogramme" in manager
+
+
+def test_ctrl_c_bricht_mit_sauberer_meldung_ab():
+    manager, _ = _updater_scripts()
+    assert "menu_abbruch()" in manager
+    assert "trap menu_abbruch INT TERM" in manager
+
+
+def test_service_stopp_wird_bestaetigt():
+    manager, _ = _updater_scripts()
+    assert "Trotzdem jetzt stoppen? (j/N):" in manager
+    assert "Abbruch - Dienst laeuft weiter." in manager
+
+
+def test_pager_hat_fallback_wenn_more_fehlt():
+    manager, _ = _updater_scripts()
+    assert "zeige()" in manager
+    assert "command -v more" in manager
+    # Kein direkter Pager-Aufruf mehr ausser ueber den Fallback.
+    assert "| more" not in manager
+
+
+def test_neue_optionen_health_und_qualitaet():
+    manager, _ = _updater_scripts()
+    assert "22) show_control_health ;;" in manager
+    assert "23) show_analysis_quality ;;" in manager
+    assert "manager_health.py" in manager
+    assert "/health" in manager
+    assert "quality_report.json" in manager
