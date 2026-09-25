@@ -249,6 +249,31 @@ async def test_on_blockiert_wenn_hub_nicht_fuer_mindestlaufzeit_reicht():
     assert "Start-Antizipation" in (state.control.blocking_reason or "")
 
 
+def test_start_antizipation_niedrige_konfidenz_verlaengert_puffer():
+    state = baue_state(t_unten=45.9)
+    state.control.kompressor_ein = False
+    state.control._soll_einschalten = True
+    # Keine Messung: Fallback-Rate 12 C/h, confidence 0.1.
+    calls = []
+    async def set_status(state, ein, **kwargs):
+        calls.append((ein, kwargs))
+        return True
+
+    import asyncio
+    erg = asyncio.run(pcl.handle_compressor_on(
+        state, None, regelfuehler=45.9, einschaltpunkt=42.0, ausschaltpunkt=48.0,
+        min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
+        set_kompressor_status_func=set_status,
+    ))
+    assert erg is False
+    assert calls == []
+    info = state.control._last_start_anticipation
+    assert info["confidence_category"] == "niedrig"
+    assert info["extra_buffer_min"] == 2.0
+    assert info["effective_buffer_min"] == 3.0
+
+
 # ---------- Konfiguration ----------
 
 def test_default_werte_matchen_anforderung():

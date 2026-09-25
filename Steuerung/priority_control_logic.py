@@ -1491,26 +1491,44 @@ async def handle_compressor_on(
         if hub_k > 0:
             erwartet_min = hub_k / max(rate_var, 1.0) * 60.0
             puffer_min = float(getattr(_sic_cfg, "start_vorhersage_puffer_min", 1.0))
+            low_conf = float(getattr(_sic_cfg, "start_vorhersage_niedrig_confidence", 0.4))
+            high_conf = float(getattr(_sic_cfg, "start_vorhersage_hoch_confidence", 0.7))
+            rate_confidence = float(getattr(state.control, "_rate_confidence", 0.1))
+            if rate_confidence < low_conf:
+                confidence_category = "niedrig"
+                extra_puffer = float(
+                    getattr(_sic_cfg, "start_vorhersage_niedrig_zusatzpuffer_min", 2.0)
+                )
+            elif rate_confidence < high_conf:
+                confidence_category = "mittel"
+                extra_puffer = 0.0
+            else:
+                confidence_category = "hoch"
+                extra_puffer = 0.0
+            effective_puffer_min = puffer_min + extra_puffer
             minz = _effektive_mindestlaufzeit(
                 state, min_laufzeit, getattr(state.control, "active_rule_name", None)
             )
             minz_min = float(minz.total_seconds() / 60.0)
             rate_confidence = float(getattr(state.control, "_rate_confidence", 0.1))
             state.control._last_start_anticipation = {
-                "blocked": erwartet_min + puffer_min < minz_min,
+                "blocked": erwartet_min + effective_puffer_min < minz_min,
                 "hub_k": round(hub_k, 2),
                 "rate_c_h": round(rate_var, 2),
                 "rate_confidence": round(rate_confidence, 2),
+                "confidence_category": confidence_category,
                 "expected_min": round(erwartet_min, 1),
                 "effective_min": round(minz_min, 1),
                 "buffer_min": round(puffer_min, 1),
+                "extra_buffer_min": round(extra_puffer, 1),
+                "effective_buffer_min": round(effective_puffer_min, 1),
             }
-            if erwartet_min + puffer_min < minz_min:
+            if erwartet_min + effective_puffer_min < minz_min:
                 state.control.blocking_reason = (
                     f"Start-Antizipation: hub zur Obergrenze nur {hub_k:.1f}K "
                     f"(Rate {rate_var:.0f}C/h, Confidence {rate_confidence:.0%} -> "
                     f"{erwartet_min:.0f}min < {minz_min:.0f}min Mindestlaufzeit + "
-                    f"{puffer_min:.0f}min Reserve)"
+                    f"{effective_puffer_min:.0f}min Reserve, Konfidenz {confidence_category})"
                 )
                 if check_log_throttle(state, "log_start_vorhersage_block", 10):
                     logging.info(

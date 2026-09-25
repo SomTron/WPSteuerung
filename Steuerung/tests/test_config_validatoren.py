@@ -19,10 +19,32 @@ from json_config import (
     AbweichungConfig,
     ForecastConfig,
     CalculatedStartConfig,
+    NotfallschutzConfig,
+    LegionellenConfig,
+    SicherheitConfig,
 )
 
 
 # ── Defaults muessen gueltig sein ──
+
+def test_notfall_fuehler_und_legionellenparameter_werden_validiert():
+    assert NotfallschutzConfig().temperaturfuehler == "auto"
+    with pytest.raises(ValueError):
+        NotfallschutzConfig(temperaturfuehler="seitlich")
+    with pytest.raises(ValueError):
+        LegionellenConfig(pv_prognose_schwelle_gut=25000.0)
+
+
+def test_start_vorhersage_konfigurationsgrenzen():
+    config = WPSteuerungConfig()
+    assert config.sicherheit.start_vorhersage_niedrig_confidence == 0.4
+    assert config.sicherheit.start_vorhersage_hoch_confidence == 0.7
+    with pytest.raises(ValueError):
+        SicherheitConfig(
+            start_vorhersage_niedrig_confidence=0.8,
+            start_vorhersage_hoch_confidence=0.7,
+        )
+
 
 def test_defaults_gueltig():
     """Alle Default-Werte muessen die Validatoren passieren."""

@@ -360,6 +360,45 @@ def test_solar_negative_zeitstempel_ist_stale():
                 assert state.solar.sunset_today == "20:15"
 
     @pytest.mark.asyncio
+    async def test_legionellen_erforderliche_prognose_wird_beachtet(self, monkeypatch):
+        from main import check_periodic_tasks
+
+        state = self._baue_state()
+        from json_config import LegionellenConfig
+
+        state.priority_config.legionellen = LegionellenConfig(
+            aktiv=True, bevorzugter_tag=4, letzter_tag=6,
+            mindest_prognose_wh_qm=800.0, erforderliche_wh_qm=2500.0,
+            pv_prognose_schwelle_gut=2000.0,
+        )
+        state.legionellen_last_done = None
+        state.legionellen_planned_tag = None
+        state.legionellen_planned_date = None
+        state.legionellen_planned_day = None
+        state.legionellen_planned_time = None
+        state.legionellen_planned_reason = None
+        state.legionellen_plan_revision = 0
+        state.legionellen_plan_created_at = None
+        state.legionellen_aktiv = False
+        monkeypatch.setattr("main.save_plan", lambda state: True)
+        monkeypatch.setattr("main.clear_plan", lambda state, reason, persist=True: None)
+        monkeypatch.setattr("main.check_vpn_status", new_callable=AsyncMock)
+        with patch(
+            "main._state_now",
+            return_value=pytz.timezone("Europe/Berlin").localize(
+                datetime(2026, 9, 24, 12, 0)
+            ),
+        ):
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
+                # Donnerstag heute; Freitag 2.0 < erforderliche 2.5,
+                # Samstag 3.0 ist der nächste gute planbare Tag.
+                mock_forecast.return_value = (2.5, 2.0, 3.0, "06:15", "20:15", "06:16", "20:14", {})
+                await check_periodic_tasks(AsyncMock(), state, datetime.now() - timedelta(hours=2))
+
+        assert state.legionellen_planned_tag == 5
+        assert state.legionellen_planned_forecast_wh == 3000.0
+
+    @pytest.mark.asyncio
     async def test_check_periodic_tasks_reicht_sommer_modus_wh_werte(self):
         from main import check_periodic_tasks
         state = self._baue_state()

@@ -24,6 +24,21 @@ TZ = pytz.timezone("Europe/Berlin")
 
 # ── Wochenende-Prioritaet ──
 
+def test_wochenende_laufender_zyklus_wird_nicht_durch_wochenendspur_re_befohlen():
+    config = WPSteuerungConfig()
+    samstag = TZ.localize(datetime(2025, 6, 14, 8, 0))
+    ergebnis = evaluate_wochenende(config.wochenende, samstag, kompressor_ein=True)
+    assert ergebnis.einschalten is None
+    assert "Mindestlaufzeit" in ergebnis.grund
+
+
+def test_wochenende_ohne_lauf_behindert_start():
+    config = WPSteuerungConfig()
+    samstag = TZ.localize(datetime(2025, 6, 14, 8, 0))
+    ergebnis = evaluate_wochenende(config.wochenende, samstag, kompressor_ein=False)
+    assert ergebnis.einschalten is False
+
+
 def test_wochenende_prio_default_100():
     config = WPSteuerungConfig()
     assert config.wochenende.prioritaet == 100

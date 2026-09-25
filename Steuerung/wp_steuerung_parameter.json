@@ -18,6 +18,10 @@
         "boiler_max_fuehler": "unten",
     "boiler_max_hysterese_k": 2.0,
     "boiler_max_ein_abstand_k": 3.0,
+    "start_vorhersage_puffer_min": 1.0,
+    "start_vorhersage_niedrig_confidence": 0.4,
+    "start_vorhersage_hoch_confidence": 0.7,
+    "start_vorhersage_niedrig_zusatzpuffer_min": 2.0,
     "ueberhitzung_c": 58,
     "notfall_c": 36
   },
@@ -25,7 +29,8 @@
     "aktiv": true,
     "prioritaet": 110,
     "einschalten_bei_c": 36.0,
-    "ausschalten_bei_c": 38.0
+    "ausschalten_bei_c": 38.0,
+    "temperaturfuehler": "auto"
   },
   "wochenende": {
     "aktiv": true,

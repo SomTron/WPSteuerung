@@ -714,11 +714,19 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                             (aktueller_wochentag + 1) % 7: rad_tomorrow_wh,
                             (aktueller_wochentag + 2) % 7: rad_day2_wh,
                         }
+                        # Planbare Tage benötigen die allgemeine Mindestprognose.
+                        # Der bevorzugte Tag benötigt zusätzlich seine eigene
+                        # Anforderung; ein guter PV-Tag wird für die Auswahl
+                        # und den sichtbaren Planstatus berücksichtigt.
                         tages_prognose = {
                             tag: prognose for tag, prognose in tages_prognose.items()
                             if prognose is not None
                             and tag in verfuegbare_tage
                             and prognose >= legionellen_cfg.mindest_prognose_wh_qm
+                            and (
+                                tag != legionellen_cfg.bevorzugter_tag
+                                or prognose >= legionellen_cfg.erforderliche_wh_qm
+                            )
                         }
                         if not tages_prognose:
                             clear_plan(
@@ -731,6 +739,7 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                 tages_prognose,
                                 key=lambda tag: (
                                     tages_prognose[tag],
+                                    tages_prognose[tag] >= legionellen_cfg.pv_prognose_schwelle_gut,
                                     tag == legionellen_cfg.bevorzugter_tag,
                                 ),
                             )
@@ -750,9 +759,16 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                             state.legionellen_planned_forecast_wh = float(tages_prognose[bester_tag])
                             state.legionellen_plan_revision += 1
                             state.legionellen_plan_created_at = now_local
+                            gueter_tag = tages_prognose[bester_tag] >= legionellen_cfg.pv_prognose_schwelle_gut
                             state.legionellen_planned_reason = (
                                 f"Bester PV-Tag: {tages_prognose[bester_tag]:.0f} Wh/m² "
-                                f"(>= {legionellen_cfg.mindest_prognose_wh_qm:.0f} Wh/m²)"
+                                f"(>= {legionellen_cfg.mindest_prognose_wh_qm:.0f} Wh/m², "
+                                + (
+                                    "guter PV-Tag"
+                                    if gueter_tag
+                                    else f"unter Gut-Schwelle {legionellen_cfg.pv_prognose_schwelle_gut:.0f} Wh/m²"
+                                )
+                                + ")"
                             )
                             save_plan(state)
 

@@ -104,6 +104,22 @@ class TestEvaluateNotfallschutz:
         assert erg.einschalten is True
         assert "unten" in erg.grund
 
+    def test_konfigurierter_fuehler_unten(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(temperaturfuehler="unten"),
+            {"oben": 35.0, "mittig": 36.0, "unten": 40.0},
+        )
+        assert erg.einschalten is None
+        assert "unten" in erg.grund
+
+    def test_alle_verwendet_kuehlsten_fuehler(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(temperaturfuehler="alle"),
+            {"oben": 40.0, "mittig": 35.0, "unten": 38.0},
+        )
+        assert erg.einschalten is True
+        assert "mittig" in erg.grund
+
     def test_deaktiviert(self):
         erg = pc.evaluate_notfallschutz(
             NotfallschutzConfig(aktiv=False), {"oben": 35.0}

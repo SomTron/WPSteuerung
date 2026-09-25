@@ -64,6 +64,16 @@ class SicherheitConfig(BaseModel):
         default=1.0,
         description="Reserve auf die erwartete Laufzeit (min)",
     )
+    start_vorhersage_niedrig_confidence: float = Field(
+        default=0.4, description="Konfidenz unterhalb dieses Werts = niedrig",
+    )
+    start_vorhersage_hoch_confidence: float = Field(
+        default=0.7, description="Konfidenz ab diesem Werts = hoch",
+    )
+    start_vorhersage_niedrig_zusatzpuffer_min: float = Field(
+        default=2.0,
+        description="Zusatzpuffer bei niedriger Heizraten-Konfidenz (min)",
+    )
     rate_fallback_c_h: float = Field(
         default=12.0,
         description="Fallback-Heizrate wenn keine Messung vorliegt (°C/h)",
@@ -94,6 +104,12 @@ class SicherheitConfig(BaseModel):
             raise ValueError("boiler_max_hysterese_k darf nicht negativ sein")
         if self.boiler_max_ein_abstand_k < 0:
             raise ValueError("boiler_max_ein_abstand_k darf nicht negativ sein")
+        if self.start_vorhersage_niedrig_confidence < 0 or self.start_vorhersage_hoch_confidence > 1:
+            raise ValueError("Start-Vorhersage-Konfidenz muss zwischen 0 und 1 liegen")
+        if self.start_vorhersage_niedrig_confidence >= self.start_vorhersage_hoch_confidence:
+            raise ValueError("Niedrige Konfidenz muss kleiner als hohe Konfidenz sein")
+        if self.start_vorhersage_puffer_min < 0 or self.start_vorhersage_niedrig_zusatzpuffer_min < 0:
+            raise ValueError("Start-Vorhersage-Puffer dürfen nicht negativ sein")
         if not (20.0 <= self.max_temp_c <= 70.0):
             raise ValueError(f"max_temp_c={self.max_temp_c} ausserhalb des plausiblen Bereichs (20-70 C)")
         if self.max_temp_c > self.ueberhitzung_c:
@@ -115,6 +131,10 @@ class NotfallschutzConfig(BaseModel):
     prioritaet: int = Field(default=110, description="Prioritaet (hoechste Regel, vor Wochenende=100)")
     einschalten_bei_c: float = Field(default=36.0, description="Einschalten wenn Nutz-Wassertemperatur <= (Cel)" )
     ausschalten_bei_c: float = Field(default=38.0, description="Setpoint: ab Erreichen endet die Notfall-Heizung (Cel)")
+    temperaturfuehler: str = Field(
+        default="auto",
+        description="Notfall-Fühler: oben, mittig, unten oder alle (kältester relevanter Fühler)",
+    )
 
     @model_validator(mode="after")
     def _pruefe_notfallschutz(self):
@@ -125,6 +145,11 @@ class NotfallschutzConfig(BaseModel):
             )
         if not (20.0 <= self.einschalten_bei_c <= 50.0):
             raise ValueError("notfallschutz: einschalten_bei_c ausserhalb 20-50 C")
+        if self.temperaturfuehler not in {"auto", "oben", "mittig", "unten", "alle"}:
+            raise ValueError(
+                "notfallschutz.temperaturfuehler muss 'auto', 'oben', "
+                "'mittig', 'unten' oder 'alle' sein"
+            )
         return self
 
 class WochenendeConfig(BaseModel):
@@ -683,6 +708,8 @@ class LegionellenConfig(BaseModel):
             raise ValueError("erforderliche_wh_qm ausserhalb 0-20000 Wh/qm")
         if not (0 <= self.mindest_prognose_wh_qm <= 20000):
             raise ValueError("mindest_prognose_wh_qm ausserhalb 0-20000 Wh/qm")
+        if not (0 <= self.pv_prognose_schwelle_gut <= 20000):
+            raise ValueError("pv_prognose_schwelle_gut ausserhalb 0-20000 Wh/qm")
         if not (0 <= self.tagwechsel_ab_diff_wh_qm <= 20000):
             raise ValueError("tagwechsel_ab_diff_wh_qm ausserhalb 0-20000 Wh/qm")
         if self.pv_start_min_watt < 0 or self.batterie_start_min_watt < 0:

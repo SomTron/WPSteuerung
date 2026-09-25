@@ -513,6 +513,7 @@ def evaluate_einspeisung(
 def evaluate_wochenende(
     wochenende: WochenendeConfig,
     now: datetime,
+    kompressor_ein: bool = False,
 ) -> RegelErgebnis:
     """
     Wochenende-Regel: Blockiert Einschalten am Wochenende vor fruehestens_uhr.
@@ -542,8 +543,15 @@ def evaluate_wochenende(
             name="Wochenende",
             prioritaet=wochenende.prioritaet,  # blockiert alles andere
             aktiv=True,
-            einschalten=False,
-            grund=f"Wochenende: Vor {wochenende.fruehestens_uhr} Uhr ({now.hour}:xx) -> AUS",
+            einschalten=None if kompressor_ein else False,
+            grund=(
+                f"Wochenende: Vor {wochenende.fruehestens_uhr} Uhr ({now.hour}:xx); "
+                + (
+                    "laufender Zyklus bleibt bis Mindestlaufzeit aktiv"
+                    if kompressor_ein
+                    else "Start gesperrt -> AUS"
+                )
+            ),
         )
 
     return RegelErgebnis(
@@ -577,19 +585,34 @@ def evaluate_notfallschutz(
         result.grund = "Notfallschutz inaktiv"
         return result
 
-    # Fuehler-Prioritaet wie beim alten Komfort-Notfall: oben (Nutztemperatur /
-    # Schichtung) > mittig > unten.
-    temp = _parse_sensor(temp_dict, "oben")
-    sensor = "oben"
-    if temp is None:
-        temp = _parse_sensor(temp_dict, "mittig")
-        sensor = "mittig"
-    if temp is None:
-        temp = _parse_sensor(temp_dict, "unten")
-        sensor = "unten"
+    # Konfigurierbare Strategie. "auto" bewahrt die bisherige sichere Reihenfolge;
+    # "alle" verwendet den kältesten verfügbaren Boiler-Fühler.
+    strategie = getattr(nf_cfg, "temperaturfuehler", "auto")
+    if strategie == "alle":
+        kandidaten = []
+        for name in ("oben", "mittig", "unten"):
+            wert = _parse_sensor(temp_dict, name)
+            if wert is not None:
+                kandidaten.append((wert, name))
+        if not kandidaten:
+            result.aktiv = False
+            result.grund = "Keine Sensordaten fuer Notfallschutz verfuegbar"
+            return result
+        temp, sensor = min(kandidaten, key=lambda item: item[0])
+    elif strategie == "auto":
+        temp = None
+        sensor = ""
+        for name in ("oben", "mittig", "unten"):
+            temp = _parse_sensor(temp_dict, name)
+            if temp is not None:
+                sensor = name
+                break
+    else:
+        temp = _parse_sensor(temp_dict, strategie)
+        sensor = strategie
     if temp is None:
         result.aktiv = False
-        result.grund = "Keine Sensordaten verfuegbar"
+        result.grund = f"Sensor '{sensor or strategie}' fuer Notfallschutz nicht verfuegbar"
         return result
 
     if temp <= nf_cfg.einschalten_bei_c:
@@ -1866,7 +1889,7 @@ def bewerte_alle_regeln(
     ergebnisse.append(ergebnis)
 
     # 0. Wochenende-Regel (blockiert Einschalten am Wochenende vor fruehestens_uhr)
-    ergebnis = evaluate_wochenende(config.wochenende, now)
+    ergebnis = evaluate_wochenende(config.wochenende, now, kompressor_ein)
     ergebnisse.append(ergebnis)
 
     # 1. Einspeise-Begrenzung (PV-Shaping am Netzlimit, hoechste Heizen-Prioritaet)
