@@ -1061,6 +1061,8 @@
                 <span class="status-badge badge-compressor off" id="header-compressor">Kompressor AUS</span>
                 <span class="status-badge badge-night" id="header-nightsperre" style="display:none">🌙 Nacht</span>
                 <span class="status-badge badge-info" id="header-rule" style="display:none"></span>
+                <span class="status-badge badge-info" id="header-health" style="display:none"></span>
+                <span class="status-badge badge-info" id="control-feedback" style="display:none"></span>
             </div>
             <div class="quick-status" aria-label="Aktueller Betriebsstatus">
                 <div class="quick-status-item"><span class="quick-status-label">Kompressor</span><span class="quick-status-value is-off" id="quick-compressor">—</span></div>
@@ -1090,10 +1092,12 @@
 
         <script>
                 const API_BASE = window.location.origin;
-        const API_CACHE_BUST = '?v=' + Date.now();
+        const STATUS_TIMEOUT_MS = 8000;
         // Optionaler Schreibschutz. Den Key einmalig im Browser hinterlegen:
         // localStorage.setItem('wp_api_key', 'DEIN_KEY');
         const NO_DATA = '—';
+        const HEALTH_INTERVAL_MS = 30000;
+        const HEALTH_TIMEOUT_MS = 5000;
         const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
         const valueOrDash = (value) => value === null || value === undefined || value === '' ? NO_DATA : value;
 
@@ -1104,20 +1108,101 @@
             return headers;
         }
 
+        async function responseError(response, fallback) {
+            try {
+                const body = await response.json();
+                return body.detail || body.message || fallback;
+            } catch (_parseError) {
+                return fallback;
+            }
+        }
+
         let statusData = null;
+        let healthData = null;
+        let healthLastCheckedAt = 0;
+        let statusPollTimer = null;
         let chart = null;
         let temperatureHistory = { timestamps: [], oben: [], mittig: [], unten: [], verdampfer: [], sollwerte: [] };
         const MAX_DATA_POINTS = 120;
         let currentHistoryHours = 24;
         let isLoadingHistory = false;
+        let statusRequestActive = false;
+        let statusAbortController = null;
+        let healthRequestActive = false;
+
+        function formatAge(seconds) {
+            if (!Number.isFinite(seconds)) return NO_DATA;
+            if (seconds < 60) return `vor ${Math.round(seconds)} s`;
+            if (seconds < 3600) return `vor ${Math.round(seconds / 60)} min`;
+            return `vor ${(seconds / 3600).toFixed(1)} h`;
+        }
+
+        function updateHealthBadge() {
+            const el = document.getElementById('header-health');
+            if (!el) return;
+            if (!healthData) {
+                el.style.display = 'none';
+                return;
+            }
+            const healthy = healthData.status === 'ok';
+            el.textContent = healthy ? 'Steuerung ok' : 'Steuerung eingeschränkt';
+            el.className = 'status-badge ' + (healthy ? 'badge-compressor' : 'badge-compressor off');
+            el.style.display = '';
+        }
+
+        async function fetchHealth(force = false) {
+            if (!force && (healthRequestActive || Date.now() - healthLastCheckedAt < HEALTH_INTERVAL_MS)) return;
+            healthRequestActive = true;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+            try {
+                const response = await fetch(`${API_BASE}/health?ts=${Date.now()}`, {
+                    signal: controller.signal,
+                    cache: 'no-store'
+                });
+                if (!response.ok) throw new Error(await responseError(response, 'Health API Fehler ' + response.status));
+                healthData = await response.json();
+                healthLastCheckedAt = Date.now();
+                updateHealthBadge();
+                updateConnectionStatus(true);
+            } catch (error) {
+                healthData = { status: 'degraded', error: error.message || 'Health unbekannt' };
+                updateHealthBadge();
+            } finally {
+                clearTimeout(timeoutId);
+                healthRequestActive = false;
+            }
+        }
+
+        function showOfflineState(online = navigator.onLine) {
+            if (!online) {
+                updateConnectionStatus(false);
+                const errorPanel = document.getElementById('error-panel');
+                const errorMsg = document.getElementById('error-message');
+                if (errorPanel && errorMsg) {
+                    errorMsg.textContent = 'Offline – die WebApp versucht automatisch erneut zu verbinden.';
+                    errorPanel.style.display = 'block';
+                }
+            }
+        }
 
         async function fetchStatus() {
+            if (statusRequestActive) return;
+            statusRequestActive = true;
             const errorPanel = document.getElementById('error-panel');
             const errorMsg = document.getElementById('error-message');
+            const controller = new AbortController();
+            statusAbortController = controller;
+            const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
 
             try {
-                const response = await fetch(`${API_BASE}/status` + API_CACHE_BUST);
-                if (!response.ok) throw new Error('API-Fehler ' + response.status);
+                const response = await fetch(`${API_BASE}/status?ts=${Date.now()}`, {
+                    signal: controller.signal,
+                    cache: 'no-store'
+                });
+                if (!response.ok) {
+                    throw new Error(await responseError(response, 'API-Fehler ' + response.status));
+                }
 
                 statusData = await response.json();
 
@@ -1134,18 +1219,28 @@
 
                 updateHeader();
                 updateQuickStatus();
+                fetchHealth();
                 updateConnectionStatus(true);
                 if (errorPanel && errorMsg) {
                     errorPanel.style.display = 'none';
                     errorMsg.textContent = '';
                 }
             } catch (error) {
-                console.error('Fehler beim Abrufen der Daten:', error);
+                const fehlerText = error.name === 'AbortError'
+                    ? 'Statusabruf Zeitüberschreitung'
+                    : (error.message || 'Unbekannter Fehler');
+                if (error.name !== 'AbortError') {
+                    console.error('Fehler beim Abrufen der Daten:', error);
+                }
                 updateConnectionStatus(false);
                 if (errorPanel && errorMsg) {
-                    errorMsg.textContent = error.message || 'Unbekannter Fehler';
+                    errorMsg.textContent = fehlerText;
                     errorPanel.style.display = 'block';
                 }
+            } finally {
+                clearTimeout(timeoutId);
+                statusRequestActive = false;
+                if (statusAbortController === controller) statusAbortController = null;
             }
         }
 
@@ -1166,9 +1261,20 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE}/history?hours=${hours}&v=${Date.now()}`);
-                if (!response.ok) throw new Error('History API Fehler');
+                const response = await fetch(`${API_BASE}/history?hours=${hours}&v=${Date.now()}`, {
+                    cache: 'no-store'
+                });
+                if (!response.ok) {
+                    throw new Error(await responseError(response, 'History API Fehler ' + response.status));
+                }
                 const historyData = await response.json();
+                const quality = historyData.quality || {};
+                const qualityEl = document.getElementById('history-quality');
+                if (qualityEl) {
+                    qualityEl.textContent = quality.partial
+                        ? 'Historie teilweise verfügbar · ' + (quality.returned_hours ?? 0) + ' h' + (quality.stale_end_s ? ' · Datenende vor ' + formatAge(quality.stale_end_s) : '') + ' · ' + (quality.sampling_seconds ?? 0) + ' s je Punkt'
+                        : (quality.sampling_seconds ? 'Historie vollständig · ' + quality.sampling_seconds + ' s je Punkt' : '');
+                }
 
                 // Historische Daten laden
                 temperatureHistory = {
@@ -1187,9 +1293,13 @@
                 let regelnDaten = [];
                 try {
                     const respR = await fetch(`${API_BASE}/history/regeln?hours=${hours}&limit=1000&v=${Date.now()}`, {
-                        headers: apiHeaders()
+                        headers: apiHeaders(),
+                        cache: 'no-store'
                     });
-                    if (respR.ok) {
+                    if (!respR.ok) {
+                        throw new Error(await responseError(respR, 'Regelhistorie nicht verfügbar'));
+                    }
+                    {
                         const jd = await respR.json();
                         regelnDaten = (jd.data || []).sort((a, b) => {
                             const ta = new Date(a.timestamp).getTime();
@@ -1466,15 +1576,23 @@
             set('quick-rule', mode.active_rule || NO_DATA);
             set('quick-mode', mode.current || 'Normal');
             set('quick-solar', energy.solar_stale ? 'Daten veraltet' : (isFiniteNumber(energy.feed_in) ? Math.round(energy.feed_in) + ' W' : NO_DATA), energy.solar_stale ? 'is-warning' : '');
+            if (healthData && healthData.status !== 'ok') {
+                document.getElementById('connection-status')?.replaceChildren(document.createTextNode('API ok · Steuerung eingeschränkt'));
+            }
             set('quick-boiler', isFiniteNumber(temperatures.boiler) ? temperatures.boiler.toFixed(1) + ' °C' : NO_DATA);
-            set('quick-updated', system.last_update || NO_DATA);
+            const ageText = Number.isFinite(system.last_update_age_s)
+                ? formatAge(system.last_update_age_s)
+                : (system.last_update || NO_DATA);
+            set('quick-updated', ageText, Number.isFinite(system.last_update_age_s) && system.last_update_age_s > 30 ? 'is-warning' : '');
         }
 
         function updateConnectionStatus(connected) {
             const statusEl = document.getElementById('connection-status');
             const dotEl = document.querySelector('.status-dot');
             if (connected) {
-                statusEl.textContent = 'Verbunden';
+                statusEl.textContent = healthData && healthData.status !== 'ok'
+                    ? 'API ok · Steuerung eingeschränkt'
+                    : 'Verbunden';
                 dotEl.style.background = 'var(--accent-success)';
             } else {
                 statusEl.textContent = 'Verbindung unterbrochen';
@@ -1482,9 +1600,19 @@
             }
         }
 
+        function showControlFeedback(text, isError = false) {
+            const el = document.getElementById('control-feedback');
+            if (!el) return;
+            el.textContent = text;
+            el.className = 'status-badge ' + (isError ? 'badge-compressor off' : 'badge-info');
+            el.style.display = '';
+            window.clearTimeout(showControlFeedback.timer);
+            showControlFeedback.timer = window.setTimeout(() => { el.style.display = 'none'; }, 8000);
+        }
+
         async function sendControl(command, params = {}) {
             try {
-                const response = await fetch(`${API_BASE}/control` + API_CACHE_BUST, {
+                const response = await fetch(`${API_BASE}/control?ts=${Date.now()}`, {
                     method: 'POST',
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ command, params })
@@ -1498,9 +1626,13 @@
                 if (!response.ok) {
                     throw new Error(result?.detail || result?.message || ('API-Fehler ' + response.status));
                 }
+                showControlFeedback(result?.status === 'queued'
+                    ? 'Befehl eingereiht – Main-Loop verarbeitet ihn.'
+                    : 'Befehl angenommen.');
                 await fetchStatus();
             } catch (error) {
                 console.error('Fehler beim Senden des Befehls:', error);
+                showControlFeedback(error.message || 'Unbekannter API-Fehler', true);
                 const errorPanel = document.getElementById('error-panel');
                 const errorMsg = document.getElementById('error-message');
                 if (errorPanel && errorMsg) {
@@ -2055,6 +2187,7 @@
                             <div class="chart-info">
                                 <kbd>Mausrad</kbd> zoomen &middot; <kbd>Ziehen</kbd> pan &middot; <kbd>⟲</kbd> reset
                             </div>
+                            <div id="history-quality" class="chart-info" aria-live="polite"></div>
                             <div class="chart-inner">
                                 <div style="height: 300px;"><canvas id="tempChart"></canvas></div>
                             </div>
@@ -2388,7 +2521,19 @@
             }
         }
 
-        // Auto-refresh every 5 seconds (after DOM ready)
+        function startStatusPolling(delay = 5000) {
+            window.clearTimeout(statusPollTimer);
+            if (document.hidden || !navigator.onLine) {
+                showOfflineState(navigator.onLine);
+                return;
+            }
+            statusPollTimer = window.setTimeout(async () => {
+                await fetchStatus();
+                startStatusPolling();
+            }, delay);
+        }
+
+        // Auto-refresh with visibility/offline awareness (after DOM ready)
         document.addEventListener('DOMContentLoaded', () => {
             // Initial load mit Fehlerbehandlung
             fetchStatus().catch(error => {
@@ -2405,8 +2550,20 @@
                 loadHistory(currentHistoryHours);
             });
 
-            setInterval(fetchStatus, 5000);
+            startStatusPolling();
         });
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && navigator.onLine) {
+                fetchStatus();
+                startStatusPolling();
+            }
+        });
+        window.addEventListener('online', () => {
+            fetchStatus();
+            startStatusPolling();
+        });
+        window.addEventListener('offline', () => showOfflineState(false));
 
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {

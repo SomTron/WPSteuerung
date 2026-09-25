@@ -1,5 +1,5 @@
 import logging
-import asyncio
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Callable
 from telegram_api import send_telegram_message
@@ -211,6 +211,17 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
     # Im Legionellenmodus bleibt der Verdampfer alleiniger Beweis, weil der
     # untere Fuehler dort saettigen kann.
     betriebsbeweis = verd_ok if nur_verdampfer else (verd_ok or unten_ok)
+    if nur_verdampfer:
+        checks = getattr(state.control, "_legionellen_verify_checks", None)
+        if not isinstance(checks, deque):
+            checks = deque(maxlen=3)
+            state.control._legionellen_verify_checks = checks
+        checks.append(bool(betriebsbeweis))
+        if len(checks) < 3 or sum(checks) >= 2:
+            state.kompressor_verification_failed = False
+            state.kompressor_verification_error_count = 0
+            return True, None
+        betriebsbeweis = False
     if betriebsbeweis:
         state.kompressor_verification_failed = False
         state.kompressor_verification_error_count = 0
@@ -227,6 +238,13 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
     
     error_msg = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)
     if state.bot_token:
-        # Cast to string to prevent MagicMock serialization errors in telegram_api
-        asyncio.create_task(send_telegram_message(session, state.config.Telegram.CHAT_ID, f"{error_msg}\nFehler #{state.kompressor_verification_error_count}", state.config.Telegram.BOT_TOKEN))
+        # Verifizierungsfehler synchron mit begrenzten Telegram-Retries senden;
+        # ein fehlgeschlagener Versand darf nicht still verschwinden.
+        sent = await send_telegram_message(
+            session, state.config.Telegram.CHAT_ID,
+            f"{error_msg}\nFehler #{state.kompressor_verification_error_count}",
+            state.config.Telegram.BOT_TOKEN,
+        )
+        if not sent:
+            logging.warning("Telegram-Warnung zur Kompressorverifizierung nicht zugestellt")
     return False, error_msg

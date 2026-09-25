@@ -51,8 +51,12 @@ class ControlState:
         self.active_rule_sensor: Optional[str] = None
         self.active_rule_name: Optional[str] = None
         self.blocking_reason: Optional[str] = None
+        self.blocking_code: Optional[str] = None
         self.last_blocking_reason: Optional[str] = None
         self.last_alert_type: Optional[str] = None
+        self._last_alert_attempt_at: Optional[datetime] = None
+        self._last_alert_failed_type: Optional[str] = None
+        self._alert_retry_count: int = 0
         self.komfort_aktiv: bool = False
         self._soll_einschalten: bool = False
         self._soll_einschalten_bestaetigt: bool = False
@@ -73,6 +77,8 @@ class ControlState:
         self._rate_messungen: deque = deque(maxlen=5)
         self._rate_confidence: float = 0.0
         self._last_start_anticipation: dict = {}
+        self._legionellen_completion_pending: bool = False
+        self._legionellen_verify_checks: deque = deque(maxlen=3)
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
         # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).
         # Ersetzt den alten Hack, last_compressor_off_time in die Zukunft zu setzen.
@@ -151,6 +157,8 @@ class State:
         self._today_usage_count: int = 0
         self._learned_morning_window: Optional[dict] = None
         self._learned_evening_window: Optional[dict] = None
+        self._legionellen_completion_pending: bool = False
+        self._legionellen_verify_checks: deque = deque(maxlen=3)
 
         # System/Internal
         self.gpio_lock = asyncio.Lock()
@@ -188,6 +196,9 @@ class State:
         self.last_config_hash: Optional[str] = None
         self.api_errors: dict = {}
         self._last_api_health_warning: Optional[datetime] = None
+        self.last_state_write_ok: Optional[bool] = None
+        self.last_state_write_error: Optional[str] = None
+        self._last_state_write_log: Optional[datetime] = None
 
     # --- Properties representing Config Values ---
     @property

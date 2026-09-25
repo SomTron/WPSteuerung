@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 WEBAPP = Path(__file__).resolve().parents[2] / "webapp"
+NGINX = Path(__file__).resolve().parents[1] / "Nginx-Konfiguration"
 
 
 def test_forecast_einheiten_werden_korrekt_angezeigt():
@@ -65,7 +66,62 @@ def test_touch_ziele_und_chart_hinweis_sind_vorhanden():
     assert "Chart horizontal scrollen" in html
 
 
-def test_service_worker_existiert_und_cachet_keine_daten_endpunkte():
+def test_status_polling_hat_timeout_und_verhindert_ueberlappung():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "const STATUS_TIMEOUT_MS = 8000" in html
+    assert "if (statusRequestActive) return" in html
+    assert "new AbortController()" in html
+    assert "cache: 'no-store'" in html
+    assert "API_CACHE_BUST" not in html
+
+
+def test_live_api_und_service_worker_cache_vertraege():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    worker = (WEBAPP / "service-worker.js").read_text(encoding="utf-8")
+    assert "cache: 'no-store'" in html
+    assert "const CACHE_NAME = 'wp-webapp-shell-v3'" in worker
+    assert "fetch(event.request, { cache: 'no-store' })" in worker
+    assert "caches.match(event.request)" in worker
+    assert "url.pathname === '/status'" in worker
+    assert "url.pathname.startsWith('/history')" in worker
+    assert "url.pathname === '/health'" in worker
+    assert "url.pathname === '/command'" in worker
+    assert "url.pathname.startsWith('/debug/')" in worker
+
+
+def test_webapp_zeigt_health_und_queue_und_offline_status():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert 'id="header-health"' in html
+    assert 'id="control-feedback"' in html
+    assert "fetchHealth" in html
+    assert "/health?ts=" in html
+    assert "Steuerung eingeschränkt" in html
+    assert "Befehl eingereiht" in html
+    assert "showOfflineState" in html
+    assert "visibilitychange" in html
+    assert "navigator.onLine" in html
+    assert "window.addEventListener('online'" in html
+
+
+def test_history_quality_und_api_fehlertext_sichtbar():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "responseError" in html
+    assert "quality.partial" in html
+    assert "quality.returned_hours" in html
+    assert "quality.sampling_seconds" in html
+    assert "quality.stale_end_s" in html
+
+
+def test_nginx_proxy_zeigt_auf_aktuelle_fastapi_routen():
+    nginx = NGINX.read_text(encoding="utf-8")
+    assert "location /api/" not in nginx
+    assert "location / {" in nginx
+    assert "proxy_pass http://127.0.0.1:8000;" in nginx
+    assert "proxy_set_header X-API-Key $http_x_api_key;" in nginx
+    assert "proxy_connect_timeout 5s;" in nginx
+    assert "proxy_read_timeout 30s;" in nginx
+
+
     worker = WEBAPP / "service-worker.js"
     assert worker.exists()
     text = worker.read_text(encoding="utf-8")

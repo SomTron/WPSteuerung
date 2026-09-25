@@ -129,6 +129,35 @@ def test_health_endpoint_zeigt_heartbeat_und_control_errors():
     assert result["data_update_ok"] is True
 
 
+def test_persistenzfehler_macht_health_degraded(monkeypatch):
+    import api
+    import main
+
+    state = _minimal_state()
+    state.loop_heartbeat = datetime.now(state.local_tz)
+    state.last_data_update_ok = True
+    state.last_state_write_ok = None
+    state.last_state_write_error = None
+
+    def kaputt(*args, **kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(main, "atomic_write_text", kaputt)
+    main.write_last_state_snapshot(state)
+    assert state.last_state_write_ok is False
+    assert "OSError" in state.last_state_write_error
+
+    old_state, old_control, old_funcs = api.shared_state, api.control_state, api.control_funcs
+    try:
+        api.init_api(state, {})
+        result = api.health_status()
+    finally:
+        api.shared_state, api.control_state, api.control_funcs = old_state, old_control, old_funcs
+    assert result["status"] == "degraded"
+    assert result["last_state_write_ok"] is False
+    assert "OSError" in result["last_state_write_error"]
+
+
 def test_clock_liefert_aware_und_monotone_zeit():
     clock = Clock(pytz.timezone("Europe/Berlin"))
     assert clock.now().tzinfo is not None

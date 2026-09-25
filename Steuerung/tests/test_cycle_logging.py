@@ -169,6 +169,78 @@ async def test_set_kompressor_status_schreibt_einen_zyklus(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_echter_stop_bereinigt_legionellenlauf_zentral(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main, "hardware_manager",
+        SimpleNamespace(set_compressor_state=lambda value: True),
+    )
+    state = SimpleNamespace(
+        local_tz=timezone.utc,
+        priority_config=SimpleNamespace(
+            legionellen=SimpleNamespace(probezeit_minuten=30)
+        ),
+        legionellen_aktiv=True,
+        legionellen_temp_override=65.0,
+        legionellen_started_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+        legionellen_target_reached_at=None,
+        sensors=SimpleNamespace(t_unten=45.0, t_mittig=45.0, t_oben=45.0, t_verd=10.0),
+        control=SimpleNamespace(
+            kompressor_ein=True, zyklus_id=1, blocking_reason=None,
+            effective_rule_name="Legionellen", active_rule_name="Legionellen",
+            effective_source="PV", source_at_start="PV", _lauf_start_regel="Legionellen",
+        ),
+        stats=SimpleNamespace(
+            last_compressor_on_time=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+            last_compressor_off_time=None, total_runtime_today=timedelta(),
+            last_completed_cycle=None,
+        ),
+    )
+    assert await main.set_kompressor_status(state, False, end_grund="test_stop") is True
+    assert state.control.kompressor_ein is False
+    assert state.legionellen_aktiv is False
+    assert state.legionellen_temp_override is None
+    assert state.control.effective_rule_name is None
+    assert state.control.active_rule_name is None
+    assert state.control.source_at_start is None
+
+
+def test_legionellen_abschluss_reaktiviert_keine_effektiven_felder():
+    import main
+
+    state = SimpleNamespace(
+        legionellen_last_done=None,
+        legionellen_wochennummer=None,
+        legionellen_aktiv=True,
+        legionellen_temp_override=65.0,
+        legionellen_started_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+        legionellen_target_reached_at=datetime(2026, 9, 25, 12, 30, tzinfo=timezone.utc),
+        legionellen_end_time=None,
+        _last_was_legionellen=False,
+        _legionellen_completion_pending=True,
+        control=SimpleNamespace(
+            requested_rule_name=None,
+            effective_rule_name="Legionellen",
+            active_rule_name="Legionellen",
+            effective_source="PV",
+            source_at_start="PV",
+            source_current="PV",
+            _lauf_start_regel="Legionellen",
+        ),
+    )
+    now = datetime(2026, 9, 25, 13, 0, tzinfo=timezone.utc)
+    main._complete_legionellen_lifecycle(state, now)
+    assert state.legionellen_aktiv is False
+    assert state.legionellen_last_done == now.date()
+    assert state.control.requested_rule_name == "Legionellen"
+    assert state.control.effective_rule_name is None
+    assert state.control.active_rule_name is None
+    assert state.control.source_at_start is None
+    assert state.control._lauf_start_regel is None
+
+
+@pytest.mark.asyncio
 async def test_gpio_fehler_laesst_state_aus(monkeypatch):
     import main
 

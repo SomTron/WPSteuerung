@@ -166,6 +166,13 @@ def test_keine_doppelt_registrierten_routen():
     assert not doppelt, f"Doppelt registrierte Routen: {doppelt}"
 
 
+def test_api_live_routen_haben_no_store_middleware():
+    source = __import__("pathlib").Path(api.__file__).read_text(encoding="utf-8-sig")
+    assert "def add_live_no_store_headers" in source
+    assert '"Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"' in source
+    assert '"/health"' in source
+
+
 def test_api_cors_ist_nicht_wildcard_und_ist_konfigurierbar():
     from pathlib import Path
 

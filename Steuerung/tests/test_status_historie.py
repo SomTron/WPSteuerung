@@ -40,6 +40,49 @@ def _csv_schreiben(pfad, tage=3, feedin=1000.0):
         f.write("\n".join(zeilen) + "\n")
 
 
+def test_history_wird_zeitbasiert_gedownsampelt_und_meldet_partial():
+    rows = []
+    base = api.datetime(2026, 9, 1, 0, 0)
+    for minute in range(0, 180, 1):
+        rows.append({
+            "Zeitstempel": (base + api.timedelta(minutes=minute)).strftime("%Y-%m-%d %H:%M:%S"),
+            "T_Oben": "40", "T_Mittig": "40", "T_Unten": "40", "T_Verd": "10",
+            "Kompressor": "AUS", "Einschaltpunkt": "42", "Ausschaltpunkt": "48",
+        })
+    selected, quality = api._downsample_history(
+        rows, cutoff=base, max_points=500
+    )
+    assert len(selected) < len(rows)
+    assert quality["selected_rows"] == len(selected)
+    assert quality["raw_rows_in_range"] == len(rows)
+    assert quality["sampling_seconds"] >= 60
+    assert quality["partial"] is False
+    assert quality["coverage_start"] == rows[0]["Zeitstempel"]
+
+
+def test_history_meldet_veraltetes_csv_ende(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import pytz
+
+    p = tmp_path / "hist.csv"
+    p.write_text(
+        "Zeitstempel,T_Oben,T_Mittig,T_Unten,T_Verd,Kompressor,Einschaltpunkt,Ausschaltpunkt\n"
+        "2026-09-01 12:00:00,40,40,40,10,AUS,42,48\n",
+        encoding="utf-8",
+    )
+    old_state = api.shared_state
+    old_path = api.HEIZUNGSDATEN_CSV
+    try:
+        api.HEIZUNGSDATEN_CSV = str(p)
+        api.shared_state = SimpleNamespace(local_tz=pytz.timezone("Europe/Berlin"))
+        result = api.get_history(hours=1)
+    finally:
+        api.shared_state = old_state
+        api.HEIZUNGSDATEN_CSV = old_path
+    assert result["quality"]["partial"] is True
+    assert "stale_end_s" in result["quality"]
+
+
 def test_berechnet_mittel_ohne_pandas(tmp_path):
     """Korrektes Ergebnis - und zwar ohne pandas (stdlib csv)."""
     p = tmp_path / "hist.csv"

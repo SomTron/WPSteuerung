@@ -187,13 +187,19 @@ async def test_legionellen_echter_stillstand_wird_weiter_erkannt(mock_state):
                 return now
         m.setattr("safety_logic.datetime", MockDateTime)
 
-        # kein Abfall am Verdampfer
-        is_running, error_msg = await verify_compressor_running(
-            mock_state, None, current_t_verd=20.0, current_t_unten=47.3
-        )
-        assert is_running is False
-        assert "Verdampfer" in error_msg
-        assert "Unterer Fühler" not in error_msg
+        # Drei aufeinanderfolgende Prüfungen ohne Verdampferabfall.
+        # Ein einzelner Messwert ist absichtlich noch kein Stillstandsbeweis.
+        results = []
+        for _ in range(3):
+            mock_state.kompressor_verification_last_check = None
+            results.append(await verify_compressor_running(
+                mock_state, None, current_t_verd=20.0, current_t_unten=47.3
+            ))
+        assert results[0][0] is True
+        assert results[1][0] is True
+        assert results[2][0] is False
+        assert "Verdampfer" in results[2][1]
+        assert "Unterer Fühler" not in results[2][1]
 
 
 @pytest.mark.asyncio

@@ -73,6 +73,7 @@ def build_status_snapshot(state):
         "consecutive_control_errors",
         "energy_source", "energy_source_detail", "clock",
         "last_api_call", "last_forecast_update", "last_forecast_attempt",
+        "last_state_write_ok", "last_state_write_error",
     )
     setattr(snapshot, "learning_engine_summary", _learning_summary(
         getattr(state, "learning_engine", None)

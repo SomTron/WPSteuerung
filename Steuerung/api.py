@@ -19,7 +19,7 @@ try:
     import entscheidungs_log
 except ImportError:
     entscheidungs_log = None
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -197,6 +197,22 @@ app = FastAPI(
     version=API_CONTRACT_VERSION,
 )
 
+# Live-Daten niemals durch Browser, FastAPI-Proxy oder Service Worker cachen.
+_LIVE_NO_STORE_PATHS = {
+    "/status", "/health", "/history", "/history/regeln",
+    "/control", "/command", "/config", "/config/export", "/debug/csv",
+}
+
+
+@app.middleware("http")
+async def add_live_no_store_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path in _LIVE_NO_STORE_PATHS or request.url.path.startswith("/history/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # CORS: Standardmaessig keine fremden Origins. Auf dem Pi koennen erlaubte
 # Origins explizit als WPS_CORS_ORIGINS="https://domain,http://localhost:..." gesetzt werden.
 if CORS_ORIGINS:
@@ -269,7 +285,11 @@ def health_status():
     raw_errors = getattr(getattr(state, "control", None), "consecutive_control_errors", 0)
     errors = int(raw_errors) if isinstance(raw_errors, (int, float)) else 0
     data_ok = getattr(state, "last_data_update_ok", None)
-    healthy = age_s is not None and age_s <= 30 and errors == 0 and data_ok is not False
+    snapshot_ok = getattr(state, "last_state_write_ok", None)
+    healthy = (
+        age_s is not None and age_s <= 30 and errors == 0
+        and data_ok is not False and snapshot_ok is not False
+    )
     return {
         "status": "ok" if healthy else "degraded",
         "loop_heartbeat_age_s": age_s,
@@ -278,6 +298,8 @@ def health_status():
         "last_status_snapshot_at": getattr(state, "last_status_snapshot_at", None),
         "consecutive_control_errors": errors,
         "data_update_ok": data_ok,
+        "last_state_write_ok": snapshot_ok,
+        "last_state_write_error": getattr(state, "last_state_write_error", None),
     }
 
 
@@ -378,6 +400,77 @@ def _read_csv_tail(csv_path: str, max_rows: int = 25000):
         "invalid_rows": invalid_rows,
         "null_bytes": null_bytes,
         "header": header,
+    }
+
+
+def _history_sampling_seconds(hours: int) -> int:
+    """Zielintervall der History-Antwort abhängig vom angeforderten Zeitraum."""
+    if hours <= 2:
+        return 60
+    if hours <= 6:
+        return 300
+    if hours <= 24:
+        return 600
+    if hours <= 72:
+        return 900
+    return 1800
+
+
+def _downsample_history(rows, cutoff: datetime, max_points: int = 5000):
+    """Filtert History zeitbasiert und reduziert sie auf wenige Minutenwerte.
+
+    Die Rohdaten bleiben CSV-basiert; nur die JSON-Antwort wird reduziert.
+    ``partial`` zeigt an, wenn der gelesene Tail den angeforderten Zeitraum
+    nicht vollständig abdeckt.
+    """
+    parsed = []
+    last_available = None
+    for row in rows:
+        ts = _parse_zeitstempel(row.get("Zeitstempel"))
+        if ts is None:
+            continue
+        last_available = ts if last_available is None else max(last_available, ts)
+        if ts >= cutoff:
+            parsed.append((ts, row))
+    parsed.sort(key=lambda item: item[0])
+    if not parsed:
+        return [], {
+            "partial": True,
+            "returned_hours": 0.0,
+            "sampling_seconds": 0,
+            "raw_rows_in_range": 0,
+            "selected_rows": 0,
+            "coverage_start": None,
+            "coverage_end": last_available.strftime("%Y-%m-%d %H:%M:%S") if last_available else None,
+        }
+
+    sampling = _history_sampling_seconds(max(1, int((parsed[-1][0] - cutoff).total_seconds() / 3600) + 1))
+    selected = []
+    last_bucket = None
+    for ts, row in parsed:
+        bucket = int(ts.timestamp() // sampling)
+        if bucket != last_bucket:
+            selected.append((ts, row))
+            last_bucket = bucket
+    if selected[-1][0] != parsed[-1][0]:
+        selected.append(parsed[-1])
+    if len(selected) > max_points:
+        step = (len(selected) + max_points - 1) // max_points
+        selected = selected[::step]
+        if selected[-1][0] != parsed[-1][0]:
+            selected.append(parsed[-1])
+
+    raw_start = parsed[0][0]
+    raw_end = parsed[-1][0]
+    partial = raw_start > cutoff + timedelta(seconds=sampling * 2)
+    return [row for _ts, row in selected], {
+        "partial": partial,
+        "returned_hours": round(max(0.0, (raw_end - cutoff).total_seconds() / 3600), 2),
+        "sampling_seconds": sampling,
+        "raw_rows_in_range": len(parsed),
+        "selected_rows": len(selected),
+        "coverage_start": raw_start.strftime("%Y-%m-%d %H:%M:%S"),
+        "coverage_end": raw_end.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
@@ -1119,9 +1212,19 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
         raise HTTPException(status_code=404, detail="No historical data available")
 
     try:
-        MAX_ROWS = 25000
-        rows, quality = _read_csv_tail(csv_path, max_rows=MAX_ROWS)
+        # Für 7 Tage reicht der Tail nicht bei 14-Sekunden-Samples.
+        # großzügiger Tail plus zeitbasiertes Downsampling hält RAM und Antwort klein.
+        max_rows = max(25000, int(hours * 3600 / 5) + 5000)
+        rows, quality = _read_csv_tail(csv_path, max_rows=min(max_rows, 100000))
         cutoff = to_naive(now_for(shared_state)) - timedelta(hours=hours)
+        rows, coverage = _downsample_history(rows, cutoff, max_points=5000)
+        quality.update(coverage)
+        quality["requested_hours"] = hours
+        now = to_naive(now_for(shared_state))
+        coverage_end = _parse_zeitstempel(quality.get("coverage_end"))
+        if coverage_end is not None and now - coverage_end > timedelta(seconds=quality.get("sampling_seconds", 60) * 2):
+            quality["partial"] = True
+            quality["stale_end_s"] = round((now - coverage_end).total_seconds(), 1)
 
         # Convert to JSON-friendly format
         data = []

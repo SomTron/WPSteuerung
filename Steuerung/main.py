@@ -153,6 +153,92 @@ async def _set_hardware_state(state, status: bool) -> bool:
     return await compressor_actuator.set_state(status)
 
 
+def _blocking_code(reason: str | None) -> str:
+    """Liefert stabile Sperrfamilien statt dynamischer Freitext-Alarme."""
+    text = (reason or "").strip().lower()
+    if not text:
+        return ""
+    if "mindestlaufzeit" in text or "warte auf mindestlaufzeit" in text:
+        return "mindestlaufzeit"
+    if "min. pause" in text or "mindestpause" in text or "pause" in text:
+        return "mindestpause"
+    if "boiler-max" in text or "boiler max" in text:
+        return "boiler_max"
+    if "sensor" in text:
+        return "sensorfehler"
+    if "druck" in text:
+        return "druckfehler"
+    if "verdampfer" in text:
+        return "verdampfer"
+    if "gpio" in text or "hardware" in text or "einschalten fehlgeschlagen" in text:
+        return "hardwarefehler"
+    if "stale" in text or "veraltet" in text:
+        return "daten_stale"
+    if "nachtsperre" in text:
+        return "nachtsperre"
+    if "quelle" in text or "pv/batterie" in text:
+        return "warte_quelle"
+    return "sonstige_sperre"
+
+
+def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
+    """Bereinigt den Legionellen-Lifecycle bei jedem echten Hardware-Stopp."""
+    if getattr(state, "legionellen_aktiv", False) is not True:
+        return
+    cfg = getattr(getattr(state, "priority_config", None), "legionellen", None)
+    target_at = getattr(state, "legionellen_target_reached_at", None)
+    probe_done = False
+    if cfg is not None and isinstance(target_at, datetime):
+        try:
+            probe_done = safe_timedelta(now, target_at, state.local_tz) >= timedelta(
+                minutes=float(cfg.probezeit_minuten)
+            )
+        except (TypeError, ValueError, OverflowError):
+            probe_done = False
+    # Der korrekte Lifecycle-Status wird an der einen Stelle bereinigt.
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.legionellen_started_at = None
+    # Bei bereits erfüllter Probezeit bleibt der Zielzeitpunkt für den
+    # nachgelagerten Lifecycle-Abschluss erhalten.
+    if not probe_done:
+        state.legionellen_target_reached_at = None
+    state.legionellen_end_time = now
+    state._last_was_legionellen = True
+    state._legionellen_completion_pending = probe_done
+    if not probe_done:
+        try:
+            clear_plan(state, f"Legionellenlauf beendet: {end_grund or 'Stop'}", persist=True)
+        except Exception:
+            logging.debug("Legionellenplan konnte beim Laufende nicht bereinigt werden", exc_info=True)
+
+
+def _complete_legionellen_lifecycle(state, now) -> None:
+    """Markiert einen erfolgreichen Probeabschluss ohne effektive Hardwarefelder."""
+    state.legionellen_last_done = now.date()
+    state.legionellen_wochennummer = now.isocalendar()[1]
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.legionellen_started_at = None
+    state.legionellen_target_reached_at = None
+    state.legionellen_end_time = now
+    state._last_was_legionellen = True
+    state._legionellen_completion_pending = False
+    state.control.requested_rule_name = "Legionellen"
+    # Nach dem Hardware-Stopp dürfen keine effektiven Felder reaktiviert werden.
+    state.control.effective_rule_name = None
+    state.control.active_rule_name = None
+    state.control.effective_source = None
+    state.control.source_at_start = None
+    state.control.source_current = None
+    state.control._lauf_start_regel = None
+    try:
+        clear_plan(state, "Legionellenlauf abgeschlossen", persist=True)
+    except Exception:
+        logging.debug("Legionellenplan konnte nach Abschluss nicht gelöscht werden", exc_info=True)
+
+
+
 async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, end_grund=None):
     """
     Schaltet den Kompressor und aktualisiert den State sowie Statistiken.
@@ -185,6 +271,8 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
                 or pcl._aktuelle_quellenbezeichnung(state)
             )
         state.control.source_current = state.control.source_at_start
+        if hasattr(state.control, "_legionellen_verify_checks"):
+            state.control._legionellen_verify_checks.clear()
         if manual_rule or pending_rule:
             state.control._lauf_start_regel = (
                 "API force_on" if manual_rule else pending_rule
@@ -219,6 +307,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
             state.control.blocking_reason = "Kompressor-Ausschalten fehlgeschlagen"
             return False
         state.control.kompressor_ein = False
+        _beende_legionellenlauf_if_needed(state, now, end_grund)
         state.control.effective_rule_name = None
         state.control.active_rule_name = None
         state.control.effective_source = None
@@ -815,38 +904,79 @@ async def check_and_send_alerts(session, state):
         return res.strip()
 
     current_type = normalize(current_blocking)
+    current_code = _blocking_code(current_blocking)
     last_type = getattr(state.control, 'last_alert_type', "")
-    
-    if current_type != last_type:
-        if current_type:
-            # Filtere bekannte Infos, die keine Alarme sein sollen
-            is_solar = "Solarfenster" in current_type
-            is_zieltemp = "Zieltemp" in current_type
-            
-            if not is_solar and not is_zieltemp:
-                # Boiler-Max-Naehe: pro Tag nur 1x senden (sonst Telegram-Spam
-                # bei vollem Boiler an sonnigen Tagen - Empfehlung 3.1).
-                sende_erlaubt = True
-                if "Boiler-Max-Naehe" in current_type:
-                    sende_erlaubt = check_log_throttle(
-                        state, "log_boiler_naehe_alert", interval_minutes=24 * 60)
-                if sende_erlaubt:
-                    emoji = "⚠"
-                    if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
-                        emoji = "🚨"
-                    elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
-                        emoji = "⏳"
-                    
-                    # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
-                    msg = f"{emoji} *Kompressor blockiert:* {escape_markdown(current_blocking)}"
-                    logging.info(f"Sende Einmal-Alarm: {current_type} (Voll: {current_blocking})")
-                    await control_logic.send_telegram_message(
-                        session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN, parse_mode="Markdown"
+    try:
+        now_alert = _state_now(state)
+    except (TypeError, ValueError):
+        now_alert = datetime.now()
+    last_attempt = getattr(state.control, "_last_alert_attempt_at", None)
+    raw_retry_count = getattr(state.control, "_alert_retry_count", 0)
+    retry_count = int(raw_retry_count) if isinstance(raw_retry_count, (int, float)) else 0
+    failed_type = getattr(state.control, "_last_alert_failed_type", None)
+    if not isinstance(failed_type, str):
+        failed_type = None
+    if (
+        current_code == failed_type
+        and current_blocking
+        and isinstance(last_attempt, datetime)
+        and safe_timedelta(now_alert, last_attempt, state.local_tz).total_seconds()
+        < min(300, 15 * (2 ** min(retry_count - 1, 4)))
+    ):
+        state.control.last_blocking_reason = current_blocking
+        return
+
+    if current_code != last_type:
+        if current_blocking:
+            state.control.blocking_code = current_code
+        else:
+            state.control.blocking_code = None
+        # Filtere bekannte Infos, die keine Alarme sein sollen
+        is_solar = "Solarfenster" in current_type
+        is_zieltemp = "Zieltemp" in current_type
+
+        if not current_blocking:
+            state.control.blocking_code = None
+        elif not is_solar and not is_zieltemp:
+            # Boiler-Max-Naehe: pro Tag nur 1x senden (sonst Telegram-Spam
+            # bei vollem Boiler an sonnigen Tagen - Empfehlung 3.1).
+            sende_erlaubt = True
+            if "Boiler-Max-Naehe" in current_type:
+                sende_erlaubt = check_log_throttle(
+                    state, "log_boiler_naehe_alert", interval_minutes=24 * 60)
+            if sende_erlaubt:
+                emoji = "⚠"
+                if any(x in current_type for x in ["Fehler", "Sicherheit", "🚨"]):
+                    emoji = "🚨"
+                elif any(x in current_type for x in ["Pause", "Mindestlaufzeit"]):
+                    emoji = "⏳"
+
+                # Wir schicken die VOLLE Nachricht (inkl. Details/Zeit) beim ersten Mal
+                msg = f"{emoji} *Kompressor blockiert:* {escape_markdown(current_blocking)}"
+                logging.info(f"Sende Einmal-Alarm: {current_type} (Voll: {current_blocking})")
+                delivered = await control_logic.send_telegram_message(
+                    session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN, parse_mode="Markdown"
+                )
+                if delivered:
+                    state.control.last_alert_type = current_code
+                    state.control._last_alert_failed_type = None
+                    state.control._alert_retry_count = 0
+                else:
+                    state.control._last_alert_failed_type = current_code
+                    state.control._last_alert_attempt_at = _state_now(state)
+                    state.control._alert_retry_count += 1
+                    logging.warning(
+                        "Telegram-Alarm nicht zugestellt: %s (Versuch %d)",
+                        current_type, state.control._alert_retry_count,
                     )
-        
-        state.control.last_alert_type = current_type
     
-    # Der technische Statuswechsel wird weiterhin fÃ¼r andere Zwecke geloggt/gespeichert
+    if not current_blocking:
+        state.control.blocking_code = None
+        state.control.last_alert_type = ""
+        state.control._last_alert_attempt_at = None
+        state.control._last_alert_failed_type = None
+        state.control._alert_retry_count = 0
+    # Der technische Statuswechsel wird weiterhin für andere Zwecke geloggt/gespeichert
     state.control.last_blocking_reason = current_blocking
 
 async def _aktualisiere_legionellen_lifecycle(session, state, result):
@@ -854,13 +984,19 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
     cfg = state.priority_config.legionellen
     if not cfg.aktiv:
         return
+    now = _state_now(state)
+    if getattr(state, "_legionellen_completion_pending", False):
+        _complete_legionellen_lifecycle(state, now)
+        logging.info(
+            "Legionellenprophylaxe ABGESCHLOSSEN: KW %d, Ziel %.0fC inklusive %d min Probezeit",
+            now.isocalendar()[1], cfg.target_temp_c, cfg.probezeit_minuten,
+        )
+        return
     winner = result.get("gewinner_ergebnis")
     if not state.legionellen_aktiv and state.legionellen_temp_override is not None:
         state.legionellen_temp_override = None
     if winner is None or winner.name != "Legionellen":
         return
-
-    now = _state_now(state)
     if (
         winner.einschalten is True
         and not state.legionellen_aktiv
@@ -946,9 +1082,8 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
     state.legionellen_end_time = now
     clear_plan(state, "Legionellenlauf abgeschlossen", persist=True)
     state._last_was_legionellen = True
-    state.control.requested_rule_name = "Legionellen"
-    state.control.effective_rule_name = "Legionellen"
-    state.control.effective_source = pcl._aktuelle_quellenbezeichnung(state)
+    # Nach dem Abschluss dürfen effektive Hardwarefelder nicht wieder
+    # resurrectiert werden; requested_rule_name bleibt als Diagnose erhalten.
     logging.info(
         "Legionellenprophylaxe ABGESCHLOSSEN: KW %d, Ziel %.0fC inklusive %d min Probezeit",
         now.isocalendar()[1], cfg.target_temp_c, cfg.probezeit_minuten,
@@ -958,9 +1093,10 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
             msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
                    f"KW {now.isocalendar()[1]}: {cfg.target_temp_c:.0f}°C und Probezeit erreicht")
             from telegram_api import send_telegram_message as _send_tg
-            await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
-                           state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
-            state.legionellen_telegram_done_sent = True
+            sent = await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
+                                  state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
+            if sent is not False:
+                state.legionellen_telegram_done_sent = True
         except Exception as exc:
             logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {exc}")
 
@@ -985,13 +1121,9 @@ async def run_logic_step(session, state, learning_engine=None):
                 state.control.blocking_reason = "Manuelles Ausschalten fehlgeschlagen"
                 return
             if getattr(state, "legionellen_aktiv", False):
-                state.legionellen_aktiv = False
-                state.legionellen_temp_override = None
-                state.legionellen_started_at = None
-                state.legionellen_target_reached_at = None
-                state.legionellen_end_time = _state_now(state)
-                state._last_was_legionellen = True
-                clear_plan(state, "Legionellenlauf manuell beendet", persist=True)
+                # Der zentrale Hardware-Stop hat den Lifecycle bereits bereinigt.
+                # Kein zweites, abweichendes Nachpflegen hier.
+                pass
         elif command == "set_mode":
             mode = params.get("mode")
             active = bool(params.get("active"))
@@ -1212,27 +1344,32 @@ def _fmt_temp(v):
 
 
 def write_last_state_snapshot(state):
-    """Schreibt one Zeile (Overwrite) mit dem aktuellen Systemzustand."""
+    """Schreibt atomar; Persistenzfehler werden im Health-Status sichtbar."""
     try:
         now = _state_now(state)
         komp = "EIN" if state.control.kompressor_ein else "AUS"
         rule = getattr(state.control, "active_rule_name", "") or "-"
         blocking = getattr(state.control, "blocking_reason", "") or "-"
+        off_at = getattr(state.stats, "last_compressor_off_time", None)
         line = (
             f"{now:%Y-%m-%d %H:%M:%S} | Komp={komp} | Regel={rule} | "
             f"Blocking={blocking} | "
-            f"AUS_seit={getattr(state.stats, 'last_compressor_off_time', None).strftime('%Y-%m-%d %H:%M:%S') if getattr(state.stats, 'last_compressor_off_time', None) is not None else '-'} | "
+            f"AUS_seit={off_at.strftime('%Y-%m-%d %H:%M:%S') if off_at is not None else '-'} | "
             f"T_oben={_fmt_temp(getattr(state.sensors, 't_oben', None))} | "
             f"T_mittig={_fmt_temp(getattr(state.sensors, 't_mittig', None))} | "
             f"T_unten={_fmt_temp(getattr(state.sensors, 't_unten', None))} | "
             f"T_verd={_fmt_temp(getattr(state.sensors, 't_verd', None))} | "
-            f"PV={state.solar.acpower or 0.0:.0f}W | "
-            f"SOC={state.solar.soc or 0.0:.0f}%\n"
+            f"PV={getattr(state.solar, 'acpower', None) or 0.0:.0f}W | "
+            f"SOC={getattr(state.solar, 'soc', None) or 0.0:.0f}%\n"
         )
         atomic_write_text(LAST_STATE_FILE, line)
-    except Exception:
-        # Diagnose-Datei ist optional - niemals den Haupt-Loop belasten.
-        pass
+        state.last_state_write_ok = True
+        state.last_state_write_error = None
+    except Exception as exc:
+        state.last_state_write_ok = False
+        state.last_state_write_error = f"{type(exc).__name__}: {exc}"
+        if check_log_throttle(state, "_last_state_write_log", interval_minutes=5.0):
+            logging.error("last_state.txt konnte nicht geschrieben werden: %s", exc)
 
 
 async def log_system_state(state):

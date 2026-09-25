@@ -8,6 +8,9 @@ async def test_check_and_send_alerts_normalization():
     state = MagicMock()
     state.control.blocking_reason = "Min. Pause (noch 2m 00s)"
     state.control.last_alert_type = ""
+    state.control._last_alert_attempt_at = None
+    state.control._last_alert_failed_type = None
+    state.control._alert_retry_count = 0
     state.config.Telegram.CHAT_ID = "123"
     state.config.Telegram.BOT_TOKEN = "abc"
     
@@ -40,3 +43,30 @@ async def test_check_and_send_alerts_normalization():
         await check_and_send_alerts(session, state)
         assert mock_send.call_count == 2
         assert state.control.last_alert_type == ""
+
+
+@pytest.mark.asyncio
+async def test_telegram_fehlschlag_wird_nicht_als_erfolgreich_markiert():
+    state = MagicMock()
+    state.local_tz = __import__("pytz").timezone("Europe/Berlin")
+    state.control.blocking_reason = "Min. Pause (noch 2m 00s)"
+    state.control.last_alert_type = ""
+    state.control._last_alert_attempt_at = None
+    state.control._last_alert_failed_type = None
+    state.control._alert_retry_count = 0
+    state.config.Telegram.CHAT_ID = "123"
+    state.config.Telegram.BOT_TOKEN = "abc"
+
+    with patch("control_logic.send_telegram_message", new_callable=AsyncMock) as send:
+        send.return_value = False
+        await check_and_send_alerts(AsyncMock(), state)
+        assert state.control.last_alert_type == ""
+        assert state.control.blocking_code == "mindestpause"
+        assert state.control._last_alert_failed_type == "mindestpause"
+
+        # Backoff-Fenster umgehen und erfolgreichen Retry simulieren.
+        state.control._last_alert_attempt_at = None
+        send.return_value = True
+        await check_and_send_alerts(AsyncMock(), state)
+        assert state.control.last_alert_type == "mindestpause"
+        assert state.control._last_alert_failed_type is None
