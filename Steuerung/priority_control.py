@@ -569,6 +569,7 @@ def evaluate_wochenende(
 def evaluate_notfallschutz(
     nf_cfg: NotfallschutzConfig,
     temp_dict: Dict[str, Optional[float]],
+    kompressor_ein: bool = False,
 ) -> RegelErgebnis:
     """Notfallschutz (Prio 110): Reiner Schutzleiter fuer die
     Brauchwasser-Mindesttemperatur.
@@ -588,8 +589,8 @@ def evaluate_notfallschutz(
         result.grund = "Notfallschutz inaktiv"
         return result
 
-    # Konfigurierbare Strategie. "auto" bewahrt die bisherige sichere Reihenfolge;
-    # "alle" verwendet den kältesten verfügbaren Boiler-Fühler.
+    # "auto" ist bewusst eine Prioritätsstrategie: der erste gültige Fühler
+    # entscheidet (oben -> mittig -> unten). "alle" nutzt dagegen den kältesten.
     strategie = getattr(nf_cfg, "temperaturfuehler", "auto")
     if strategie == "alle":
         kandidaten = []
@@ -623,6 +624,20 @@ def evaluate_notfallschutz(
         result.grund = (
             f"NOTFALLSCHUTZ: {sensor} {temp:.1f}C <= "
             f"{nf_cfg.einschalten_bei_c}C -> EIN"
+        )
+        return result
+    if kompressor_ein and temp >= nf_cfg.ausschalten_bei_c:
+        result.einschalten = False
+        result.grund = (
+            f"Notfallschutz-Hysterese: {sensor} {temp:.1f}C >= "
+            f"{nf_cfg.ausschalten_bei_c}C -> AUS"
+        )
+        return result
+    if kompressor_ein:
+        result.einschalten = True
+        result.grund = (
+            f"Notfallschutz-Hysterese: {sensor} {temp:.1f}C zwischen "
+            f"{nf_cfg.einschalten_bei_c}-{nf_cfg.ausschalten_bei_c}C -> laeuft weiter"
         )
         return result
 
@@ -1116,6 +1131,7 @@ def evaluate_forecast(
     pv_acpower: Optional[float] = None,
     battery_power: Optional[float] = None,
     solar_stale: bool = False,
+    kompressor_ein: bool = False,
 ) -> RegelErgebnis:
     """
     Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter.
@@ -1194,11 +1210,18 @@ def evaluate_forecast(
     if forecast_wh_qm >= forecast_cfg.fc_schwelle_hoch_wh:
         if forecast_cfg.sparen_start_uhr <= now_hour < forecast_cfg.sparen_ende_uhr:
             if temp >= forecast_cfg.t_vorheiz_ab_c:
+                if kompressor_ein:
+                    result.einschalten = None
+                    result.grund = (
+                        f"Forecast-Sparen: Morgen {forecast_wh_qm:.0f} Wh/qm gut; "
+                        "laufender Zyklus wird allein durch die Tagesprognose nicht beendet"
+                    )
+                    return result
                 result.einschalten = False
                 result.grund = (
                     f"Forecast-Sparen: Morgen {forecast_wh_qm:.0f} Wh/qm >= "
                     f"{forecast_cfg.fc_schwelle_hoch_wh:.0f} (gut), "
-                    f"Temp {temp:.1f}C >= {forecast_cfg.t_vorheiz_ab_c}C -> Sparen"
+                    f"Temp {temp:.1f}C >= {forecast_cfg.t_vorheiz_ab_c}C -> kein Start"
                 )
                 return result
 
@@ -1217,6 +1240,10 @@ def evaluate_adaptive_pv(
     nachtsperre_ende: int = 8,
     fc_ratio: float = 1.0,
     forecast_today_wh_qm: Optional[float] = None,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    soc: Optional[float] = None,
+    solar_stale: bool = False,
 ) -> RegelErgebnis:
     """
     Adaptive-PV-Regel: PV-Schwelle passt sich dynamisch an.
@@ -1278,6 +1305,27 @@ def evaluate_adaptive_pv(
 
     # Dynamische Schwelle berechnen
     schwelle = adaptive_cfg.base_threshold_watt
+
+    # Nur eine zentral bestätigte PV-Quelle darf AdaptivePV auslösen.
+    #pv_acpower ist die Erzeugung; Netzeinspeisung allein beweist keine PV-Leistung.
+    quelle_ok, quelle_text = _energiequelle_mit_grund(
+        pv_leistung,
+        soc,
+        1.0,
+        0.0,
+        -50.0,
+        pv_acpower=pv_acpower,
+        battery_power=battery_power,
+        battery_min_watt=1.0,
+        solar_stale=solar_stale,
+    )
+    if quelle_ok and "PV" not in quelle_text:
+        quelle_ok = False
+        quelle_text = "Batterie verfuegbar; AdaptivePV steuert ausschliesslich PV"
+    if not quelle_ok:
+        result.reason_code = "waiting_source"
+        result.grund = f"AdaptivePV wartet auf PV: {quelle_text}"
+        return result
 
     # Temperatur-Anpassung
     if temp < adaptive_cfg.t_aggressiv_kalt_c:
@@ -1693,7 +1741,6 @@ def evaluate_legionellen(
             result.grund = f"Bereits in KW {aktuelle_kw} durchgefuehrt"
             return result
     start_h = int(legionellen_cfg.start_uhr)
-    start_m = int((legionellen_cfg.start_uhr - start_h) * 60 + 0.5)
     is_weekend = _is_weekend(now)
     fruehestens = (
         getattr(wochenende_cfg, "fruehestens_uhr", None)
@@ -1720,11 +1767,10 @@ def evaluate_legionellen(
         )
         return result
     if legionellen_planned_date is not None and now.date() > legionellen_planned_date:
-        result.aktiv = True
-        result.einschalten = None
+        result.reason_code = "planned_day_missed"
         result.grund = (
             f"Legionellen: geplanter Termin {legionellen_planned_date} ist verstrichen; "
-            "Forecast-Plan verwerfen"
+            "naechster geeigneter PV-Tag wird geplant"
         )
         return result
     if legionellen_planned_tag is not None:
@@ -1747,59 +1793,27 @@ def evaluate_legionellen(
         )
         return result
 
-    # Prioritaeten-Kaskade (Legionellen=90 < Wochenende=100): Am Wochenende
-    # blockt die Prio-100-Wochenende-Sperre Starts vor fruehestens_uhr
-    # (z.B. 09:00). Das Startfenster wird flexibel gehalten, damit die Fahrt
-    # direkt nach der Sperre nachgeholt wird.
+    # Ein gemeinsames Startfenster gilt an Werktagen und am Wochenende.
+    # Innerhalb des Fensters wartet die Regel auf PV/Batterie; nach dem
+    # spaetesten Start wird der Tag fuer Variante C als verpasst markiert.
+    spaeteste_start_h = int(getattr(legionellen_cfg, "spaeteste_start_uhr", 12))
+    frueheste_start_h = start_h
     if is_weekend and fruehestens is not None:
-        fruehster_start = int(fruehestens)
-        if now.hour < fruehster_start:
-            if now.hour >= start_h:
-                # Fahrt ist eigentlich faellig, wird aber bis zur Freigabe
-                # von der Wochenende-Sperre gehalten. Fenster offen lassen,
-                # damit um fruehster_start sofort gestartet wird.
-                result.einschalten = None
-                result.grund = (
-                    f"Legionellen: Wochenende-Sperre blockt bis {fruehster_start:g}:00; "
-                    f"PV-/Batterie-Quelle und Start werden danach erneut geprueft "
-                    f"(unten {t_unten:.1f}C)"
-                )
-            else:
-                result.aktiv = False
-                result.grund = (
-                    f"Nicht zur geplanten Startzeit {legionellen_cfg.start_uhr:g}:00"
-                )
-            return result
-        # Nach der Wochenende-Sperre: Nachhol-Fenster bis spaeteste_start_uhr
-        spatest_hr = int(getattr(legionellen_cfg, "spaeteste_start_uhr", 16))
-        if now.hour > spatest_hr:
-            result.aktiv = False
-            result.grund = f"Startfenster abgelaufen (spaeteste {spatest_hr:g}:00)"
-            return result
-        if kompressor_ein:
-            result.einschalten = None
-            result.grund = "Kompressor laeuft bereits, warte auf Abschluss"
-            return result
-        quelle_ok, quelle_text = _legionellen_quelle_status(
-            legionellen_cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower
-        )
-        if not quelle_ok:
-            result.einschalten = None
-            result.reason_code = "waiting_source"
-            result.grund = f"Legionellen wartet auf PV/Batterie: {quelle_text}"
-            return result
-        result.einschalten = True
+        frueheste_start_h = max(frueheste_start_h, int(fruehestens))
+    aktuelle_zeit = now.hour + now.minute / 60.0
+    if aktuelle_zeit < frueheste_start_h:
+        result.aktiv = False
         result.grund = (
-            f"Legionellenprophylaxe faellig (Wochenende-Nachholung): Starte "
-            f"mit {quelle_text} auf {legionellen_cfg.target_temp_c:.0f}C "
-            f"(unten {t_unten:.1f}C)"
+            f"Legionellen: vor Startfenster {frueheste_start_h:g}:00"
+            + (" (Wochenendfreigabe)" if frueheste_start_h > start_h else "")
         )
         return result
-
-    # Werktag: exakte Startstunde
-    if now.hour != start_h or now.minute < start_m:
-        result.aktiv = False
-        result.grund = f"Nicht zur geplanten Startzeit {legionellen_cfg.start_uhr:g}:00"
+    if now.hour > spaeteste_start_h:
+        result.reason_code = "planned_day_missed"
+        result.grund = (
+            f"Legionellen: Startfenster {frueheste_start_h:g}:00-"
+            f"{spaeteste_start_h:g}:00 verpasst; naechster geeigneter PV-Tag"
+        )
         return result
     if kompressor_ein:
         result.einschalten = None
@@ -1813,10 +1827,9 @@ def evaluate_legionellen(
         result.reason_code = "waiting_source"
         result.grund = f"Legionellen wartet auf PV/Batterie: {quelle_text}"
         return result
-    quelle = quelle_text
     result.einschalten = True
     result.grund = (
-        f"Legionellenprophylaxe faellig: Starte mit {quelle} auf "
+        f"Legionellenprophylaxe faellig: Starte mit {quelle_text} auf "
         f"{legionellen_cfg.target_temp_c:.0f}C (unten {t_unten:.1f}C)"
     )
     return result
@@ -1895,7 +1908,9 @@ def bewerte_alle_regeln(
     # -1. Notfallschutz (Prio 110): hoechste Regel, reiner Schutzleiter.
     #     Greift ohne weitere Bedingungen vor allen Sperren (Wochenende,
     #     Nachtsperre) - im Normalbetrieb stumm.
-    ergebnis = evaluate_notfallschutz(config.notfallschutz, temp_dict)
+    ergebnis = evaluate_notfallschutz(
+        config.notfallschutz, temp_dict, kompressor_ein=kompressor_ein
+    )
     ergebnisse.append(ergebnis)
 
     # 0. Wochenende-Regel (blockiert Einschalten am Wochenende vor fruehestens_uhr)
@@ -2020,6 +2035,7 @@ def bewerte_alle_regeln(
         pv_acpower=pv_acpower,
         battery_power=battery_power,
         solar_stale=solar_stale,
+        kompressor_ein=kompressor_ein,
     )
     ergebnisse.append(ergebnis)
 
@@ -2035,6 +2051,10 @@ def bewerte_alle_regeln(
         nachtsperre_ende,
         fc_ratio=fc_ratio,
         forecast_today_wh_qm=forecast_today_wh_qm,
+        pv_acpower=pv_acpower,
+        battery_power=battery_power,
+        soc=soc,
+        solar_stale=solar_stale,
     )
     ergebnisse.append(ergebnis)
 

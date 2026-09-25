@@ -82,6 +82,7 @@ def _adaptive_grund(forecast, adaptive_cfg=None):
         # die Grund-Schwelle 300W bleibt direkt sichtbar
         temp_dict={"unten": 40.0, "mitte": 42.0, "oben": 44.0},
         pv_leistung=0.0,  # unter jeder Schwelle -> Grund enthaelt die Schwelle
+        pv_acpower=200.0,
         forecast_wh_qm=forecast,
         kompressor_ein=False,
         now_hour=12,
@@ -155,24 +156,21 @@ async def test_bademodus_erhoehung_aus_config():
 
     gewinner = result["gewinner_ergebnis"]
     assert gewinner is not None and gewinner.name == "Abweichung"
-    # einschaltpunkt = (40 + 5) - 3.0 = 42.0 statt 37.0 ohne Bademodus
-    assert result["einschaltpunkt"] == 42.0
+    # einschaltpunkt = (42 + 5) - 3.0 = 44.0; ohne Bademodus waere Basis 42.
+    assert result["einschaltpunkt"] == 44.0
 
 
 @pytest.mark.asyncio
 async def test_ohne_bademodus_keine_erhoehung():
-    """Ohne Bademodus bleibt der Sollwert bei 40C -> 41C loest kein EIN aus."""
+    """Ohne Bademodus gilt exakt das Basisziel 42C."""
     state = _baue_state(bademodus=False, erhoehung=5.0)
+    state.sensors.t_unten = 42.0
 
     with patch('priority_control_logic.datetime') as mock_dt:
         mock_dt.now.return_value = TZ.localize(datetime(2025, 6, 11, 18, 0))
-        result = await pcl.determine_mode_and_setpoints(state, t_unten=41.0, t_mittig=42.0)
+        result = await pcl.determine_mode_and_setpoints(state, t_unten=42.0, t_mittig=42.0)
 
     gewinner = result["gewinner_ergebnis"]
-    assert gewinner is not None and gewinner.name == "Abweichung"
-    # Soll 40.0 - unten 41.0 = -1.0K: innerhalb der Hysterese, keine Heizanforderung
+    assert gewinner is not None and gewinner.name == "Komfort"
     assert gewinner.einschalten is False
-    assert "Soll 40.0" in gewinner.grund
-    # Gemeldete Setpoints folgen dem unveraenderten Soll (40C):
-    # AUS-Zweig nimmt max(Ein-Punkt 37, Aus-Punkt 39.5) = 39.5 (kein Neueinschalten)
-    assert result["einschaltpunkt"] == 39.5
+    assert result["ausschaltpunkt"] == 42.0

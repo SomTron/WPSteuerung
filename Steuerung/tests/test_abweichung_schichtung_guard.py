@@ -20,7 +20,7 @@ from priority_control import evaluate_abweichung  # noqa: E402
 
 def _cfg(**overrides):
     basis = dict(
-        solltemperatur_c=44.0,
+        solltemperatur_c=42.0,
         temperaturfuehler="unten",
         einschalten_bei_abweichung_k=4.9,
         ausschalten_bei_abweichung_k=0.7,
@@ -59,7 +59,7 @@ def test_oben_warm_und_start_erlaubt_deckelt_oben():
 
 def test_oben_kalt_geht_den_normalen_pfad():
     """Gruppe A (28.08./03.09./14.09.): auch oben kalt -> Heizen bleibt richtig."""
-    r = _eval(_cfg(schichtung_erlaube_start=False), oben=36.4, unten=31.3)
+    r = _eval(_cfg(schichtung_erlaube_start=False), oben=36.4, unten=29.5)
     assert r.einschalten is True
     assert "Schichtung" not in r.grund
 
@@ -79,6 +79,6 @@ def test_deployment_config_hat_die_gepruefte_einstellung():
     assert abw["schichtung_erlaube_start"] is False
     assert abw["netz_notfall_offset_k"] == 12
     assert abw["pv_warten_forecast_schwelle_wh_qm"] == 1200
-    # unveraendert bleiben:
-    assert abw["solltemperatur_c"] == 44
+    # Basisziel ohne PV bleibt 42°C; PV-Regeln dürfen bis 48°C heizen.
+    assert abw["solltemperatur_c"] == 42
     assert abw["temperaturfuehler"] == "unten"

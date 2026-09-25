@@ -24,7 +24,7 @@ def _cfg(**overrides):
         temperaturfuehler="mitte",
         fc_schwelle_hoch_wh=3000.0,
         fc_schwelle_niedrig_wh=800.0,
-        t_vorheiz_ab_c=44.0,
+        t_vorheiz_ab_c=42.0,
         tmax_c=48.0,
         vorheiz_start_uhr=8,
         vorheiz_ende_uhr=19,
@@ -109,9 +109,16 @@ class TestForecastQuellenGate:
             feedin_watt=0.0, soc=10.0,
         )
         assert erg.einschalten is False
-        assert "Sparen" in erg.grund
+        assert "kein Start" in erg.grund
 
-    def test_ausserhalb_vorheizfenster_keine_aktion(self):
+    def test_sparen_beendet_laufenden_zyklus_nicht(self):
+        erg = evaluate_forecast(
+            _cfg(), _temps(mittig=45.0), GUT, 12,
+            feedin_watt=0.0, soc=10.0, kompressor_ein=True,
+        )
+        assert erg.einschalten is None
+        assert "laufender Zyklus" in erg.grund
+
         erg = self._rufe(stunde=20)
         assert erg.einschalten is None
 
@@ -122,7 +129,7 @@ class TestVerdrahtungInBewerteAlleRegeln:
     def _bewerte(self, feedin, soc, battery_power=None):
         _gewinner, ergebnisse = bewerte_alle_regeln(
             config=WPSteuerungConfig(),
-            temp_dict={"oben": 45.0, "mittig": 43.5, "unten": 41.0},
+            temp_dict={"oben": 45.0, "mittig": 41.5, "unten": 41.0},
             pv_leistung=feedin,
             kompressor_ein=False,
             now=datetime(2026, 8, 26, 18, 30),

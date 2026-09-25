@@ -108,8 +108,10 @@ Heizen mit Hausbatterie-Strom, **ohne dass das Haus Netzstrom kauft**:
   1. `soc ≥ min_soc_prozent` (90 %) – Batterie deutlich gefüllt
   2. `feedinpower ≥ max_netzbezug_watt` (−50 W) – kein nennenswerter Netzbezug
      (kleiner Negativ-Puffer toleriert Messrauschen)
-  3. Fühler ≤ `einschalten_bei_c` (42 °C)
-- **Weiterlauf** aus der Batterie bis `ausschalten_bei_c` (47 °C), solange 1.+2. halten
+  3. Fühler ≤ `einschalten_bei_c` (41 °C)
+- **Weiterlauf** aus der Batterie bis zum Basisziel `ausschalten_bei_c` (42 °C),
+  solange 1.+2. halten. Batterie ist bewusst **kein Solarbuffer**; der 48-°C-Puffer
+  bleibt aktueller PV vorbehalten.
 - Sinkt der SOC darunter oder bezieht das Haus Netz → keine Aktion (Schonung)
 - **SOC-Hysterese** (`soc_hysterese_prozent`, default 2): Solange der Kompressor
   läuft, genügt für den Weiterlauf `min_soc − Hysterese` (z. B. 88 %). Ein
@@ -122,16 +124,17 @@ ausschalten_bei_c, temperaturfuehler}`
 
 ### 3.5 Mindest-Temperatur-Garantien (MinTemp-*) — Prio 65
 
-> Vorgabe: Die obere Temperatur soll mittags nicht unter 40 °C fallen; die mittlere
-> Temperatur soll zum Abend-Duschen (~19 Uhr) mindestens 42 °C betragen – aber
-> nach dem Duschen wird nachts nicht mehr geheizt.
+> Vorgabe: Ohne aktuelle PV-Quelle bleiben obere und mittlere Temperatur bei
+> **42 °C**. Mit PV dürfen die PV-Regeln den laufenden Boiler bis maximal
+> **48 °C** als Solarbuffer weiterführen. Nach dem Duschen wird nachts nicht
+> mehr geheizt.
 
 Pro Eintrag (`mindest_temp.eintraege[]`) gilt:
 
 | Eintrag | Fühler | Garantie | Fenster (default) |
 |---|---|---|---|
-| Mittag-Oben | oben | ≥ 40 °C | 11–16 Uhr |
-| Abend-Mitte | mittig | ≥ 42 °C | 17–22 Uhr *(lernend, effektiv bis Nachtsperren-Beginn)* |
+| Mittag-Oben | oben | ≥ 42 °C ohne PV / bis 48 °C mit PV | 11–16 Uhr |
+| Abend-Mitte | mittig | ≥ 42 °C ohne PV / bis 48 °C mit PV | 17–22 Uhr *(lernend, effektiv bis Nachtsperren-Beginn)* |
 
 - **EIN**, wenn der Fühler unter der Mindesttemperatur liegt – **auch während der
   Nachtsperre**, solange `"nachtsperre_ueberschreiben": true` ist. Das ist der
@@ -142,8 +145,9 @@ Pro Eintrag (`mindest_temp.eintraege[]`) gilt:
   vorgeheizt, kühlt der Boiler nach dem Duschen ab, wird nicht mehr nachgeheizt –
   nachts gäbe es dafür ohnehin kein PV und die Nachtsperre bleibt unangetastet.
   Letzte Komfort-Linie bleibt weiterhin der Komfort-Notfall (3.6).
-- Zwischen `min_temp_c` und `min_temp_c + hysterese_k` (Hysterese 2 K) tritt die
-  Regel stumm zurück.
+- Zwischen `min_temp_c` und `min_temp_c + hysterese_k` (Standard 0 K) tritt die
+  Regel stumm zurück. Die Basisregel selbst erzeugt keinen AUS-Befehl; eine
+  bestätigte PV-Quelle darf den laufenden Zyklus bis 48 °C weiterführen.
 - **Rein additiv:** Die Regel kann nur *einschalten*, niemals blockieren. Ist die
   Garantie erfüllt, liefert sie keine Aktion – so schneidet sie Heizwünsche anderer
   Regeln (PV/CalcStart/Abweichung) nie weg. Die Abschaltung nach einem Garantie-

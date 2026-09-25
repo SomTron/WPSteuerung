@@ -44,7 +44,7 @@ SPALTEN_VERTRAG = {
     6: ("Kompressor", lambda v: str(v) in {"0", "1"}),
     16: ("Solar", lambda v: str(v) in {"0", "1"}),          # Solarueberschuss
     17: ("Urlaubsmodus", lambda v: str(v) in {"0", "1"}),
-    18: ("PowerSource", lambda v: str(v) in {"Netz", "Solar", "Batterie"}),
+    18: ("PowerSource", lambda v: str(v) in {"Netz", "Solar", "Batterie", "unbekannt"}),
 }
 
 
@@ -103,7 +103,11 @@ class TestZeilenSemantik:
         state.solar.batpower = 3000
         assert build_heizungsdaten_zeile(state)[18] == "Batterie"
 
-    def test_none_werte_werden_na(self):
+    def test_power_source_stale_ist_unbekannt(self):
+        state = baue_state()
+        state.solar.energy_source = "Daten stale"
+        assert build_heizungsdaten_zeile(state)[18] == "unbekannt"
+
         state = baue_state()
         state.sensors.t_oben = None
         state.solar.soc = None

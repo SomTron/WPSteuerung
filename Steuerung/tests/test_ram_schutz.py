@@ -20,7 +20,8 @@ STEUERUNG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def test_debug_csv_liest_nur_tail(monkeypatch, tmp_path):
-    """Der Debug-Endpoint darf die CSV nicht komplett in pandas laden."""
+    """Der geschuetzte Debug-Endpoint darf die CSV nur tail-basiert lesen."""
+    monkeypatch.setattr(api, "API_KEY", "ram-test-secret")
     p = tmp_path / "heizungsdaten.csv"
     p.write_text(
         "Zeitstempel,FeedinPower,BatPower\n"
@@ -31,7 +32,7 @@ def test_debug_csv_liest_nur_tail(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(api, "HEIZUNGSDATEN_CSV", str(p))
 
-    r = api.debug_csv()
+    r = api.debug_csv("ram-test-secret")
 
     assert r["csv_exists"] is True
     assert r["rows"] == 3
@@ -43,10 +44,23 @@ def test_debug_csv_liest_nur_tail(monkeypatch, tmp_path):
 
 
 def test_debug_csv_ohne_datei(monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "API_KEY", "ram-test-secret")
     monkeypatch.setattr(api, "HEIZUNGSDATEN_CSV", str(tmp_path / "fehlt.csv"))
-    r = api.debug_csv()
+    r = api.debug_csv("ram-test-secret")
     assert r["csv_exists"] is False
     assert "rows" not in r
+
+
+def test_debug_csv_ohne_api_key_wird_abgewiesen(monkeypatch, tmp_path):
+    """Die RAM-Diagnose bleibt auch bei korrektem Tail-Zugriff geschuetzt."""
+    import pytest
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(api, "API_KEY", "ram-test-secret")
+    monkeypatch.setattr(api, "HEIZUNGSDATEN_CSV", str(tmp_path / "heizungsdaten.csv"))
+    with pytest.raises(HTTPException) as exc:
+        api.debug_csv()
+    assert exc.value.status_code == 401
 
 
 def test_telegram_charts_laedt_matplotlib_erst_bei_bedarf():

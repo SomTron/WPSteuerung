@@ -92,12 +92,20 @@ def test_mindesttemp_temp_zu_niedrig():
                            hysterese_k=2.0, fenster_aus_lernen=False)
 
 
-def test_mindesttemp_hysterese_zu_klein():
-    """hysterese_k < 0.5 wird abgelehnt."""
+def test_mindesttemp_hysterese_0_ist_fuer_42_grad_erlaubt():
+    """Null-Hysterese ist fuer das exakte 42-Grad-Ziel erlaubt."""
+    eintrag = MindestTempEintrag(
+        name="Test", temperaturfuehler="mitte", min_temp_c=42.0,
+        start_uhr=6, ende_uhr=8, hysterese_k=0.0,
+    )
+    assert eintrag.hysterese_k == 0.0
+
+
+def test_mindesttemp_hysterese_negativ_wird_abgelehnt():
     with pytest.raises(ValueError):
         MindestTempEintrag(name="Test", temperaturfuehler="mitte",
                            min_temp_c=38.0, start_uhr=6, ende_uhr=8,
-                           hysterese_k=0.1, fenster_aus_lernen=False)
+                           hysterese_k=-0.1, fenster_aus_lernen=False)
 
 
 # ── Batterie ──

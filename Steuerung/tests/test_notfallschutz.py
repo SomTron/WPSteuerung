@@ -127,7 +127,31 @@ class TestEvaluateNotfallschutz:
         assert erg.aktiv is False
         assert erg.einschalten is None
 
-    def test_keine_sensordaten(self):
+    def test_auto_erster_gueltiger_fuehler_gewinnt(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(), {"oben": 40.0, "mittig": 35.0, "unten": 34.0}
+        )
+        assert erg.einschalten is None
+        assert "oben" in erg.grund
+
+    def test_hysterese_bekommt_laufenden_notfall_zuerst_wieder_aus(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(),
+            {"oben": 39.0, "mittig": 40.0, "unten": 41.0},
+            kompressor_ein=True,
+        )
+        assert erg.einschalten is False
+        assert "Hysterese" in erg.grund
+
+    def test_hysterese_between_grenzen_haelt_laufenden_lauf(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(),
+            {"oben": 37.0, "mittig": 38.0, "unten": 39.0},
+            kompressor_ein=True,
+        )
+        assert erg.einschalten is True
+        assert "laeuft weiter" in erg.grund
+
         erg = pc.evaluate_notfallschutz(NotfallschutzConfig(), {})
         assert erg.aktiv is False
 

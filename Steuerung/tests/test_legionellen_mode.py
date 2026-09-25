@@ -123,8 +123,9 @@ class TestEvaluateLegionellen:
         result = evaluate_legionellen(
             legionellen_config, temp_dict, now,
         )
-        assert result.aktiv is False
-        assert "Startzeit" in result.grund
+        assert result.aktiv is True
+        assert result.reason_code == "planned_day_missed"
+        assert "naechster geeigneter PV-Tag" in result.grund
 
     def test_korrekte_startzeit_erlaubt(self, legionellen_config, temp_dict):
         """Um 10:00 Uhr muss die Regel einschalten (sofern nicht aktiv)."""
@@ -176,7 +177,47 @@ class TestEvaluateLegionellen:
         assert "Probezeit" in result.grund
 
 
-def test_legionellen_start_erfordert_pv_oder_batterie():
+def test_legionellen_startet_im_fenster_spaeter_wenn_pv_kommt():
+    from priority_control import evaluate_legionellen
+
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6,
+        start_uhr=8, spaeteste_start_uhr=12,
+        pv_start_min_watt=500.0,
+    )
+    temps = {"oben": 45.0, "unten": 35.0, "mittig": 40.0}
+    ohne = evaluate_legionellen(cfg, temps, datetime(2025, 6, 13, 8, 0))
+    spaeter = evaluate_legionellen(
+        cfg, temps, datetime(2025, 6, 13, 10, 30),
+        pv_leistung=600.0, pv_acpower=600.0,
+    )
+    assert ohne.einschalten is None
+    assert ohne.reason_code == "waiting_source"
+    assert spaeter.einschalten is True
+    assert "Starte mit PV" in spaeter.grund
+
+
+def test_legionellen_verpasster_tag_wird_zurueckgestellt_variante_c():
+    from priority_control import evaluate_legionellen
+
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6,
+        start_uhr=8, spaeteste_start_uhr=12,
+    )
+    temps = {"oben": 45.0, "unten": 35.0, "mittig": 40.0}
+    heute = datetime(2025, 6, 13, 13, 0)
+    gestern = heute.date()
+    result = evaluate_legionellen(
+        cfg, temps, heute,
+        legionellen_planned_date=gestern,
+    )
+    assert result.einschalten is None
+    assert result.reason_code == "planned_day_missed"
+    assert "naechster geeigneter PV-Tag" in result.grund
+
+
     from priority_control import evaluate_legionellen
     cfg = LegionellenConfig(
         aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
@@ -530,8 +571,8 @@ class TestLegionellenWochenendeNachholung:
             wochenende_cfg=self._weekend_cfg(),
         )
         assert erg.einschalten is None
-        assert "Wochenende-Sperre" in erg.grund
-        assert "PV-/Batterie-Quelle" in erg.grund
+        assert "vor Startfenster 9:00" in erg.grund
+        assert "Wochenendfreigabe" in erg.grund
 
     def test_wochenende_nachholung_nach_sperre(self, legionellen_config, temp_dict):
         """Sa 09:05: Nach der Sperre wird sofort nachgeholt (Fenster bis 16U)."""
@@ -544,7 +585,7 @@ class TestLegionellenWochenendeNachholung:
         )
         assert erg.aktiv is True
         assert erg.einschalten is True
-        assert "Nachholung" in erg.grund
+        assert "Starte mit PV" in erg.grund
 
     def test_wochenende_startfenster_abgelaufen(self, legionellen_config, temp_dict):
         """Sa 17:00: Nachhol-Fenster (bis spaeteste_start_uhr=16) abgelaufen."""
@@ -554,8 +595,9 @@ class TestLegionellenWochenendeNachholung:
             self._samstag(17, 0),
             wochenende_cfg=self._weekend_cfg(),
         )
-        assert erg.aktiv is False
-        assert "Startfenster abgelaufen" in erg.grund
+        assert erg.aktiv is True
+        assert erg.reason_code == "planned_day_missed"
+        assert "naechster geeigneter PV-Tag" in erg.grund
 
     def test_donnerstag_vor_erlaubtem_fenster_geblockt(self, legionellen_config, temp_dict):
         """Do 09:30 (start=8): Donnerstag liegt VOR dem erlaubten Fenster
@@ -591,6 +633,7 @@ class TestLegionellenWochenendeNachholung:
 
         config = WPSteuerungConfig(beschreibung="Test", legionellen=legionellen_config)
         config.wochenende.fruehestens_uhr = 9
+        config.legionellen.start_uhr = 8
         config.calculated_start.aktiv = False
         config.forecast.aktiv = False
         config.adaptive_pv.aktiv = False
@@ -608,7 +651,7 @@ class TestLegionellenWochenendeNachholung:
         nach = pc.bewerte_alle_regeln(
             config=config, temp_dict=temp, pv_leistung=500.0, kompressor_ein=False,
             now=self._samstag(9, 0), battery_power=None, soc=None,
-            solar_stale=False,
+            pv_acpower=500.0, solar_stale=False,
         )
         assert nach[0].name == "Legionellen"        # Nachholung um 09:00
         assert nach[0].einschalten is True

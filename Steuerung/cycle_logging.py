@@ -34,12 +34,18 @@ def _zahl(value):
 
 
 def _quelle(start_regel):
-    """Kompatibel zur bisherigen Log-Auswertung Stromquelle ableiten."""
+    """Kompatibel zur bisherigen Log-Auswertung Stromquelle ableiten.
+
+    Alte Datensaetze ohne eindeutige Startregel duerfen nicht nachtraeglich
+    als Netzbetrieb interpretiert werden.
+    """
     if start_regel in ("AdaptivePV", "Einspeisung", "PV_mitte", "PV_unten"):
         return "pv"
     if start_regel == "Batterie":
         return "batterie"
-    return "netz"
+    if start_regel in ("API force_on", "Legionellen", "Notfallschutz", "MindestTemp", "Abweichung", "CalcStart", "Komfort", "Zeitfenster", "Wochenende"):
+        return "netz"
+    return "unbekannt"
 
 
 def _zeitpunkt(value):

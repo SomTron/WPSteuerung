@@ -12,6 +12,9 @@ TEMP_MIN_VALID: float = -50.0
 TEMP_MAX_VALID: float = 150.0
 TEMP_VERD_MIN_VALID: float = -20.0
 TEMP_VERD_MAX_VALID: float = 50.0
+# Zieltrennung: ohne Solarquelle Basiskomfort, mit PV optionaler Solarbuffer.
+BASIS_COMFORT_TEMP_C: float = 42.0
+MAX_SOLAR_BUFFER_TEMP_C: float = 48.0
 
 # --- Reduction Limits ---
 REDUCTION_MIN: float = 0.0

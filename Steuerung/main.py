@@ -722,6 +722,10 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                         tag
                         for tag in range(legionellen_cfg.bevorzugter_tag, legionellen_cfg.letzter_tag + 1)
                         if tag >= aktueller_wochentag
+                        and not (
+                            tag == aktueller_wochentag
+                            and now_local.hour > int(legionellen_cfg.spaeteste_start_uhr)
+                        )
                     ]
 
                     if not verfuegbare_tage:
@@ -1122,7 +1126,9 @@ def build_heizungsdaten_zeile(state):
             power_source = "Batterie"
 
     if power_source == "Daten stale":
-        power_source = "Netz"
+        # Nicht als Netzstrom interpretieren: Dann wuerde spaeterer CSV-Export
+        # behaupten, die WP habe mit Netz geheizt, obwohl die Messung stale war.
+        power_source = "unbekannt"
     elif power_source == "PV":
         # Historischer CSV-Vertrag: "Solar" statt der internen Bezeichnung "PV".
         power_source = "Solar"

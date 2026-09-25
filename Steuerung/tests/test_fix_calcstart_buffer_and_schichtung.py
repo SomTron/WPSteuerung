@@ -30,7 +30,7 @@ def _calc_cfg(**kwargs):
     defaults = dict(
         prioritaet=82,
         aktiv=True,
-        solltemperatur_c=44.0,
+        solltemperatur_c=44.0,  # synthetischer 44C-Testfall fuer Pufferlogik
         target_uhr=17,
         heizrate_unten_c_h=3.0,
         heizrate_gesamt_c_h=2.0,

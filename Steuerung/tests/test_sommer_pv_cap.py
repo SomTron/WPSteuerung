@@ -29,7 +29,7 @@ def test_sommer_cap_pv_regeln():
     for pv in config.pv_regeln:
         assert pv.ausschalten_bei_c == 46.0  # 48 - 2 (pv_ausschalt_offset_c)
     assert config.adaptive_pv.tmax_c == 46.0
-    assert config.abweichung.solltemperatur_c == 37.0  # Default-Soll 40 - 3
+    assert config.abweichung.solltemperatur_c == 39.0  # Default-Soll 42 - 3
 
 
 def test_sommer_cap_klemmt_an_einschaltpunkt():

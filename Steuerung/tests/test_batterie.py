@@ -73,20 +73,20 @@ def test_kleiner_messfehler_bezug_ist_ok():
 
 # ── Hysterese / Ausschalten ──
 
-def test_ausschalten_wenn_warm_genug():
-    erg = bewerte({"unten": 47.5}, soc=95.0, feedin=0.0)
+def test_ausschalten_beim_basisziel_42():
+    erg = bewerte({"unten": 42.0}, soc=95.0, feedin=0.0)
     assert erg.einschalten is False
 
 
-def test_weiterlauf_mit_batteriestrom():
-    """Laeuft schon + Batterie traegt -> weiter bis ausschalten_bei_c."""
-    erg = bewerte({"unten": 44.0}, soc=92.0, feedin=0.0, kompressor_ein=True)
+def test_batterie_heizt_nur_bis_zum_basisziel():
+    """Batterie ist eine 42-Grad-Quelle, kein Solarbuffer bis 48 Grad."""
+    erg = bewerte({"unten": 41.0}, soc=92.0, feedin=0.0, kompressor_ein=True)
     assert erg.einschalten is True
-    assert "Weiterlauf" in erg.grund
+    assert "Batterie" in erg.grund
 
 
-def test_weiterlauf_endet_bei_soc_fall():
-    erg = bewerte({"unten": 44.0}, soc=60.0, feedin=-200.0, kompressor_ein=True)
+def test_batterie_hoert_bei_soc_fall_und_netzbezug():
+    erg = bewerte({"unten": 41.0}, soc=60.0, feedin=-200.0, kompressor_ein=True)
     assert erg.einschalten is None
 
 

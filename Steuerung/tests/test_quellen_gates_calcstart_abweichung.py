@@ -31,7 +31,7 @@ def _calc_cfg(**overrides):
     cfg = SimpleNamespace(
         aktiv=True,
         prioritaet=82,
-        solltemperatur_c=44.0,
+        solltemperatur_c=42.0,
         target_uhr=17,
         heizrate_unten_c_h=3.0,
         heizrate_gesamt_c_h=2.0,
@@ -46,8 +46,8 @@ def _calc_cfg(**overrides):
     return cfg
 
 
-def _temps(unten=41.0, mitte=43.0):
-    """unten 41 -> diff 3K / 3 K/h = 1.0h; mitte 43 -> diff 1K / 2 K/h."""
+def _temps(unten=40.0, mitte=43.0):
+    """unten 40 -> diff 2K / 3 K/h = 0.67h; mitte 43 -> diff 1K / 2 K/h."""
     return {"oben": 45.0, "mittig": mitte, "unten": unten}
 
 
@@ -73,7 +73,7 @@ class TestCalcStartQuellenGate:
     def test_mit_gleicher_lage_pv_startet_frueher(self):
         """Gegenstueck zum Wartefall: Mit Quelle feuert der Fruehstart."""
         erg = evaluate_calculated_start(
-            _calc_cfg(), _temps(), 15, 12, forecast_wh_qm=400.0,
+            _calc_cfg(), _temps(), 16, 30, forecast_wh_qm=400.0,
             feedin_watt=150.0, soc=None,
         )
         assert erg.einschalten is True
@@ -113,9 +113,9 @@ class TestCalcStartQuellenGate:
 
     def test_spaetstart_puffer_konfigurierbar(self):
         erg = evaluate_calculated_start(
-            _calc_cfg(spaetstart_puffer_h=2.0, netz_fallback_erlaubt=True), _temps(), 14, 0,
+            _calc_cfg(spaetstart_puffer_h=2.0, netz_fallback_erlaubt=True), _temps(), 14, 40,
             feedin_watt=0.0, soc=None,
-        )  # Restpuffer 2.0h <= 2.0h -> Spatest-Start greift frueher
+        )  # Restpuffer 1.67h <= 2.0h -> Spaetest-Start greift frueher
         assert erg.einschalten is True
         assert "SPAETEST" in erg.grund
 
@@ -124,7 +124,7 @@ class TestCalcStartVerdrahtung:
     """bewerte_alle_regeln muss pv_leistung/soc an CalcStart durchreichen."""
 
     @staticmethod
-    def _ergebnisse(feedin, soc):
+    def _ergebnisse(feedin, soc, pv_acpower=None):
         config = WPSteuerungConfig()
         # Der Test prueft den expliziten Netzfallback der Zapfgarantie.
         config.calculated_start.netz_fallback_erlaubt = True
@@ -132,20 +132,21 @@ class TestCalcStartVerdrahtung:
             config=config,
             temp_dict={"oben": 45.0, "mittig": 43.0, "unten": 41.0},
             pv_leistung=feedin,
+            pv_acpower=pv_acpower,
             kompressor_ein=False,
-            now=datetime(2026, 8, 26, 16, 0),
+            now=datetime(2026, 8, 26, 16, 30),
             forecast_today_wh_qm=None,
             soc=soc,
         )
         return [e for e in alle if e.name == "CalcStart"][0]
 
-    def test_soc_durchgereicht_spatest_start(self):
+    def test_netzfallback_wird_am_spaetesten_start_ausgefuehrt(self):
         cs = self._ergebnisse(feedin=0.0, soc=None)
         assert cs.einschalten is True
         assert "SPAETEST" in cs.grund
 
-    def test_feedin_durchgereicht_fruehstart_mit_quelle(self):
-        cs = self._ergebnisse(feedin=100.0, soc=95.0)
+    def test_pv_leistung_wird_durchgereicht_und_fruehgestartet(self):
+        cs = self._ergebnisse(feedin=100.0, soc=95.0, pv_acpower=100.0)
         assert cs.einschalten is True
         assert "PV-Erzeugung 100W" in cs.grund
 

@@ -78,7 +78,18 @@ def test_abschluss_speichert_start_maxima_und_endgrund(tmp_path):
     assert state._cycle_log is None
 
 
-def test_ungueltige_sensorwerte_werden_ignoriert(tmp_path):
+def test_unbekannte_quelle_bleibt_unbekannt(tmp_path):
+    state = _state("SonstigeRegel")
+    start = datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)
+    begin_cycle(state, start, 1)
+    state.control.kompressor_ein = True
+    assert finish_cycle(state, start, csv_path=str(tmp_path / "zyklen.csv")) is True
+    with open(tmp_path / "zyklen.csv", encoding="utf-8", newline="") as f:
+        row = next(csv.DictReader(f, delimiter=";"))
+    assert row["quelle"] == "unbekannt"
+    assert row["source_at_start"] == "unbekannt"
+
+
     state = _state()
     state.sensors.t_unten = "30.0"
     state.sensors.t_oben = float("nan")
@@ -88,7 +99,8 @@ def test_ungueltige_sensorwerte_werden_ignoriert(tmp_path):
     assert update_cycle_maxima(state) is True
     assert finish_cycle(state, start, csv_path=str(tmp_path / "zyklen.csv")) is True
     with open(tmp_path / "zyklen.csv", encoding="utf-8", newline="") as f:
-        row = next(csv.DictReader(f, delimiter=";"))
+        rows = list(csv.DictReader(f, delimiter=";"))
+    row = rows[-1]
     assert row["start_unten"] == ""
     assert row["start_oben"] == ""
     assert row["max_unten"] == ""

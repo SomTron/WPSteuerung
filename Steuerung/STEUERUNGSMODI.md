@@ -300,17 +300,22 @@ Gewinner-Regel aus deren Konfiguration abgeleitet (Anzeige + Abschaltung):
 | `PV_*` | `pv_regel.einschalten_bei_c` (42) | `pv_regel.ausschalten_bei_c` (48) |
 | `Komfort` | `komfort.komfort_einschalten_bei_c` (38) | `komfort.ausschalten_bei_c` (42) |
 | `Zeitfenster` | `zeitfenster.max_temp_fuer_einschalten_c` (44.5) | dito |
-| `Abweichung` | `soll − einschalten_bei_abweichung_k` (44−4,9≈39,1) | `soll − ausschalten_bei_abweichung_k` (44−0,7=43,3) |
-| `Forecast` | `forecast.t_vorheiz_ab_c` (44) | `forecast.tmax_c` (48) |
+| `Abweichung` | `soll − einschalten_bei_abweichung_k` (42−4,9≈37,1) | `soll − ausschalten_bei_abweichung_k` (42−0=42) |
+| `Forecast` | `forecast.t_vorheiz_ab_c` (42) | `forecast.tmax_c` (48) |
 | `AdaptivePV` | `adaptive_pv.base_threshold_watt` (300 W) | `adaptive_pv.tmax_c` (48) |
-| `CalcStart` | `calculated_start.solltemperatur_c` (44) | `calculated_start.tmax_c` (48) |
-| `MinTemp-*` | `eintrag.min_temp_c` | `eintrag.min_temp_c + hysterese_k` |
-| `Batterie` | `batterie.einschalten_bei_c` (42) | `batterie.ausschalten_bei_c` (47) |
+| `CalcStart` | `calculated_start.solltemperatur_c` (42) | `calculated_start.tmax_c` (48) |
+| `MinTemp-*` | `eintrag.min_temp_c` (42) | ohne PV 42; mit bestätigter PV bis `solarziel` (max. 48) |
+| `Batterie` | `batterie.einschalten_bei_c` (41) | `batterie.ausschalten_bei_c` (42) |
 | `Einspeisung` | `ausschalten_bei_c − 6.0` (42, Anzeige-Wert) | `einspeisung.ausschalten_bei_c` (48) |
 | `Legionellen` | `target_temp_c − 5.0` (55, Anzeige-Wert) | `legionellen.legionellen_max_temp_c` (65) |
 | Default | `sicherheit.max_temp_c` (48) | `sicherheit.max_temp_c` (48) |
 
 (Werte in Klammern = Defaults aus `json_config.py` / `wp_steuerung_parameter.json`)
+
+**Zieltrennung:** Ohne bestätigte PV bleiben Abweichung, Forecast, CalcStart und
+MinTemp bei **42 °C**. Eine nutzbare PV-Quelle darf einen laufenden Wunsch bis zum
+kleinsten konfigurierten Solarziel, höchstens **48 °C**, verlängern. Batterie und
+Netz bauen bewusst keinen Solarbuffer über 42 °C auf.
 
 ### 3.7 Die wichtigsten Quellen-Helfer
 

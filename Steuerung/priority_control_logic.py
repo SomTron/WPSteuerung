@@ -16,8 +16,10 @@ from typing import Callable
 from utils import safe_timedelta
 from clock import now_for
 from constants import (
+    BASIS_COMFORT_TEMP_C,
     CONFIG_CHECK_INTERVAL_SEC,
     FORECAST_MAX_AGE_HOURS,
+    MAX_SOLAR_BUFFER_TEMP_C,
     SOLAR_DATA_STALE_THRESHOLD_MIN,
 )
 from collections import deque
@@ -569,7 +571,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             eps = _extract_einschaltpunkt(gewinner, effektive_config)
             ausp = _extract_ausschaltpunkt(gewinner, effektive_config)
             state.control.aktueller_einschaltpunkt = eps
-            state.control.aktueller_ausschaltpunkt = ausp
+            state.control.aktueller_ausschaltpunkt = _begrenze_ohne_pv(
+                gewinner, ausp, state, effektive_config
+            )
         else:
             # Regel sagt AUS: korrekte Setpoints aus der Regel extrahieren,
             # damit handle_compressor_off() den Kompressor auch abschalten kann.
@@ -577,12 +581,11 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             # weil z.B. t_unten=43.2C < max_temp_c=48C.
             eps = _extract_einschaltpunkt(gewinner, effektive_config)
             ausp = _extract_ausschaltpunkt(gewinner, effektive_config)
+            ausp = _begrenze_ohne_pv(gewinner, ausp, state, effektive_config)
             state.control.aktueller_einschaltpunkt = max(
                 eps, ausp
             )  # hoch, damit kein Neueinschalten
-            state.control.aktueller_ausschaltpunkt = (
-                ausp  # korrekt, damit Abschaltung funktioniert
-            )
+            state.control.aktueller_ausschaltpunkt = ausp
     else:
         # Keine Regel will einschalten: Standard = ausschalten
         state.control.aktueller_einschaltpunkt = (
@@ -590,6 +593,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         )
         state.control.aktueller_ausschaltpunkt = (
             state.priority_config.sicherheit.max_temp_c
+            if _pv_quelle_aktiv(state)
+            else BASIS_COMFORT_TEMP_C
         )
 
     # Komfort-Einschaltstatus (fuer Komfort-Regel)
@@ -841,6 +846,60 @@ def _extract_einschaltpunkt(
         return config.legionellen.target_temp_c - 5.0  # EIN unter 55C
 
     return config.sicherheit.max_temp_c
+
+
+def _pv_quelle_aktiv(state) -> bool:
+    """True nur bei aktueller, zentral bestätigter PV-Quelle."""
+    source = getattr(getattr(state, "solar", None), "energy_source", None)
+    if isinstance(source, str) and source.lower() in {"pv", "solar"}:
+        return True
+    if source is not None and not isinstance(source, str):
+        return False
+    acpower = getattr(getattr(state, "solar", None), "acpower", None)
+    feedin = getattr(getattr(state, "solar", None), "feedinpower", None)
+    try:
+        return (
+            float(acpower) >= 50.0
+            and float(feedin) >= -50.0
+            and not bool(getattr(state, "solar_stale", False))
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _solarziel_c(config: WPSteuerungConfig) -> float:
+    """Kleinstes konfiguriertes Solarziel; Sommermodus kann es z. B. auf 46 senken."""
+    ziele = []
+    if getattr(config, "adaptive_pv", None) is not None:
+        ziele.append(float(config.adaptive_pv.tmax_c))
+    if getattr(config, "forecast", None) is not None:
+        ziele.append(float(config.forecast.tmax_c))
+    if getattr(config, "einspeisung", None) is not None:
+        ziele.append(float(config.einspeisung.ausschalten_bei_c))
+    ziele.extend(float(regel.ausschalten_bei_c) for regel in config.pv_regeln)
+    return min(ziele, default=float(config.sicherheit.max_temp_c))
+
+
+def _begrenze_ohne_pv(
+    ergebnis: RegelErgebnis,
+    setpoint: float,
+    state,
+    config: WPSteuerungConfig,
+) -> float:
+    """42°C Basisziel; ein laufender Wunsch darf mit PV bis 48°C werden."""
+    name = ergebnis.name
+    if name in {"Legionellen", "Notfallschutz"}:
+        return float(setpoint)
+    # Bademodus ist eine ausdrückliche Nutzer-Ausnahme vom Basisziel.
+    if name == "Abweichung" and bool(getattr(state, "bademodus_aktiv", False)):
+        return float(setpoint)
+    if _pv_quelle_aktiv(state):
+        solarziel = min(_solarziel_c(config), MAX_SOLAR_BUFFER_TEMP_C)
+        if ergebnis.einschalten is True:
+            return solarziel
+        # Eine bestaetigte PV-Abschaltung darf nicht auf 42 C verwassert werden.
+        return min(float(setpoint), solarziel)
+    return min(float(setpoint), BASIS_COMFORT_TEMP_C)
 
 
 def _extract_ausschaltpunkt(

@@ -133,16 +133,17 @@ class NotfallschutzConfig(BaseModel):
     ausschalten_bei_c: float = Field(default=38.0, description="Setpoint: ab Erreichen endet die Notfall-Heizung (Cel)")
     temperaturfuehler: str = Field(
         default="auto",
-        description="Notfall-Fühler: oben, mittig, unten oder alle (kältester relevanter Fühler)",
+        description="Notfall-Fühler: auto=oben→mittig→unten (erster gültiger), oben, mittig, unten oder alle (kältester)",
     )
 
     @model_validator(mode="after")
     def _pruefe_notfallschutz(self):
         if self.einschalten_bei_c >= self.ausschalten_bei_c:
-            raise ValueError(
-                f"notfallschutz: einschalten_bei_c ({self.einschalten_bei_c}) "
-                f"muss kleiner als ausschalten_bei_c ({self.ausschalten_bei_c}) sein"
-            )
+            raise ValueError("einschalten_bei_c muss kleiner als ausschalten_bei_c sein")
+        if not (-20.0 <= self.einschalten_bei_c < self.ausschalten_bei_c <= 80.0):
+            raise ValueError("Notfallschutz-Temperaturen ausserhalb plausiblen Bereichs")
+        if self.einschalten_bei_c >= self.ausschalten_bei_c:
+            raise ValueError("Notfallschutz-Ein-/Ausschaltschwelle ungueltig")
         if not (20.0 <= self.einschalten_bei_c <= 50.0):
             raise ValueError("notfallschutz: einschalten_bei_c ausserhalb 20-50 C")
         if self.temperaturfuehler not in {"auto", "oben", "mittig", "unten", "alle"}:
@@ -199,10 +200,10 @@ class MindestTempEintrag(BaseModel):
     """Eine Mindest-Temperatur-Garantie fuer einen Fuehler in einem Zeitfenster."""
     name: str = Field(default="Eintrag", description="Anzeigename (z.B. 'Mittag-Oben')")
     temperaturfuehler: str = Field(default="oben", description="'oben', 'mitte' oder 'unten'")
-    min_temp_c: float = Field(default=40.0, description="Mindesttemperatur (°C)")
+    min_temp_c: float = Field(default=42.0, description="Mindesttemperatur (°C)")
     start_uhr: int = Field(default=11, description="Fenster-Start (Stunde, 0-23)")
     ende_uhr: int = Field(default=16, description="Fenster-Ende (Stunde, exklusiv)")
-    hysterese_k: float = Field(default=2.0, description="Ausschalten erst bei min_temp_c + K")
+    hysterese_k: float = Field(default=0.0, description="Ausschalten erst bei min_temp_c + K")
     fenster_aus_lernen: bool = Field(
         default=False,
         description=("Zeitfenster dynamisch aus dem gelernten Abend-Zapfverhalten "
@@ -228,8 +229,8 @@ class MindestTempEintrag(BaseModel):
             )
         if not (20.0 <= self.min_temp_c <= 55.0):
             raise ValueError(f"mindest_temp '{self.name}': min_temp_c ausserhalb 20-55 C")
-        if self.hysterese_k < 0.5:
-            raise ValueError(f"mindest_temp '{self.name}': hysterese_k < 0.5 sinnlos")
+        if not (0.0 <= self.hysterese_k <= 10.0):
+            raise ValueError("mindest_temp: hysterese_k muss zwischen 0 und 10 K liegen")
         return self
 
 
@@ -243,11 +244,13 @@ class MindestTempConfig(BaseModel):
         default_factory=lambda: [
             MindestTempEintrag(name="Frueh-Mitte", temperaturfuehler="mitte",
                                min_temp_c=38.0, start_uhr=6, ende_uhr=8,
-                               fenster_aus_lernen=True),
+                               fenster_aus_lernen=True, hysterese_k=2.0),
             MindestTempEintrag(name="Mittag-Oben", temperaturfuehler="oben",
-                               min_temp_c=40.0, start_uhr=11, ende_uhr=16),
+                               min_temp_c=42.0, start_uhr=11, ende_uhr=16,
+                               hysterese_k=0.0),
             MindestTempEintrag(name="Abend-Mitte", temperaturfuehler="mitte",
-                               min_temp_c=40.0, start_uhr=17, ende_uhr=22),
+                               min_temp_c=42.0, start_uhr=17, ende_uhr=22,
+                               hysterese_k=0.0),
         ],
         description="Garantierte Mindesttemperaturen",
     )
@@ -260,8 +263,8 @@ class BatterieConfig(BaseModel):
     aktiv: bool = Field(default=True, description="Regel aktiv")
     prioritaet: int = Field(default=75, description="Priorität (unter den PV-Regeln)")
     temperaturfuehler: str = Field(default="unten", description="Regelfühler")
-    einschalten_bei_c: float = Field(default=42.0, description="Einschalten bei (°C)")
-    ausschalten_bei_c: float = Field(default=47.0, description="Ausschalten bei (°C)")
+    einschalten_bei_c: float = Field(default=41.0, description="Einschalten bei (°C)")
+    ausschalten_bei_c: float = Field(default=42.0, description="Ausschalten bei (°C)")
     min_soc_prozent: float = Field(default=90.0, description="Batterie mind. so voll (%)")
     min_batterieleistung_watt: float = Field(
         default=50.0,
@@ -347,14 +350,30 @@ class ZeitfensterConfig(BaseModel):
     max_temp_fuer_einschalten_c: float = Field(default=50.0, description="Einschalten wenn Temp <= (°C)")
     min_pv_watt: float = Field(default=0.0, description="Minimale PV-Leistung (W)")
 
+    @model_validator(mode="after")
+    def _plausibel(self):
+        if not (0 <= self.start_uhr <= 23 and 0 <= self.ende_uhr <= 23):
+            raise ValueError("zeitfenster: Uhrzeiten muessen zwischen 0 und 23 liegen")
+        if self.ende_uhr <= self.start_uhr:
+            raise ValueError("zeitfenster: ende_uhr muss groesser als start_uhr sein")
+        if self.modus not in {"einschalten", "ausschalten"}:
+            raise ValueError("zeitfenster.modus muss einschalten oder ausschalten sein")
+        if self.temperaturfuehler not in {"oben", "mitte", "unten"}:
+            raise ValueError("zeitfenster.temperaturfuehler ungueltig")
+        if not (20.0 <= self.max_temp_fuer_einschalten_c <= 70.0):
+            raise ValueError("zeitfenster.max_temp_fuer_einschalten_c ausserhalb 20-70 C")
+        if self.min_pv_watt < 0:
+            raise ValueError("zeitfenster.min_pv_watt darf nicht negativ sein")
+        return self
+
 
 class AbweichungConfig(BaseModel):
     """Abweichungsregel: Hält Temperatur nahe am Sollwert."""
     prioritaet: int = Field(default=47, description="Priorität")
-    solltemperatur_c: float = Field(default=40.0, description="Solltemperatur (°C)")
+    solltemperatur_c: float = Field(default=42.0, description="Basis-/Komfortziel ohne Solarstrom (°C)")
     temperaturfuehler: str = Field(default="unten", description="Welcher Fühler: oben/mitte/unten")
     einschalten_bei_abweichung_k: float = Field(default=3.0, description="Einschalten bei Abweichung >= (K)")
-    ausschalten_bei_abweichung_k: float = Field(default=0.5, description="Ausschalten bei Abweichung <= (K)")
+    ausschalten_bei_abweichung_k: float = Field(default=0.0, description="Ausschalten bei Abweichung <= (K); 0 = exakt am Ziel")
     schichtung_min_oben_c: float = Field(default=42.0, description="2-Zonen-Schichtungs-Check: Nicht einschalten wenn oben >= (°C), vermeidet Netzstrom-Start bei Zapfen")
     schichtung_erlaube_start: bool = Field(
         default=False,
@@ -439,8 +458,8 @@ class ForecastConfig(BaseModel):
     temperaturfuehler: str = Field(default="mitte", description="Welcher Fuehler: oben/mitte/unten")
     fc_schwelle_hoch_wh: float = Field(default=3000.0, description="Prognose ueber Wert = guter Solartag (Wh/qm)")
     fc_schwelle_niedrig_wh: float = Field(default=800.0, description="Prognose unter Wert = schlechter Solartag (Wh/qm)")
-    t_vorheiz_ab_c: float = Field(default=44.0, description="Vorheizen wenn Temp kleiner gleich (Grad C)")
-    tmax_c: float = Field(default=48.0, description="Maximale Vorheiztemperatur (Grad C)")
+    t_vorheiz_ab_c: float = Field(default=42.0, description="Vorheizen wenn Temp kleiner gleich (Grad C)")
+    tmax_c: float = Field(default=48.0, description="Maximale PV-/Solar-Vorheiztemperatur (Grad C)")
     vorheiz_start_uhr: int = Field(default=8, description="Vorheiz-Fenster Start-Stunde")
     vorheiz_ende_uhr: int = Field(default=19, description="Vorheiz-Fenster Ende-Stunde")
     sparen_start_uhr: int = Field(default=11, description="Spar-Fenster Start-Stunde")
@@ -516,12 +535,26 @@ class AdaptivePVConfig(BaseModel):
         description="Ab dieser HEUTE-Prognose wird gespart (Wh/m2)",
     )
 
+    @model_validator(mode="after")
+    def _plausibel(self):
+        if self.temperaturfuehler not in {"oben", "mitte", "unten"}:
+            raise ValueError("adaptive_pv.temperaturfuehler ungueltig")
+        if not (0.0 < self.base_threshold_watt <= 10000.0):
+            raise ValueError("adaptive_pv.base_threshold_watt ausserhalb 0-10000 W")
+        if not (self.t_aggressiv_kalt_c < self.t_normal_kalt_c < self.tmax_c):
+            raise ValueError("adaptive_pv: t_aggressiv < t_normal < tmax erforderlich")
+        if self.fc_schwelle_schlecht_wh > self.fc_schwelle_gut_wh:
+            raise ValueError("adaptive_pv: fc_schwelle_schlecht muss <= fc_schwelle_gut sein")
+        if not (0.0 <= self.sparen_hysterese_k < 10.0):
+            raise ValueError("adaptive_pv.sparen_hysterese_k ausserhalb 0-10 K")
+        return self
+
 
 class CalculatedStartConfig(BaseModel):
     """Startzeit-Regel: Berechnet optimalen Einschaltzeitpunkt fuer Zieltemperatur."""
     prioritaet: int = Field(default=82, description="Prioritaet")
     aktiv: bool = Field(default=True, description="Regel aktiv")
-    solltemperatur_c: float = Field(default=44.0, description="Zieltemperatur (Grad C)")
+    solltemperatur_c: float = Field(default=42.0, description="Zieltemperatur (Grad C); PV-Regeln dürfen bis 48 Grad weiterheizen")
     target_uhr: int = Field(default=17, description="Zielzeit (Stunde) - typische Zapfzeit")
     heizrate_unten_c_h: float = Field(default=3.0, description="Geschaetzte Heizrate unten (Grad C/h)")
     heizrate_gesamt_c_h: float = Field(default=2.0, description="Geschaetzte Heizrate gesamt (Grad C/h)")
@@ -700,6 +733,10 @@ class LegionellenConfig(BaseModel):
             raise ValueError("legionellen_max_temp_c muss > target_temp_c sein")
         if not (0 <= self.start_uhr <= 23):
             raise ValueError(f"start_uhr={self.start_uhr} ausserhalb 0-23")
+        if self.mindest_prognose_wh_qm > self.pv_prognose_schwelle_gut:
+            raise ValueError("mindest_prognose_wh_qm darf nicht groesser als die Gut-Schwelle sein")
+        if self.erforderliche_wh_qm > self.pv_prognose_schwelle_gut:
+            raise ValueError("erforderliche_wh_qm darf nicht groesser als die Gut-Schwelle sein")
         if not (1 <= self.max_duration_hours <= 12):
             raise ValueError(f"max_duration_hours={self.max_duration_hours} ausserhalb 1-12")
         if not (0 <= self.probezeit_minuten <= 240):
@@ -756,6 +793,36 @@ class WPSteuerungConfig(BaseModel):
     komfort_verletzung: KomfortVerletzungConfig = Field(default_factory=KomfortVerletzungConfig)
     taktschutz: TaktschutzConfig = Field(default_factory=TaktschutzConfig)
     boiler_modell: BoilerModellConfig = Field(default_factory=BoilerModellConfig)
+
+    @model_validator(mode="after")
+    def _pruefe_globale_kaskade(self):
+        # Mehrere Regeln teilen sich gewollt Prioritaeten; geprueft wird daher
+        # die Sicherheitsreihenfolge, nicht globale Eindeutigkeit.
+        kaskade = [
+            ("Notfallschutz", self.notfallschutz.prioritaet),
+            ("Wochenende", self.wochenende.prioritaet),
+            ("Legionellen", self.legionellen.prioritaet),
+            ("Einspeisung", self.einspeisung.prioritaet),
+            ("CalcStart", self.calculated_start.prioritaet),
+            ("AdaptivePV", self.adaptive_pv.prioritaet),
+            ("Batterie", self.batterie.prioritaet),
+            ("MinTemp", self.mindest_temp.prioritaet),
+            ("Komfort", self.komfort.prioritaet),
+            ("Forecast", self.forecast.prioritaet),
+            ("Zeitfenster", self.zeitfenster.prioritaet),
+            ("Abweichung", self.abweichung.prioritaet),
+        ]
+        for (links_name, links_prio), (rechts_name, rechts_prio) in zip(kaskade, kaskade[1:]):
+            if links_prio <= rechts_prio:
+                raise ValueError(
+                    f"Prioritaet {links_name}={links_prio} muss groesser als "
+                    f"{rechts_name}={rechts_prio} sein"
+                )
+        if not self.zyklus.mindestpausenzeit_minuten >= 5:
+            raise ValueError("Mindestpause muss mindestens 5 Minuten betragen")
+        if self.sicherheit.nachtsperre_start == self.sicherheit.nachtsperre_ende:
+            raise ValueError("Nachtsperre Start und Ende duerfen nicht identisch sein")
+        return self
 
 
 class WPSteuerungConfigManager:
