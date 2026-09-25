@@ -103,6 +103,9 @@ def test_webapp_zeigt_health_und_queue_und_offline_status():
     assert "visibilitychange" in html
     assert "navigator.onLine" in html
     assert "window.addEventListener('online'" in html
+    assert "planned_start_hour" in html
+    assert "spätestens:" in html
+    assert "formatCalcHour" in html
 
 
 def test_history_quality_und_api_fehlertext_sichtbar():

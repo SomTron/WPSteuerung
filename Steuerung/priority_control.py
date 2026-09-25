@@ -1564,6 +1564,25 @@ def evaluate_calculated_start(
         solar_stale=solar_stale,
     )
 
+    # Strukturierte Startplanung fuer API/WebApp/Diagnose. Die menschliche
+    # Grundmeldung bleibt fuer Logs erhalten; die WebApp muss die Uhrzeit
+    # nicht aus Freitext erraten.
+    ideal_start_h = ziel_uhr - hours_needed - max(effektiver_puffer, 0.0)
+    spaetester_start_h = ziel_uhr - hours_needed - float(
+        getattr(calc_cfg, "spaetstart_puffer_h", 0.5)
+    )
+    # Ohne freigegebene Quelle ist der spaeteste Start der frueheste
+    # tatsaechlich moegliche Start. Mit Quelle darf der Idealpuffer genutzt werden.
+    geplanter_start_h = ideal_start_h if quelle_ok else spaetester_start_h
+    result.regel_dict = {
+        "planned_start_hour": round(max(current_time, geplanter_start_h), 2),
+        "spaetester_start_hour": round(spaetester_start_h, 2),
+        "target_hour": round(ziel_uhr, 2),
+        "hours_needed": round(hours_needed, 2),
+        "time_left_hours": round(time_left, 2),
+        "effective_buffer_hours": round(effektiver_puffer, 2),
+    }
+
     if buffer_hours < 0:
         # Bereits ueber Zielzeit oder zu spaet -> sofort heizen.
         # Netzfallback ist nur erlaubt, wenn explizit aktiviert und ab der

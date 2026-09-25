@@ -730,6 +730,7 @@ def get_status():
                 "einschalten": e.einschalten,  # True/False/None
                 "grund": e.grund,
                 "reason_code": getattr(e, "reason_code", None),
+                "regel_dict": getattr(e, "regel_dict", None),
             })
 
     # Entscheidungs-Historie + KPIs (Fehler hier duerfen /status nie killen)

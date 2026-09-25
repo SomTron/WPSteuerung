@@ -87,6 +87,8 @@ class TestCalcStartQuellenGate:
         assert erg.einschalten is True
         assert "SPAETEST" in erg.grund
         assert "Zapf-Garantie" in erg.grund
+        assert erg.regel_dict["planned_start_hour"] == 16.0
+        assert erg.regel_dict["spaetester_start_hour"] == 15.83
 
     def test_vor_dem_spaetest_start_wird_gewartet(self):
         """Noch 1.0h Restpuffer bei 1.0h Bedarf + Sicherheitspuffer: warten."""
