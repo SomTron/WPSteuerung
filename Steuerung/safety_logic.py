@@ -6,6 +6,7 @@ from telegram_api import send_telegram_message
 from logic_utils import is_valid_temperature, check_log_throttle
 from utils import safe_timedelta
 from clock import now_for
+import alert_throttle
 from constants import (
     TEMP_VERD_MIN_VALID, TEMP_VERD_MAX_VALID,
     COMPRESSOR_VERIFICATION_DELAY_MIN, COMPRESSOR_VERIFICATION_CHECK_INTERVAL_MIN,
@@ -25,13 +26,37 @@ def _now_for_state(state):
     return now_for(state)
 
 async def handle_critical_compressor_error(session, state, error_context: str):
-    """Behandelt kritische Fehler beim Kompressor-Ausschalten."""
+    """Behandelt kritische Fehler beim Kompressor-Ausschalten.
+
+    Sicherheitsrelevant und deshalb *nicht* stumm: der Kompressor laeuft
+    weiter. Trotzdem kann dieser Pfad im 10-Sekunden-Takt erneut
+    durchlaufen, wenn das Ausschalten dauerhaft fehlschlaegt (z.B. GPIO- oder
+    Relaisfehler). Ohne Drosselung waeren das bis zu sechs Nachrichten pro
+    Minute. Deshalb: erste Meldung sofort, danach gestaffelt wiederholen.
+    """
     msg = f"🚨 KRITISCHER FEHLER: Kompressor bleibt {error_context} eingeschaltet!"
     logging.critical(f"Kritischer Fehler: Kompressor konnte {error_context} nicht ausgeschaltet werden!")
+    # Getrennte Drosselung je Fehlerart: Ein Ueberhitzungsfehler und ein
+    # Boiler-Maximum sollen nicht gegenseitig die Meldung unterdruecken.
+    key = f"tg_kritisch_{_kritisch_key(error_context)}"
+    if not alert_throttle.soll_senden(
+        state, key, _now_for_state(state), getattr(state, "local_tz", None)
+    ):
+        return
     # Kritische Alarme awaiten statt fire-and-forget: Task-Referenz wuerde sonst
     # vom GC eingesammelt, bevor die Nachricht zugestellt ist (stiller Fehler).
     await send_telegram_message(
         session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN)
+
+
+def _kritisch_key(error_context: str) -> str:
+    """Stabile Sperrfamilie fuer einen kritischen Abschaltfehler."""
+    text = (error_context or "").strip().lower()
+    if "ueberhitzung" in text or "überhitzung" in text:
+        return "ueberhitzung"
+    if "boiler" in text or "max" in text:
+        return "boiler_max"
+    return "allgemein"
 
 
 async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten, t_mittig):
@@ -220,11 +245,15 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
         if len(checks) < 3 or sum(checks) >= 2:
             state.kompressor_verification_failed = False
             state.kompressor_verification_error_count = 0
+            alert_throttle.reset(state, "tg_verifizierung")
             return True, None
         betriebsbeweis = False
     if betriebsbeweis:
         state.kompressor_verification_failed = False
         state.kompressor_verification_error_count = 0
+        # Erholung: Drosselung zuruecksetzen, damit ein spaeter auftretendes,
+        # neues Ereignis sofort wieder gemeldet wird.
+        alert_throttle.reset(state, "tg_verifizierung")
         return True, None
     
     state.kompressor_verification_failed = True
@@ -238,13 +267,24 @@ async def verify_compressor_running(state, session, current_t_verd, current_t_un
     
     error_msg = "⚠️ Wärmepumpe läuft möglicherweise NICHT:\n" + "\n".join(error_parts)
     if state.bot_token:
-        # Verifizierungsfehler synchron mit begrenzten Telegram-Retries senden;
-        # ein fehlgeschlagener Versand darf nicht still verschwinden.
-        sent = await send_telegram_message(
-            session, state.config.Telegram.CHAT_ID,
-            f"{error_msg}\nFehler #{state.kompressor_verification_error_count}",
-            state.config.Telegram.BOT_TOKEN,
-        )
-        if not sent:
-            logging.warning("Telegram-Warnung zur Kompressorverifizierung nicht zugestellt")
+        # Die Pruefung laeuft einmal pro Minute. Schlaegt anschliessend auch
+        # das Ausschalten fehl, laeuft sie hier weiter und wuerde jede Minute
+        # eine Nachricht schicken. Deshalb gestaffelt wiederholen; die erste
+        # Meldung und jede Fehlerstufe gehen weiterhin raus.
+        if alert_throttle.soll_senden(
+            state,
+            "tg_verifizierung",
+            _now_for_state(state),
+            getattr(state, "local_tz", None),
+            alert_throttle.VERIFIKATION_STEPS_MIN,
+        ):
+            # Verifizierungsfehler synchron mit begrenzten Telegram-Retries senden;
+            # ein fehlgeschlagener Versand darf nicht still verschwinden.
+            sent = await send_telegram_message(
+                session, state.config.Telegram.CHAT_ID,
+                f"{error_msg}\nFehler #{state.kompressor_verification_error_count}",
+                state.config.Telegram.BOT_TOKEN,
+            )
+            if not sent:
+                logging.warning("Telegram-Warnung zur Kompressorverifizierung nicht zugestellt")
     return False, error_msg

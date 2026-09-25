@@ -40,6 +40,7 @@ from blocking_codes import (  # noqa: F401  (Re-Export fuer Aufrufer/Tests)
     blocking_code as _blocking_code,
     normalisiere_sperrtext as _normalisiere_sperrtext,
 )
+import alert_throttle
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_and_fix_csv_header, rotiere_csv_monatlich
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
@@ -1537,6 +1538,34 @@ async def _melde_unsauberen_lauf(session, state):
 
     if not (state.bot_token and state.chat_id):
         return
+
+    # Absturz-Sturm: `Restart=always` mit `RestartSec=10` laesst den Dienst im
+    # Zehn-Sekunden-Takt neu starten. Jede Instanz wuerde hier erneut melden
+    # und Telegram flatten. Deshalb stufen:
+    #   1-2 Absturze  -> normale Einzelmeldung (die wichtige erste)
+    #   ab 3          -> Sturm-Meldung, danach nur Log
+    #   ab 10         -> Sturm-Meldung mit Maximal-Hinweis
+    abstuerze = int(info.get("absturze_stunde") or 0)
+    stufe_1 = startup_diagnose.ABSTURZ_STUFE_1
+    stufe_2 = startup_diagnose.ABSTURZ_STUFE_2
+    if abstuerze > stufe_1:
+        if not alert_throttle.soll_senden(
+            state, "tg_absturz_sturm", _state_now(state), state.local_tz,
+            alert_throttle.NEUSTART_STEPS_MIN,
+        ):
+            return
+        zusatz = (
+            f"\n🚨 Der Dienst startet wiederholt neu: {abstuerze} unsaubere "
+            f"Beendigungen in der letzten Stunde."
+        )
+        if abstuerze > stufe_2:
+            zusatz += (
+                f"\n⚠️ Mehr als {stufe_2} - Neustart-Schleife, bitte "
+                "LOG und Kernel-Journal pruefen."
+            )
+    else:
+        zusatz = ""
+
     try:
         speicher = startup_diagnose.formatiere_speicher(startup_diagnose.speicher_werte())
         from telegram_api import send_telegram_message as _send_tg
@@ -1545,7 +1574,7 @@ async def _melde_unsauberen_lauf(session, state):
             session,
             state.chat_id,
             f"⚠️ Steuerung wurde unsauber beendet – Verdacht: {grund}.\n"
-            f"Start {start}, Ende {ende}.\nSpeicher jetzt: {speicher}",
+            f"Start {start}, Ende {ende}.\nSpeicher jetzt: {speicher}{zusatz}",
             state.bot_token,
         )
     except Exception as e:

@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from atomic_io import atomic_write_json
@@ -197,6 +197,12 @@ def pruefe_lauf_start_grund() -> dict:
     Liest das Kernel-Log nur, wenn tatsaechlich ein unsauberes Ende vorliegt,
     und dann nur den Zeitraum ab dem vorherigen Start (kein Fehlalarm durch
     alte OOM-Eintraege im Ringpuffer).
+
+    Zusaetzlich wird der Neustart gezaehlt. `Restart=always` mit
+    `RestartSec=10` bedeutet: Ein reproduzierbarer Crash erzeugt alle zehn
+    Sekunden einen neuen Prozess. Ohne Zaehler wuerde jede Instanz erneut
+    eine Absturz-Meldung schicken. Der Zaehler liegt bewusst persistent,
+    weil ein Neustart den RAM-Zustand zuruecksetzt.
     """
     letzter = pruefe_letzten_lauf()
     hinweis = None
@@ -204,7 +210,58 @@ def pruefe_lauf_start_grund() -> dict:
         hinweis = oom_hinweis_aus_text(
             kernel_log_lesen(letzter.get("vorheriger_start"))
         )
-    return {**letzter, "oom_hinweis": hinweis}
+    return {**letzter, "oom_hinweis": hinweis,
+            "absturze_stunde": zaehle_absturze(letzter["unsauber"])}
+
+
+ABSTURZ_HISTORIE_DATEI = "absturz_historie.json"
+ABSTURZ_FENSTER_MIN = 60
+ABSTURZ_STUFE_1 = 3
+ABSTURZ_STUFE_2 = 10
+
+
+def _lade_absturze() -> list:
+    try:
+        with open(ABSTURZ_HISTORIE_DATEI, "r", encoding="utf-8") as f:
+            daten = json.load(f)
+        if isinstance(daten, list):
+            return [str(z) for z in daten]
+    except Exception:
+        pass
+    return []
+
+
+def _speichere_absturze(zeitstempel: list) -> None:
+    try:
+        atomic_write_json(ABSTURZ_HISTORIE_DATEI, zeitstempel[-50:])
+    except Exception as e:
+        logging.debug(f"Absturz-Historie nicht schreibbar: {e}")
+
+
+def zaehle_absturze(unsauber: bool, jetzt: Optional[datetime] = None) -> int:
+    """Zaehlt unsaubere Beendigungen im Zeitfenster und liefert die Anzahl.
+
+    Bei einem *sauberen* Start wird die Historie zurueckgesetzt: Dann liegt
+    kein Neustart-Sturm vor und die naechste echte Stoerung meldet wieder
+    sofort.
+    """
+    jetzt = jetzt or datetime.now()
+    if not unsauber:
+        if _lade_absturze():
+            _speichere_absturze([])
+        return 0
+    grenze = jetzt - timedelta(minutes=ABSTURZ_FENSTER_MIN)
+    frisch = []
+    for eintrag in _lade_absturze():
+        try:
+            ts = datetime.fromisoformat(eintrag)
+        except (TypeError, ValueError):
+            continue
+        if ts >= grenze:
+            frisch.append(eintrag)
+    frisch.append(jetzt.isoformat())
+    _speichere_absturze(frisch)
+    return len(frisch)
 
 
 def speicher_werte(
