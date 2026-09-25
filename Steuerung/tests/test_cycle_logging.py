@@ -22,6 +22,7 @@ def _state(start_regel="Einspeisung"):
 def test_schema_entspricht_der_bestehenden_loganalyse():
     assert CYCLE_CSV_HEADER == [
         "start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund",
+        "reason_code",
         "start_unten", "start_mittig", "start_oben",
         "max_unten", "max_mittig", "max_oben",
         "ueberschreitung_k", "start_verd",

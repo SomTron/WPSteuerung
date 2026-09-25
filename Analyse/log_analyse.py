@@ -12,14 +12,31 @@ Setzt die Empfehlungen aus der Log-Review um:
 Nur Standardbibliothek -> laeuft ohne pip-Installation (kein pandas/noch nicht noetig).
 """
 import csv
+import json
 import os
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 try:
-    from analysis_core import build_cycle_quality, classify_end_reason, classify_source, parse_timestamp, read_cycles
+    from analysis_core import (
+        build_cycle_quality,
+        build_quality_report,
+        classify_end_reason,
+        classify_source,
+        parse_timestamp,
+        read_cycles,
+        read_jsonl,
+    )
 except ImportError:
-    from Analyse.analysis_core import build_cycle_quality, classify_end_reason, classify_source, parse_timestamp, read_cycles
+    from Analyse.analysis_core import (
+        build_cycle_quality,
+        build_quality_report,
+        classify_end_reason,
+        classify_source,
+        parse_timestamp,
+        read_cycles,
+        read_jsonl,
+    )
 
 # --------------------------------------------------------------------------- #
 # Konfiguration
@@ -85,7 +102,10 @@ RE_SENSO_FEHLER = re.compile(r"Zu wenige Zeilen|Sensor-Error|Sensorfehler", re.I
 
 # ---------------------------------------------------------------- helpers -->
 def parse_ts(ts_str: str) -> datetime:
-    return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S %z")
+    value = parse_timestamp(ts_str)
+    if value is None:
+        raise ValueError(f"Ungültiger Zeitstempel: {ts_str}")
+    return value
 
 
 def _zahl(werte):
@@ -157,6 +177,7 @@ def _cycle_csv_as_parsed(cycle_path):
             "source_at_start": row.get("source_at_start") or source,
             "source_quality": source_quality,
             "end_grund": reason,
+            "reason_code": row.get("reason_code") or (reason if reason_quality == "direct" else ""),
             "end_grund_raw": row.get("end_grund") or "",
             "end_grund_quality": reason_quality,
             "quelle": source, "start_t_unten": float(row["start_unten"]) if row.get("start_unten") else None,
@@ -362,6 +383,7 @@ def parse_log(pfad):
                                     else "wechsel:" + name
                                 break
                     offener_zyklus["end_grund"] = end_grund or "unbekannt"
+                    offener_zyklus["reason_code"] = end_grund if end_quality == "direct" else ""
                     offener_zyklus["end_grund_quality"] = (
                         "missing" if not end_grund or end_grund == "unbekannt" else end_quality
                     )
@@ -611,7 +633,7 @@ def export_csve(parsed, out, outdir):
 
     # 1) Zyklus-Tabelle (Temperaturen unten/mittig/oben jeweils Start + Max)
     felder = ["start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund",
-              "end_grund_quality", "start_unten", "start_mittig", "start_oben",
+              "reason_code", "end_grund_quality", "start_unten", "start_mittig", "start_oben",
               "max_unten", "max_mittig", "max_oben", "ueberschreitung_k", "start_verd"]
     zyklen = []
     for z in parsed["zyklen"]:
@@ -621,6 +643,7 @@ def export_csve(parsed, out, outdir):
             "dauer_min": z["dauer_min"], "quelle": z["quelle"],
             "source_at_start": z.get("source_at_start", ""),
             "start_regel": z["start_regel"], "end_grund": z["end_grund"],
+            "reason_code": z.get("reason_code", ""),
             "end_grund_quality": z.get("end_grund_quality", "unknown"),
             "start_unten": z["start_t_unten"], "start_mittig": z["start_t_mittig"],
             "start_oben": z["start_t_oben"],
@@ -695,6 +718,11 @@ def erzeuge_bericht(parsed, out, outdir, stats_roh):
     ap(f"- Unbekannte Abschlussgründe: **{quality.get('unknown_end_grund', 0)}**  ")
     ap(f"- Abschlussgrund-Qualität: `{quality.get('end_grund_quality', {})}`  ")
     ap(f"- Quellenqualität: `{quality.get('source_quality', {})}`  ")
+    report = parsed.get("quality_report") or {}
+    ap(f"- Analyse-Qualität: **{report.get('status', 'n/a')}**  ")
+    ap(f"- Qualitätsschema: `{report.get('schema_version', 'n/a')}`  ")
+    ap(f"- Fehlende Decision-Codes: **{report.get('summary', {}).get('missing_decision_reason_codes', 'n/a')}**  ")
+    ap(f"- Szenarien: `{report.get('scenarios', {})}`")
     ap(f"- Regel-Bewertungs-Bloecke: **{parsed['stats'].get('snapshots')}**  ")
     ap(f"- Level: INFO {stats_roh.get('level_INFO', 0)} / "
        f"DEBUG {stats_roh.get('level_DEBUG', 0)} / "
@@ -815,7 +843,34 @@ def _parse_args(argv=None):
                         help="Ausgabe-Verzeichnis fuer Bericht + CSVs")
     parser.add_argument("--cycles", default=None,
                         help="Optionale zyklen.csv als primaere Zyklusquelle")
+    parser.add_argument("--decisions", default=None,
+                        help="Optionale entscheidungs_log.jsonl")
     return parser.parse_args(argv)
+
+
+def _decision_log_candidate(log_path: str, explicit: str | None = None) -> str | None:
+    """Findet den strukturierten Decision-Log neben dem Log bzw. im Projekt."""
+    if explicit:
+        return explicit if os.path.exists(explicit) else None
+    sibling = os.path.join(os.path.dirname(os.path.abspath(log_path)), "entscheidungs_log.jsonl")
+    if os.path.exists(sibling):
+        return sibling
+    project = os.path.join(os.getcwd(), "Steuerung", "entscheidungs_log.jsonl")
+    return project if os.path.exists(project) else None
+
+
+def _write_quality_report(report, outdir):
+    """Schreibt den Qualitätsbericht atomar und ohne absolute Pfade."""
+    os.makedirs(outdir, exist_ok=True)
+    target = os.path.join(outdir, "quality_report.json")
+    temp = target + ".tmp"
+    with open(temp, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp, target)
+
 
 
 def main(argv=None):
@@ -836,17 +891,33 @@ def main(argv=None):
     if cycle_path is None:
         sibling = os.path.join(os.path.dirname(os.path.abspath(LOG_PFAD)), "zyklen.csv")
         cycle_path = sibling if os.path.exists(sibling) else None
+    cycle_rows = parsed["zyklen"]
+    cycle_quality = build_cycle_quality(cycle_rows, {"present": bool(cycle_rows), "schema": "parsed_log", "rows": len(cycle_rows)})
     if cycle_path and os.path.exists(cycle_path):
-        parsed["zyklen"], cycle_quality = _cycle_csv_as_parsed(cycle_path)
+        cycle_rows, cycle_quality = _cycle_csv_as_parsed(cycle_path)
+        parsed["zyklen"] = cycle_rows
         parsed["cycle_quality"] = cycle_quality
         parsed["quality"].update({
             "unknown_end_grund": cycle_quality.get("unknown_end_grund", 0),
             "end_grund_quality": cycle_quality.get("end_grund_quality", {}),
             "source_quality": cycle_quality.get("source_quality", {}),
         })
+
+    decision_path = _decision_log_candidate(LOG_PFAD, args.decisions)
+    decision_rows, decision_quality = read_jsonl(decision_path) if decision_path else (
+        [], {"present": False, "rows": 0, "invalid_rows": 0}
+    )
+    quality_report = build_quality_report(
+        cycle_rows, cycle_quality, decision_rows, decision_quality,
+        generated_at=datetime.now(),
+    )
+    parsed["quality_report"] = quality_report
+    parsed["decision_quality"] = decision_quality
+
     out = analysiere(parsed)
     os.makedirs(AUSGABE_DIR, exist_ok=True)
     export_csve(parsed, out, AUSGABE_DIR)
+    _write_quality_report(quality_report, AUSGABE_DIR)
     bericht = erzeuge_bericht(parsed, out, AUSGABE_DIR, parsed["stats"])
     print(bericht)
     print(f"\n-> Fertig: {AUSGABE_DIR}")

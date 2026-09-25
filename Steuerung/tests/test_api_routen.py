@@ -129,7 +129,36 @@ def test_status_liefert_dict_keine_primitiven():
         assert schluessel in d, f"Key {schluessel} fehlt in /status"
 
 
-def test_debug_csv_ist_geschuetzt_und_redigiert_pfad_und_fehler(monkeypatch, tmp_path):
+def test_analysis_quality_route_liest_redigierten_bericht(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+    import json
+
+    bericht = {
+        "status": "ok",
+        "git_revision": "abc123",
+        "summary": {"cycles": 3, "decisions": 4, "invalid_rows": 0},
+        "scenarios": {"pv": 3},
+    }
+    pfad = tmp_path / "quality_report.json"
+    pfad.write_text(json.dumps(bericht), encoding="utf-8")
+    monkeypatch.setenv("WPS_ANALYSIS_QUALITY_FILE", str(pfad))
+    assert api.get_analysis_quality() == bericht
+
+    pfad.write_text("{invalid", encoding="utf-8")
+    with pytest.raises(HTTPException) as exc:
+        api.get_analysis_quality()
+    assert exc.value.status_code == 503
+
+
+def test_analysis_quality_route_404_wenn_bericht_fehlt(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("WPS_ANALYSIS_QUALITY_FILE", str(tmp_path / "missing.json"))
+    with pytest.raises(HTTPException) as exc:
+        api.get_analysis_quality()
+    assert exc.value.status_code == 404
+
+
     from fastapi import HTTPException
 
     monkeypatch.setattr(api, "API_KEY", "test-secret")

@@ -34,7 +34,7 @@ self.addEventListener('fetch', event => {
     if (url.pathname === '/status' || url.pathname === '/health' ||
         url.pathname.startsWith('/history') || url.pathname === '/control' ||
         url.pathname === '/command' || url.pathname === '/config' ||
-        url.pathname.startsWith('/debug/')) return;
+        url.pathname.startsWith('/analysis/') || url.pathname.startsWith('/debug/')) return;
 
     if (url.pathname === '/' || url.pathname.endsWith('.html') ||
         url.pathname === '/manifest.json') {

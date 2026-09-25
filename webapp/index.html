@@ -1098,6 +1098,8 @@
         const NO_DATA = '—';
         const HEALTH_INTERVAL_MS = 30000;
         const HEALTH_TIMEOUT_MS = 5000;
+        const ANALYSIS_INTERVAL_MS = 300000;
+        const ANALYSIS_TIMEOUT_MS = 5000;
         const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
         const valueOrDash = (value) => value === null || value === undefined || value === '' ? NO_DATA : value;
 
@@ -1119,7 +1121,9 @@
 
         let statusData = null;
         let healthData = null;
+        let analysisData = null;
         let healthLastCheckedAt = 0;
+        let analysisLastCheckedAt = 0;
         let statusPollTimer = null;
         let chart = null;
         let temperatureHistory = { timestamps: [], oben: [], mittig: [], unten: [], verdampfer: [], sollwerte: [] };
@@ -1129,6 +1133,8 @@
         let statusRequestActive = false;
         let statusAbortController = null;
         let healthRequestActive = false;
+        let analysisRequestActive = false;
+        let analysisPollTimer = null;
 
         function formatAge(seconds) {
             if (!Number.isFinite(seconds)) return NO_DATA;
@@ -1172,6 +1178,63 @@
                 clearTimeout(timeoutId);
                 healthRequestActive = false;
             }
+        }
+
+        async function fetchAnalysis(force = false) {
+            if (analysisRequestActive) return;
+            if (!force && (Date.now() - analysisLastCheckedAt < ANALYSIS_INTERVAL_MS)) return;
+            analysisRequestActive = true;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
+            try {
+                const response = await fetch(`${API_BASE}/analysis/quality?ts=${Date.now()}`, {
+                    signal: controller.signal, cache: 'no-store', headers: apiHeaders()
+                });
+                if (!response.ok) throw new Error(await responseError(response, 'Analyse nicht verfügbar'));
+                analysisData = await response.json();
+                analysisLastCheckedAt = Date.now();
+                updateAnalysisCard();
+            } catch (error) {
+                analysisData = null;
+                updateAnalysisCard(error.name === 'AbortError' ? 'Analyse-Zeitüberschreitung' : (error.message || 'Analyse nicht verfügbar'));
+            } finally {
+                clearTimeout(timeoutId);
+                analysisRequestActive = false;
+            }
+        }
+
+        function updateAnalysisCard(errorText = '') {
+            const card = document.getElementById('analysis-quality-card');
+            const status = document.getElementById('analysis-quality-status');
+            const generated = document.getElementById('analysis-quality-generated');
+            const summary = document.getElementById('analysis-quality-summary');
+            const scenarios = document.getElementById('analysis-quality-scenarios');
+            const revision = document.getElementById('analysis-quality-revision');
+            if (!card || !status) return;
+            if (errorText) {
+                status.textContent = 'Nicht verfügbar';
+                generated.textContent = errorText;
+                summary.textContent = NO_DATA;
+                scenarios.textContent = NO_DATA;
+                revision.textContent = NO_DATA;
+                return;
+            }
+            if (!analysisData) {
+                status.textContent = 'Noch kein Bericht';
+                generated.textContent = NO_DATA;
+                summary.textContent = NO_DATA;
+                scenarios.textContent = NO_DATA;
+                revision.textContent = NO_DATA;
+                return;
+            }
+            const report = analysisData;
+            const sum = report.summary || {};
+            status.textContent = report.status === 'ok' ? 'OK' : 'Eingeschränkt';
+            generated.textContent = report.generated_at || NO_DATA;
+            summary.textContent = `${sum.cycles ?? 0} Zyklen · ${sum.decisions ?? 0} Entscheidungen · ${sum.invalid_rows ?? 0} ungültige Zeilen`;
+            const scenario = report.scenarios || {};
+            scenarios.textContent = Object.entries(scenario).map(([k, v]) => `${k}: ${v}`).join(' · ') || 'Keine Szenarien erkannt';
+            revision.textContent = report.git_revision || 'unbekannt';
         }
 
         function showOfflineState(online = navigator.onLine) {
@@ -1220,6 +1283,7 @@
                 updateHeader();
                 updateQuickStatus();
                 fetchHealth();
+                fetchAnalysis();
                 updateConnectionStatus(true);
                 if (errorPanel && errorMsg) {
                     errorPanel.style.display = 'none';
@@ -2452,6 +2516,19 @@
                         </div>
                     </div>
 
+                    <!-- Analyse-Qualität -->
+                    <div class="card" id="analysis-quality-card">
+                        <div class="card-header">
+                            <div class="card-icon green">🧪</div>
+                            <div class="card-title">Analyse-Qualität</div>
+                        </div>
+                        <div class="info-row"><span class="info-label">Status</span><span class="info-value" id="analysis-quality-status">Noch kein Bericht</span></div>
+                        <div class="info-row"><span class="info-label">Erstellt</span><span class="info-value" id="analysis-quality-generated">—</span></div>
+                        <div class="info-row"><span class="info-label">Umfang</span><span class="info-value" id="analysis-quality-summary">—</span></div>
+                        <div class="info-row"><span class="info-label">Szenarien</span><span class="info-value" id="analysis-quality-scenarios">—</span></div>
+                        <div class="info-row"><span class="info-label">Revision</span><span class="info-value" id="analysis-quality-revision">—</span></div>
+                    </div>
+
                     <!-- System Info -->
                     <div class="card">
                         <div class="card-header">
@@ -2521,6 +2598,18 @@
             }
         }
 
+        function startAnalysisPolling(delay = ANALYSIS_INTERVAL_MS) {
+            window.clearTimeout(analysisPollTimer);
+            analysisPollTimer = window.setTimeout(async () => {
+                if (document.hidden || !navigator.onLine) {
+                    startAnalysisPolling();
+                    return;
+                }
+                await fetchAnalysis(true);
+                startAnalysisPolling();
+            }, delay);
+        }
+
         function startStatusPolling(delay = 5000) {
             window.clearTimeout(statusPollTimer);
             if (document.hidden || !navigator.onLine) {
@@ -2546,22 +2635,26 @@
                     errorPanel.style.display = 'block';
                 }
             }).then(() => {
-                // Nach dem ersten Fetch Historie laden
+                // Nach dem ersten Fetch Historie und Analyse laden
                 loadHistory(currentHistoryHours);
+                fetchAnalysis(true);
             });
 
             startStatusPolling();
+            startAnalysisPolling();
         });
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden && navigator.onLine) {
                 fetchStatus();
                 startStatusPolling();
+                startAnalysisPolling();
             }
         });
         window.addEventListener('online', () => {
             fetchStatus();
             startStatusPolling();
+            startAnalysisPolling();
         });
         window.addEventListener('offline', () => showOfflineState(false));
 

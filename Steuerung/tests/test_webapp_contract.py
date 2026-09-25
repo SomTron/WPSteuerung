@@ -70,6 +70,8 @@ def test_status_polling_hat_timeout_und_verhindert_ueberlappung():
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")
     assert "const STATUS_TIMEOUT_MS = 8000" in html
     assert "if (statusRequestActive) return" in html
+    assert "if (analysisRequestActive) return" in html
+    assert "analysisRequestActive = false" in html
     assert "new AbortController()" in html
     assert "cache: 'no-store'" in html
     assert "API_CACHE_BUST" not in html
@@ -112,7 +114,20 @@ def test_history_quality_und_api_fehlertext_sichtbar():
     assert "quality.stale_end_s" in html
 
 
-def test_nginx_proxy_zeigt_auf_aktuelle_fastapi_routen():
+def test_analyse_qualitaetskarte_und_abruf_sind_im_webapp_und_service_worker():
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    worker = (WEBAPP / "service-worker.js").read_text(encoding="utf-8")
+    assert 'id="analysis-quality-card"' in html
+    assert 'id="analysis-quality-status"' in html
+    assert 'id="analysis-quality-summary"' in html
+    assert "fetchAnalysis" in html
+    assert "/analysis/quality?ts=" in html
+    assert "function startAnalysisPolling" in html
+    assert "analysisPollTimer" in html
+    assert "startAnalysisPolling();" in html
+    assert "url.pathname.startsWith('/analysis/')" in worker
+
+
     nginx = NGINX.read_text(encoding="utf-8")
     assert "location /api/" not in nginx
     assert "location / {" in nginx

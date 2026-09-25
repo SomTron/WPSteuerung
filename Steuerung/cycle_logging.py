@@ -17,7 +17,7 @@ from utils import rotiere_csv_monatlich
 
 CYCLE_CSV = os.path.join("csv log", "zyklen.csv")
 CYCLE_CSV_HEADER = [
-    "start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund",
+    "start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund", "reason_code",
     "start_unten", "start_mittig", "start_oben",
     "max_unten", "max_mittig", "max_oben",
     "ueberschreitung_k", "start_verd",
@@ -45,6 +45,31 @@ def _quelle(start_regel):
         return "batterie"
     if start_regel in ("API force_on", "Legionellen", "Notfallschutz", "MindestTemp", "Abweichung", "CalcStart", "Komfort", "Zeitfenster", "Wochenende"):
         return "netz"
+    return "unbekannt"
+
+
+def _end_code(end_grund, blocking_code=None):
+    """Stabilen Abschlusscode bevorzugen, Freitext nur als Fallback nutzen."""
+    if blocking_code:
+        return str(blocking_code).strip().lower() or "unbekannt"
+    text = str(end_grund or "").strip().lower()
+    if text in {"boiler_max", "regel_aus", "keine_regel", "mindestlaufzeit", "mindestpause",
+                "uebertemperatur", "sensorfehler", "druckfehler", "hardwarefehler",
+                "kompressor_verifizierung", "verifizierung_fehler", "legionellen_timeout",
+                "dienst_neustart", "api_manuell", "unknown", "unbekannt"}:
+        return text
+    if "boiler" in text or "max" in text:
+        return "boiler_max"
+    if "verifiz" in text:
+        return "verifizierung_fehler"
+    if "sensor" in text:
+        return "sensorfehler"
+    if "druck" in text:
+        return "druckfehler"
+    if "pause" in text:
+        return "mindestpause"
+    if "laufzeit" in text:
+        return "mindestlaufzeit"
     return "unbekannt"
 
 
@@ -78,7 +103,10 @@ def _migriere_cycle_header(csv_path):
             if not any(str(cell).strip() for cell in row):
                 continue
             old = dict(zip(old_header, row))
-            writer.writerow([old.get(field, "") for field in CYCLE_CSV_HEADER])
+            values = [old.get(field, "") for field in CYCLE_CSV_HEADER]
+            if not values[CYCLE_CSV_HEADER.index("reason_code")]:
+                values[CYCLE_CSV_HEADER.index("reason_code")] = _end_code(old.get("end_grund"))
+            writer.writerow(values)
     os.replace(tmp_path, csv_path)
     logging.warning(
         "Zyklus-CSV-Header migriert: %s -> %s (%s)",
@@ -176,6 +204,10 @@ def finish_cycle(state, now, end_grund=None, csv_path=None):
         "source_at_start": cycle.get("source_at_start") or "",
         "start_regel": cycle.get("start_regel") or "",
         "end_grund": (end_grund or getattr(getattr(state, "control", None), "blocking_reason", None) or "unbekannt"),
+        "reason_code": _end_code(
+            end_grund,
+            getattr(getattr(state, "control", None), "blocking_code", None),
+        ),
         "start_unten": cycle.get("start_unten"),
         "start_mittig": cycle.get("start_mittig"),
         "start_oben": cycle.get("start_oben"),

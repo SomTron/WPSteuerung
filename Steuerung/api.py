@@ -4,6 +4,7 @@ except ImportError:
     SOLAR_DATA_STALE_THRESHOLD_MIN = 15
 
 import hmac
+import json
 import logging
 import math
 
@@ -200,7 +201,7 @@ app = FastAPI(
 # Live-Daten niemals durch Browser, FastAPI-Proxy oder Service Worker cachen.
 _LIVE_NO_STORE_PATHS = {
     "/status", "/health", "/history", "/history/regeln",
-    "/control", "/command", "/config", "/config/export", "/debug/csv",
+    "/control", "/command", "/config", "/config/export", "/debug/csv", "/analysis/quality",
 }
 
 
@@ -1203,6 +1204,29 @@ def debug_csv(
             logging.exception("CSV-Debugdiagnose fehlgeschlagen")
             result["read_error"] = "CSV konnte nicht gelesen werden"
     return result
+
+@app.get("/analysis/quality")
+def get_analysis_quality():
+    """Read-only, redigierter Qualitätsbericht der automatischen Analyse."""
+    report_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "logs", "analyse_auto", "quality_report.json",
+    )
+    # Der Analyse-Timer schreibt bewusst in logs/analyse_auto. In Tests oder
+    # bei abweichendem CWD darf der Pfad über die Umgebung gesetzt werden.
+    report_path = os.environ.get("WPS_ANALYSIS_QUALITY_FILE", report_path)
+    if not os.path.isfile(report_path):
+        raise HTTPException(status_code=404, detail="Analyse-Qualitätsbericht noch nicht vorhanden")
+    try:
+        with open(report_path, "r", encoding="utf-8") as handle:
+            report = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        logging.warning("Analyse-Qualitätsbericht nicht lesbar: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Analyse-Qualitätsbericht nicht verfügbar") from exc
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=503, detail="Analyse-Qualitätsbericht ungültig")
+    return report
+
 
 @app.get("/history")
 def get_history(hours: int = Query(default=24, ge=1, le=168)):
