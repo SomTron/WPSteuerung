@@ -154,6 +154,18 @@ def _fuehre_aus(eingabe: str, *, max_lines: str | None = None) -> str:
     return result.stdout
 
 
+@pytest.fixture(autouse=True)
+def ohne_wartezeit():
+    """Die Meldung "keine Zahl" nicht 1 s stehen lassen.
+
+    Die Ausgabe bleibt identisch - nur die Wartezeit entfaellt, damit die
+    Shell-Tests nicht mehrere Sekunden kosten.
+    """
+    os.environ["WPS_MANAGER_NO_SLEEP"] = "1"
+    yield
+    os.environ.pop("WPS_MANAGER_NO_SLEEP", None)
+
+
 @pytest.mark.skipif(POSIX_SH is None, reason="keine POSIX-Shell 'sh' verfuegbar")
 def test_leere_eingabe_uebernimmt_den_standardwert_200():
     assert "ERGEBNIS=200" in _fuehre_aus("\n")

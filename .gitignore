@@ -15,6 +15,7 @@ legionellen_plan.json
 
 # Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
 letzter_lauf.json
+absturz_historie.json
 
 # Diagnose-/Analyse-Artefakte (lokal ausgewertet, nie committen - teils >10 MB)
 logs/wp_diag_*/

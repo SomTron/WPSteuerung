@@ -22,6 +22,18 @@ import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+
+@pytest.fixture(autouse=True)
+def ohne_retry_wartezeit(monkeypatch):
+    """Die Retry-Wartezeit des Forecast-Abrufs auf 0 setzen.
+
+    Ohne das wartet jeder Timeout-/Fehlertest echt 2 Versuche x 3 s = 3 s.
+    Die gepruefte Logik (Anzahl Versuche, 8x-None-Rueckgabe) bleibt gleich.
+    """
+    import weather_forecast as wf
+
+    monkeypatch.setattr(wf, "FORECAST_RETRY_DELAY_SEC", 0.0)
+
 PRODUKTION_CSV = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     'sonnen_prognose.csv',

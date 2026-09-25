@@ -67,6 +67,23 @@ jobs:
           set -o pipefail
           python -m pytest Steuerung/tests -m "not integration" -q --tb=long -ra 2>&1 | tee pytest_output.txt
 
+      - name: Laufzeit-Budget prüfen
+        # Die Suite wurde einmal von 62 s auf ~12 s gebracht (echte Wartezeiten
+        # in Retry-/Shell-Tests). Ohne Budget wächst sie still wieder: ein
+        # echtes sleep() in einem Test kostet dann plötzlich CI-Minuten.
+        run: |
+          set -o pipefail
+          BUDGET_SEC=90
+          SEKUNDEN=$(grep -oE 'in [0-9]+(\.[0-9]+)?s' pytest_output.txt | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?' || echo 0)
+          echo "Laufzeit: ${SEKUNDEN}s (Budget: ${BUDGET_SEC}s)"
+          awk -v s="${SEKUNDEN:-0}" -v b="${BUDGET_SEC}" 'BEGIN {
+            if (s + 0 > b + 0) {
+              printf "FEHLER: Testsuite %.1fs ueberschreitet Budget %ds. Vermutlich ein echtes sleep()/Timeout in einem Test.\n", s, b
+              exit 1
+            }
+            printf "Laufzeitbudget OK\n"
+          }'
+
       - name: Fehlbericht als Issue anlegen
         if: failure()
         uses: actions/github-script@v7

@@ -6,7 +6,12 @@ import aiofiles
 from datetime import datetime, timedelta
 import pytz
 from atomic_io import atomic_write_text
-from constants import DEFAULT_TIMEZONE
+from constants import (
+    DEFAULT_TIMEZONE,
+    FORECAST_API_TIMEOUT_SEC,
+    FORECAST_MAX_RETRIES,
+    FORECAST_RETRY_DELAY_SEC,
+)
 
 # Erwarteter Header der Forecast-CSV (8 Spalten inkl. Day2 seit Sommer-Modus)
 EXPECTED_FORECAST_HEADER = (
@@ -81,7 +86,9 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
         from api_client import robust_get
         result = await robust_get(
             session, url, params=params,
-            timeout_sec=10, max_retries=2, retry_delay_sec=3,
+            timeout_sec=FORECAST_API_TIMEOUT_SEC,
+            max_retries=FORECAST_MAX_RETRIES,
+            retry_delay_sec=FORECAST_RETRY_DELAY_SEC,
             logger=logging.getLogger(__name__),
         )
 

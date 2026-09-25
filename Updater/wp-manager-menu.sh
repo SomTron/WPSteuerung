@@ -106,16 +106,23 @@ frage_zahl() {
         _fq_wert=""
     fi
     _fq_wert="${_fq_wert:-$_fq_default}"
+    # Kurze Pause, damit der Benutzer die Meldung im Betrieb lesen kann.
+    # Im Test wird sie ueber WPS_MANAGER_NO_SLEEP abgeschaltet: die Meldung
+    # bleibt unveraendert, nur die Wartezeit entfaellt.
+    _fq_sleep="sleep 1"
+    if [ "${WPS_MANAGER_NO_SLEEP:-0}" = "1" ]; then
+        _fq_sleep=":"
+    fi
     if ! is_number "$_fq_wert"; then
         printf "${RED}'%s' ist keine Zahl - verwende Standardwert %s.${NC}\n" \
             "$_fq_wert" "$_fq_default"
         _fq_wert="$_fq_default"
-        sleep 1
+        $_fq_sleep
     elif [ "$_fq_wert" -lt "$_fq_min" ]; then
         printf "${RED}%s muss groesser als %s sein - verwende Standardwert %s.${NC}\n" \
             "$_fq_einheit" "$((_fq_min - 1))" "$_fq_default"
         _fq_wert="$_fq_default"
-        sleep 1
+        $_fq_sleep
     elif [ "$_fq_wert" -gt "$_fq_max" ]; then
         printf "${YELLOW}%s wird auf %s begrenzt.${NC}\n" "$_fq_einheit" "$_fq_max"
         _fq_wert="$_fq_max"

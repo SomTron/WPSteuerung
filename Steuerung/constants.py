@@ -33,6 +33,17 @@ FORECAST_MAX_AGE_HOURS: int = 12
 # Zeit erneut fragen. Ohne Throttle wuerde der 10-s-Loop die Open-Meteo-API
 # dauerhaft anfragen und das Log fluten (beobachtet im Pi-Log 12.09.).
 FORECAST_RETRY_INTERVAL_MIN: int = 15
+# Wartezeit zwischen zwei Solax-Retry-Versuchen. Als Konstante, damit die
+# Retry-Logik in Tests ohne echte Wartezeit pruefbar ist (3 Versuche x 2
+# Wartezeiten x 5 s = 10 s pro Test, sonst 40 s nur fuer diese Pfade).
+SOLAX_RETRY_DELAY_SEC: float = 5.0
+SOLAX_MAX_RETRIES: int = 3
+# Gleiche Situation fuer den Open-Meteo-Abruf: die Retry-Wartezeit als
+# Konstante, damit die Timeout-/Fehlerpfade ohne echte Wartezeit testbar sind
+# (2 Versuche x 3 s = 3 s pro Test, sonst der teuerste Einzelposten).
+FORECAST_API_TIMEOUT_SEC: int = 10
+FORECAST_MAX_RETRIES: int = 2
+FORECAST_RETRY_DELAY_SEC: float = 3.0
 HEALTHCHECK_PING_INTERVAL_MIN: float = 1.0
 VPN_CHECK_INTERVAL_SEC: int = 60
 WEATHER_UPDATE_INTERVAL_MIN: int = 60

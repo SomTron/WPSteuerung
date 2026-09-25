@@ -11,6 +11,8 @@ from constants import (
     DEFAULT_TIMEZONE,
     SOLAR_API_TIMEOUT_SEC,
     SOLAR_DATA_STALE_THRESHOLD_MIN,
+    SOLAX_MAX_RETRIES,
+    SOLAX_RETRY_DELAY_SEC,
 )
 
 API_URL = "https://global.solaxcloud.com/proxyApp/proxy/api/getRealtimeInfo.do"
@@ -69,8 +71,11 @@ async def get_solax_data(session, state):
     if state.solar.last_api_call and (now - state.solar.last_api_call) < CACHE_TTL:
         return state.solar.last_api_data
 
-    max_retries = 3
-    retry_delay = 5
+    max_retries = SOLAX_MAX_RETRIES
+    # Die Wartezeit kommt aus constants.py, damit die Retry-Logik in Tests
+    # ohne echtes Warten pruefbar ist. Produktiv bleiben 5 s sinnvoll: der
+    # Aufruf laeuft ohnehin im Hintergrund-Task, nicht im 10-s-Hauptloop.
+    retry_delay = SOLAX_RETRY_DELAY_SEC
     for attempt in range(max_retries):
         try:
             # Config access via state.config

@@ -6,6 +6,45 @@ import pytest
 # Add the project root to the python path so we can import modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# --- Vertrags-/Strukturtests automatisch markieren -----------------------
+#
+# Diese Tests pruefen Absichten im Quelltext ("diese Logzeile muss stehen").
+# Sie haben mehrfach echte Regressionen gefunden, sind aber beim Refactoring
+# rueckwaertsbrechend, auch wenn die Logik gleichwertig umgebaut wird.
+# Deshalb sind sie als `contract` markiert und gezielt abruf-/ausblendbar:
+#   pytest -m "contract"      nur diese
+#   pytest -m "not contract"  nur Verhaltenstests
+#
+# Automatisch statt manuell, damit neue Tests nicht unmarkiert bleiben.
+_QUELLTEXT_MARKER = (
+    "read_text(",
+    "in html",
+    "in manager",
+    "in deploy",
+    "in text",
+    "in main_text",
+    "in script_text",
+    "in nginx",
+    "in worker",
+)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Kennzeichnet Quelltext-Tests automatisch mit `contract`."""
+    import inspect
+
+    mark = pytest.mark.contract
+    for item in items:
+        obj = getattr(item, "obj", None)
+        if obj is None:
+            continue
+        try:
+            quelle = inspect.getsource(obj)
+        except (OSError, TypeError):
+            continue
+        if any(marker in quelle for marker in _QUELLTEXT_MARKER):
+            item.add_marker(mark)
+
 # --- MOCK HARDWARE MODULES BEFORE IMPORTING APP CODE ---
 
 # Mock RPi.GPIO

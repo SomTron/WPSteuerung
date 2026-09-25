@@ -18,7 +18,19 @@ import pytest
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from solax import get_solax_data  # noqa: E402
+import solax as solax_modul  # noqa: E402
 from constants import DEFAULT_TIMEZONE  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def ohne_retry_wartezeit(monkeypatch):
+    """Die Retry-Wartezeit auf 0 setzen.
+
+    Ohne das wartet jeder Retry-Test echt 3 Versuche x 2 Wartezeiten x 5 s
+    = 10 s. Die *Logik* (Anzahl Versuche, Abbruch, Fallback) wird dadurch
+    unveraendert geprueft - nur das Warten entfaellt.
+    """
+    monkeypatch.setattr(solax_modul, "SOLAX_RETRY_DELAY_SEC", 0.0)
 
 
 def baue_state():

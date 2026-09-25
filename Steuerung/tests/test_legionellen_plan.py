@@ -1,4 +1,4 @@
-﻿"""Regressionen fuer persistente Legionellen-Tagesplanung."""
+"""Regressionen fuer persistente Legionellen-Tagesplanung."""
 
 from datetime import datetime
 from types import SimpleNamespace
