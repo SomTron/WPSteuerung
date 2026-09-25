@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import pytz
-from datetime import datetime, timedelta
+from datetime import timedelta
+from clock import now_for
 from constants import DEFAULT_TIMEZONE, TELEGRAM_RATE_LIMIT_SECONDS
 
 # New Modules
@@ -88,7 +89,7 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
                 return
 
         local_tz = pytz.timezone(DEFAULT_TIMEZONE)
-        now = datetime.now(local_tz)
+        now = now_for(state, fallback_tz=local_tz)
         state.urlaubsmodus_aktiv = True
         state.urlaubsmodus_start = now
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
@@ -109,7 +110,7 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
             return
         duration_days = int(message_text.strip())
         local_tz = pytz.timezone(DEFAULT_TIMEZONE)
-        now = datetime.now(local_tz)
+        now = now_for(state, fallback_tz=local_tz)
         state.urlaubsmodus_aktiv = True
         state.urlaubsmodus_start = now
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
@@ -238,7 +239,7 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
             "ℹ️ *Infos*",
             f"Modus: {escape_markdown(mode_str)}",
             f"VPN IP: `{vpn_ip}`",
-            f"Update: {datetime.now().strftime('%H:%M:%S')}",
+            f"Update: {now_for(state).strftime('%H:%M:%S')}",
             "🌤️ *Prognose*",
             escape_markdown(forecast_text)
         ])
@@ -253,7 +254,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         return last_update_id
 
     # Rate-Limiting: Prüfe ob letzte Nachricht zu schnell aufeinander folgt
-    now = datetime.now(state.local_tz)
+    now = now_for(state)
     if state.last_telegram_command_time:
         elapsed = (now - state.last_telegram_command_time).total_seconds()
         if elapsed < TELEGRAM_RATE_LIMIT_SECONDS:

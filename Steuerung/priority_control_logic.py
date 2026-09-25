@@ -14,24 +14,16 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 
 from utils import safe_timedelta
+from clock import now_for
 from constants import (
     CONFIG_CHECK_INTERVAL_SEC,
     FORECAST_MAX_AGE_HOURS,
+    SOLAR_DATA_STALE_THRESHOLD_MIN,
 )
-
-try:
-    from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
-except ImportError:
-    SOLAR_DATA_STALE_THRESHOLD_MIN = 15
-try:
-    import entscheidungs_log
-except ImportError:
-    entscheidungs_log = None
+from collections import deque
 from logic_utils import check_log_throttle, normalize_forecast_wh_qm
 from legionellen_plan import clear_plan
-from safety_logic import (
-    handle_critical_compressor_error,
-)
+from safety_logic import handle_critical_compressor_error
 from json_config import WPSteuerungConfig
 from priority_control import (
     RegelErgebnis,
@@ -40,12 +32,24 @@ from priority_control import (
     formatiere_ergebnisse,
 )
 
+_REAL_DATETIME = datetime
+
+
+def _now_for_state(state):
+    """State-Zeit mit Rückwärtskompatibilität für Test-/Alt-Time-Patches."""
+    if datetime is not _REAL_DATETIME:
+        return datetime.now(getattr(state, "local_tz", None))
+    return now_for(state)
+
+try:
+    import entscheidungs_log
+except ImportError:
+    entscheidungs_log = None
+
 try:
     from telegram_api import send_telegram_message  # noqa: F401 - Verfuegbarkeits-Probe
 except ImportError:
     pass
-
-from collections import deque
 
 # Sicherheitsabstand zum harten Boiler-Maximum beim Neueinschalten (K).
 # Default 2.0: Bei Bezugsfuehler >= 46C (Limit 48C) wird kein EIN mehr
@@ -65,7 +69,7 @@ def setze_neustartsperre(state, minuten: int = 10) -> None:
     Ersetzt den alten Trick, last_compressor_off_time in die Zukunft zu
     setzen: Die Sperre ist jetzt ein eigenes Feld mit klar lesbarem
     Blocking-Reason, statt eine Mindestpausen-Rechnung zu verfaelschen."""
-    state.control.restart_lockout_until = datetime.now(state.local_tz) + timedelta(
+    state.control.restart_lockout_until = _now_for_state(state) + timedelta(
         minutes=minuten
     )
 
@@ -93,10 +97,10 @@ async def check_pressure_and_config(
 
     if not only_pressure:
         if safe_timedelta(
-            datetime.now(state.local_tz), state._last_config_check, state.local_tz
+            _now_for_state(state), state._last_config_check, state.local_tz
         ) > timedelta(seconds=CONFIG_CHECK_INTERVAL_SEC):
             state.update_config()
-            state._last_config_check = datetime.now(state.local_tz)
+            state._last_config_check = _now_for_state(state)
     return True
 
 
@@ -110,7 +114,7 @@ def _solar_daten_veraltet(state) -> bool:
         return True  # nicht lieferbar oder Mock/ungültig -> fail-safe
     try:
         alter_min = safe_timedelta(
-            datetime.now(state.local_tz), last_api_call, state.local_tz
+            _now_for_state(state), last_api_call, state.local_tz
         ).total_seconds() / 60.0
     except (TypeError, ValueError) as exc:
         # Fehlerhafte Zeitdaten sind nicht frisch. Fail-safe: Solarregeln
@@ -141,7 +145,7 @@ def _forecast_daten_veraltet(state) -> bool:
         return True
     try:
         age = safe_timedelta(
-            datetime.now(state.local_tz), updated, state.local_tz
+            _now_for_state(state), updated, state.local_tz
         ).total_seconds()
         state.forecast_age_s = max(0, int(age))
         stale = age < 0 or age > FORECAST_MAX_AGE_HOURS * 3600
@@ -161,6 +165,7 @@ def _invalidate_legionellen_plan(state, reason: str = "Forecast veraltet") -> No
 def _set_stale_forecast(state) -> None:
     """Alle prognoseabhängigen Felder neutralisieren, nie alte Werte weitergeben."""
     state.forecast_stale = True
+    state.forecast_age_s = None
     _invalidate_legionellen_plan(state, "Forecast veraltet")
     if check_log_throttle(state, "_log_forecast_stale", interval_minutes=30):
         logging.warning(
@@ -192,13 +197,15 @@ PV_WEITERLAUF_REGELN = ("AdaptivePV", "PV_mitte", "PV_unten", "Einspeisung")
 
 
 def _ist_pv_unterbrechung(grund) -> bool:
-    """True, wenn ein AUS-Grund einer PV-Regel auf zu wenig PV zurueckgeht.
-
-    Muster aus dem Log: 'AdaptivePV: PV 0W < 105W'. Temperatur-bedingte
-    AUS-Gruende ('>= ...C -> AUS') zaehlen nicht dazu.
-    """
-    if not grund:
-        return False
+    """Prüft den stabilen Regelcode; Text-Fallback bleibt für Alt-Tests."""
+    reason_code = getattr(grund, "reason_code", None)
+    if reason_code:
+        return reason_code == "pv_unterbrechung"
+    if not isinstance(grund, str) or not grund:
+        text = getattr(grund, "grund", "")
+        if not text:
+            return False
+        grund = text
     return bool(
         re.search(r"PV [\d.]+W < [\d.]+W", grund)
         or "kein PV-Ueberschuss" in grund
@@ -228,7 +235,7 @@ def _pv_weiterlauf_block(state, gewinner, should_on: bool) -> bool:
     if gewinner is None or getattr(gewinner, "name", "") not in PV_WEITERLAUF_REGELN:
         _reset()
         return should_on
-    if not _ist_pv_unterbrechung(getattr(gewinner, "grund", "")):
+    if not _ist_pv_unterbrechung(gewinner):
         _reset()
         return should_on
     try:
@@ -239,7 +246,7 @@ def _pv_weiterlauf_block(state, gewinner, should_on: bool) -> bool:
     if delay_min <= 0:
         _reset()
         return should_on
-    jetzt = datetime.now(state.local_tz)
+    jetzt = _now_for_state(state)
     seit = getattr(state.control, "_pv_abschaltwunsch_seit", None)
     if seit is None:
         state.control._pv_abschaltwunsch_seit = jetzt
@@ -268,6 +275,20 @@ def _aktuelle_quellenbezeichnung(state) -> str:
     return "Netz"
 
 
+def _set_effective_cycle_rule(state, rule_name, source_name=None) -> None:
+    """Setzt die tatsächlich Hardware-steuernde Regel nach erfolgreichem Start."""
+    control = getattr(state, "control", None)
+    if control is None:
+        return
+    control.effective_rule_name = rule_name or None
+    control.active_rule_name = rule_name or None
+    control._lauf_start_regel = rule_name or None
+    if source_name:
+        control.source_at_start = source_name
+        control.effective_source = source_name
+    control.source_current = _aktuelle_quellenbezeichnung(state)
+
+
 def _soll_priority_loggen(state, alle_ergebnisse) -> bool:
     """Kompakt-Log-Entscheidung (Empfehlung "Logvolumen reduzieren").
 
@@ -285,7 +306,7 @@ def _soll_priority_loggen(state, alle_ergebnisse) -> bool:
         state._last_priority_signatur = signatur
         # Throttle-Zeitpunkt mitziehen, damit der Snapshot-Zweig (60 min)
         # nicht unmittelbar danach ein zweites Mal loggen wuerde.
-        state._last_priority_log = datetime.now(state.local_tz)
+        state._last_priority_log = _now_for_state(state)
         return True
     return check_log_throttle(state, "_last_priority_log", interval_minutes=60.0)
 
@@ -373,7 +394,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     planned_tag = getattr(state, "legionellen_planned_tag", None)
     if not isinstance(planned_date, date):
         planned_date = None
-    now_local = datetime.now(state.local_tz)
+    now_local = _now_for_state(state)
     if planned_date is not None and planned_date < now_local.date():
         _invalidate_legionellen_plan(state, "Geplanter Legionellen-Termin ist verstrichen")
         planned_date = None
@@ -382,7 +403,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # Learning Engine aktualisieren (Heizzyklen + Zapfprofil + Solar-Tracking)
     if learning_engine is not None:
         learning_engine.update(
-            now=datetime.now(state.local_tz),
+            now=_now_for_state(state),
             temp_dict=temp_dict,
             compressor_is_on=state.control.kompressor_ein,
             feedin_watt=pv_leistung,
@@ -391,10 +412,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_hourly_wh=hourly_forecast_watt,
         )
         gelernte_rate_unten = learning_engine.get_learned_heating_rate(
-            datetime.now(state.local_tz).month, "unten"
+            now_local.month, "unten"
         )
         gelernte_rate_gesamt = learning_engine.get_learned_heating_rate(
-            datetime.now(state.local_tz).month, "gesamt"
+            now_local.month, "gesamt"
         )
         gelernte_zielzeit = learning_engine.get_learned_target_hour()
         # Defensiv: aeltere Lern-Engines/Fakes kennen die Methoden evtl.
@@ -451,7 +472,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         temp_dict=temp_dict,
         pv_leistung=pv_leistung,
         kompressor_ein=state.control.kompressor_ein,
-        now=datetime.now(state.local_tz),
+        now=_now_for_state(state),
         forecast_wh_qm=forecast_wh_qm,
         forecast_today_wh_qm=forecast_today_wh,
         forecast_hourly_wh=hourly_forecast_watt,
@@ -494,32 +515,51 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         )
 
     # Gewinner-Regel in State speichern fuer Anzeige
-    state.control.active_rule_sensor = None
-    # Effective source fields are separate from the requested rule. A waiting
-    # Legionella rule must not be shown as if it were already driving hardware.
+    if not state.control.kompressor_ein:
+        state.control.active_rule_sensor = None
+    # `requested_rule_name` darf eine wartende Regel sein. Die beiden
+    # `effective_*`-Felder beschreiben dagegen ausschließlich einen laufenden
+    # Hardware-Zyklus und werden bei AUS nicht aus dem letzten Modus geerbt.
     if gewinner is None:
         waiting = next(
-            (e for e in alle_ergebnisse if e.name == "Legionellen" and e.aktiv and e.einschalten is None),
+            (
+                e for e in alle_ergebnisse
+                if e.aktiv and e.einschalten is None
+                and getattr(e, "reason_code", "") == "waiting_source"
+            ),
             None,
         )
         state.control.requested_rule_name = waiting.name if waiting else None
-        state.control.active_rule_name = waiting.name if waiting else None
     else:
         state.control.requested_rule_name = gewinner.name
-        state.control.active_rule_name = gewinner.name
-    state.control.effective_rule_name = state.control.previous_modus
-    state.control.effective_source = _aktuelle_quellenbezeichnung(state)
+
+    state.control.source_current = _aktuelle_quellenbezeichnung(state)
+    if state.control.kompressor_ein:
+        state.control.effective_rule_name = (
+            getattr(state.control, "effective_rule_name", None)
+            or getattr(state.control, "_lauf_start_regel", None)
+            or getattr(state.control, "previous_modus", None)
+        )
+        state.control.active_rule_name = state.control.effective_rule_name
+        state.control.effective_source = (
+            getattr(state.control, "source_at_start", None)
+            or state.control.source_current
+        )
+    else:
+        state.control.effective_rule_name = None
+        state.control.active_rule_name = None
+        state.control.effective_source = None
+        state.control.source_at_start = None
 
     if gewinner is not None:
-        state.control.active_rule_name = gewinner.name
-
-        # Sensor-Name aus Regel ermitteln
-        if "mitte" in gewinner.grund.lower():
-            state.control.active_rule_sensor = "Mittig"
-        elif "unten" in gewinner.grund.lower():
-            state.control.active_rule_sensor = "Unten"
-        elif "oben" in gewinner.grund.lower():
-            state.control.active_rule_sensor = "Oben"
+        if gewinner.name == state.control.effective_rule_name:
+            # Sensor-Name aus der aktuell bestätigten Regel ermitteln.
+            if "mitte" in gewinner.grund.lower():
+                state.control.active_rule_sensor = "Mittig"
+            elif "unten" in gewinner.grund.lower():
+                state.control.active_rule_sensor = "Unten"
+            elif "oben" in gewinner.grund.lower():
+                state.control.active_rule_sensor = "Oben"
 
         # Ein/Ausschaltpunkte aus Regel ermitteln.
         # WICHTIG: effektive_config (mit Bademodus-/Urlaubs-Offsets) verwenden,
@@ -650,8 +690,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
 
     if ist_bestaetigt:
         state.control.previous_modus = modus
-        state.control.effective_rule_name = modus
-        state.control.effective_source = _aktuelle_quellenbezeichnung(state)
+        # effective_rule_name/active_rule_name bleiben hier unverändert.
+        # Erst handle_compressor_on bestätigt sie nach erfolgreichem
+        # Hardware-Start; laufende Zyklen behalten ihre Startquelle.
         state.control._soll_einschalten_bestaetigt = bool(should_on)
         if modus != prev_modus:
             logging.info(
@@ -677,7 +718,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             if _last_call is not None:
                 try:
                     stale_s = int(max(
-                        (datetime.now(state.local_tz) - _last_call).total_seconds(),
+                        (_now_for_state(state) - _last_call).total_seconds(),
                         0,
                     ))
                 except (TypeError, ValueError):
@@ -693,7 +734,13 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 t_unten=t_unten,
                 t_oben=getattr(state.sensors, "t_oben", None),
                 stale_s=stale_s,
+                reason_code=getattr(gewinner, "reason_code", None) if gewinner else None,
+                ts=_now_for_state(state),
                 diagnostics={
+                    "reason_code": getattr(gewinner, "reason_code", None) if gewinner else None,
+                    "requested_rule": getattr(state.control, "requested_rule_name", None),
+                    "effective_rule": getattr(state.control, "effective_rule_name", None),
+                    "source_at_start": getattr(state.control, "source_at_start", None),
                     "forecast_stale": bool(getattr(state, "forecast_stale", False)),
                     "forecast_age_s": getattr(state, "forecast_age_s", None),
                     "rate_confidence": getattr(state.control, "_rate_confidence", None),
@@ -857,7 +904,7 @@ def _track_wechsel(state, gewinner_name):
     Nur tatsaechliche Wechsel des Gewinners werden erfasst, nicht jede
     Bewertung (siehe Kommentar unten).
     """
-    now = datetime.now(state.local_tz)
+    now = _now_for_state(state)
     hist = getattr(state.control, "_wechsel_historie", None)
     if not isinstance(hist, deque):
         hist = deque()
@@ -946,7 +993,7 @@ def _taktschutz_blockiert(state, cfg) -> float:
         _episode_beenden()
         return 0.0
     # Sind die Wechsel innerhalb der letzten Stunde?
-    now = datetime.now(state.local_tz)
+    now = _now_for_state(state)
     grenze = now - timedelta(hours=1)
     aktuelle = sum(1 for ts, _ in hist if ts >= grenze)
     if aktuelle >= ts_cfg.max_wechsel_pro_stunde:
@@ -1007,7 +1054,7 @@ def _rate_fuer_entscheidung(state, t_unten):
     Fallback, 0.4 bei gelernter Rate und bis 1.0 bei mindestens drei
     plausiblen Live-Messungen.
     """
-    jetzt = datetime.now(state.local_tz)
+    jetzt = _now_for_state(state)
     messung = getattr(state.control, "_rate_messung", None)
     samples = getattr(state.control, "_rate_messungen", None)
     if not isinstance(samples, deque):
@@ -1247,7 +1294,7 @@ async def handle_compressor_off(
         rate_schwelle = float(getattr(_sic_cfg, "overshoot_rate_schwelle_c_h", 12.0))
         reserve_k = float(getattr(_sic_cfg, "overshoot_reserve_k", 0.8))
         elapsed_var = safe_timedelta(
-            datetime.now(state.local_tz),
+            _now_for_state(state),
             state.stats.last_compressor_on_time,
             state.local_tz,
         )
@@ -1335,7 +1382,7 @@ async def handle_compressor_off(
         )
 
         elapsed = safe_timedelta(
-            datetime.now(state.local_tz),
+            _now_for_state(state),
             state.stats.last_compressor_on_time,
             state.local_tz,
         )
@@ -1375,7 +1422,7 @@ async def handle_compressor_off(
             state, min_laufzeit, lauf_regel
         )
         elapsed = safe_timedelta(
-            datetime.now(state.local_tz),
+            _now_for_state(state),
             state.stats.last_compressor_on_time,
             state.local_tz,
         )
@@ -1419,7 +1466,7 @@ async def handle_compressor_on(
     set_kompressor_status_func: Callable,
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""
-    now = datetime.now(state.local_tz)
+    now = _now_for_state(state)
 
     # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gÃƒÆ’Ã‚Â¼ltige
     # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
@@ -1595,7 +1642,15 @@ async def handle_compressor_on(
         should_on = getattr(state.control, "_soll_einschalten", False)
 
         if should_on and pause_ok:
+            state.control._pending_start_rule = getattr(
+                state.control, "requested_rule_name", None
+            ) or getattr(state.control, "previous_modus", None)
+            state.control._pending_start_source = getattr(
+                state.control, "source_current", None
+            )
             if stop_condition:
+                state.control._pending_start_rule = None
+                state.control._pending_start_source = None
                 logging.info(
                     f"Einschalten unterdrueckt: Regelfuehler ({regelfuehler:.1f}) >= "
                     f"Ausschaltpunkt ({ausschaltpunkt:.1f})"
@@ -1603,14 +1658,21 @@ async def handle_compressor_on(
                 state.control.blocking_reason = "Zieltemp erreicht"
                 return False
 
+            pending_rule = getattr(state.control, "_pending_start_rule", None)
+            pending_source = getattr(state.control, "_pending_start_source", None)
             if await set_kompressor_status_func(state, True, t_boiler_oben=t_oben):
+                state.control._pending_start_rule = None
+                state.control._pending_start_source = None
                 state.control.blocking_reason = None
                 state.control.restart_lockout_until = None  # Sperre erledigt
-                # Merken, welche Regel diesen Lauf gestartet hat - Basis fuer die
-                # PV-Mindestlaufzeit-Entkopplung beim Abschalten (Task: PV-Lauf).
-                state.control._lauf_start_regel = getattr(
-                    state.control, "active_rule_name", None
-                )
+                # Erst nach erfolgreichem Hardware-Start wird die gewünschte
+                # Regel zur effektiv wirksamen Hardware-Regel.
+                start_regel = pending_rule
+                if not start_regel:
+                    start_regel = getattr(state.control, "requested_rule_name", None)
+                if not start_regel:
+                    start_regel = getattr(state.control, "previous_modus", None)
+                _set_effective_cycle_rule(state, start_regel, pending_source)
                 # Regelnamen + tatsaechliche Ausschaltgrenze loggen (nicht den
                 # nur fuer die Anzeige abgeleiteten Einschaltpunkt - bei der
                 # Einspeisungs-Regel waere das ein Dummy-Wert wie 42.0).
@@ -1733,7 +1795,7 @@ def get_priority_control_status(state) -> dict:
         "pv_leistung_watt": pv_leistung,
         "aktive_regel": getattr(state.control, "active_rule_name", None),
         "sensoren": state.control.active_rule_sensor,
-        "nachtsperre_aktiv": _is_nachtsperre_aktiv(cfg, datetime.now(state.local_tz)),
+        "nachtsperre_aktiv": _is_nachtsperre_aktiv(cfg, _now_for_state(state)),
         "komfort_aktiv": getattr(state.control, "komfort_aktiv", False),
         "anzahl_regeln": len(cfg.pv_regeln)
         + 4

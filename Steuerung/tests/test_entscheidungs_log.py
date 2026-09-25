@@ -82,6 +82,23 @@ def test_schreibe_feld_stale_s(tmp_path):
         assert e2["stale_s"] is None
 
 
+def test_entscheidung_uebernimmt_zeit_und_reason_code_aus_state(tmp_path):
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    fixed = datetime(2026, 9, 24, 12, 34, 56)
+    with patcher:
+        assert el.schreibe_eintrag(
+            "PV_unten", "PV-Einbruch", False, False,
+            reason_code="pv_unterbrechung",
+            diagnostics={"requested_rule": "PV_unten"},
+            ts=fixed,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readline())
+    assert eintrag["ts"] == fixed.isoformat(timespec="seconds")
+    assert eintrag["reason_code"] == "pv_unterbrechung"
+    assert eintrag["diagnostics"]["requested_rule"] == "PV_unten"
+
+
 def test_historie_filtert_nach_stunden(tmp_path):
     """Nur Eintraege innerhalb des Stunden-Fensters zurueck."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)

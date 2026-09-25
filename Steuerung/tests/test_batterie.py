@@ -181,7 +181,7 @@ async def test_determine_mode_reicht_soc_durch():
         legionellen_started_at=None,
         sensors=SimpleNamespace(t_oben=43.0, t_unten=41.0, t_mittig=42.0, t_verd=30.0),
         solar=SimpleNamespace(
-            feedinpower=0.0, batpower=1200.0, soc=95.0,
+            feedinpower=0.0, battery_discharge_watt=1200.0, batpower=1200.0, soc=95.0,
             forecast_today=None, forecast_tomorrow=None,
             forecast_day2=None,
             # frische API-Daten -> solar_stale=False (Stale-Guard)

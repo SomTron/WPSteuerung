@@ -1553,6 +1553,9 @@
             // Aktive Regel
             const ruleName = mode.active_rule || 'Keine';
             document.getElementById('rule-name').textContent = ruleName;
+            document.getElementById('rule-requested').textContent = mode.requested_rule || '—';
+            document.getElementById('rule-source').textContent = mode.source_at_start || mode.effective_source || '—';
+            document.getElementById('rule-source-current').textContent = mode.source_current || mode.effective_source || '—';
             document.getElementById('rule-sensor').textContent = mode.active_rule_sensor ? 'Fuehler: ' + mode.active_rule_sensor : '';
             const rd = document.getElementById('rule-decision');
             if (mode.blocking_reason) { rd.textContent = mode.blocking_reason; rd.className = 'badge badge-warning'; }
@@ -2105,6 +2108,9 @@
                         <div class="temp-display">
                             <span class="temp-value" style="font-size:1.5rem" id="rule-name">${mode.active_rule || 'Keine'}</span>
                         </div>
+                        <div class="info-row"><span class="info-label">Gewünschte Regel</span><span class="info-value" id="rule-requested">${mode.requested_rule || '—'}</span></div>
+                        <div class="info-row"><span class="info-label">Quelle beim Start</span><span class="info-value" id="rule-source">${mode.source_at_start || mode.effective_source || '—'}</span></div>
+                        <div class="info-row"><span class="info-label">Aktuell verfügbare Quelle</span><span class="info-value" id="rule-source-current">${mode.source_current || mode.effective_source || '—'}</span></div>
                         <div class="info-row"><span class="info-label">Fuehler</span><span class="info-value" id="rule-sensor">${mode.active_rule_sensor || ''}</span></div>
                         <div class="info-row"><span class="info-label">Entscheidung</span><span class="info-value" id="rule-decision"></span></div>
                         <div class="info-row"><span class="info-label">Einschaltpunkt</span><span class="info-value"><span id="setpoint-ein">${setpoints?.einschaltpunkt ?? NO_DATA}</span> °C</span></div>

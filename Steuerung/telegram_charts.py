@@ -2,7 +2,8 @@ import logging
 import os
 import io
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
+from clock import now_for
 
 import pytz
 from aiohttp import FormData
@@ -73,7 +74,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
     pd = _pandas()  # pandas erst hier laden (RAM!)
     try:
         local_tz = pytz.timezone(DEFAULT_TIMEZONE)
-        now = datetime.now(local_tz)
+        now = now_for(state, fallback_tz=local_tz)
         time_ago = now - timedelta(hours=hours)
         logging.debug(f"⏳ Starte Temperaturverlauf für {hours} Stunden, Zeitfenster: {time_ago} bis {now}")
         file_path = HEIZUNGSDATEN_CSV

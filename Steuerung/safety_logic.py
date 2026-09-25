@@ -5,6 +5,7 @@ from typing import Callable
 from telegram_api import send_telegram_message
 from logic_utils import is_valid_temperature, check_log_throttle
 from utils import safe_timedelta
+from clock import now_for
 from constants import (
     TEMP_VERD_MIN_VALID, TEMP_VERD_MAX_VALID,
     COMPRESSOR_VERIFICATION_DELAY_MIN, COMPRESSOR_VERIFICATION_CHECK_INTERVAL_MIN,
@@ -13,6 +14,15 @@ from constants import (
     COMPRESSOR_UNTEN_DELTA_MIN,
     LEGIONELLEN_VERIFY_NUR_VERDAMPFER,
 )
+
+_REAL_DATETIME = datetime
+
+
+def _now_for_state(state):
+    """State-Zeit mit Rückwärtskompatibilität für Test-/Alt-Time-Patches."""
+    if datetime is not _REAL_DATETIME:
+        return datetime.now(getattr(state, "local_tz", None))
+    return now_for(state)
 
 async def handle_critical_compressor_error(session, state, error_context: str):
     """Behandelt kritische Fehler beim Kompressor-Ausschalten."""
@@ -24,7 +34,7 @@ async def handle_critical_compressor_error(session, state, error_context: str):
         session, state.config.Telegram.CHAT_ID, msg, state.config.Telegram.BOT_TOKEN)
 
 
-async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten, t_mittig=None):
+async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten, t_mittig):
     """Prueft alle für die Regelung benötigten Boiler-Sensoren."""
     errors = []
     if not is_valid_temperature(t_boiler_oben):
@@ -37,7 +47,7 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten,
     if errors:
         error_msg = ", ".join(errors)
         state.control.blocking_reason = f"Sensorfehler: {error_msg}"
-        state.last_sensor_error_time = datetime.now(state.local_tz)
+        state.last_sensor_error_time = _now_for_state(state)
         # Separater Throttle-Marker: last_sensor_error_time fachlich der letzte
         # Fehlerzeitpunkt; sonst wird die erste Meldung durch das sofortige Setzen
         # des Markers unterdrückt.
@@ -134,7 +144,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         state.verdampfer_blocked = True
         # Verdampfer-Abschaltung tracken (nur bei erstem Blockieren pro Zyklus)
         if not already_blocked:
-            now = datetime.now(state.local_tz)
+            now = _now_for_state(state)
             state.verdampfer_shutdowns.append(now)
             # Altvte Einträge außerhalb der letzten Stunde bereinigen
             cutoff = now - timedelta(hours=1)
@@ -163,7 +173,7 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
 
 async def verify_compressor_running(state, session, current_t_verd, current_t_unten, verification_delay_minutes=COMPRESSOR_VERIFICATION_DELAY_MIN):
     """Verifiziert den Lauf des Kompressors über Temperaturänderungen."""
-    now = datetime.now(state.local_tz)
+    now = _now_for_state(state)
     if not state.control.kompressor_ein or state.kompressor_verification_start_time is None:
         state.kompressor_verification_start_time = None
         return True, None

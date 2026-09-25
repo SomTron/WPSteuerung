@@ -15,6 +15,7 @@ from energy_source import (
     batterie_entladung_watt,
     classify_energy_source,
 )
+from utils import to_naive
 from json_config import (
     WPSteuerungConfig,
     PVRegel,
@@ -203,6 +204,7 @@ def evaluate_pv_regel(
 
     # 5. Keine Bedingung erfuellt
     result.einschalten = None
+    result.reason_code = "pv_unterbrechung"
     result.grund = (
         f"Keine Bedingung erfuellt (PV={pv_leistung:.0f}W, {sensor_name}={temp:.1f}C)"
     )
@@ -506,6 +508,7 @@ def evaluate_einspeisung(
         )
         return result
 
+    result.reason_code = "pv_unterbrechung"
     result.grund = f"Einspeisung {feedin_watt:.0f}W < {einsp_cfg.einspeisegrenze_watt:.0f}W -> keine Aktion"
     return result
 
@@ -1302,6 +1305,7 @@ def evaluate_adaptive_pv(
         )
         return result
 
+    result.reason_code = "pv_unterbrechung"
     result.grund = f"AdaptivePV: PV {pv_leistung:.0f}W < {schwelle:.0f}W"
     return result
 
@@ -1781,6 +1785,7 @@ def evaluate_legionellen(
         )
         if not quelle_ok:
             result.einschalten = None
+            result.reason_code = "waiting_source"
             result.grund = f"Legionellen wartet auf PV/Batterie: {quelle_text}"
             return result
         result.einschalten = True
@@ -1805,6 +1810,7 @@ def evaluate_legionellen(
     )
     if not quelle_ok:
         result.einschalten = None
+        result.reason_code = "waiting_source"
         result.grund = f"Legionellen wartet auf PV/Batterie: {quelle_text}"
         return result
     quelle = quelle_text
@@ -1832,8 +1838,12 @@ def _wochentag_name(tag: int) -> str:
     return f"Unbekannt ({tag})"
 
 
-def bewerte_alle_regeln_placeholder():
-    pass
+def _marke_regel_ursache(result, code: str) -> RegelErgebnis:
+    """Setzt einen stabilen Grundcode ohne Änderung des Lesetexts."""
+    result.reason_code = code
+    return result
+
+
 
 
 def bewerte_alle_regeln(
@@ -2108,11 +2118,13 @@ def bewerte_alle_regeln(
             ):
                 e.aktiv = False
                 e.einschalten = None
+                e.reason_code = "data_stale"
                 e.grund = "Solar-Daten veraltet -> Regel pausiert"
-        jetzt = datetime.now()
+        jetzt = now
         if (
             _last_stale_warning is None
-            or (jetzt - _last_stale_warning)
+            or not isinstance(_last_stale_warning, datetime)
+            or (to_naive(jetzt) - to_naive(_last_stale_warning))
             >= timedelta(minutes=STALE_LOG_INTERVAL_MIN)
         ):
             logging.warning(
@@ -2144,7 +2156,6 @@ def bewerte_alle_regeln(
         and not any(r.name == "CalcStart" and r.einschalten is True for r in ergebnisse)
     ):
         global _last_calcstart_log
-        now = datetime.now()
         if _last_calcstart_log is None or (now - _last_calcstart_log) > timedelta(minutes=5):
             _last_calcstart_log = now
             logging.debug(

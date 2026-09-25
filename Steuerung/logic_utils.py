@@ -1,6 +1,7 @@
 import logging
 import math
 from datetime import datetime, timedelta, date, tzinfo
+from clock import now_for
 from typing import Optional
 from utils import safe_timedelta
 from constants import TEMP_MIN_VALID, TEMP_MAX_VALID, REDUCTION_MIN, REDUCTION_MAX, SOLAR_WINDOW_HOURS
@@ -68,7 +69,7 @@ def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0
 
 def is_solar_window(config, state):
     """Prüft, ob die aktuelle Uhrzeit im Solarfenster nach der Nachtabsenkung liegt."""
-    now = datetime.now(state.local_tz)
+    now = now_for(state)
     try:
         end_time_str = config.Heizungssteuerung.NACHTABSENKUNG_END
         end_hour, end_minute = map(int, end_time_str.split(':'))
@@ -88,7 +89,7 @@ def is_solar_window(config, state):
 def ist_uebergangsmodus_aktiv(state):
     """Prüft, ob aktuell der Übergangsmodus (morgens oder abends) aktiv ist."""
     try:
-        now_time = datetime.now(state.local_tz).time()
+        now_time = now_for(state).time()
         
         cfg = state.config.Heizungssteuerung
         def parse_t(s): return datetime.strptime(s, "%H:%M").time()

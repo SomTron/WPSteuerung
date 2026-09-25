@@ -82,6 +82,38 @@ class TestSommerModusImModePayload:
         )
         assert payload["nightsperre_active"] is True
 
+    def test_regel_und_quellen_status_sind_getrennt(self):
+        state = baue_vollen_state()
+        state.control.kompressor_ein = True
+        state.control.active_rule_name = "Abweichung"
+        state.control.effective_rule_name = "Abweichung"
+        state.control.requested_rule_name = "Legionellen"
+        state.control.source_at_start = "PV"
+        state.control.source_current = "Batterie"
+        state.control.effective_source = "PV"
+
+        payload = build_mode_payload(state, priority_info_override={})
+        assert payload["active_rule"] == "Abweichung"
+        assert payload["requested_rule"] == "Legionellen"
+        assert payload["source_at_start"] == "PV"
+        assert payload["source_current"] == "Batterie"
+        assert payload["effective_source"] == "PV"
+
+    def test_laufende_regel_bleibt_wirksam_aber_aus_status_fehlt(self):
+        state = baue_vollen_state()
+        state.control.kompressor_ein = False
+        state.control.active_rule_name = "Abweichung"
+        state.control.effective_rule_name = "Abweichung"
+        state.control.requested_rule_name = "Legionellen"
+        state.control.source_at_start = "PV"
+        state.control.source_current = "Netz"
+        payload = build_mode_payload(state, priority_info_override={})
+        assert payload["active_rule"] == ""
+        assert payload["effective_rule"] == ""
+        assert payload["requested_rule"] == "Legionellen"
+        assert payload["source_at_start"] == "—"
+        assert payload["source_current"] == "Netz"
+
     def test_webapp_erwartete_schluessel_vorhanden(self):
         """Der Vertrag mit webapp/index.html (sommer-info-Zeile)."""
         erwartet = {

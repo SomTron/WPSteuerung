@@ -18,7 +18,7 @@ from hardware import HardwareManager
 from hardware_mock import MockHardwareManager
 from hardware_actuator import CompressorActuator
 from atomic_io import atomic_write_text
-from clock import Clock
+from clock import Clock, now_for
 from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
@@ -78,11 +78,7 @@ control_command_queue: Queue = Queue(maxsize=16)
 
 
 def _state_now(state):
-    clock = getattr(state, "clock", None)
-    if isinstance(clock, Clock):
-        return clock.now()
-    local_tz = getattr(state, "local_tz", None)
-    return datetime.now(local_tz) if local_tz is not None else datetime.now()
+    return now_for(state)
 
 
 def _state_monotonic(state):
@@ -177,6 +173,24 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
             state.control.blocking_reason = "Kompressor-Einschalten fehlgeschlagen"
             return False
         state.control.kompressor_ein = True
+        pending_rule = getattr(state.control, "_pending_start_rule", None)
+        manual_rule = getattr(state.control, "_lauf_start_regel", None) == "API force_on"
+        if manual_rule:
+            state.control.source_at_start = "Manuell"
+        else:
+            state.control.source_at_start = (
+                getattr(state.control, "source_at_start", None)
+                or getattr(state.control, "_pending_start_source", None)
+                or getattr(getattr(state, "solar", None), "energy_source", None)
+                or pcl._aktuelle_quellenbezeichnung(state)
+            )
+        state.control.source_current = state.control.source_at_start
+        if manual_rule or pending_rule:
+            state.control._lauf_start_regel = (
+                "API force_on" if manual_rule else pending_rule
+            )
+            state.control.effective_rule_name = state.control._lauf_start_regel
+            state.control.active_rule_name = state.control._lauf_start_regel
         _record_hardware_change(state, now, True)
         
         # Statistiken aktualisieren + Zyklus-ID je Kompressor-Lauf inkrementieren
@@ -205,6 +219,11 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
             state.control.blocking_reason = "Kompressor-Ausschalten fehlgeschlagen"
             return False
         state.control.kompressor_ein = False
+        state.control.effective_rule_name = None
+        state.control.active_rule_name = None
+        state.control.effective_source = None
+        state.control._lauf_start_regel = None
+        state.control.source_at_start = None
         _record_hardware_change(state, now, False)
         
         # Statistiken nur bei einem echten Übergang EIN -> AUS aktualisieren.
@@ -345,7 +364,7 @@ async def setup_application():
         logging.error(f"Startup CSV check failed: {e}")
 
     # 7c. Abgeschlossene Kompressorzyklen persistent vorbereiten/rotieren.
-    ensure_cycle_csv(CYCLE_CSV)
+    ensure_cycle_csv(CYCLE_CSV, jetzt=_state_now(state))
 
     # 8. Start Telegram Task
     tg_task = asyncio.create_task(telegram_task(
@@ -359,7 +378,7 @@ async def setup_application():
         state=state,
         get_temperature_history_func=get_boiler_temperature_history,
         get_runtime_bar_chart_func=get_runtime_bar_chart,
-        is_nighttime_func=lambda config: pcl._is_nachtsperre_aktiv(state.priority_config, datetime.now(state.local_tz)),
+        is_nighttime_func=lambda config: pcl._is_nachtsperre_aktiv(state.priority_config, _state_now(state)),
         is_solar_window_func=control_logic.is_solar_window
     ))
 
@@ -462,7 +481,7 @@ async def update_system_data(session, state, refresh_solar: bool = True):
     if isinstance(last_api_call, datetime):
         try:
             alter_min = safe_timedelta(
-                datetime.now(state.local_tz), last_api_call, state.local_tz
+                _state_now(state), last_api_call, state.local_tz
             ).total_seconds() / 60
         except (TypeError, ValueError):
             alter_min = None
@@ -518,8 +537,7 @@ async def update_system_data(session, state, refresh_solar: bool = True):
 
 def track_api_error(state, api_name: str, error_type: str):
     """Zeichnet einen API-Fehler im State auf fuer das Health-Monitoring."""
-    from datetime import datetime
-    now = datetime.now(state.local_tz)
+    now = _state_now(state)
     if api_name not in state.api_errors:
         state.api_errors[api_name] = {"errors": [], "last_alert": None}
     state.api_errors[api_name]["errors"].append((now, error_type))
@@ -535,7 +553,7 @@ async def check_api_health(session, state):
     (maximal alle 60 Minuten).
     """
     from datetime import timedelta
-    now = datetime.now(state.local_tz)
+    now = _state_now(state)
     threshold_30min = now - timedelta(minutes=30)
 
     for api_name, data in state.api_errors.items():
@@ -838,7 +856,7 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
     if winner is None or winner.name != "Legionellen":
         return
 
-    now = datetime.now(state.local_tz)
+    now = _state_now(state)
     if (
         winner.einschalten is True
         and not state.legionellen_aktiv
@@ -1013,6 +1031,7 @@ async def run_logic_step(session, state, learning_engine=None):
             state.control.requested_rule_name = "API force_on"
             state.control.effective_rule_name = "API force_on"
             state.control.effective_source = "Manuell"
+            state.control._lauf_start_regel = "API force_on"
             ok = await set_kompressor_status(state, True, force=True, end_grund="api_manuell")
             if not ok:
                 state.control.blocking_reason = "Manuelles Einschalten blockiert: Sicherheitsprüfung/GPIO"
@@ -1070,23 +1089,51 @@ def build_heizungsdaten_zeile(state):
 
     solax = getattr(state.solar, "last_api_data", None) or {}
 
-    # Power Source
-    power_source = "Netz"
-    acpower = getattr(state.solar, "acpower", None)
-    feedin = getattr(state.solar, "feedinpower", 0)
-    if (acpower and acpower > 0) or (feedin and feedin > 0):
-        power_source = "Solar"
-    else:
-        batpower = getattr(state.solar, "batpower", None)
-        if batpower and batpower > 0:
+    # Power Source aus der zentralen, validierten Klassifikation übernehmen.
+    # Keine erneute lokale Heuristik aus einzelnen Rohwerten.
+    power_source = getattr(state.solar, "energy_source", None) or getattr(
+        state, "energy_source", None
+    )
+    if not power_source:
+        source_status = classify_energy_source(
+            pv_acpower=getattr(state.solar, "acpower", None),
+            feedin_watt=getattr(state.solar, "feedinpower", None),
+            battery_discharge_watt=(
+                getattr(state.solar, "battery_discharge_watt", None)
+                if getattr(state.solar, "battery_discharge_watt", None) is not None
+                else batterie_entladung_watt(getattr(state.solar, "batpower", None))
+            ),
+            soc=getattr(state.solar, "soc", None),
+            solar_stale=bool(getattr(state, "solar_stale", False)),
+        )
+        power_source = source_status.quelle.value
+        # Rückwärtskompatibilität für historische/teilweise befüllte States:
+        # Die Produktionsklassifikation verlangt für Batterie zusätzlich SOC.
+        # Im Diagnose-CSV darf ein eindeutig positives BatPower-Signal bei
+        # fehlendem SOC dennoch als historische Batteriequelle markiert werden.
+        if (
+            power_source == "Netz"
+            and not bool(getattr(state, "solar_stale", False))
+            and batterie_entladung_watt(getattr(state.solar, "batpower", None)) is not None
+            and float(getattr(state.solar, "batpower", 0.0)) >= 50.0
+            and getattr(state.solar, "feedinpower", None) is not None
+            and float(state.solar.feedinpower) >= -50.0
+        ):
             power_source = "Batterie"
+
+    if power_source == "Daten stale":
+        power_source = "Netz"
+    elif power_source == "PV":
+        # Historischer CSV-Vertrag: "Solar" statt der internen Bezeichnung "PV".
+        power_source = "Solar"
 
     return [
         _state_now(state).strftime("%Y-%m-%d %H:%M:%S"),
         fmt_csv(state.sensors.t_oben), fmt_csv(state.sensors.t_unten), fmt_csv(state.sensors.t_mittig),
         fmt_csv(state.sensors.t_boiler), fmt_csv(state.sensors.t_verd),
         "1" if state.control.kompressor_ein else "0",
-        fmt_csv(acpower), fmt_csv(feedin),
+        fmt_csv(getattr(state.solar, "acpower", None)),
+        fmt_csv(getattr(state.solar, "feedinpower", None)),
         fmt_csv(state.solar.batpower), fmt_csv(state.solar.soc),
         fmt_csv(solax.get("powerdc1", 0)), fmt_csv(solax.get("powerdc2", 0)),
         fmt_csv(solax.get("consumeenergy", 0)),
@@ -1221,7 +1268,7 @@ async def log_system_state(state):
             except (TypeError, ValueError):
                 return "n/a"
 
-        solar_now = datetime.now(state.local_tz)
+        solar_now = _state_now(state)
         last_call = getattr(state.solar, 'last_api_call', None)
         alter_s = None
         if last_call is not None:
@@ -1413,7 +1460,7 @@ async def _run_periodic_phase(session, state, last_vpn_check):
 async def _run_api_health_phase(session, state) -> None:
     """API-Health ist Diagnose und niemals Teil des sicherheitskritischen Pfads."""
     try:
-        now_local = datetime.now(state.local_tz)
+        now_local = _state_now(state)
         letzte_warnung = getattr(state, "_last_api_health_warning", None)
         faellig = (
             letzte_warnung is None
@@ -1428,7 +1475,7 @@ async def _run_api_health_phase(session, state) -> None:
     except Exception:
         logging.exception("Fehler im API-Health-Check")
     try:
-        state._last_api_health_warning = datetime.now(state.local_tz)
+        state._last_api_health_warning = _state_now(state)
     except Exception:
         logging.debug("API-Health-Zeitstempel konnte nicht gespeichert werden", exc_info=True)
 

@@ -150,6 +150,36 @@ def test_api_init_verwendet_status_snapshot():
         api.shared_state, api.control_state, api.control_funcs = old_state, old_control, old_funcs
 
 
+def test_forecast_stale_setzt_kein_alter_und_enthaelt_plan():
+    import priority_control_logic as pcl
+    state = _minimal_state()
+    state.last_forecast_update = datetime.now(state.local_tz)
+    state.solar.last_api_call = datetime.now(state.local_tz) - timedelta(hours=1)
+    state.solar.feedinpower = 100.0
+    state.solar.forecast_today = 3.0
+    result = pcl._set_stale_forecast(state)
+    assert result is None
+    assert state.forecast_stale is True
+    assert state.forecast_age_s is None
+
+
+def test_status_snapshot_enthaelt_nur_kompakte_lernsummary():
+    state = _minimal_state()
+    state.learning_engine = SimpleNamespace(
+        get_info=lambda: {
+            "total_cycles": 7,
+            "total_usage_events": 4,
+            "forecast_ratio": 1.1,
+            "forecast_ratio_samples": 3,
+            "internal_large_payload": "x" * 10000,
+        }
+    )
+    snapshot = build_status_snapshot(state)
+    assert not hasattr(snapshot, "learning_engine")
+    assert snapshot.learning_engine_summary["total_cycles"] == 7
+    assert "internal_large_payload" not in snapshot.learning_engine_summary
+
+
 def test_status_snapshot_is_consistent_after_live_mutation():
     state = _minimal_state()
     snapshot = build_status_snapshot(state)

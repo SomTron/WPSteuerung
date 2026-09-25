@@ -92,7 +92,9 @@ def schreibe_eintrag(
     t_unten: Optional[float] = None,
     t_oben: Optional[float] = None,
     stale_s: Optional[int] = None,
+    reason_code: Optional[str] = None,
     diagnostics: Optional[Dict] = None,
+    ts: Optional[datetime] = None,
 ) -> bool:
     """Haengt einen Zyklus-Eintrag ans JSONL-Log (nur bei Aenderung/Herzschlag).
 
@@ -103,7 +105,7 @@ def schreibe_eintrag(
     Rueckgabe: True, wenn geschrieben wurde; False bei unterdruecktem Duplikat.
     """
     eintrag = {
-        "ts": datetime.now().isoformat(timespec="seconds"),
+        "ts": (ts or datetime.now()).isoformat(timespec="seconds"),
         "gewinner": gewinner_name or "",
         "grund": (gewinner_grund or "")[:200],
         "soll_einschalten": bool(soll_einschalten),
@@ -114,6 +116,7 @@ def schreibe_eintrag(
         "t_unten": round(float(t_unten), 2) if t_unten is not None else None,
         "t_oben": round(float(t_oben), 2) if t_oben is not None else None,
         "stale_s": stale_s,
+        "reason_code": reason_code,
         "diagnostics": dict(diagnostics) if isinstance(diagnostics, dict) else {},
     }
     try:

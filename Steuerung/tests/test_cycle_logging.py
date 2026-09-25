@@ -21,7 +21,7 @@ def _state(start_regel="Einspeisung"):
 
 def test_schema_entspricht_der_bestehenden_loganalyse():
     assert CYCLE_CSV_HEADER == [
-        "start", "ende", "dauer_min", "quelle", "start_regel", "end_grund",
+        "start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund",
         "start_unten", "start_mittig", "start_oben",
         "max_unten", "max_mittig", "max_oben",
         "ueberschreitung_k", "start_verd",
@@ -122,7 +122,7 @@ async def test_set_kompressor_status_schreibt_einen_zyklus(monkeypatch, tmp_path
         sensors=SimpleNamespace(t_unten=30.0, t_mittig=40.0, t_oben=50.0, t_verd=5.0),
         control=SimpleNamespace(
             kompressor_ein=False, zyklus_id=0, active_rule_name="PV_unten",
-            blocking_reason=None,
+            source_at_start="PV", blocking_reason=None,
         ),
         stats=SimpleNamespace(
             last_compressor_on_time=None, last_compressor_off_time=None,

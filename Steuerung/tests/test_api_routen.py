@@ -129,6 +129,32 @@ def test_status_liefert_dict_keine_primitiven():
         assert schluessel in d, f"Key {schluessel} fehlt in /status"
 
 
+def test_debug_csv_ist_geschuetzt_und_redigiert_pfad_und_fehler(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
+    monkeypatch.setattr(api, "HEIZUNGSDATEN_CSV", str(tmp_path / "heizungsdaten.csv"))
+    (tmp_path / "heizungsdaten.csv").write_text(
+        "Zeitstempel,T_Oben\n2026-09-24 10:00:00,42\n", encoding="utf-8"
+    )
+    with pytest.raises(HTTPException) as exc:
+        api.debug_csv("wrong")
+    assert exc.value.status_code == 401
+
+    result = api.debug_csv("test-secret")
+    assert not os.path.isabs(result["csv_path"])
+    assert str(tmp_path) not in result["csv_path"]
+    assert result["read_error"] if "read_error" in result else True
+
+    def kaputt_open(*args, **kwargs):
+        raise OSError("interner /home/patrik/Geheimnis/Pfad")
+
+    monkeypatch.setattr("builtins.open", kaputt_open)
+    result = api.debug_csv("test-secret")
+    assert result["read_error"] == "CSV konnte nicht gelesen werden"
+    assert "Geheimnis" not in str(result)
+
+
 def test_keine_doppelt_registrierten_routen():
     """Regression: /debug/csv war zweimal definiert - die erste Definition
     (Platzhalter mit 'pass') gewann das Routing und lieferte 'null', der echte

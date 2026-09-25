@@ -2,7 +2,8 @@ import logging
 import math
 import asyncio
 import aiohttp
-from datetime import datetime, timedelta
+from datetime import timedelta
+from clock import now_for
 from typing import Optional
 import pytz
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
@@ -46,7 +47,7 @@ async def get_solax_data(session, state):
     Gibt None zurück wenn Daten zu alt sind (>15 min) oder API nicht erreichbar.
     """
     local_tz = pytz.timezone(DEFAULT_TIMEZONE)
-    now = datetime.now(local_tz)
+    now = now_for(state, fallback_tz=local_tz)
 
     # Frische-Cache: kurze API-Sperre, aber fail-safe nach 15 Minuten.
     CACHE_TTL = timedelta(minutes=5)

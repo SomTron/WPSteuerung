@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import re
 
 from utils import HEIZUNGSDATEN_CSV, to_naive
+from clock import now_for
 from logic_utils import forecast_kwh_m2_to_wh_m2
 from status_snapshot import build_status_snapshot
 from api_contract import (
@@ -70,6 +71,15 @@ def _check_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-
         raise HTTPException(status_code=401, detail="Ungueltiger oder fehlender API-Key")
 
 
+def _api_now(state):
+    """Nutzt für API-Snapshots deren konsistente Erzeugungszeit."""
+    for name in ("_is_status_snapshot_created_at", "last_status_snapshot_at"):
+        value = getattr(state, name, None)
+        if isinstance(value, datetime):
+            return value
+    return now_for(state)
+
+
 def _redact_config(value, key: str = ""):
     """Exportiert Konfiguration ohne Telegram-/Solax-Geheimnisse."""
     if isinstance(value, dict):
@@ -97,11 +107,21 @@ def build_mode_payload(state, priority_info_override=None):
         pc = getattr(state, 'priority_config', None)
         if pc is not None and _is_nachtsperre_aktiv is not None:
             try:
-                nachtsperre = bool(_is_nachtsperre_aktiv(pc, datetime.now(state.local_tz)))
+                nachtsperre = bool(_is_nachtsperre_aktiv(pc, _api_now(state)))
             except Exception as e:
                 logging.warning(f"Konnte Nachtsperren-Status nicht ermitteln: {e}")
         priority_info_override = {"nachtsperre_aktiv": nachtsperre}
     info = priority_info_override
+    # effective_rule_name/active_rule_name describe only a running hardware
+    # cycle. A requested rule that is waiting for a source must not be shown
+    # as if it already controls the compressor.
+    running = bool(getattr(control, "kompressor_ein", False))
+    effective_rule = getattr(control, "effective_rule_name", None) if running else None
+    active_rule = getattr(control, "active_rule_name", None) if running else None
+    source_at_start = getattr(control, "source_at_start", None) if running else None
+    effective_source = getattr(control, "effective_source", None) if running else None
+    source_at_start = source_at_start or "—"
+    effective_source = effective_source or "—"
     return {
         "current": (getattr(control, 'previous_modus', None) or ""),
         "solar_active": bool(getattr(control, 'solar_ueberschuss_aktiv', False)),
@@ -109,9 +129,12 @@ def build_mode_payload(state, priority_info_override=None):
         "bath_active": bool(getattr(state, 'bademodus_aktiv', False)),
         "nightsperre_active": (bool(info.get("nachtsperre_aktiv", False))
                                if isinstance(info, dict) else False),
-        "active_rule": (getattr(control, 'effective_rule_name', None) or getattr(control, 'active_rule_name', None) or ""),
+        "active_rule": effective_rule or active_rule or "",
+        "effective_rule": effective_rule or "",
         "requested_rule": (getattr(control, 'requested_rule_name', None) or ""),
-        "effective_source": (getattr(control, 'effective_source', None) or "Netz"),
+        "effective_source": effective_source or "Netz",
+        "source_at_start": source_at_start or "Netz",
+        "source_current": (getattr(control, 'source_current', None) or "Netz"),
         "active_rule_sensor": (getattr(control, 'active_rule_sensor', None) or ""),
         "blocking_reason": (getattr(control, 'blocking_reason', None) or ""),
         "soll_einschalten": bool(getattr(control, '_soll_einschalten', False)),
@@ -236,7 +259,7 @@ def health_status():
         raise HTTPException(status_code=503, detail="System not initialized")
     state = shared_state
     try:
-        now = datetime.now(getattr(state, "local_tz", None))
+        now = _api_now(state)
         heartbeat = getattr(state, "loop_heartbeat", None)
         age_s = None if not isinstance(heartbeat, datetime) else max(
             0.0, (now - heartbeat).total_seconds()
@@ -266,7 +289,9 @@ def _solar_stale_status() -> bool:
         last_api_call = getattr(shared_state.solar, 'last_api_call', None)
         if not isinstance(last_api_call, datetime):
             return True
-        jetzt = datetime.now(getattr(last_api_call, 'tzinfo', None))
+        jetzt = now_for(shared_state)
+        if jetzt.tzinfo is None and last_api_call.tzinfo is not None:
+            jetzt = last_api_call.replace(tzinfo=None)
         return (jetzt - last_api_call).total_seconds() / 60.0 > SOLAR_DATA_STALE_THRESHOLD_MIN
     except Exception as exc:
         # Bei fehlerhaftem Zeitstempel lieber stale als eine potentiell
@@ -365,7 +390,7 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     Funktion liest aktuelle Datei und relevante Monatsarchive ohne pandas.
     """
     if jetzt is None:
-        jetzt = datetime.now()
+        jetzt = now_for(shared_state) if shared_state is not None else datetime.now()
     grenze = jetzt - timedelta(days=max(1, int(tage)))
     if not os.path.exists(csv_path):
         return None
@@ -483,7 +508,7 @@ def get_status():
     if pc:
         nightsperre = False
         if _is_nachtsperre_aktiv:
-            nightsperre = _is_nachtsperre_aktiv(pc, datetime.now(shared_state.local_tz))
+            nightsperre = _is_nachtsperre_aktiv(pc, _api_now(shared_state))
         priority_info = {
             "beschreibung": pc.beschreibung,
             "wp_leistung": pc.wp.leistung_watt,
@@ -605,6 +630,7 @@ def get_status():
                 "aktiv": e.aktiv,
                 "einschalten": e.einschalten,  # True/False/None
                 "grund": e.grund,
+                "reason_code": getattr(e, "reason_code", None),
             })
 
     # Entscheidungs-Historie + KPIs (Fehler hier duerfen /status nie killen)
@@ -616,6 +642,7 @@ def get_status():
                 {
                     "ts": e.get("ts"), "gewinner": e.get("gewinner") or "",
                     "grund": e.get("grund") or "",
+                    "reason_code": e.get("reason_code") or (e.get("diagnostics") or {}).get("reason_code"),
                     "soll_einschalten": bool(e.get("soll_einschalten")),
                     "laeuft": bool(e.get("kompressor_laeuft")),
                 }
@@ -667,22 +694,22 @@ def get_status():
     komfort_info: dict = {}
     try:
 
-        le = getattr(shared_state, "learning_engine", None)
+        le = getattr(shared_state, "learning_engine_summary", None)
         if le is not None:
             komfort_info = {
-                "verletzungen_7d": le.get_komfort_verletzung_rate(tage=7),
-                "verletzungen_1d": le.get_komfort_verletzung_rate(tage=1),
-                "grenz_c": getattr(le, "_komfort_grenz_c", 40.0),
-                "bonus_vorlauf_h": le.get_komfort_bonus_vorlauf(),
+                "verletzungen_7d": le.get("komfort_verletzungen_7d", 0),
+                "verletzungen_1d": le.get("komfort_verletzungen_1d", 0),
+                "grenz_c": 40.0,
+                "bonus_vorlauf_h": 0.0,
             }
     except Exception as e:
         logging.debug(f"Komfort-Info nicht verfuegbar: {e}")
 
     learning_info: dict = {}
     try:
-        le = getattr(shared_state, "learning_engine", None)
+        le = getattr(shared_state, "learning_engine_summary", None)
         if le is not None:
-            learning_info = le.get_info()
+            learning_info = dict(le) if isinstance(le, dict) else {}
     except Exception as e:
         # Ein Fehler im Lernmodul darf nie den kompletten /status in einen
         # HTTP 500 zwingen (sonst zeigt die WebApp dauerhaft nur "500").
@@ -756,6 +783,15 @@ def get_status():
     except Exception as e:
         logging.debug(f"PV-Profil/Forecast nicht verfuegbar: {e}")
 
+    status_now = _api_now(shared_state)
+    status_age_s = None
+    snapshot_at = getattr(shared_state, "_is_status_snapshot_created_at", None)
+    if isinstance(snapshot_at, datetime):
+        try:
+            status_age_s = max(0, int((now_for(shared_state) - snapshot_at).total_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            status_age_s = None
+
     response = with_contract_metadata({
         "temperatures": {
             "oben": shared_state.sensors.t_oben,
@@ -798,7 +834,8 @@ def get_status():
         "learning": learning_info,
                 "system": {
             "exclusion_reason": shared_state.control.ausschluss_grund or "",
-            "last_update": datetime.now().strftime("%H:%M:%S"),
+            "last_update": status_now.isoformat(timespec="seconds"),
+            "last_update_age_s": status_age_s,
             "loop_heartbeat": getattr(shared_state, "loop_heartbeat", None),
             "consecutive_control_errors": getattr(shared_state.control, "consecutive_control_errors", 0),
         },
@@ -826,11 +863,7 @@ def get_status():
             "forecast_age_s": getattr(shared_state, "forecast_age_s", None),
             "verdampfer_shutdowns_stunde": getattr(shared_state.control, 'verdampfer_shutdowns', []),
         },
-        "learning_engine": {
-            "zapfungen_heute": getattr(getattr(shared_state, "learning_engine", None), "_today_usage_count", 0),
-            "gelerntes_morgenfenster": getattr(getattr(shared_state, "learning_engine", None), "_learned_morning_window", None),
-            "gelerntes_abendfenster": getattr(getattr(shared_state, "learning_engine", None), "_learned_evening_window", None),
-        },
+        "learning_engine": learning_info,
         "debug_info": {
             "solar_power": getattr(shared_state.solar, 'acpower', None),
             "feedin_power": getattr(shared_state.solar, 'feedinpower', None),
@@ -866,6 +899,7 @@ def get_history_regeln(
     return {
         "data": [
             {"timestamp": e.get("ts"), "regel": e.get("gewinner") or "Keine",
+             "reason_code": e.get("reason_code"),
              "laeuft": bool(e.get("kompressor_laeuft"))}
             for e in eintraege
         ],
@@ -1025,19 +1059,19 @@ def _csv_spaltentypen(kopf, daten):
 def debug_csv(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """Debug: Zeigt CSV-Status und Daten an.
-
-    Bewusst OHNE pandas und nur mit Kopf + Tail: ein pd.read_csv() ueber die
-    gewachsene heizungsdaten.csv hat am 15.09. zum OOM-Kill (status=9/KILL)
-    auf dem Pi beigetragen. 'rows' wird weiterhin exakt gezaehlt (zeilenweise).
-    """
+    """Geschützte CSV-Qualitätsdiagnose ohne absolute Pfade oder Rohfehler."""
+    _check_api_key(x_api_key)
     import os as _os
     from collections import deque
     import csv
 
     csv_path = HEIZUNGSDATEN_CSV
+    # Diagnose gibt bewusst nur den Dateinamen zurück. Ein relativer Pfad
+    # könnte bei einem abweichenden Arbeitsverzeichnis ebenfalls interne
+    # Verzeichnisnamen preisgeben.
+    display_path = os.path.basename(csv_path)
     result = {
-        "csv_path": csv_path,
+        "csv_path": display_path,
         "csv_exists": _os.path.exists(csv_path),
     }
     if result["csv_exists"]:
@@ -1067,8 +1101,9 @@ def debug_csv(
             else:
                 result["last_timestamp"] = None
             result["column_types"] = _csv_spaltentypen(kopf, daten)
-        except Exception as e:
-            result["read_error"] = str(e)
+        except Exception:
+            logging.exception("CSV-Debugdiagnose fehlgeschlagen")
+            result["read_error"] = "CSV konnte nicht gelesen werden"
     return result
 
 @app.get("/history")
@@ -1081,7 +1116,7 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
     try:
         MAX_ROWS = 25000
         rows, quality = _read_csv_tail(csv_path, max_rows=MAX_ROWS)
-        cutoff = datetime.now() - timedelta(hours=hours)
+        cutoff = to_naive(now_for(shared_state)) - timedelta(hours=hours)
 
         # Convert to JSON-friendly format
         data = []

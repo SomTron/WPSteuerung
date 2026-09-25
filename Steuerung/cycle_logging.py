@@ -17,7 +17,7 @@ from utils import rotiere_csv_monatlich
 
 CYCLE_CSV = os.path.join("csv log", "zyklen.csv")
 CYCLE_CSV_HEADER = [
-    "start", "ende", "dauer_min", "quelle", "start_regel", "end_grund",
+    "start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund",
     "start_unten", "start_mittig", "start_oben",
     "max_unten", "max_mittig", "max_oben",
     "ueberschreitung_k", "start_verd",
@@ -112,6 +112,9 @@ def begin_cycle(state, now, cycle_id):
         "start_ts": now,
         "cycle_id": cycle_id,
         "start_regel": start_regel,
+        "source_at_start": getattr(
+            getattr(state, "control", None), "source_at_start", None
+        ) or _quelle(start_regel),
         "start_unten": _zahl(getattr(sensors, "t_unten", None)),
         "start_mittig": _zahl(getattr(sensors, "t_mittig", None)),
         "start_oben": _zahl(getattr(sensors, "t_oben", None)),
@@ -161,7 +164,10 @@ def finish_cycle(state, now, end_grund=None, csv_path=None):
         "start": _zeitpunkt(start_ts),
         "ende": _zeitpunkt(now),
         "dauer_min": dauer_min,
-        "quelle": _quelle(cycle.get("start_regel")),
+        "quelle": str(
+            cycle.get("source_at_start") or _quelle(cycle.get("start_regel"))
+        ).lower(),
+        "source_at_start": cycle.get("source_at_start") or "",
         "start_regel": cycle.get("start_regel") or "",
         "end_grund": (end_grund or getattr(getattr(state, "control", None), "blocking_reason", None) or "unbekannt"),
         "start_unten": cycle.get("start_unten"),

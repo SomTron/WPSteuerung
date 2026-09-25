@@ -64,7 +64,11 @@ class ControlState:
         self.requested_rule_name: Optional[str] = None
         self.effective_rule_name: Optional[str] = None
         self.effective_source: Optional[str] = None
+        self.source_at_start: Optional[str] = None
+        self.source_current: Optional[str] = None
         self.manual_force_on_pending: bool = False
+        self._pending_start_rule: Optional[str] = None
+        self._pending_start_source: Optional[str] = None
         self.consecutive_control_errors: int = 0
         self._rate_messungen: deque = deque(maxlen=5)
         self._rate_confidence: float = 0.0

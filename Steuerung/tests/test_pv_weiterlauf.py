@@ -76,12 +76,15 @@ def _block_state(delay=3.0, kompressor=True):
     )
 
 
-def _gewinner(name="AdaptivePV", grund="AdaptivePV: PV 0W < 105W"):
-    return SimpleNamespace(name=name, grund=grund)
+def _gewinner(name="AdaptivePV", grund="AdaptivePV: PV 0W < 105W", reason_code="pv_unterbrechung"):
+    return SimpleNamespace(name=name, grund=grund, reason_code=reason_code)
 
 
 class TestPvWeiterlaufBand:
-    def test_erkennt_pv_unterbrechung(self):
+    def test_erkennt_pv_unterbrechung_ueber_reason_code_ohne_textabgleich(self):
+        result = _gewinner(grund="freier Text ohne PV-Muster", reason_code="pv_unterbrechung")
+        assert pcl._ist_pv_unterbrechung(result) is True
+
         assert pcl._ist_pv_unterbrechung("AdaptivePV: PV 0W < 105W") is True
         assert pcl._ist_pv_unterbrechung(
             "AdaptivePV: unten 48.0C >= 48.0C -> AUS") is False
@@ -113,7 +116,11 @@ class TestPvWeiterlaufBand:
             state, _gewinner(name="Abweichung"), False) is False
         # PV-Regel, aber Temperatur-AUS (Limit)
         assert pcl._pv_weiterlauf_block(
-            state, _gewinner(grund="AdaptivePV: unten 48.0C >= 48.0C -> AUS"),
+            state,
+            _gewinner(
+                grund="AdaptivePV: unten 48.0C >= 48.0C -> AUS",
+                reason_code="stop",
+            ),
             False) is False
 
     def test_deaktivierbar_mit_delay_0(self):
