@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import glob
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 import json
 
@@ -38,7 +38,8 @@ def merge_csv_files():
         except Exception as e:
             logging.error(f"Error reading {f}: {e}")
 
-    if not df_list: return None
+    if not df_list:
+        return None
 
     df = pd.concat(df_list, ignore_index=True)
     if "Zeitstempel" in df.columns:
@@ -50,7 +51,8 @@ def merge_csv_files():
 
 def analyze_cycles(df):
     """Identifies and analyzes heating and standby periods."""
-    if "Kompressor" not in df.columns: return [], []
+    if "Kompressor" not in df.columns:
+        return [], []
 
     # Reset index to ensure range-based indexing works perfectly
     df = df.reset_index(drop=True)
@@ -135,9 +137,6 @@ def calculate_metrics(heating_cycles, standby_periods):
 
 def generate_html(cycle_data, loss_data):
     """Generates the HTML dashboard with interactive charts."""
-    
-    # Filter valid COPs for trend
-    cops = [c for c in cycle_data if c["cop"] is not None]
     
     # Prepare data for JSON
     json_cycles = json.dumps(cycle_data)

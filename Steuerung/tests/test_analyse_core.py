@@ -7,6 +7,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "Analyse"))
 
+import importlib.util  # noqa: E402
+
+ANALYSIS_PATH = ROOT / "Analyse" / "wp_analysis.py"
+_spec = importlib.util.spec_from_file_location("legacy_wp_analysis", ANALYSIS_PATH)
+wp_analysis = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(wp_analysis)
+
 from analysis_core import (  # noqa: E402
     build_cycle_quality,
     classify_end_reason,
@@ -228,6 +235,19 @@ def test_fehlender_decision_code_wird_als_missing_gewertet():
     )
     assert report["status"] == "degraded"
     assert report["summary"]["missing_decision_reason_codes"] == 1
+
+
+def test_legacy_wp_analysis_meldet_leere_analyse(monkeypatch, tmp_path):
+    """Die alte Dashboard-Analyse darf ohne Eingabedatei sauber None liefern."""
+    monkeypatch.setattr(wp_analysis, "ANALYSE_DIR", str(tmp_path))
+    monkeypatch.setattr(wp_analysis, "MERGED_CSV", str(tmp_path / "merged_data.csv"))
+    assert wp_analysis.merge_csv_files() is None
+
+
+def test_legacy_wp_analysis_ohne_kompressor_liefert_keine_zyklen():
+    """Eine CSV ohne Kompressor-Spalte wird nicht als Heizzyklus fehlinterpretiert."""
+    df = wp_analysis.pd.DataFrame({"Zeitstempel": ["2026-09-24 10:00:00"]})
+    assert wp_analysis.analyze_cycles(df) == ([], [])
 
 
 def test_legacy_zyklus_migration_ergaenzt_reason_code(tmp_path):
