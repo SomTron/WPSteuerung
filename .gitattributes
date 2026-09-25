@@ -1,0 +1,9 @@
+# Shellskripte MUESEN LF haben - CRLF macht sie unter /bin/sh nicht startbar
+*.sh text eol=lf
+Updater/*.sh text eol=lf
+*.service text eol=lf
+
+# Python/JSON/HTML: normale Textkonvention
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf

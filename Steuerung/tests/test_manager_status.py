@@ -121,9 +121,13 @@ def test_main_gibt_shell_werte_aus(tmp_path, capsys):
 
 def _updater_scripts():
     return (
-        (UPDATER_DIR / "wp-manager.sh").read_text(encoding="utf-8"),
+        (UPDATER_DIR / "wp-manager-menu.sh").read_text(encoding="utf-8"),
         (UPDATER_DIR / "rpi-deploy.sh").read_text(encoding="utf-8"),
     )
+
+
+def _launcher_text():
+    return (UPDATER_DIR / "wp-manager.sh").read_text(encoding="utf-8")
 
 
 def test_updater_verwirft_lokale_aenderungen_nicht():

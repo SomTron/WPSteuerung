@@ -304,7 +304,7 @@ case "$choice" in
         read confirm
         if [ "$confirm" = "j" ] || [ "$confirm" = "J" ]; then
             printf "${CYAN}Wechsle zu Branch '%s'...${NC}\n" "$target_branch"
-            
+
             # Pruefe ob Branch lokal existiert, sonst erstelle Tracking-Branch.
             if git show-ref --verify --quiet "refs/heads/$target_branch"; then
                 git checkout "$target_branch"
