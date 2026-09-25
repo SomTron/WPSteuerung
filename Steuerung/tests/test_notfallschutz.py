@@ -143,6 +143,26 @@ class TestEvaluateNotfallschutz:
         assert erg.einschalten is False
         assert "Hysterese" in erg.grund
 
+    def test_aktive_legionellenfahrt_wird_nicht_ueber_stop_notfall_beendet(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(),
+            {"oben": 45.7, "mittig": 45.2, "unten": 38.0},
+            kompressor_ein=True,
+            legionellen_aktiv=True,
+        )
+        assert erg.einschalten is None
+        assert "Legionellenfahrt" in erg.grund
+
+    def test_echter_kaltnotfall_gewinnt_auch_waehrend_legionellenfahrt(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(),
+            {"oben": 35.0, "mittig": 36.0, "unten": 36.0},
+            kompressor_ein=True,
+            legionellen_aktiv=True,
+        )
+        assert erg.einschalten is True
+        assert "NOTFALLSCHUTZ" in erg.grund
+
     def test_hysterese_between_grenzen_haelt_laufenden_lauf(self):
         erg = pc.evaluate_notfallschutz(
             NotfallschutzConfig(),
@@ -188,6 +208,24 @@ class TestNotfallschutzPrioritaet:
         assert gewinner is not None
         assert gewinner.name == "Notfallschutz"
         assert gewinner.einschalten is True
+
+    def test_laufende_legionellen_regel_bleibt_wirksamer_gewinner(self):
+        config = WPSteuerungConfig()
+        config.legionellen.aktiv = True
+        gewinner, alle = pc.bewerte_alle_regeln(
+            config=config,
+            temp_dict={"oben": 45.7, "mittig": 45.2, "unten": 35.8, "verd": 21.6},
+            pv_leistung=7560.0,
+            kompressor_ein=True,
+            now=TZ.localize(datetime(2026, 9, 25, 13, 23)),
+            legionellen_aktiv=True,
+            legionellen_started_at=TZ.localize(datetime(2026, 9, 25, 13, 20)),
+        )
+        assert gewinner is not None
+        assert gewinner.name == "Legionellen"
+        assert gewinner.einschalten is True
+        notfall = next(e for e in alle if e.name == "Notfallschutz")
+        assert notfall.einschalten is None
 
     def test_normalbetrieb_blockt_nicht(self):
         """Warmes Wasser: Notfallschutz stumm - andere Regeln koennen gewinnen."""

@@ -26,11 +26,33 @@ import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+import pytz
+
+from constants import DEFAULT_TIMEZONE
+
 LOG_DATEI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entscheidungs_log.jsonl")
 MAX_BYTES = 2_000_000          # Rotation bei ~2 MB -> .old
 MAX_EINTRAEGE_LESEN = 5000
 NETZKAUF_GRENZE_W = -50.0      # darunter gilt: Haus kauft Netzstrom
 HEARTBEAT_SEKUNDEN = 75.0      # Zwangsschreibintervall laufender WP (< dt-Cap 120 s)
+LOG_TIMEZONE = pytz.timezone(DEFAULT_TIMEZONE)
+
+
+def _parse_log_datetime(raw) -> Optional[datetime]:
+    """Parst alte naive und neue ISO-Zeitstempel in dieselbe Zeitzone."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        value = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    if value.tzinfo is None:
+        return LOG_TIMEZONE.localize(value)
+    return value.astimezone(LOG_TIMEZONE)
+
+
+def _log_now() -> datetime:
+    return datetime.now(LOG_TIMEZONE)
 
 # Cache der zuletzt geschriebenen Zeile (pfad-gebunden, damit Tests mit
 # umgeleitetem LOG_DATEI nicht gegenseitig stoeren).
@@ -74,10 +96,13 @@ def _soll_schreiben(vorher: Optional[Dict], eintrag: Dict) -> bool:
     if not eintrag.get("kompressor_laeuft"):
         return False  # Stillstand: identische Zyklen nicht weiterschreiben
     try:
-        dt = (datetime.fromisoformat(eintrag["ts"])
-              - datetime.fromisoformat(vorher["ts"])).total_seconds()
+        aktuell = _parse_log_datetime(eintrag.get("ts"))
+        vorher_ts = _parse_log_datetime(vorher.get("ts"))
+        if aktuell is None or vorher_ts is None:
+            return True
+        dt = (aktuell - vorher_ts).total_seconds()
         return dt >= HEARTBEAT_SEKUNDEN
-    except (KeyError, ValueError):
+    except (TypeError, ValueError):
         return True  # im Zweifel lieber schreiben als Zustand verlieren
 
 
@@ -105,7 +130,7 @@ def schreibe_eintrag(
     Rueckgabe: True, wenn geschrieben wurde; False bei unterdruecktem Duplikat.
     """
     eintrag = {
-        "ts": (ts or datetime.now()).isoformat(timespec="seconds"),
+        "ts": (ts or _log_now()).isoformat(timespec="seconds"),
         "gewinner": gewinner_name or "",
         "grund": (gewinner_grund or "")[:200],
         "soll_einschalten": bool(soll_einschalten),
@@ -165,12 +190,11 @@ def _lies_zeilen() -> List[Dict]:
 
 def historie(stunden: float = 24, limit: int = 100) -> List[Dict]:
     """Letzte Entscheidungen (neueste zuerst) fuer API/Webapp."""
-    grenze = datetime.now() - timedelta(hours=stunden)
+    grenze = _log_now() - timedelta(hours=stunden)
     auswahl = []
     for e in _lies_zeilen():
-        try:
-            ts = datetime.fromisoformat(e["ts"])
-        except (KeyError, ValueError):
+        ts = _parse_log_datetime(e.get("ts"))
+        if ts is None:
             continue
         if ts >= grenze:
             auswahl.append(e)
@@ -192,9 +216,8 @@ def _aggregiere(eintraege: List[Dict], wp_leistung_watt: float,
     vorher_laeuft = False
     vorher_feedin: Optional[float] = None
     for e in eintraege:
-        try:
-            ts = datetime.fromisoformat(e["ts"])
-        except (KeyError, ValueError):
+        ts = _parse_log_datetime(e.get("ts"))
+        if ts is None:
             vorher_ts = None
             vorher_laeuft = False
             continue
@@ -227,17 +250,16 @@ def _aggregiere(eintraege: List[Dict], wp_leistung_watt: float,
 def kpis(wp_leistung_watt: float = 600.0, strompreis_eur_kwh: float = 0.35) -> Dict:
     """KPIs fuer heute und die letzten 7 Tage."""
     alle = _lies_zeilen()
-    heute_str = datetime.now().strftime("%Y-%m-%d")
+    jetzt = _log_now()
+    heute_str = jetzt.strftime("%Y-%m-%d")
 
     def _von(bis_stunden: float) -> List[Dict]:
-        grenze = datetime.now() - timedelta(hours=bis_stunden)
+        grenze = jetzt - timedelta(hours=bis_stunden)
         out = []
         for e in alle:
-            try:
-                if datetime.fromisoformat(e["ts"]) >= grenze:
-                    out.append(e)
-            except (KeyError, ValueError):
-                continue
+            ts = _parse_log_datetime(e.get("ts"))
+            if ts is not None and ts >= grenze:
+                out.append(e)
         return out
 
     heute = [e for e in alle if e.get("ts", "").startswith(heute_str)]

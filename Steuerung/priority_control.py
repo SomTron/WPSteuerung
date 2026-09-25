@@ -570,6 +570,7 @@ def evaluate_notfallschutz(
     nf_cfg: NotfallschutzConfig,
     temp_dict: Dict[str, Optional[float]],
     kompressor_ein: bool = False,
+    legionellen_aktiv: bool = False,
 ) -> RegelErgebnis:
     """Notfallschutz (Prio 110): Reiner Schutzleiter fuer die
     Brauchwasser-Mindesttemperatur.
@@ -619,6 +620,13 @@ def evaluate_notfallschutz(
         result.grund = f"Sensor '{sensor or strategie}' fuer Notfallschutz nicht verfuegbar"
         return result
 
+    if kompressor_ein and legionellen_aktiv and temp > nf_cfg.einschalten_bei_c:
+        result.einschalten = None
+        result.grund = (
+            f"Notfallschutz: {sensor} {temp:.1f}C > {nf_cfg.einschalten_bei_c:.1f}C; "
+            "aktive Legionellenfahrt bleibt bis zum konfigurierten Limit wirksam"
+        )
+        return result
     if temp <= nf_cfg.einschalten_bei_c:
         result.einschalten = True
         result.grund = (
@@ -1909,7 +1917,10 @@ def bewerte_alle_regeln(
     #     Greift ohne weitere Bedingungen vor allen Sperren (Wochenende,
     #     Nachtsperre) - im Normalbetrieb stumm.
     ergebnis = evaluate_notfallschutz(
-        config.notfallschutz, temp_dict, kompressor_ein=kompressor_ein
+        config.notfallschutz,
+        temp_dict,
+        kompressor_ein=kompressor_ein,
+        legionellen_aktiv=bool(legionellen_aktiv),
     )
     ergebnisse.append(ergebnis)
 

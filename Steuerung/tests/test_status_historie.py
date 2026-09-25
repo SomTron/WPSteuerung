@@ -92,6 +92,23 @@ def test_excel_seriennummer_wird_erkannt():
     assert api._parse_zeitstempel("keinDatum") is None
 
 
+def test_aware_cache_und_state_zeit_kommen_mit_naiven_csv_daten_klar(tmp_path):
+    """Status darf keine aware/naive Vergleichsfehler mehr loggen."""
+    import pytz
+    p = tmp_path / "hist.csv"
+    _csv_schreiben(str(p))
+    state = pytz.timezone("Europe/Berlin")
+    old_state = api.shared_state
+    try:
+        api.shared_state = type("State", (), {"local_tz": state, "clock": None})()
+        api._HIST_WH_QM_CACHE["zeit"] = state.localize(datetime.now() - timedelta(seconds=1))
+        api._HIST_WH_QM_CACHE["wert"] = 1000.0
+        wert = api._historisches_wh_qm(str(p))
+    finally:
+        api.shared_state = old_state
+    assert wert == pytest.approx(1000.0)
+
+
 def test_zweiter_aufruf_kommt_aus_dem_cache(tmp_path, monkeypatch):
     p = tmp_path / "hist.csv"
     _csv_schreiben(str(p))

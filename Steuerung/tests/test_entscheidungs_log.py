@@ -99,6 +99,29 @@ def test_entscheidung_uebernimmt_zeit_und_reason_code_aus_state(tmp_path):
     assert eintrag["diagnostics"]["requested_rule"] == "PV_unten"
 
 
+def test_gemischte_naive_und_aware_zeiten_bleiben_lesbar(tmp_path):
+    """Alte naive und neue ISO-Zeitstempel duerfen nicht verglichen crashen."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        now = el._log_now()
+        alt_naive = (now - timedelta(minutes=2)).replace(tzinfo=None).isoformat(timespec="seconds")
+        aktuell = now.isoformat(timespec="seconds")
+        with open(log_datei, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": alt_naive, "gewinner": "Alt", "kompressor_laeuft": True, "feedin_w": 1000}) + "\n")
+            f.write(json.dumps({"ts": aktuell, "gewinner": "Neu", "kompressor_laeuft": True, "feedin_w": 1000}) + "\n")
+
+        historie = el.historie(stunden=24, limit=10)
+        kpi = el.kpis()
+        assert [e["gewinner"] for e in historie] == ["Neu", "Alt"]
+        assert kpi["heute"]["laufzeit_min"] == pytest.approx(2.0, abs=0.05)
+
+
+def test_soll_schreiben_vergleicht_naive_und_aware_zeiten():
+    alt = {"ts": "2026-09-25T13:00:00", "gewinner": "X", "soll_einschalten": True, "kompressor_laeuft": True}
+    neu = {"ts": "2026-09-25T13:01:00+02:00", "gewinner": "X", "soll_einschalten": True, "kompressor_laeuft": True}
+    assert el._soll_schreiben(alt, neu) is False
+
+
 def test_historie_filtert_nach_stunden(tmp_path):
     """Nur Eintraege innerhalb des Stunden-Fensters zurueck."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)

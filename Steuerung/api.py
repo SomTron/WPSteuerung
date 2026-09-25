@@ -391,6 +391,9 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     """
     if jetzt is None:
         jetzt = now_for(shared_state) if shared_state is not None else datetime.now()
+    # CSV-Zeitstempel werden bewusst als lokale naive Zeit verarbeitet. Damit
+    # Monatsgrenzen und Cache-Zeit garantiert denselben Vergleichstyp.
+    jetzt = to_naive(jetzt)
     grenze = jetzt - timedelta(days=max(1, int(tage)))
     if not os.path.exists(csv_path):
         return None
@@ -481,8 +484,10 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
 
 def _historisches_wh_qm(csv_path: str):
     """Gecachter 14-Tage-Mittelwert (hoechstens 1x pro HIST_WH_QM_TTL_SEC)."""
-    jetzt = datetime.now()
+    jetzt = to_naive(now_for(shared_state) if shared_state is not None else datetime.now())
     zeit = _HIST_WH_QM_CACHE["zeit"]
+    if isinstance(zeit, datetime) and zeit.tzinfo is not None:
+        zeit = to_naive(zeit)
     if zeit is not None and (jetzt - zeit).total_seconds() < HIST_WH_QM_TTL_SEC:
         return _HIST_WH_QM_CACHE["wert"]
 
