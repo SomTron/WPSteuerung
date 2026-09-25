@@ -74,6 +74,70 @@ is_number() {
     esac
 }
 
+# Fragt interaktiv eine Zahl ab und validiert sie.
+#   $1 = Beschriftung des Prompts
+#   $2 = Standardwert
+#   $3 = kleinster erlaubter Wert   (Default 1)
+#   $4 = groesster erlaubter Wert   (Default: praktisch unbegrenzt)
+#   $5 = Bezeichnung fuer Meldungen (Default "Anzahl")
+# Das Ergebnis wird absichtlich ueber die globale Variable ZAHL_ANTWORT
+# zurueckgegeben und nicht per stdout: eine Command-Substitution wuerde sonst
+# auch den Prompt verschlucken, den der Benutzer sehen muss.
+# Enter uebernimmt den Standard, nicht-numerische und leere Werte fallen
+# kontrolliert zurueck, und ein Sicherheitsdeckel verhindert, dass ein
+# versehentliches 8000000 die komplette Konsole blockiert.
+frage_zahl() {
+    _fq_label="$1"
+    _fq_default="$2"
+    _fq_min="${3:-1}"
+    _fq_max="${4:-}"
+    _fq_einheit="${5:-Anzahl}"
+    case "$_fq_max" in
+        ''|*[!0-9]*) _fq_max=999999999 ;;
+    esac
+    case "$_fq_min" in
+        ''|*[!0-9]*) _fq_min=1 ;;
+    esac
+    if [ "$_fq_min" -le 0 ]; then
+        _fq_min=1
+    fi
+    printf "%s" "$_fq_label"
+    if ! IFS= read -r _fq_wert; then
+        _fq_wert=""
+    fi
+    _fq_wert="${_fq_wert:-$_fq_default}"
+    if ! is_number "$_fq_wert"; then
+        printf "${RED}'%s' ist keine Zahl - verwende Standardwert %s.${NC}\n" \
+            "$_fq_wert" "$_fq_default"
+        _fq_wert="$_fq_default"
+        sleep 1
+    elif [ "$_fq_wert" -lt "$_fq_min" ]; then
+        printf "${RED}%s muss groesser als %s sein - verwende Standardwert %s.${NC}\n" \
+            "$_fq_einheit" "$((_fq_min - 1))" "$_fq_default"
+        _fq_wert="$_fq_default"
+        sleep 1
+    elif [ "$_fq_wert" -gt "$_fq_max" ]; then
+        printf "${YELLOW}%s wird auf %s begrenzt.${NC}\n" "$_fq_einheit" "$_fq_max"
+        _fq_wert="$_fq_max"
+    fi
+    ZAHL_ANTWORT="$_fq_wert"
+}
+
+# Spezialfall fuer den Anzeigeumfang: Zeilenzahl mit Sicherheitsdeckel, damit
+# ein Tippfehler nicht die komplette Konsole blockiert.
+#   $1 = Beschriftung des Prompts, $2 = Standardwert (Default 200)
+frage_zeilen() {
+    _fzz_max="${WPS_MAX_LOG_LINES:-20000}"
+    case "$_fzz_max" in
+        ''|*[!0-9]*) _fzz_max=20000 ;;
+    esac
+    if [ "$_fzz_max" -le 0 ]; then
+        _fzz_max=20000
+    fi
+    frage_zahl "$1" "$2" 1 "$_fzz_max" "Anzahl"
+    ZEILEN_ANTWORT="$ZAHL_ANTWORT"
+}
+
 # Voraussetzungen einmal pruefen. Ohne python3/git ist der Manager nicht
 # arbeitsfaehig; curl/gzip werden nur fuer die Upload-Optionen gebraucht.
 preflight() {
@@ -810,8 +874,8 @@ while true; do
     printf -- "${BLUE}---------------------------------------------------------${NC}\n\n"
 
     printf "1) 📜   Live-Logs (tail -f, Strg+C beendet)\n"
-    printf "2) 📄   Last 200 log lines\n"
-    printf "3) ⚠️    Error Log (Last 200 lines)\n"
+    printf "2) 📄   Letzte Logzeilen (Standard 200, fragt nach Anzahl)\n"
+    printf "3) ⚠️    Letzte Error-Log-Zeilen (Standard 200, fragt nach Anzahl)\n"
     printf "4) 🚀   Update & Deploy (WPSteuerung)\n"
     printf "5) 🔄   Restart Service\n"
     printf "6) ⏹️    Stop Service\n"
@@ -849,7 +913,9 @@ while true; do
             ;;
         2)
             if [ -f "$LOG_FILE" ]; then
-                tail -n 200 "$LOG_FILE" | zeige
+                frage_zeilen "${CYAN}Wie viele Logzeilen anzeigen? (Enter = 200):${NC} " 200
+                printf -- "${CYAN}--- Letzte %s Zeilen: %s ---${NC}\n" "$ZEILEN_ANTWORT" "$LOG_FILE"
+                tail -n "$ZEILEN_ANTWORT" "$LOG_FILE" | zeige
             else
                 printf "${RED}Logdatei nicht gefunden: %s${NC}\n" "$LOG_FILE"
             fi
@@ -857,7 +923,9 @@ while true; do
             ;;
         3)
             if [ -f "$ERROR_LOG_FILE" ] && [ -s "$ERROR_LOG_FILE" ]; then
-                tail -n 200 "$ERROR_LOG_FILE" | zeige
+                frage_zeilen "${CYAN}Wie viele Error-Log-Zeilen anzeigen? (Enter = 200):${NC} " 200
+                printf -- "${CYAN}--- Letzte %s Fehlerzeilen: %s ---${NC}\n" "$ZEILEN_ANTWORT" "$ERROR_LOG_FILE"
+                tail -n "$ZEILEN_ANTWORT" "$ERROR_LOG_FILE" | zeige
             elif [ -f "$ERROR_LOG_FILE" ]; then
                 printf "${GREEN}error.log ist leer – keine Fehler!${NC}\n"
             else
@@ -913,35 +981,15 @@ while true; do
                 printf "${RED}Keine Eingabe, Abbruch.${NC}\n"
                 wait_for_key
             else
-                printf "${CYAN}Wieviele Zeilen? (Default 50):${NC} "
-                read log_lines
-                log_lines="${log_lines:-50}"
-                if ! is_number "$log_lines"; then
-                    printf "${RED}'%s' ist keine Zahl – verwende Standardwert 50.${NC}\n" "$log_lines"
-                    log_lines=50
-                    sleep 1
-                fi
-                query_logs_by_time "$log_target" "$log_lines"
+                frage_zeilen "${CYAN}Wieviele Zeilen? (Enter = 50):${NC} " 50
+                query_logs_by_time "$log_target" "$ZEILEN_ANTWORT"
             fi
             ;;
         12)
-            printf "${CYAN}Letzte wieviele Stunden anzeigen? (z.B. 2, 4, 24):${NC} "
-            read log_hours
-            log_hours="${log_hours:-2}"
-            if ! is_number "$log_hours"; then
-                printf "${RED}'%s' ist keine Zahl – verwende Standardwert 2.${NC}\n" "$log_hours"
-                log_hours=2
-                sleep 1
-            fi
-            printf "${CYAN}Wieviele Zeilen? (Default 200):${NC} "
-            read log_lines
-            log_lines="${log_lines:-200}"
-            if ! is_number "$log_lines"; then
-                printf "${RED}'%s' ist keine Zahl – verwende Standardwert 200.${NC}\n" "$log_lines"
-                log_lines=200
-                sleep 1
-            fi
-            query_logs_by_duration "$log_hours" "$log_lines"
+            frage_zahl "${CYAN}Letzte wieviele Stunden anzeigen? (z.B. 2, 4, 24 – Enter = 2):${NC} " 2 1 "" "Stundenzahl"
+            log_hours="$ZAHL_ANTWORT"
+            frage_zeilen "${CYAN}Wieviele Zeilen? (Enter = 200):${NC} " 200
+            query_logs_by_duration "$log_hours" "$ZEILEN_ANTWORT"
             ;;
         13)
             systemctl status wpsteuerung --no-pager -l 2>/dev/null \
@@ -967,14 +1015,8 @@ while true; do
                 printf "                alternativ Option 20 (Auto-Analyse) ausfuehren.\\n"
                 wait_for_key
             else
-                printf "${CYAN}Wie viele Zyklen anzeigen? (Default 20):${NC} "
-                read zyk_n
-                zyk_n="${zyk_n:-20}"
-                if ! is_number "$zyk_n"; then
-                    printf "${RED}'%s' ist keine Zahl – verwende Standardwert 20.${NC}\\n" "$zyk_n"
-                    zyk_n=20
-                    sleep 1
-                fi
+                frage_zeilen "${CYAN}Wie viele Zyklen anzeigen? (Enter = 20):${NC} " 20
+                zyk_n="$ZEILEN_ANTWORT"
                 printf "${CYAN}Zyklus-Historie: %s${NC}\\n" "$ZYKLEN_CSV"
                 # BOM (UTF-8-Signatur) bleibt als Spalte 1 sichtbar
                 if command -v column >/dev/null 2>&1; then

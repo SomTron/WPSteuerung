@@ -92,6 +92,38 @@ unter `.git/wp-manager-backups/<Zeitstempel>-<PID>/`:
 Es werden weder `git reset --hard` noch automatisches Stashen verwendet. Nach
 einer eigenen Commit-/Stash-Auflösung wird das Update erneut gestartet.
 
+### Zeilenanzahl bei den Log-Optionen
+
+Die Optionen `2` (Logzeilen) und `3` (Error-Log) zeigen **standardmaessig
+200 Zeilen**, fragen aber vorher nach einer anderen Anzahl:
+
+```text
+Choice: 2
+Wie viele Logzeilen anzeigen? (Enter = 200): 500
+--- Letzte 500 Zeilen: /var/log/wps/heizungssteuerung.log ---
+```
+
+Verhalten der Eingabe:
+
+| Eingabe | Wirkung |
+|---|---|
+| nur Enter | Standardwert (200) |
+| Zahl | wird uebernommen |
+| Text | Hinweis, Rueckfall auf den Standardwert |
+| `0` oder negativ | Hinweis, Rueckfall auf den Standardwert |
+| sehr gross | Begrenzung auf `WPS_MAX_LOG_LINES` (Default 20000) |
+| EOF / nicht-interaktiv | Standardwert, kein Leerwert |
+
+Dieselbe Eingabepruefung wird auch fuer die Stundenabfrage in Option `12`
+und die Zyklenzahl in Option `17` verwendet (`frage_zahl`). Es gibt damit
+nur eine Stelle mit Zahlenvalidierung im Manager.
+
+Optional:
+
+```sh
+WPS_MAX_LOG_LINES=5000    # Deckel fuer die angeforderte Zeilenzahl
+```
+
 ### Neue Optionen: Health und Analyse-Qualitaet
 
 | Option | Zweck |
