@@ -10,7 +10,7 @@ Die Regel hoechster Prioritaet bestimmt das Schaltverhalten.
 import logging
 import re
 import datetime as _datetime_module
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Callable
 
 from utils import safe_timedelta
@@ -262,12 +262,9 @@ def _pv_weiterlauf_block(state, gewinner, should_on: bool) -> bool:
 
 def _aktuelle_quellenbezeichnung(state) -> str:
     """Trennt PV-Erzeugung, Batterieentladung und Netzbezug im Status."""
-    pv = getattr(getattr(state, "solar", None), "acpower", 0)
-    battery = getattr(getattr(state, "solar", None), "batpower", 0)
-    if isinstance(pv, (int, float)) and pv > 0:
-        return "PV"
-    if isinstance(battery, (int, float)) and battery > 0:
-        return "Batterie"
+    source = getattr(getattr(state, "solar", None), "energy_source", None)
+    if source in {"PV", "Batterie", "Netz", "Daten stale", "keine Quelle"}:
+        return source
     return "Netz"
 
 
@@ -373,8 +370,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         hourly_forecast_watt = {h: w * pv_flaeche for h, w in hourly_mw2.items()}
 
     planned_date = getattr(state, "legionellen_planned_date", None)
-    if planned_date is not None and planned_date != datetime.now(state.local_tz).date():
-        _invalidate_legionellen_plan(state, "Geplanter Legionellen-Termin ist nicht heute")
+    planned_tag = getattr(state, "legionellen_planned_tag", None)
+    if not isinstance(planned_date, date):
+        planned_date = None
+    now_local = datetime.now(state.local_tz)
+    if planned_date is not None and planned_date < now_local.date():
+        _invalidate_legionellen_plan(state, "Geplanter Legionellen-Termin ist verstrichen")
         planned_date = None
 
     # Alle Regeln bewerten (mit effektiver Config)
@@ -477,8 +478,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             getattr(state.solar, "forecast_day2", None)
         ),
         wochenende_cfg=state.priority_config.wochenende,  # fuer Wochenende-Nachholung
-        legionellen_planned_tag=getattr(state, "legionellen_planned_tag", None),
-        legionellen_planned_date=getattr(state, "legionellen_planned_date", None),
+        legionellen_planned_tag=(
+            planned_tag if isinstance(planned_tag, int) and 0 <= planned_tag <= 6 else None
+        ),
+        legionellen_planned_date=planned_date,
     )
 
     # Ergebnisse loggen - KOMPAKT-MODUS (Empfehlung "Logvolumen reduzieren"):

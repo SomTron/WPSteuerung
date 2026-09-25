@@ -40,6 +40,11 @@ from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
 from cycle_logging import CYCLE_CSV, begin_cycle, ensure_cycle_csv, finish_cycle, update_cycle_maxima
 from legionellen_plan import clear_plan, load_plan, save_plan
+from energy_source import (
+    batterie_entladung_watt,
+    batterie_ladung_watt,
+    classify_energy_source,
+)
 from logic_utils import (
     check_log_throttle,
     evaluate_sommer_modus,
@@ -478,11 +483,38 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         state.solar.feedinpower = 0.0
         state.solar.batpower = 0.0
         state.solar.soc = 0.0
+        state.solar.battery_discharge_watt = 0.0
+        state.solar.battery_charge_watt = 0.0
     elif state.solar.last_api_data:
         state.solar.acpower = state.solar.last_api_data.get("acpower", 0)
         state.solar.feedinpower = state.solar.last_api_data.get("feedinpower", 0)
         state.solar.batpower = state.solar.last_api_data.get("batPower", 0)
         state.solar.soc = state.solar.last_api_data.get("soc", 0)
+        state.solar.battery_discharge_watt = batterie_entladung_watt(state.solar.batpower) or 0.0
+        state.solar.battery_charge_watt = batterie_ladung_watt(state.solar.batpower) or 0.0
+    else:
+        state.solar.acpower = 0.0
+        state.solar.feedinpower = 0.0
+        state.solar.batpower = 0.0
+        state.solar.soc = 0.0
+        state.solar.battery_discharge_watt = 0.0
+        state.solar.battery_charge_watt = 0.0
+
+    cfg = getattr(getattr(state, "priority_config", None), "batterie", None)
+    source_status = classify_energy_source(
+        pv_acpower=state.solar.acpower,
+        feedin_watt=state.solar.feedinpower,
+        battery_discharge_watt=state.solar.battery_discharge_watt,
+        soc=state.solar.soc,
+        solar_stale=not frisch,
+        pv_min_watt=float(getattr(cfg, "pv_einspeisung_min_watt", 50.0)),
+        battery_min_watt=float(getattr(cfg, "min_batterieleistung_watt", 50.0)),
+        soc_min_prozent=float(getattr(cfg, "min_soc_prozent", 90.0)),
+        max_netzkauf_watt=float(getattr(cfg, "max_netzbezug_watt", -50.0)),
+    )
+    state.solar.energy_source = source_status.quelle.value
+    state.energy_source_detail = source_status.begruendung
+
 
 def track_api_error(state, api_name: str, error_type: str):
     """Zeichnet einen API-Fehler im State auf fuer das Health-Monitoring."""

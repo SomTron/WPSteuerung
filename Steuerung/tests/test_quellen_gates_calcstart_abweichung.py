@@ -81,7 +81,8 @@ class TestCalcStartQuellenGate:
     def test_spaetest_start_wird_aus_heizzeit_berechnet(self):
         """Ohne Quelle erst am errechneten Spatest-Start (buffer <= Puffer)."""
         erg = evaluate_calculated_start(
-            _calc_cfg(), _temps(), 16, 0, feedin_watt=0.0, soc=None,
+            _calc_cfg(netz_fallback_erlaubt=True), _temps(), 16, 0,
+            feedin_watt=0.0, soc=None,
         )  # brauche 1.0h bis 17:00, Restpuffer 0.0h <= 0.5h
         assert erg.einschalten is True
         assert "SPAETEST" in erg.grund
@@ -96,21 +97,23 @@ class TestCalcStartQuellenGate:
 
     def test_zu_spaet_notfall_bleibt(self):
         erg = evaluate_calculated_start(
-            _calc_cfg(), _temps(), 16, 59, feedin_watt=0.0, soc=None,
+            _calc_cfg(netz_fallback_erlaubt=True), _temps(), 16, 59,
+            feedin_watt=0.0, soc=None,
         )
         assert erg.einschalten is True
         assert "ZU SPAET" in erg.grund
 
     def test_batterie_als_fruehquelle(self):
         erg = evaluate_calculated_start(
-            _calc_cfg(), _temps(), 16, 0, feedin_watt=-20.0, soc=92.0,
+            _calc_cfg(netz_fallback_erlaubt=True), _temps(), 16, 0,
+            feedin_watt=-20.0, soc=92.0, battery_power=100.0,
         )
         assert erg.einschalten is True
         assert "[Batterie" in erg.grund
 
     def test_spaetstart_puffer_konfigurierbar(self):
         erg = evaluate_calculated_start(
-            _calc_cfg(spaetstart_puffer_h=2.0), _temps(), 14, 0,
+            _calc_cfg(spaetstart_puffer_h=2.0, netz_fallback_erlaubt=True), _temps(), 14, 0,
             feedin_watt=0.0, soc=None,
         )  # Restpuffer 2.0h <= 2.0h -> Spatest-Start greift frueher
         assert erg.einschalten is True
@@ -122,8 +125,11 @@ class TestCalcStartVerdrahtung:
 
     @staticmethod
     def _ergebnisse(feedin, soc):
+        config = WPSteuerungConfig()
+        # Der Test prueft den expliziten Netzfallback der Zapfgarantie.
+        config.calculated_start.netz_fallback_erlaubt = True
         _gewinner, alle = bewerte_alle_regeln(
-            config=WPSteuerungConfig(),
+            config=config,
             temp_dict={"oben": 45.0, "mittig": 43.0, "unten": 41.0},
             pv_leistung=feedin,
             kompressor_ein=False,
@@ -141,7 +147,7 @@ class TestCalcStartVerdrahtung:
     def test_feedin_durchgereicht_fruehstart_mit_quelle(self):
         cs = self._ergebnisse(feedin=100.0, soc=95.0)
         assert cs.einschalten is True
-        assert "[PV 100W" in cs.grund
+        assert "PV-Erzeugung 100W" in cs.grund
 
 
 # ─────────────────────────── Abweichung ───────────────────────────
@@ -199,7 +205,11 @@ class TestAbweichungQuellenGate:
         assert erg.grund.endswith("-> EIN")
 
     def test_batterie_als_quelle(self):
-        erg = _abw_rufe(33.0, feedin=-20.0, soc=90.0)
+        erg = evaluate_abweichung(
+            _abw_cfg(), {"oben": 35.0, "mittig": 34.0, "unten": 33.0},
+            False, 12, 19, 8, feedin_watt=-20.0, soc=90.0,
+            battery_power=100.0,
+        )
         assert erg.einschalten is True
 
     def test_batterie_mit_netzkauf_zaehlt_nicht(self):

@@ -197,7 +197,7 @@ def test_legionellen_start_erfordert_pv_oder_batterie():
     assert "mit PV" in mit_pv.grund
 
     mit_batterie = evaluate_legionellen(
-        cfg, temps, now, battery_power=50.0, soc=90.0
+        cfg, temps, now, pv_leistung=0.0, battery_power=50.0, soc=90.0
     )
     assert mit_batterie.einschalten is True
     assert "mit Batterie" in mit_batterie.grund

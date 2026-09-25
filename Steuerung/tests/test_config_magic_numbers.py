@@ -113,7 +113,8 @@ def _baue_state(bademodus, erhoehung):
         solar=SimpleNamespace(
             # PV als Quelle fuer das Abweichungs-Gate, aber SOC niedrig, damit
             # die Batterie-Regel (Prio 75) nicht dazwischen gewinnt
-            feedinpower=100, batpower=0, soc=0, forecast_today=None, forecast_tomorrow=None,
+            acpower=100, feedinpower=100, batpower=0, soc=0, forecast_today=None, forecast_tomorrow=None,
+            last_api_call=TZ.localize(datetime(2025, 6, 11, 17, 55)),
         ),
         control=SimpleNamespace(
             kompressor_ein=False,

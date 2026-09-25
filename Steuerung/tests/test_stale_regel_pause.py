@@ -52,6 +52,10 @@ def test_stale_hochpriorisierte_regel_wird_nicht_gewinner():
     config = baue_config()
     config.batterie.aktiv = True
     config.komfort.komfort_einschalten_bei_c = 0.0
+    # Tiefenschutz der Abweichungsregel bleibt auch bei stale Solar-Daten
+    # als Netzgarantie aktiv; 36C liegt mit diesem Offset exakt am Grenzwert.
+    config.abweichung.netz_notfall_offset_k = 4.0
+    config.abweichung.schichtung_erlaube_start = True
     temp = {"oben": 43.0, "mittig": 42.0, "unten": 36.0}
 
     gewinner, alle = pc.bewerte_alle_regeln(

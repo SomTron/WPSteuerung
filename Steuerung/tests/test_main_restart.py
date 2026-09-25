@@ -19,18 +19,19 @@ def _state():
 
 def test_restore_persisted_compressor_pause_aus_snapshot(tmp_path, monkeypatch):
     snapshot = tmp_path / "last_state.txt"
+    tz = pytz.timezone("Europe/Berlin")
+    snapshot_time = datetime.now(tz) - timedelta(minutes=5)
+    off_time = datetime.now(tz) - timedelta(minutes=10)
     snapshot.write_text(
-        "2026-09-24 07:00:00 | Komp=AUS | Regel=Keine Regel aktiv | "
-        "Blocking=- | AUS_seit=2026-09-24 06:55:00 | T_oben=48.0\n",
+        f"{snapshot_time:%Y-%m-%d %H:%M:%S} | Komp=AUS | Regel=Keine Regel aktiv | "
+        f"Blocking=- | AUS_seit={off_time:%Y-%m-%d %H:%M:%S} | T_oben=48.0\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(main, "LAST_STATE_FILE", str(snapshot))
     state = _state()
 
     assert main.restore_persisted_compressor_pause(state) is True
-    assert state.stats.last_compressor_off_time == pytz.timezone(
-        "Europe/Berlin"
-    ).localize(datetime(2026, 9, 24, 6, 55))
+    assert state.stats.last_compressor_off_time == off_time.replace(microsecond=0)
 
 
 def test_restore_persisted_compressor_pause_ignoriert_alten_snapshot(tmp_path, monkeypatch):

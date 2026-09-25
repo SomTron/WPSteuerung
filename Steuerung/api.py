@@ -778,6 +778,10 @@ def get_status():
         "mode": build_mode_payload(shared_state),
         "energy": {
             "battery_power": shared_state.solar.batpower,
+            "battery_discharge_watt": getattr(shared_state.solar, "battery_discharge_watt", None),
+            "battery_charge_watt": getattr(shared_state.solar, "battery_charge_watt", None),
+            "energy_source": getattr(shared_state.solar, "energy_source", None),
+            "energy_source_detail": getattr(shared_state, "energy_source_detail", None),
             "soc": shared_state.solar.soc,
             "feed_in": shared_state.solar.feedinpower,
             "ac_power": getattr(shared_state.solar, 'acpower', None),

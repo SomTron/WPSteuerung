@@ -7,11 +7,14 @@ deren Bedingungen erfüllt sind, gewinnt.
 """
 
 import logging
-import math
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
 from rule_types import RegelErgebnis
 
+from energy_source import (
+    batterie_entladung_watt,
+    classify_energy_source,
+)
 from json_config import (
     WPSteuerungConfig,
     PVRegel,
@@ -360,9 +363,10 @@ def evaluate_batterie(
         result.grund = "SOC nicht verfuegbar"
         return result
     min_batpower = max(float(getattr(batt_cfg, "min_batterieleistung_watt", 0.0) or 0.0), 0.0)
-    if battery_power is None or battery_power < min_batpower:
+    discharge = batterie_entladung_watt(battery_power)
+    if discharge is None or discharge < min_batpower:
         result.grund = (
-            f"Batterie: Leistung {battery_power if battery_power is not None else 'n/a'}W "
+            f"Batterie: Entladung {discharge if discharge is not None else 'n/a'}W "
             f"< {min_batpower:.0f}W (keine Entladung nachgewiesen)"
         )
         return result
@@ -396,13 +400,18 @@ def evaluate_batterie(
     soc_schwelle = eff_min_soc
     if kompressor_ein:
         soc_schwelle -= max(getattr(batt_cfg, "soc_hysterese_prozent", 2.0), 0.0)
-    strom_ok = soc >= soc_schwelle and feedin_watt >= batt_cfg.max_netzbezug_watt
+    strom_ok = (
+        soc >= soc_schwelle
+        and discharge is not None
+        and discharge >= min_batpower
+        and feedin_watt >= batt_cfg.max_netzbezug_watt
+    )
     if kompressor_ein and strom_ok and temp > batt_cfg.einschalten_bei_c:
         result.einschalten = True
         result.grund = (
             f"Batterie-Weiterlauf: SOC {soc:.0f}% >= {eff_min_soc:.0f}%, "
             f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
-            f"Batterie {battery_power:.0f}W, {batt_cfg.temperaturfuehler} {temp:.1f}C"
+            f"Entladung {discharge:.0f}W, {batt_cfg.temperaturfuehler} {temp:.1f}C"
         )
         return result
     if strom_ok and temp <= batt_cfg.einschalten_bei_c:
@@ -410,15 +419,15 @@ def evaluate_batterie(
         result.grund = (
             f"Batterie: SOC {soc:.0f}% >= {eff_min_soc:.0f}%, "
             f"Einspeisung {feedin_watt:.0f}W >= {batt_cfg.max_netzbezug_watt:.0f}W, "
-            f"Batterie {battery_power:.0f}W, {batt_cfg.temperaturfuehler} {temp:.1f}C -> EIN"
+            f"Entladung {discharge:.0f}W, {batt_cfg.temperaturfuehler} {temp:.1f}C -> EIN"
         )
         return result
     if soc < soc_schwelle:
         result.grund = f"Batterie: SOC {soc:.0f}% < {soc_schwelle:.0f}% (Schonung)"
     elif feedin_watt < batt_cfg.max_netzbezug_watt:
         result.grund = f"Batterie: Netzbezug {feedin_watt:.0f}W < {batt_cfg.max_netzbezug_watt:.0f}W (kein Netzstrom!)"
-    elif battery_power < min_batpower:
-        result.grund = f"Batterie: Leistung {battery_power:.0f}W < {min_batpower:.0f}W"
+    elif discharge < min_batpower:
+        result.grund = f"Batterie: Entladung {discharge:.0f}W < {min_batpower:.0f}W"
     else:
         result.grund = f"Batterie: {temp:.1f}C in Hysterese ({batt_cfg.einschalten_bei_c}-{batt_cfg.ausschalten_bei_c}C)"
     return result
@@ -721,6 +730,9 @@ def evaluate_abweichung(
     bademodus_aktiv: bool = False,
     forecast_today_wh_qm: Optional[float] = None,
     fc_ratio: float = 1.0,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    solar_stale: bool = False,
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: haelt den Boiler auf Solltemperatur (Komfort-Boden).
@@ -801,6 +813,10 @@ def evaluate_abweichung(
                 getattr(abw, "pv_einspeisung_min_watt", 50.0),
                 getattr(abw, "soc_min_prozent", 90.0),
                 getattr(abw, "max_netzbezug_watt", -50.0),
+                pv_acpower=pv_acpower,
+                battery_power=battery_power,
+                battery_min_watt=getattr(abw, "batterie_entladung_min_watt", 50.0),
+                solar_stale=solar_stale,
             )
         ):
             eff = _forecast_effektiv_wh_qm(forecast_today_wh_qm, fc_ratio)
@@ -821,19 +837,61 @@ def evaluate_abweichung(
                 erlaube = getattr(abw, "schichtung_erlaube_start", False)
                 steig = max(getattr(abw, "schichtung_max_steig_k", 1.0), 0.1)
                 if erlaube:
-                    # Warmstart: einschalten erlaubt, aber oben darf nur um
-                    # schichtung_max_steig_k (Standard 1 K) steigen.
+                    quelle_ok, quelle_grund = _energiequelle_mit_grund(
+                        feedin_watt,
+                        soc,
+                        getattr(abw, "pv_einspeisung_min_watt", 50.0),
+                        getattr(abw, "soc_min_prozent", 90.0),
+                        getattr(abw, "max_netzbezug_watt", -50.0),
+                        pv_acpower=pv_acpower,
+                        battery_power=battery_power,
+                        battery_min_watt=getattr(abw, "batterie_entladung_min_watt", 50.0),
+                        solar_stale=solar_stale,
+                    )
+                    netz_erlaubt = getattr(
+                        abw, "schichtung_netz_fallback_erlaubt", False
+                    )
+                    if not quelle_ok and not netz_erlaubt:
+                        tief_grenze = abw.solltemperatur_c - max(
+                            getattr(abw, "netz_notfall_offset_k", 8.0), 0.0
+                        )
+                        if temp > tief_grenze:
+                            result.einschalten = None
+                            result.grund = (
+                                f"oben {temp_oben:.1f}C warm, Schichtungs-Start verlangt "
+                                f"PV/Batterie: {quelle_grund}"
+                            )
+                            return result
+                        # Tiefenschutz bleibt auch im Schichtungs-Warmstart
+                        # fail-safe erhalten; nur unterhalb der Notfallgrenze.
+                        result.einschalten = True
+                        result.regel_dict = {
+                            "schichtung_oben_max": temp_oben + steig,
+                            "schichtung_oben_start": temp_oben,
+                            "schichtung_max_steig_k": steig,
+                            "schichtung_netz_fallback": True,
+                        }
+                        result.grund = (
+                            f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                            f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                            f"oben {temp_oben:.1f}C warm, Tiefenschutz <= {tief_grenze:.1f}C "
+                            f"-> EIN mit Netz; Obergrenze oben {temp_oben + steig:.1f}C"
+                        )
+                        return result
+                    # Netzfallback ist nur durch die explizite Option aktiv.
                     result.einschalten = True
                     result.regel_dict = {
                         "schichtung_oben_max": temp_oben + steig,
                         "schichtung_oben_start": temp_oben,
                         "schichtung_max_steig_k": steig,
+                        "schichtung_netz_fallback": not quelle_ok,
                     }
                     result.grund = (
                         f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
                         f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
-                        f"oben {temp_oben:.1f}C warm, Schichtungs-Start erlaubt "
-                        f"(Obergrenze oben {temp_oben + steig:.1f}C) -> EIN"
+                        f"oben {temp_oben:.1f}C warm, Schichtungs-Start "
+                        f"({quelle_grund if quelle_ok else 'Netzfallback explizit erlaubt'}) "
+                        f"-> EIN; Obergrenze oben {temp_oben + steig:.1f}C"
                     )
                     return result
                 else:
@@ -858,6 +916,10 @@ def evaluate_abweichung(
                 getattr(abw, "pv_einspeisung_min_watt", 50.0),
                 getattr(abw, "soc_min_prozent", 90.0),
                 getattr(abw, "max_netzbezug_watt", -50.0),
+                pv_acpower=pv_acpower,
+                battery_power=battery_power,
+                battery_min_watt=getattr(abw, "batterie_entladung_min_watt", 50.0),
+                solar_stale=solar_stale,
             ):
                 result.einschalten = None
                 result.grund = (
@@ -908,13 +970,24 @@ def _energiequelle_ok(
     pv_min_watt: float,
     soc_min_prozent: float,
     max_netzkauf_watt: float,
+    *,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    battery_min_watt: float = 50.0,
+    solar_stale: bool = False,
 ) -> bool:
-    """PV-Direkt oder volle Hausbatterie ohne nennenswerten Netzkauf."""
-    if feedin_watt >= pv_min_watt:
-        return True
-    return (
-        soc is not None and soc >= soc_min_prozent and feedin_watt >= max_netzkauf_watt
-    )
+    """Gemeinsames Gate: PV oder echte Batterieentladung ohne Netzkauf."""
+    return classify_energy_source(
+        pv_acpower=pv_acpower,
+        feedin_watt=feedin_watt,
+        battery_discharge_watt=battery_power,
+        soc=soc,
+        solar_stale=solar_stale,
+        pv_min_watt=pv_min_watt,
+        battery_min_watt=battery_min_watt,
+        soc_min_prozent=soc_min_prozent,
+        max_netzkauf_watt=max_netzkauf_watt,
+    ).ist_erneuerbar
 
 
 def _energiequelle_mit_grund(
@@ -923,15 +996,25 @@ def _energiequelle_mit_grund(
     pv_min_watt: float,
     soc_min_prozent: float,
     max_netzkauf_watt: float,
+    *,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    battery_min_watt: float = 50.0,
+    solar_stale: bool = False,
 ) -> tuple:
-    """Wie _energiequelle_ok, aber mit lesbarem Grund (fuer Regel-Logs)."""
-    if feedin_watt >= pv_min_watt:
-        return True, f"PV {feedin_watt:.0f}W >= {pv_min_watt:.0f}W"
-    if soc is None:
-        return False, "SOC keine Daten"
-    if soc >= soc_min_prozent and feedin_watt >= max_netzkauf_watt:
-        return True, f"Batterie SOC {soc:.0f}% >= {soc_min_prozent:.0f}%"
-    return False, f"SOC {soc:.0f}% < {soc_min_prozent:.0f}%"
+    """Wie _energiequelle_ok, aber mit stabiler Quelle und lesbarem Grund."""
+    status = classify_energy_source(
+        pv_acpower=pv_acpower,
+        feedin_watt=feedin_watt,
+        battery_discharge_watt=battery_power,
+        soc=soc,
+        solar_stale=solar_stale,
+        pv_min_watt=pv_min_watt,
+        battery_min_watt=battery_min_watt,
+        soc_min_prozent=soc_min_prozent,
+        max_netzkauf_watt=max_netzkauf_watt,
+    )
+    return status.ist_erneuerbar, f"{status.quelle.value}: {status.begruendung}"
 
 
 def _mittagstief_stunden(
@@ -968,6 +1051,10 @@ def _forecast_quelle_ok(
     forecast_cfg: ForecastConfig,
     feedin_watt: float,
     soc: Optional[float],
+    *,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    solar_stale: bool = False,
 ) -> tuple:
     """Energie-Quelle fuer das Vorheizen: PV-Direkt vor Batterie.
 
@@ -982,6 +1069,12 @@ def _forecast_quelle_ok(
         getattr(forecast_cfg, "pv_einspeisung_min_watt", 50.0),
         getattr(forecast_cfg, "soc_min_prozent", 90.0),
         getattr(forecast_cfg, "vorheiz_max_netzbezug_watt", -50.0),
+        pv_acpower=pv_acpower,
+        battery_power=battery_power,
+        battery_min_watt=getattr(
+            forecast_cfg, "batterie_entladung_min_watt", 50.0
+        ),
+        solar_stale=solar_stale,
     )
 
 
@@ -994,6 +1087,9 @@ def evaluate_forecast(
     nachtsperre_ende: int = 8,
     feedin_watt: float = 0.0,
     soc: Optional[float] = None,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    solar_stale: bool = False,
 ) -> RegelErgebnis:
     """
     Prognose-Regel: Vorheizen bei schlechter Solar-Prognose, sparen bei guter.
@@ -1035,7 +1131,10 @@ def evaluate_forecast(
         if forecast_cfg.vorheiz_start_uhr <= now_hour < forecast_cfg.vorheiz_ende_uhr:
             if temp <= forecast_cfg.t_vorheiz_ab_c:
                 quelle_ok, quelle_grund = _forecast_quelle_ok(
-                    forecast_cfg, feedin_watt, soc
+                    forecast_cfg, feedin_watt, soc,
+                    pv_acpower=pv_acpower,
+                    battery_power=battery_power,
+                    solar_stale=solar_stale,
                 )
                 if not quelle_ok:
                     # Keine akzeptierte Quelle (weder PV noch volle Batterie):
@@ -1200,6 +1299,9 @@ def evaluate_calculated_start(
     fc_ratio: float = 1.0,
     surplus_profile: Optional[Dict[str, float]] = None,
     recent_usage_events: Optional[List[Dict]] = None,
+    pv_acpower: Optional[float] = None,
+    battery_power: Optional[float] = None,
+    solar_stale: bool = False,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -1373,10 +1475,30 @@ def evaluate_calculated_start(
         getattr(calc_cfg, "pv_einspeisung_min_watt", 50.0),
         getattr(calc_cfg, "soc_min_prozent", 90.0),
         getattr(calc_cfg, "max_netzbezug_watt", -50.0),
+        pv_acpower=pv_acpower,
+        battery_power=battery_power,
+        battery_min_watt=getattr(calc_cfg, "batterie_entladung_min_watt", 50.0),
+        solar_stale=solar_stale,
     )
 
     if buffer_hours < 0:
-        # Bereits ueber Zielzeit oder zu spaet -> sofort heizen!
+        # Bereits ueber Zielzeit oder zu spaet -> sofort heizen.
+        # Netzfallback ist nur erlaubt, wenn explizit aktiviert und ab der
+        # konfigurierten Uhrzeit freigegeben; sonst bleibt die Zapf-Garantie
+        # sichtbar, aber die Regel wartet auf eine freigegebene Quelle.
+        notfall_grenze = float(getattr(calc_cfg, "notfall_unten_c", 32.0))
+        netzfallback_ok = (
+            bool(getattr(calc_cfg, "netz_fallback_erlaubt", False))
+            and now_hour >= int(getattr(calc_cfg, "netz_fallback_ab_uhr", 12))
+        )
+        if not quelle_ok and not netzfallback_ok and temp_unten > notfall_grenze:
+            result.einschalten = None
+            result.grund = (
+                f"CalcStart: ZU SPAET ({time_left:.1f}h < {hours_needed:.1f}h), "
+                f"aber Netzfallback ist deaktiviert; warte auf PV/Batterie "
+                f"({quelle_grund})"
+            )
+            return result
         result.einschalten = True
         result.grund = (
             f"CalcStart: ZU SPAET! Zeitablauf ({time_left:.1f}h < {hours_needed:.1f}h) "
@@ -1395,9 +1517,20 @@ def evaluate_calculated_start(
         return result
 
     if buffer_hours <= getattr(calc_cfg, "spaetstart_puffer_h", 0.5):
-        # Errechneter SPAETEST-START: Zielzeit minus berechnete Heizzeit minus
-        # Sicherheitspuffer. Ab hier droht die Zapf-Garantie - heizen notfalls
-        # auch ohne PV/Batterie (dann eben mit Netz).
+        # Errechneter SPAETEST-START: Netzfallback nur explizit und zeitlich
+        # freigegeben; sonst wartet die Regel auf PV/Batterie.
+        netzfallback_ok = (
+            bool(getattr(calc_cfg, "netz_fallback_erlaubt", False))
+            and now_hour >= int(getattr(calc_cfg, "netz_fallback_ab_uhr", 12))
+        )
+        if not quelle_ok and not netzfallback_ok:
+            result.einschalten = None
+            result.grund = (
+                f"CalcStart: SPAETEST-START ({buffer_hours:.1f}h Restpuffer), "
+                f"aber Netzfallback ist deaktiviert; warte auf PV/Batterie "
+                f"({quelle_grund})"
+            )
+            return result
         result.einschalten = True
         dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
         result.grund = (
@@ -1436,42 +1569,21 @@ def _fmt_quelle(value) -> str:
 
 
 def _legionellen_quelle_status(cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower=None):
-    """Prüft aktuelle PV-Erzeugung ODER ausreichend entladene Batterie.
-
-    ``pv_leistung`` bleibt die Netzeinspeisung für die übrigen Regeln.
-    Für die Legionellenfahrt wird bevorzugt die aktuelle AC-PV-Erzeugung
-    verwendet; der Fallback dient nur alten Test-/In-Memory-States.
-    """
-    if solar_stale:
-        return False, "Solardaten veraltet"
-    pv_signal = pv_acpower if pv_acpower is not None else pv_leistung
-    pv_min = float(getattr(cfg, "pv_start_min_watt", 50.0))
-    batt_min = float(getattr(cfg, "batterie_start_min_watt", 50.0))
-    soc_min = float(getattr(cfg, "batterie_start_min_soc_prozent", 90.0))
-    pv_ok = (
-        isinstance(pv_signal, (int, float))
-        and not isinstance(pv_signal, bool)
-        and math.isfinite(float(pv_signal))
-        and float(pv_signal) >= pv_min
+    """Prüft PV/Batterie anhand derselben zentralen Quellenlogik."""
+    status = classify_energy_source(
+        pv_acpower=pv_acpower,
+        feedin_watt=pv_leistung,
+        battery_discharge_watt=battery_power,
+        soc=soc,
+        solar_stale=solar_stale,
+        pv_min_watt=float(getattr(cfg, "pv_start_min_watt", 500.0)),
+        battery_min_watt=float(getattr(cfg, "batterie_start_min_watt", 50.0)),
+        soc_min_prozent=float(getattr(cfg, "batterie_start_min_soc_prozent", 90.0)),
+        max_netzkauf_watt=float(getattr(cfg, "max_netzbezug_watt", -50.0)),
     )
-    batterie_ok = (
-        isinstance(battery_power, (int, float))
-        and not isinstance(battery_power, bool)
-        and math.isfinite(float(battery_power))
-        and float(battery_power) >= batt_min
-        and isinstance(soc, (int, float))
-        and not isinstance(soc, bool)
-        and math.isfinite(float(soc))
-        and float(soc) >= soc_min
-    )
-    if pv_ok:
-        return True, "PV"
-    if batterie_ok:
-        return True, "Batterie"
-    return False, (
-        f"PV-Erzeugung {_fmt_quelle(pv_signal)}W < {pv_min:.0f}W, "
-        f"Batterie {_fmt_quelle(battery_power)}W/{_fmt_quelle(soc)}% < {batt_min:.0f}W/{soc_min:.0f}%"
-    )
+    if status.ist_erneuerbar:
+        return True, status.quelle.value
+    return False, f"{status.quelle.value}: {status.begruendung}"
 
 
 def evaluate_legionellen(
@@ -1572,11 +1684,19 @@ def evaluate_legionellen(
         int(legionellen_cfg.bevorzugter_tag),
         int(legionellen_cfg.letzter_tag) + 1,
     )
-    if legionellen_planned_date is not None and now.date() != legionellen_planned_date:
+    if legionellen_planned_date is not None and now.date() < legionellen_planned_date:
         result.aktiv = True
         result.einschalten = None
         result.grund = (
-            f"Legionellen: geplanter Termin {legionellen_planned_date} ist nicht heute; "
+            f"Legionellen: geplanter Termin {legionellen_planned_date} liegt in der Zukunft; "
+            "warte auf den Plan"
+        )
+        return result
+    if legionellen_planned_date is not None and now.date() > legionellen_planned_date:
+        result.aktiv = True
+        result.einschalten = None
+        result.grund = (
+            f"Legionellen: geplanter Termin {legionellen_planned_date} ist verstrichen; "
             "Forecast-Plan verwerfen"
         )
         return result
@@ -1848,6 +1968,9 @@ def bewerte_alle_regeln(
         bademodus_aktiv=bademodus_aktiv,
         forecast_today_wh_qm=forecast_today_wh_qm,
         fc_ratio=fc_ratio,
+        pv_acpower=pv_acpower,
+        battery_power=battery_power,
+        solar_stale=solar_stale,
     )
     ergebnisse.append(ergebnis)
 
@@ -1861,6 +1984,9 @@ def bewerte_alle_regeln(
         nachtsperre_ende,
         feedin_watt=pv_leistung,
         soc=soc,
+        pv_acpower=pv_acpower,
+        battery_power=battery_power,
+        solar_stale=solar_stale,
     )
     ergebnisse.append(ergebnis)
 
@@ -1896,6 +2022,9 @@ def bewerte_alle_regeln(
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profile,
         recent_usage_events=recent_usage_events,
+        pv_acpower=pv_acpower,
+        battery_power=battery_power,
+        solar_stale=solar_stale,
     )
     ergebnisse.append(ergebnis)
 

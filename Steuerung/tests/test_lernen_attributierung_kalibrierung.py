@@ -216,7 +216,7 @@ class TestCalcstartMittagstief:
     def test_mittagstief_verfrueht_den_spaetest_start(self):
         """Tief um 15 Uhr -> 15-Uhr-Stunde zaehlt nur 75% -> frueher EIN."""
         erg = evaluate_calculated_start(
-            _calc_cfg(), TEMPS, 14, 45,
+            _calc_cfg(netz_fallback_erlaubt=True), TEMPS, 14, 45,
             surplus_profile={"15": 100.0},
         )
         assert erg.einschalten is True

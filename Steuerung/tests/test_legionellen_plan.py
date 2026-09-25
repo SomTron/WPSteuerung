@@ -80,6 +80,25 @@ def test_plan_roundtrip_und_clear_ist_idempotent(tmp_path, monkeypatch):
     assert restored.legionellen_plan_revision == 1
 
 
+def test_verstrichener_plan_wird_wirklich_geloescht(tmp_path, monkeypatch):
+    path = str(tmp_path / "legionellen_plan.json")
+    monkeypatch.setattr(legionellen_plan, "PLAN_FILE", path)
+    state = _state()
+    state.legionellen_planned_day = "Freitag"
+    state.legionellen_planned_tag = 4
+    state.legionellen_planned_time = "08:00"
+    state.legionellen_planned_date = datetime(2025, 1, 1).date()
+    state.legionellen_planned_forecast_wh = 2500.0
+    state.legionellen_plan_created_at = datetime(2025, 1, 1)
+    assert legionellen_plan.save_plan(state, path=path) is True
+
+    restored = _state()
+    assert legionellen_plan.load_plan(restored, path=path) is False
+    assert restored.legionellen_planned_date is None
+    assert restored.legionellen_planned_tag is None
+
+
+
 def test_legionellen_start_und_probezeit_werden_nach_hardware_start_gepflegt():
     import asyncio
 

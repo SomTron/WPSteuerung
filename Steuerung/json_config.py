@@ -332,8 +332,8 @@ class AbweichungConfig(BaseModel):
     ausschalten_bei_abweichung_k: float = Field(default=0.5, description="Ausschalten bei Abweichung <= (K)")
     schichtung_min_oben_c: float = Field(default=42.0, description="2-Zonen-Schichtungs-Check: Nicht einschalten wenn oben >= (°C), vermeidet Netzstrom-Start bei Zapfen")
     schichtung_erlaube_start: bool = Field(
-        default=True,
-        description=("True = auch bei warmem Ober (oben >= schichtung_min_oben_c) "
+        default=False,
+        description=("False = fail-safe: bei warmem Ober (oben >= schichtung_min_oben_c) "
                      "darf eingeschaltet werden, wenn unten deutlich zu kalt. "
                      "Dass die obere Schicht weiter steigt, wird ueber "
                      "schichtung_max_steig_k begrenzt (Handle in handle_compressor_off). "
@@ -358,9 +358,16 @@ class AbweichungConfig(BaseModel):
     soc_min_prozent: float = Field(
         default=90.0, description="...oder Hausbatterie mindestens so voll (%)",
     )
+    batterie_entladung_min_watt: float = Field(
+        default=50.0, description="Als Quelle zaehlt echte Batterieentladung ab (W)",
+    )
     max_netzbezug_watt: float = Field(
         default=-50.0,
         description="Batterie-Quelle nur solange Einspeisung >= Wert (kein Netzkauf)",
+    )
+    schichtung_netz_fallback_erlaubt: bool = Field(
+        default=False,
+        description="Warmstart bei warmer oberer Schicht nur mit Netz, wenn explizit erlaubt",
     )
     netz_notfall_offset_k: float = Field(
         default=8.0,
@@ -425,6 +432,9 @@ class ForecastConfig(BaseModel):
     soc_min_prozent: float = Field(
         default=90.0,
         description="...oder Hausbatterie mindestens so voll (%)",
+    )
+    batterie_entladung_min_watt: float = Field(
+        default=50.0, description="Vorheizen mit Batterie erst ab dieser Entladung (W)",
     )
     vorheiz_max_netzbezug_watt: float = Field(
         default=-50.0,
@@ -506,6 +516,18 @@ class CalculatedStartConfig(BaseModel):
         default=-50.0,
         description="Batterie-Quelle nur solange Einspeisung >= Wert (kein Netzkauf)",
     )
+    batterie_entladung_min_watt: float = Field(
+        default=50.0, description="Fruehstart mit Batterie erst ab dieser Entladung (W)",
+    )
+    netz_fallback_erlaubt: bool = Field(
+        default=False, description="Spaetest-/Notfallstart im Zielbereich mit Netz erlauben",
+    )
+    netz_fallback_ab_uhr: int = Field(
+        default=12, description="Netzfallback fruehestens ab dieser Stunde (0-23)",
+    )
+    notfall_unten_c: float = Field(
+        default=32.0, description="Unter dieser Temperatur bleibt der Notfallstart mit Netz erlaubt (C)",
+    )
     spaetstart_puffer_h: float = Field(
         default=0.5,
         description="Sicherheitszuschlag (h) auf die berechnete Heizzeit fuer den Spaetest-Start ohne Quelle",
@@ -521,6 +543,10 @@ class CalculatedStartConfig(BaseModel):
             raise ValueError("calculated_start: solltemperatur_c ausserhalb 20-55 C")
         if self.tmax_c <= self.solltemperatur_c:
             raise ValueError("calculated_start: tmax_c muss ueber solltemperatur_c liegen")
+        if not (0 <= self.netz_fallback_ab_uhr <= 23):
+            raise ValueError("calculated_start: netz_fallback_ab_uhr ausserhalb 0-23")
+        if not (-50.0 <= self.notfall_unten_c <= self.solltemperatur_c):
+            raise ValueError("calculated_start: notfall_unten_c muss zwischen -50 und Ziel liegen")
         return self
 
 
@@ -632,6 +658,8 @@ class LegionellenConfig(BaseModel):
     pv_start_min_watt: float = Field(default=500.0, description="Mindest-PV-Leistung für Start der Legionellenfahrt (W)")
     batterie_start_min_watt: float = Field(default=50.0, description="Mindest-Batterieleistung für Start der Legionellenfahrt (W)")
     batterie_start_min_soc_prozent: float = Field(default=90.0, description="Mindest-SOC für Batterie-Start der Legionellenfahrt (%)")
+    max_netzbezug_watt: float = Field(default=-50.0, description="PV/Batterie gelten nur ohne relevanten Netzkauf (W)")
+
 
     @model_validator(mode="after")
     def _pruefe_legionellen(self):
@@ -661,6 +689,8 @@ class LegionellenConfig(BaseModel):
             raise ValueError("Startleistungen fuer PV/Batterie duerfen nicht negativ sein")
         if not (0 <= self.batterie_start_min_soc_prozent <= 100):
             raise ValueError("batterie_start_min_soc_prozent ausserhalb 0-100")
+        if not (self.max_netzbezug_watt <= 0):
+            raise ValueError("max_netzbezug_watt muss <= 0 sein")
         if not (self.start_uhr <= self.spaeteste_start_uhr <= 23):
             raise ValueError("spaeteste_start_uhr muss zwischen start_uhr und 23 liegen")
         return self

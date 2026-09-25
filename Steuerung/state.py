@@ -22,7 +22,10 @@ class SolarState:
     def __init__(self):
         self.acpower: Optional[float] = None
         self.feedinpower: Optional[float] = None
-        self.batpower: Optional[float] = None
+        self.batpower: Optional[float] = None  # Solax-Rohwert: + Entladung, - Ladung
+        self.battery_discharge_watt: Optional[float] = None
+        self.battery_charge_watt: Optional[float] = None
+        self.energy_source: str = "Netz"
         self.soc: Optional[float] = None
         self.consumeenergy: Optional[float] = None
         self.last_api_call: Optional[datetime] = None
@@ -104,6 +107,7 @@ class State:
         self.control = ControlState(self.config)
         self.stats = StatsState(now)
         self._cycle_log: Optional[dict] = None
+        self.energy_source = "Netz"
         
         # Urlaubs/Bademodus (Legacy/Simple Group)
         self.urlaubsmodus_aktiv: bool = False
@@ -138,6 +142,7 @@ class State:
         self.legionellen_temp_override: Optional[float] = None
         self.forecast_stale: bool = False
         self.forecast_age_s: Optional[int] = None
+        self.energy_source_detail: str = "Noch keine Solarquelle bewertet"
         self.learning_engine: Optional[object] = None
         self._today_usage_count: int = 0
         self._learned_morning_window: Optional[dict] = None

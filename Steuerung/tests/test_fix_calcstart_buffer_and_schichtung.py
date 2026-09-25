@@ -83,7 +83,7 @@ def test_calcstart_bewoelkt_puffer_kleiner_als_sonnig():
     Bei gleichen Temperaturen (unten=38, mitte=40) brauchen wir 2h Heizzeit.
     Bewölkt muss früher einschalten als Sonnig.
     """
-    cfg = _calc_cfg()
+    cfg = _calc_cfg(netz_fallback_erlaubt=True)
     temps = _temp(unten=38.0, mitte=40.0)
 
     # 14:15 -> time_left=2.75h, braucht 2h -> buffer=0.75h
@@ -96,10 +96,9 @@ def test_calcstart_bewoelkt_puffer_kleiner_als_sonnig():
     assert r_sonnig.einschalten is None, f"Sonning 14:15 sollte warten: {r_sonnig.grund}"
     assert r_bewoelkt.einschalten is True, f"Bewölkt 14:15 sollte EIN: {r_bewoelkt.grund}"
 
-    # 14:45 -> time_left=2.25h, braucht 2h -> buffer=0.25h
-    # Neu: Der errechnete Spatest-Start (buffer <= 0.5h) gilt OHNE
-    # Quellen-Anforderung - die Zapf-Garantie dominiert die Wartezeit.
-    # Bewölkt: 0.25 * 0.5 = 0.125h < 0.5 -> EIN
+    # 14:45 -> time_left=2.25h, braucht 2h -> buffer=0.25h.
+    # Ohne PV/Batterie wartet CalcStart jetzt auch am Spatest-Start;
+    # nur der explizit freigegebene Netzfallback darf hier durch.
     r_sonnig_2 = evaluate_calculated_start(cfg, temps, 14, 45, forecast_wh_qm=3200)
     r_bewoelkt_2 = evaluate_calculated_start(
         cfg, temps, 14, 45, forecast_wh_qm=400, feedin_watt=200.0
@@ -118,7 +117,7 @@ def test_calcstart_bewoelkt_puffer_kleiner_als_sonnig():
 
 def test_calcstart_sonnig_wartet_laenger():
     """Sonnig (3000+) -> WP soll laenger warten als neutral (Puffer groesser)."""
-    cfg = _calc_cfg()
+    cfg = _calc_cfg(netz_fallback_erlaubt=True)
     temps = _temp(unten=38.0, mitte=40.0)
 
     # 15:00 -> Zeit bis 17:00 = 2h, braucht 2h -> buffer = 0h
@@ -158,7 +157,7 @@ def test_abweichung_schichtung_erlaubt_start_mit_obergrenze():
         feedin_watt=200.0,
     )
     assert r.einschalten is True, f"Schichtungs-Warmstart sollte EIN sein: {r.grund}"
-    assert "Schichtungs-Start erlaubt" in r.grund
+    assert "Schichtungs-Start" in r.grund
     assert r.regel_dict is not None
     assert r.regel_dict["schichtung_oben_max"] == 47.0  # 46 + 1
     assert r.regel_dict["schichtung_oben_start"] == 46.0
@@ -248,6 +247,7 @@ def test_abweichung_schichtung_in_gesamtbewertung():
     config.abweichung.schichtung_min_oben_c = 42.0
     config.abweichung.solltemperatur_c = 40.0
     config.abweichung.einschalten_bei_abweichung_k = 3.0
+    config.abweichung.schichtung_erlaube_start = True
 
     # Keine PV-Regeln aktiv, Zeitfenster deaktivieren, andere Regeln aus
     config.pv_regeln = []
@@ -263,7 +263,7 @@ def test_abweichung_schichtung_in_gesamtbewertung():
     # unten kalt durch Zapfen, oben warm -> EIN mit Obergrenze (nicht block)
     temps = _temp(unten=36.0, mitte=40.0, oben=46.0)
     gewinner, ergebnisse = bewerte_alle_regeln(
-        config, temps, pv_leistung=0.0, kompressor_ein=False,
+        config, temps, pv_leistung=200.0, kompressor_ein=False,
         now=datetime(2025, 6, 15, 14, 0),  # Sonntag -> Wochenende aktiv!
         forecast_wh_qm=None,
     )

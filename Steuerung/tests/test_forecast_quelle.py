@@ -51,10 +51,10 @@ GUT = 3500.0
 class TestForecastQuellenGate:
     STUNDE = 18  # im Vorheiz-Fenster (8-19)
 
-    def _rufe(self, cfg=None, feedin=0.0, soc=85.0, stunde=STUNDE):
+    def _rufe(self, cfg=None, feedin=0.0, soc=85.0, stunde=STUNDE, battery_power=None):
         return evaluate_forecast(
             cfg or _cfg(), _temps(), SCHLECHT, stunde,
-            feedin_watt=feedin, soc=soc,
+            feedin_watt=feedin, soc=soc, battery_power=battery_power,
         )
 
     def test_ohne_pv_und_leerer_batterie_wartet_die_regel(self):
@@ -69,7 +69,7 @@ class TestForecastQuellenGate:
         assert "PV" in erg.grund
 
     def test_volle_batterie_ohne_netzkauf_schaltet_frei(self):
-        erg = self._rufe(feedin=-20.0, soc=90.0)  # -20 >= -50: kein Netzkauf
+        erg = self._rufe(feedin=-20.0, soc=90.0, battery_power=100.0)  # -20 >= -50: kein Netzkauf
         assert erg.einschalten is True
         assert "Batterie" in erg.grund
 
@@ -86,7 +86,7 @@ class TestForecastQuellenGate:
     def test_soc_ohne_daten_wartet(self):
         erg = self._rufe(feedin=0.0, soc=None)
         assert erg.einschalten is None
-        assert "keine Daten" in erg.grund
+        assert "keine Daten" in erg.grund or "keine erneuerbare" in erg.grund
 
     def test_legacy_modus_mit_netz_erlaubt(self):
         """vorheiz_netz_erlaubt=True stellt das alte Verhalten her."""
@@ -119,7 +119,7 @@ class TestForecastQuellenGate:
 class TestVerdrahtungInBewerteAlleRegeln:
     """Stellt sicher, dass pv_leistung/soc wirklich durchgereicht werden."""
 
-    def _bewerte(self, feedin, soc):
+    def _bewerte(self, feedin, soc, battery_power=None):
         _gewinner, ergebnisse = bewerte_alle_regeln(
             config=WPSteuerungConfig(),
             temp_dict={"oben": 45.0, "mittig": 43.5, "unten": 41.0},
@@ -129,6 +129,7 @@ class TestVerdrahtungInBewerteAlleRegeln:
             forecast_wh_qm=SCHLECHT,
             forecast_today_wh_qm=SCHLECHT,
             soc=soc,
+            battery_power=battery_power,
         )
         return ergebnisse
 
@@ -137,7 +138,7 @@ class TestVerdrahtungInBewerteAlleRegeln:
         return next(e for e in ergebnisse if e.name == "Forecast")
 
     def test_soc_durchgereicht_batteriequelle_feuert(self):
-        f = self._forecast(self._bewerte(feedin=-10.0, soc=95.0))
+        f = self._forecast(self._bewerte(feedin=-10.0, soc=95.0, battery_power=100.0))
         assert f.einschalten is True
 
     def test_ohne_quelle_wartet_die_regel(self):

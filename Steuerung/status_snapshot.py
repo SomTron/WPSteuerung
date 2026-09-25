@@ -43,6 +43,7 @@ def build_status_snapshot(state):
         "loop_heartbeat", "last_control_success", "last_sensor_success",
         "last_status_snapshot_at", "last_data_update_ok",
         "consecutive_control_errors",
+        "energy_source", "energy_source_detail",
         "last_api_call", "last_forecast_update", "last_forecast_attempt",
     )
     for name in root_fields:

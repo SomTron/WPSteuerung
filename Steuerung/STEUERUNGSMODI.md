@@ -792,7 +792,7 @@ Konfigurationsschlüsseln.
   4. **EIN** wenn `abweichung >= einschalten_bei_abweichung_k` (4.9):
      - **Schichtungs-Warmstart (neu):** Fühler ≠ `oben` und
        `oben >= schichtung_min_oben_c` (42):
-       - `schichtung_erlaube_start=true` (Standard) → `EIN` **mit dynamischer
+       - `schichtung_erlaube_start=true` (Standard: false) → `EIN` **mit dynamischer
          Obergrenze**: `state.control.schichtung_oben_max = oben + 1 K`
          (via `regel_dict`). Damit heizt die WP nach einer Legionellenfahrt
          (oben heiß, unten/mitte kalt) wieder – aber die obere Schicht darf

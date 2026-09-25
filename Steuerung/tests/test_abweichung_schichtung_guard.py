@@ -51,7 +51,7 @@ def test_oben_warm_und_start_verboten_wartet():
 
 def test_oben_warm_und_start_erlaubt_deckelt_oben():
     """Mit erlaubtem Warmstart muss der Deckel im regel_dict stehen."""
-    r = _eval(_cfg(schichtung_erlaube_start=True), oben=48.5, unten=24.6)
+    r = _eval(_cfg(schichtung_erlaube_start=True, schichtung_netz_fallback_erlaubt=True), oben=48.5, unten=24.6)
     assert r.einschalten is True
     assert r.regel_dict["schichtung_oben_max"] == 49.5      # 48.5 + 1.0 K
     assert "Obergrenze oben" in r.grund
