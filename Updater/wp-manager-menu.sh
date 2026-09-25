@@ -612,8 +612,6 @@ analysis_menu() {
         printf "3) Timer installieren / reparieren / aktivieren\n"
         printf "4) Timer deaktivieren\n"
         printf "5) Journal der Analyse (letzte 80 Zeilen)\n"
-        printf "22) 🩺  Steuerungs-Health (API /health)\n"
-    printf "23) 📈  Analyse-Qualitaet (quality_report.json)\n"
     printf "0) Zurueck zum Hauptmenue\n"
         printf "Choice: "
         read analysis_choice
@@ -832,6 +830,8 @@ while true; do
     printf "19) 🩺  Lauf-Status / letzte Abstuerze (letzter_lauf.json)\n"
     printf "20) ⏰  Auto-Analyse (Status, Testlauf, Timer, Journal)\n"
     printf "21) 🧠  Upload learning_data.json to Catbox\n"
+        printf "22) 🩺  Steuerungs-Health (API /health)\n"
+    printf "23) 📈  Analyse-Qualitaet (quality_report.json)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "

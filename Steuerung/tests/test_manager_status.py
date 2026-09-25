@@ -246,3 +246,37 @@ def test_neue_optionen_health_und_qualitaet():
     assert "manager_health.py" in manager
     assert "/health" in manager
     assert "quality_report.json" in manager
+
+
+def test_menueintrraege_22_23_stehen_im_hauptmenue_nicht_im_untermenue():
+    """Die Anzeigezeilen muessen neben der Exit-Zeile stehen.
+
+    Regression: Beim Einfuegen wurde die erste passende `printf "0)`-Zeile
+    getroffen - das ist die Exit-Zeile des Analyse-Untermenues. Die Optionen
+    waren dadurch nur im Untermenue sichtbar, obwohl die Aufrufe korrekt
+    im Hauptmenue case-Zweig lagen.
+    """
+    manager, _ = _updater_scripts()
+    zeilen = [z.strip() for z in manager.splitlines()]
+
+    exit_idx = [
+        i for i, z in enumerate(zeilen) if z.startswith('printf "0)') and "Exit" in z
+    ]
+    assert len(exit_idx) == 1, f"genau eine Exit-Zeile erwartet, gefunden: {exit_idx}"
+    fenster = zeilen[exit_idx[0] - 4: exit_idx[0] + 1]
+    assert any(z.startswith('printf "22)') for z in fenster), (
+        "Option 22 wird im Hauptmenue nicht angezeigt"
+    )
+    assert any(z.startswith('printf "23)') for z in fenster), (
+        "Option 23 wird im Hauptmenue nicht angezeigt"
+    )
+
+    # Im Analyse-Untermenue (endet mit "Zurueck zum Hauptmenue") darf 22/23
+    # nicht erscheinen.
+    zurueck_idx = [
+        i for i, z in enumerate(zeilen) if z.startswith('printf "0)') and "Zurueck" in z
+    ]
+    assert len(zurueck_idx) == 1, zurueck_idx
+    untermenue = zeilen[zurueck_idx[0] - 8: zurueck_idx[0] + 1]
+    assert not any(z.startswith('printf "22)') for z in untermenue)
+    assert not any(z.startswith('printf "23)') for z in untermenue)
