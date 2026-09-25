@@ -241,6 +241,13 @@ class TestLegionellenUeberhitzungBypass:
         state.legionellen_temp_override = 65.0
         assert pcl._effektive_ueberhitzung_schwelle(state) == 65.0
 
+    def test_bestaetigte_legionellen_wunschregel_nutzt_sicheres_limit_vor_start(self):
+        """Vor dem Hardware-Start darf der Standard-58C-Schutz die bestaetigte
+        Legionellenregel nicht bei 45C abwuergen. Andere Schutzpfade bleiben."""
+        state = self._state(legionellen_aktiv=False)
+        state.control = SimpleNamespace(requested_rule_name="Legionellen")
+        assert pcl._effektive_ueberhitzung_schwelle(state) == 65.0
+
 
 # ============================================================
 # Wochentags-Gate fuer den Legionellen-Start (Freitag-Sonntag)

@@ -38,7 +38,10 @@ def baue_state(t_unten, t_oben=51.7, t_mittig=50.0, config=None):
             blocking_reason=None,
             _soll_einschalten=False,
             restart_lockout_until=None,
+            requested_rule_name=None,
         ),
+        legionellen_aktiv=False,
+        legionellen_temp_override=None,
         stats=SimpleNamespace(
             last_compressor_on_time=now - timedelta(minutes=2),
             last_compressor_off_time=now - timedelta(hours=2),
@@ -272,6 +275,80 @@ def test_start_antizipation_niedrige_konfidenz_verlaengert_puffer():
     assert info["confidence_category"] == "niedrig"
     assert info["extra_buffer_min"] == 2.0
     assert info["effective_buffer_min"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_legionellen_wunsch_benutzt_boilerlimit_65_vor_start():
+    """45C sind im normalen 48C-Guard naehe, fuer Legionellen aber sicher."""
+    state = baue_state(t_unten=45.0, t_oben=50.0, t_mittig=45.0)
+    state.control.kompressor_ein = False
+    state.control._soll_einschalten = True
+    state.control.requested_rule_name = "Legionellen"
+    calls = []
+
+    erg = await pcl.handle_compressor_on(
+        state, None, regelfuehler=45.0, einschaltpunkt=55.0,
+        ausschaltpunkt=60.0, min_laufzeit=timedelta(minutes=15),
+        min_pause=timedelta(minutes=30), t_oben=50.0, t_mittig=45.0,
+        set_kompressor_status_func=_set_status_sammler(calls),
+    )
+
+    assert erg is True
+    assert calls and calls[0][0] is True
+    assert "Boiler-Max-Naehe" not in (state.control.blocking_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_legionellen_mindestpause_bleibt_voll_aktiv():
+    """Legionellen hebt die normale Pause nicht auf."""
+    state = baue_state(t_unten=45.0, t_oben=50.0, t_mittig=45.0)
+    state.control.kompressor_ein = False
+    state.control._soll_einschalten = True
+    state.control.requested_rule_name = "Legionellen"
+    state.stats.last_compressor_off_time = datetime.now(TZ) - timedelta(minutes=5)
+    calls = []
+
+    erg = await pcl.handle_compressor_on(
+        state, None, regelfuehler=45.0, einschaltpunkt=55.0,
+        ausschaltpunkt=60.0, min_laufzeit=timedelta(minutes=15),
+        min_pause=timedelta(minutes=30), t_oben=50.0, t_mittig=45.0,
+        set_kompressor_status_func=_set_status_sammler(calls),
+    )
+
+    assert erg is False
+    assert calls == []
+    assert "Min. Pause" in (state.control.blocking_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_laufende_legionellen_haertet_bei_65c_ab():
+    """Der Schutz bleibt aktiv: bei 65C muss die Legionellenfahrt enden."""
+    state = baue_state(t_unten=65.0, t_oben=63.0, t_mittig=64.0)
+    state.legionellen_aktiv = True
+    state.legionellen_temp_override = 65.0
+    calls = []
+
+    erg = await pcl.handle_compressor_off(
+        state, None, regelfuehler=65.0, ausschaltpunkt=60.0,
+        min_laufzeit=timedelta(minutes=15), t_oben=63.0,
+        set_kompressor_status_func=_set_status_sammler(calls),
+        regel_name="Legionellen",
+    )
+
+    assert erg is True
+    assert calls and calls[0][0] is False
+    assert calls[0][1]["end_grund"] == "boiler_max"
+    assert state.control.boiler_max_blockiert == pytest.approx(63.0)
+
+
+def test_nach_legionellen_gilt_wieder_normaler_boilerschutz():
+    state = baue_state(t_unten=48.5)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    _temp, limit, wiederein, _sensor = pcl._boiler_max_info(state)
+    assert limit == 48.0
+    assert wiederein == 46.0
 
 
 # ---------- Konfiguration ----------

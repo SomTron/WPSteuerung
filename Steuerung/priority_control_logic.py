@@ -1069,6 +1069,35 @@ def _taktschutz_blockiert(state, cfg) -> float:
     return 0.0
 
 
+def _effektives_legionellen_limit(state, include_requested: bool = True):
+    """Gibt das harte Legionellenlimit zurück, ohne Schutzpfade abzuschalten.
+
+    Während eines bestätigten Laufs zählen ``legionellen_aktiv`` und der
+    gesetzte Override. Vor dem ersten Hardware-Start muss außerdem die bereits
+    bestätigte Wunschregel ``Legionellen`` berücksichtigt werden: Sonst prüft
+    der Boiler-Nähe-Guard noch mit 48°C und blockiert einen gültigen Start bei
+    z.B. 45°C. Andere Schutzmechanismen (Sensor, Verdampfer, Druck, Pause,
+    Verifikation) bleiben davon unberührt.
+    """
+    cfg = getattr(state, "priority_config", None)
+    lle_cfg = getattr(cfg, "legionellen", None)
+    limit = getattr(lle_cfg, "legionellen_max_temp_c", None)
+    if not isinstance(limit, (int, float)) or isinstance(limit, bool):
+        return None
+    limit = float(limit)
+    aktiv = getattr(state, "legionellen_aktiv", False) is True
+    override = getattr(state, "legionellen_temp_override", None)
+    override_aktiv = isinstance(override, (int, float)) and not isinstance(override, bool)
+    control = getattr(state, "control", None)
+    requested = (
+        include_requested
+        and getattr(control, "requested_rule_name", None) == "Legionellen"
+    )
+    if aktiv or override_aktiv or requested:
+        return limit
+    return None
+
+
 def _boiler_max_info(state):
     """Infos zum harten Boiler-Maximum: (temp, limit, wiederein, fuehler).
 
@@ -1085,10 +1114,10 @@ def _boiler_max_info(state):
         return None, None, None, fuehler
     # Standard-Limit aus Config
     limit = float(getattr(cfg, "max_temp_c", 48.0))
-    # Legionellen-Uebersteuerung: Wenn die Prophylaxe aktiv ist, darf der
-    # Boiler auf legionellen_max_temp_c hochheizen, bevor das harte Maximum
-    # zuschlaegt.
-    legionellen_limit = getattr(state, "legionellen_temp_override", None)
+    # Legionellen-Uebersteuerung: Nutze den Override/aktiven Lauf bzw. die
+    # bestaetigte Wunschregel. Der Standard-Boiler-Schutz wird dabei nicht
+    # deaktiviert, nur sein numerisches Limit wird temporaer angehoben.
+    legionellen_limit = _effektives_legionellen_limit(state)
     if legionellen_limit is not None and legionellen_limit > limit:
         limit = legionellen_limit
 
@@ -1263,15 +1292,12 @@ def _effektive_ueberhitzung_schwelle(state) -> float:
     # Legionellen aktiv ODER temp_override gesetzt (robust gegen MagicMocks /
     # Neustart-Zustaende, in denen legionellen_aktiv evtl. erst im naechsten
     # Lifecycle-Zyklus wieder True ist).
-    legionellen_betrieb = (
-        getattr(state, "legionellen_aktiv", False) is True
-        or getattr(state, "legionellen_temp_override", None) is not None
-    )
-    if legionellen_betrieb:
-        lle_cfg = getattr(cfg, "legionellen", None)
-        lle_max = getattr(lle_cfg, "legionellen_max_temp_c", None)
-        if isinstance(lle_max, (int, float)) and float(lle_max) > float(base):
-            return float(lle_max)
+    legionellen_limit = _effektives_legionellen_limit(state)
+    if (
+        legionellen_limit is not None
+        and legionellen_limit > float(base)
+    ):
+        return legionellen_limit
     return float(base)
 
 

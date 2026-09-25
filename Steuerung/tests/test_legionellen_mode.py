@@ -410,6 +410,7 @@ class TestBoilerMaxInfoLegionellen:
         state.priority_config.sicherheit.boiler_max_fuehler = "unten"
         state.sensors.t_unten = 55.0
         state.legionellen_temp_override = 65.0  # Legionellen aktiv
+        state.priority_config.legionellen.legionellen_max_temp_c = 65.0
 
         temp, limit, wiederein, fuehler = pcl._boiler_max_info(state)
         assert limit == 65.0  # override hoeher -> nimmt override
