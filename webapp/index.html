@@ -1754,7 +1754,14 @@
             document.getElementById('rule-source-current').textContent = mode.source_current || mode.effective_source || '—';
             document.getElementById('rule-sensor').textContent = mode.active_rule_sensor ? 'Fuehler: ' + mode.active_rule_sensor : '';
             const rd = document.getElementById('rule-decision');
-            if (mode.blocking_reason) { rd.textContent = mode.blocking_reason; rd.className = 'badge badge-warning'; }
+            // "boiler_bereits_warm" ist ein Normalzustand (Boiler ist heiss,
+            // Start waere unnoetig) und keine Stoerung - deshalb Info statt
+            // Warnung. Die harte Boiler-Maximum-Abschaltung bleibt Warnung.
+            const bk = mode.blocking_code || '';
+            if (mode.blocking_reason) {
+                rd.textContent = mode.blocking_reason;
+                rd.className = bk === 'boiler_bereits_warm' ? 'badge badge-info' : 'badge badge-warning';
+            }
             else if (mode.soll_einschalten) { rd.textContent = 'EINSCHALTEN empfohlen'; rd.className = 'badge badge-success'; }
             else { rd.textContent = 'AUS - kein Bedarf'; rd.className = 'badge badge-danger'; }
 

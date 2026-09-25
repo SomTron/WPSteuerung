@@ -34,6 +34,7 @@ from utils import HEIZUNGSDATEN_CSV, to_naive
 from clock import now_for
 from logic_utils import forecast_kwh_m2_to_wh_m2
 from status_snapshot import build_status_snapshot
+from blocking_codes import INFO_BLOCKING_CODES, blocking_code as _blocking_code
 from api_contract import (
     API_CONTRACT_VERSION,
     with_contract_metadata,
@@ -138,6 +139,15 @@ def build_mode_payload(state, priority_info_override=None):
         "source_current": (getattr(control, 'source_current', None) or "Netz"),
         "active_rule_sensor": (getattr(control, 'active_rule_sensor', None) or ""),
         "blocking_reason": (getattr(control, 'blocking_reason', None) or ""),
+        # Sperrfamilie und Einstufung, damit die WebApp einen Normalzustand
+        # ("Boiler bereits heiss") nicht als Warnung darstellen muss.
+        "blocking_code": _blocking_code(getattr(control, 'blocking_reason', None)),
+        "blocking_kind": (
+            "info"
+            if _blocking_code(getattr(control, 'blocking_reason', None))
+            in INFO_BLOCKING_CODES
+            else "alarm"
+        ),
         "soll_einschalten": bool(getattr(control, '_soll_einschalten', False)),
         "sommer_modus_aktiv": bool(getattr(state, 'sommer_modus_aktiv', False)),
         "sommer_modus_offset_c": float(getattr(sommer_cfg, 'temperatur_offset_c', 0.0) or 0.0),

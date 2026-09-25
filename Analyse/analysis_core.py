@@ -31,7 +31,10 @@ KNOWN_END_CODES = {
     "boiler_max", "regel_aus", "keine_regel", "mindestlaufzeit", "mindestpause",
     "uebertemperatur", "sensorfehler", "druckfehler", "hardwarefehler",
     "kompressor_verifizierung", "verifizierung_fehler", "legionellen_timeout",
-    "dienst_neustart", "api_manuell", "unknown", "unbekannt",
+    "dienst_neustart", "api_manuell", "boiler_bereits_warm",
+    "regelungsfehler", "nachtsperre", "warte_quelle", "verdampfer",
+    "daten_stale", "sonstige_sperre",
+    "unknown", "unbekannt",
 }
 
 

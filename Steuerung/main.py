@@ -35,6 +35,11 @@ from telegram_api import start_healthcheck_task, create_robust_aiohttp_session
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app, init_api, update_status_snapshot
+from blocking_codes import (  # noqa: F401  (Re-Export fuer Aufrufer/Tests)
+    INFO_BLOCKING_CODES,
+    blocking_code as _blocking_code,
+    normalisiere_sperrtext as _normalisiere_sperrtext,
+)
 from utils import safe_timedelta, HEIZUNGSDATEN_CSV, EXPECTED_CSV_HEADER, check_and_fix_csv_header, rotiere_csv_monatlich
 from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
@@ -151,34 +156,6 @@ async def _set_hardware_state(state, status: bool) -> bool:
             hardware_manager, getattr(state, "gpio_lock", None)
         )
     return await compressor_actuator.set_state(status)
-
-
-def _blocking_code(reason: str | None) -> str:
-    """Liefert stabile Sperrfamilien statt dynamischer Freitext-Alarme."""
-    text = (reason or "").strip().lower()
-    if not text:
-        return ""
-    if "mindestlaufzeit" in text or "warte auf mindestlaufzeit" in text:
-        return "mindestlaufzeit"
-    if "min. pause" in text or "mindestpause" in text or "pause" in text:
-        return "mindestpause"
-    if "boiler-max" in text or "boiler max" in text:
-        return "boiler_max"
-    if "sensor" in text:
-        return "sensorfehler"
-    if "druck" in text:
-        return "druckfehler"
-    if "verdampfer" in text:
-        return "verdampfer"
-    if "gpio" in text or "hardware" in text or "einschalten fehlgeschlagen" in text:
-        return "hardwarefehler"
-    if "stale" in text or "veraltet" in text:
-        return "daten_stale"
-    if "nachtsperre" in text:
-        return "nachtsperre"
-    if "quelle" in text or "pv/batterie" in text:
-        return "warte_quelle"
-    return "sonstige_sperre"
 
 
 def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
@@ -905,6 +882,23 @@ async def check_and_send_alerts(session, state):
 
     current_type = normalize(current_blocking)
     current_code = _blocking_code(current_blocking)
+
+    # Normalzustand statt Stoerung: Der Boiler ist bereits heiss genug. Das ist
+    # gewolltes Verhalten (Startnaehe-Sperre nach z.B. Legionellenfahrt), kein
+    # Eingriff und kein Grund fuer einen Alarm. Sichtbar bleibt es in Log und
+    # WebApp, Telegram bleibt still.
+    if current_blocking and current_code in INFO_BLOCKING_CODES:
+        state.control.blocking_code = current_code
+        state.control.last_blocking_reason = current_blocking
+        if check_log_throttle(
+            state, "log_boiler_bereits_warm", interval_minutes=30
+        ):
+            logging.info(
+                "Boiler bereits heiss, kein Start noetig (Sperre '%s'): %s",
+                current_code, current_blocking,
+            )
+        return
+
     last_type = getattr(state.control, 'last_alert_type', "")
     try:
         now_alert = _state_now(state)
@@ -1437,7 +1431,13 @@ async def log_system_state(state):
             f"Alter={alter_txt}{stale_flag}"
         )
         if state.control.blocking_reason:
-            log_line += f" | Blocking: {state.control.blocking_reason}"
+            # "Boiler bereits heiss" ist ein Normalzustand und wird deshalb
+            # nicht als Blockade gemeldet - sonst sieht die Stunden nach einer
+            # Legionellenfahrt nach einer Stoerung aus.
+            if _blocking_code(state.control.blocking_reason) in INFO_BLOCKING_CODES:
+                log_line += f" | Info: {state.control.blocking_reason}"
+            else:
+                log_line += f" | Blocking: {state.control.blocking_reason}"
         if state.control.active_rule_name:
             log_line += f" | Regel: {state.control.active_rule_name}"
         if state.control.previous_modus:
