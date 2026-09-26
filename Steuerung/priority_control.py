@@ -958,7 +958,25 @@ def evaluate_abweichung(
         # Quellen-Gate mit Tiefenschutz: Im Normalfall auf PV/Batterie warten
         # statt mit Netzstrom zu heizen. Erst wenn der Fuehler unter
         # (Soll - netz_notfall_offset_k) faellt, erlaubt der Tiefschutz Netz.
-        if getattr(abw, "quelle_warten", True):
+        #
+        # Wetterlage-Ausnahme: "Auf PV warten" lohnt nur, wenn heute auch PV
+        # kommt. Bei trueber Wetterlage wuerde die Regel sonst den ganzen Tag
+        # auf eine Sonne warten, die ausbleibt - der Speicher laeuft kalt und
+        # uebernimmt nur noch der Notfallschutz (Prio 110) mit seinem
+        # 36/38-C-Band. Deshalb wird das Gate aufgehoben, sobald die
+        # Tagesprognose unter `quelle_warten_min_forecast_wh_qm` liegt.
+        warteschwelle = float(getattr(abw, "quelle_warten_min_forecast_wh_qm", 0.0) or 0.0)
+        eff_fc = _forecast_effektiv_wh_qm(forecast_today_wh_qm, fc_ratio) \
+            if forecast_today_wh_qm is not None else None
+        unwetterlage = (
+            warteschwelle > 0.0
+            and eff_fc is not None
+            and eff_fc < warteschwelle
+            # Veraltete Solardaten sind kein Beleg fuer truebe Wetterlage -
+            # im Zweifel gilt das fail-safe (weiter warten).
+            and not solar_stale
+        )
+        if getattr(abw, "quelle_warten", True) and not unwetterlage:
             tief_grenze = abw.solltemperatur_c - max(
                 getattr(abw, "netz_notfall_offset_k", 8.0), 0.0
             )
@@ -984,10 +1002,18 @@ def evaluate_abweichung(
                 return result
 
         result.einschalten = True
-        result.grund = (
-            f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
-            f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K -> EIN"
-        )
+        if unwetterlage:
+            result.grund = (
+                f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K -> EIN "
+                f"(Prognose {eff_fc:.0f} Wh/m2 < {warteschwelle:.0f}: kein PV zu "
+                f"erwarten, Netzbetrieb)"
+            )
+        else:
+            result.grund = (
+                f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K -> EIN"
+            )
         return result
 
     # In der Hysterese: Keine Aktion (Kompressor laeuft weiter/bleibt aus)
@@ -1673,6 +1699,34 @@ def _fmt_quelle(value) -> str:
         return "n/a"
 
 
+def _legionellen_ueberfaellig(cfg, last_done, now) -> bool:
+    """True, wenn der letzte Prophylaxe-Lauf zu lange zurueckliegt.
+
+    Ohne PV (Dezember, Nebulaeltage) wartet die Regel sonst unbegrenzt auf
+    eine Quelle, die nicht kommt. ``max_tage_ohne_lauf`` (Default 14 Tage)
+    begrenzt das Warten: danach ist Hygiene wichtiger als der PV-Optimismus
+    und der Lauf wird mit Netzstrom durchgefuehrt. 0 schaltet die Frist ab.
+    """
+    frist = getattr(cfg, "max_tage_ohne_lauf", 14)
+    try:
+        frist = int(frist)
+    except (TypeError, ValueError):
+        return False
+    if frist <= 0:
+        return False
+    if last_done is None:
+        # Noch nie gelaufen: Ohne bekannten Referenzzeitpunkt gibt es keine
+        # Frist, die man ueberschreiten koennte. Dann gilt das alte Verhalten
+        # (auf PV warten) - ein Frischbetrieb soll nicht ungefragt mit
+        # Netzstrom auf 60 C fahren.
+        return False
+    try:
+        tage = (now.date() - last_done).days
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return tage >= frist
+
+
 def _legionellen_quelle_status(cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower=None):
     """Prüft PV/Batterie anhand derselben zentralen Quellenlogik."""
     status = classify_energy_source(
@@ -1779,6 +1833,14 @@ def evaluate_legionellen(
     )
     heute_wochentag = now.weekday()  # 0=Mo .. 6=So
 
+    # Hygiene-Frist: Ist der letzte Lauf zu lange her, werden Plan- und
+    # Wochentags-Gate geloest. Sonst koennte in einer PV-armen Winterwoche
+    # weder der Plan noch der Wochentag zu einem Start kommen - die
+    # Prophylaxe faellt dann still aus.
+    hygiene_notfall = _legionellen_ueberfaellig(
+        legionellen_cfg, legionellen_last_done, now
+    )
+
     # --- Wochentags-Gate (Nutzeranforderung) ---
     # Start nur an einem der erlaubten Tage (bevorzugter_tag..letzter_tag,
     # z.B. Freitag..Sonntag). Liegt bereits ein geplanter bester Forecast-Tag
@@ -1804,7 +1866,7 @@ def evaluate_legionellen(
         )
         return result
     if legionellen_planned_tag is not None:
-        if heute_wochentag != int(legionellen_planned_tag):
+        if heute_wochentag != int(legionellen_planned_tag) and not hygiene_notfall:
             result.aktiv = True
             result.einschalten = None
             result.grund = (
@@ -1813,7 +1875,7 @@ def evaluate_legionellen(
                 f"{_wochentag_name(heute_wochentag)}"
             )
             return result
-    elif heute_wochentag not in erlaubt_tag:
+    elif heute_wochentag not in erlaubt_tag and not hygiene_notfall:
         result.aktiv = True
         result.einschalten = None
         result.grund = (
@@ -1838,7 +1900,7 @@ def evaluate_legionellen(
             + (" (Wochenendfreigabe)" if frueheste_start_h > start_h else "")
         )
         return result
-    if now.hour > spaeteste_start_h:
+    if now.hour > spaeteste_start_h and not hygiene_notfall:
         result.set_reason_code("planned_day_missed")
         result.grund = (
             f"Legionellen: Startfenster {frueheste_start_h:g}:00-"
@@ -1849,9 +1911,17 @@ def evaluate_legionellen(
         result.einschalten = None
         result.grund = "Kompressor laeuft bereits, warte auf Abschluss"
         return result
-    quelle_ok, quelle_text = _legionellen_quelle_status(
-        legionellen_cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower
-    )
+    # Hygiene-Notfall: Ist der letzte Lauf laänger her als die konfigurierte
+    # Frist, wird die Quelle zurueckgestellt. Ohne diese Ausnahme bleibt die
+    # Prophylaxe in einer PV- armen Winterwoche komplett aus - der Speicher
+    # erreicht 60 C nie und das Legionella-Risiko waechst ungebremst.
+    ueberfaellig = _legionellen_ueberfaellig(legionellen_cfg, legionellen_last_done, now)
+    if ueberfaellig:
+        quelle_ok, quelle_text = True, "Hygiene-Notfall (Frist ueberschritten, Netzbetrieb)"
+    else:
+        quelle_ok, quelle_text = _legionellen_quelle_status(
+            legionellen_cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower
+        )
     if not quelle_ok:
         result.einschalten = None
         result.set_reason_code("waiting_source")

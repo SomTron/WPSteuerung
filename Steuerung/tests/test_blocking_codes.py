@@ -68,9 +68,6 @@ def test_normalzustand_wird_als_info_klassifiziert(text):
     "text",
     [
         "Ueberhitzungsschutz (62.0C >= 62.0C)",
-        "Min. Pause (noch 5m 3s)",
-        "Warte auf Mindestlaufzeit (noch 12m)",
-        "Regel 'Notfallschutz' sagt AUS, warte auf Mindestlaufzeit (noch 59m)",
         "Sensorfehler: T_Oben invalid",
         "Druckschalter-Fehler",
         "Verdampfer zu kalt (5.0C < 6.0C)",
@@ -244,3 +241,34 @@ def test_webapp_stellt_normalzustand_als_info_dar():
 def test_analyse_kennt_den_neuen_code():
     text = (PROJEKT / "Analyse" / "analysis_core.py").read_text(encoding="utf-8")
     assert '"boiler_bereits_warm"' in text
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Min. Pause (noch 5m 3s)",
+        "Min. Pause (noch 29m 40s)",
+        "Warte auf Mindestlaufzeit (noch 12m)",
+        "Regel 'Notfallschutz' sagt AUS, warte auf Mindestlaufzeit (noch 59m)",
+        "Start-Antizipation: hub zur Obergrenze nur 0.1K (Rate 5C/h)",
+    ],
+)
+def test_taktschutz_ist_normalbetrieb_und_kein_alarm(text):
+    """Taktschutz-Sperren sind gewollter Normalbetrieb, kein Telegram-Alarm.
+
+    Sie stehen nach jedem Kompressorlauf fuer Minuten an und wechseln dabei
+    schnell (Mindestpause -> Start-Antizipation -> Mindestpause ...). Als
+    Alarm erzeugten sie genau daraus eine Nachricht pro Wechsel.
+    """
+    code = blocking_code(text)
+    assert code in INFO_BLOCKING_CODES
+    assert code in {"mindestpause", "mindestlaufzeit", "start_antizipation"}
+
+
+def test_overshoot_vorhersage_hat_eigenen_code():
+    """Die Overshoot-Vorhersage ist eine echte Eingriffs-Sperre.
+
+    Sie darf nicht als generische 'sonstige_sperre' haengen bleiben.
+    """
+    code = blocking_code("Overshoot-Vorhersage (unten 60.0C + 50min x 13C/h)")
+    assert code == "overshoot_vorhersage"
+    assert code not in INFO_BLOCKING_CODES

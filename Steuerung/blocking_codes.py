@@ -17,12 +17,37 @@ from __future__ import annotations
 
 from typing import Optional
 
-# Sperrfaehlen, die kein Fehler und kein Eingriff sind, sondern den
-# Normalzustand beschreiben: der Boiler ist bereits heiss genug, ein Start
-# waere nicht nur unnoetig, sondern wuerde am Temperaturlimit in einen
-# Kurzlauf laufen. Typischer Fall: die Stunden nach einer Legionellenfahrt.
-# Diese Faelle erzeugen KEINEN Telegram-Alarm, bleiben aber sichtbar.
-INFO_BLOCKING_CODES = frozenset({"boiler_bereits_warm"})
+#: Sperrfaehlen, die kein Fehler und kein Eingriff sind, sondern den
+#: Normalzustand beschreiben: der Boiler ist bereits heiss genug, ein Start
+#: waere nicht nur unnoetig, sondern wuerde am Temperaturlimit in einen
+#: Kurzlauf laufen. Typischer Fall: die Stunden nach einer Legionellenfahrt.
+#:
+#: Ebenfalls hier: die Taktschutz-Sperren (Mindestpause, Mindestlaufzeit,
+#: Start-Antizipation). Sie sind gewollte Hardware-Schuetzung und stehen
+#: nach *jedem* Kompressorlauf fuer Minuten an - als Alarm waeren sie
+#: Spam, weil sie im Wechsel mit dem jeweils naechsten Grund erneut greifen.
+#: Sichtbar bleiben sie im Log, in der WebApp und in ``blocked``.
+INFO_BLOCKING_CODES = frozenset({
+    "boiler_bereits_warm",
+    "mindestpause",
+    "mindestlaufzeit",
+    "start_antizipation",
+})
+
+#: Ueberleitungen von Freitext auf diese Sperrfamilien. Werden VOR der
+#: generischen Musterpruefung geprueft, damit eine praezisere Benennung
+#: nicht am generischen ``sonstige_sperre`` klebt.
+_SONDER_CODES = (
+    ("start-antizipation", "start_antizipation"),
+    ("start blockiert", "start_antizipation"),
+    ("start-vorhersage", "start_antizipation"),
+    ("antizipation", "start_antizipation"),
+    ("mindestlaufzeit", "mindestlaufzeit"),
+    ("min. pause", "mindestpause"),
+    ("mindestpause", "mindestpause"),
+    ("overshoot-vorhersage", "overshoot_vorhersage"),
+    ("ueberschwing-vorhersage", "overshoot_vorhersage"),
+)
 
 _ERSAETZUNGEN = (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss"))
 
@@ -56,10 +81,11 @@ def blocking_code(reason: Optional[str]) -> str:
         or "schichtungs-obergrenze" in text
     ):
         return "boiler_bereits_warm"
-    if "mindestlaufzeit" in text or "warte auf mindestlaufzeit" in text:
-        return "mindestlaufzeit"
-    if "min. pause" in text or "mindestpause" in text or "pause" in text:
-        return "mindestpause"
+    # Taktschutz-Sperren zuerst und praezise: sie stehen als "warte auf
+    # Mindestlaufzeit" bzw. "Start-Antizipation: ..." im Freitext.
+    for muster, code in _SONDER_CODES:
+        if muster in text:
+            return code
     if "boiler-max" in text or "boiler max" in text:
         return "boiler_max"
     if "sensor" in text:

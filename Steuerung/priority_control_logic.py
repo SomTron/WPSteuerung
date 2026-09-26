@@ -1125,6 +1125,40 @@ def _boiler_max_info(state):
     return temp, limit, wiederein, fuehler
 
 
+def _legionellen_probe_aktiv(state) -> bool:
+    """True, solange die Legionellen-Probezeit (Zieltemperatur + Haltezeit) laeuft.
+
+    In dieser Phase will die Legionellen-Regel ausdruecklich weiterheizen, auch
+    wenn der Bezugsfuehler bereits auf dem Zielwert steht. Der generische
+    Ausschaltzweig in ``handle_compressor_off`` wuerde den Lauf sonst genau dort
+    beenden und die Probe verhindern.
+
+    Wichtig: Im aufrufenden Ablauf wird ``legionellen_target_reached_at`` erst
+    NACH ``handle_compressor_off`` gesetzt (``_aktualisiere_legionellen_lifecycle``
+    ist Schritt 7, das Abschalten Schritt 5). Im Moment, in dem der Fuehler
+    60 C erreicht, ist der Zeitstempel also noch ``None`` - der Lauf muss aber
+    trotzdem weiterlaufen. Deshalb gilt: solange eine Legionellenfahrt aktiv ist
+    und die Probezeit noch nicht abgelaufen ist, wird nicht abgeschaltet.
+    """
+    if getattr(state, "legionellen_aktiv", False) is not True:
+        return False
+    try:
+        cfg = state.priority_config.legionellen
+        probezeit = timedelta(minutes=int(cfg.probezeit_minuten))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+    erreicht = getattr(state, "legionellen_target_reached_at", None)
+    if not isinstance(erreicht, datetime):
+        # Ziel gerade erreicht, Zeitstempel wird erst danach gesetzt:
+        # Die Probe beginnt jetzt, sie ist also auf jeden Fall noch aktiv.
+        return True
+    try:
+        gehalten = _now_for_state(state) - erreicht
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return gehalten < probezeit
+
+
 def _zyklus_id(state) -> str:
     """Lesbarer Zyklus-ID-String fuer Event-Kodierung (robust gegen Mock-State)."""
     try:
@@ -1501,6 +1535,15 @@ async def handle_compressor_off(
         return False
 
     # Regel-basiertes Ausschalten
+    #
+    # Waehrend der Legionellen-Probezeit darf dieser generische Zweig NICHT
+    # greifen: Die Legionellen-Regel meldet in der Probe "heize weiter"
+    # (einschalten=True), ihr Ausschaltpunkt ist aber genau die Zieltemperatur.
+    # Sonst wuerde der Kompressor genau in dem Moment abgeschaltet, in dem die
+    # Probe beginnt - sie kann nie abgeschlossen werden, ``legionellen_last_done``
+    # bleibt auf None und die Prophylaxe startet jede Woche erneut.
+    if _legionellen_probe_aktiv(state):
+        return False
     if regelfuehler is not None and regelfuehler >= ausschaltpunkt:
         lauf_regel = getattr(state.control, "_lauf_start_regel", None) or regel_name
         min_laufzeit_eff = _effektive_mindestlaufzeit(

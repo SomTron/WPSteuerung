@@ -1,0 +1,12 @@
+{
+  "volumen_l": 300.0,
+  "heizleistung_w": 1552.32,
+  "verlust_w_k": 1.7931034482758625,
+  "konvektion_an_w_k": 114.56790123456786,
+  "konvektion_oben_an_w_k": 3716.1914062499986,
+  "konvektion_aus_w_k": 12.0,
+  "konvektion_oben_aus_w_k": 3.0,
+  "einspeisung_anteil_unten": 0.22528000000000006,
+  "kaltwasser_c": 10.0,
+  "umgebung_c": 20.0
+}

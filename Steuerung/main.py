@@ -863,6 +863,13 @@ async def check_periodic_tasks(session, state, last_vpn_check):
 
     return last_vpn_check
 
+##: Mindestabstand zwischen zwei Telegram-"Kompressor blockiert"-Alarmen.
+##: Nach jedem Kompressorlauf wechseln die Sperrgründe im Sekundentakt
+##: (Mindestpause -> Start-Antizipation -> Mindestpause -> ...). Ohne diese
+##: Drosselung entstünde pro Wechsel eine Nachricht.
+ALARM_MINUTEN_MINIMUM = 15.0
+
+
 async def check_and_send_alerts(session, state):
     """PrÃ¼ft auf Ã„nderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
     current_blocking = state.control.blocking_reason
@@ -884,8 +891,9 @@ async def check_and_send_alerts(session, state):
     current_type = normalize(current_blocking)
     current_code = _blocking_code(current_blocking)
 
-    # Normalzustand statt Stoerung: Der Boiler ist bereits heiss genug. Das ist
-    # gewolltes Verhalten (Startnaehe-Sperre nach z.B. Legionellenfahrt), kein
+    # Normalzustand statt Stoerung: der Boiler ist bereits heiss genug, oder
+    # eine Taktschutz-Sperre (Mindestpause/Mindestlaufzeit/Start-Antizipation)
+    # verhindert bewusst einen Start. Das ist gewolltes Verhalten, kein
     # Eingriff und kein Grund fuer einen Alarm. Sichtbar bleibt es in Log und
     # WebApp, Telegram bleibt still.
     if current_blocking and current_code in INFO_BLOCKING_CODES:
@@ -930,9 +938,27 @@ async def check_and_send_alerts(session, state):
         is_solar = "Solarfenster" in current_type
         is_zieltemp = "Zieltemp" in current_type
 
-        if not current_blocking:
-            state.control.blocking_code = None
-        elif not is_solar and not is_zieltemp:
+        # Globale Mindestpause zwischen zwei Telegram-Alarmen: Nach jedem
+        # Kompressorlauf wechseln die Sperrgruende im Sekundentakt
+        # (Mindestpause -> Start-Antizipation -> Mindestpause ...). Ohne diese
+        # Sperre entstuende je ein Alarm pro Wechsel. Echte Stoerungen fallen
+        # weiterhin sofort auf, werden aber hoechstens alle
+        # ALARM_MINUTEN_MINIMUM gesendet.
+        # Ausgenommen ist der Retry einer bereits fehlgeschlagenen Zustellung:
+        # er gehoert zum selben Alarm und darf die Drossel nicht verbrauchen.
+        ist_retry = bool(failed_type) and current_code == failed_type
+        if not ist_retry and current_blocking and not (is_solar or is_zieltemp):
+            if not check_log_throttle(
+                state, "log_alarm_global_drossel", interval_minutes=ALARM_MINUTEN_MINIMUM
+            ):
+                logging.debug(
+                    "Alarm gedrosselt (Sperre '%s', bereits kuerzlich gemeldet)",
+                    current_code,
+                )
+                state.control.last_blocking_reason = current_blocking
+                return
+
+        if current_blocking and not (is_solar or is_zieltemp):
             # Boiler-Max-Naehe: pro Tag nur 1x senden (sonst Telegram-Spam
             # bei vollem Boiler an sonnigen Tagen - Empfehlung 3.1).
             sende_erlaubt = True

@@ -30,7 +30,7 @@
     "prioritaet": 110,
     "einschalten_bei_c": 36.0,
     "ausschalten_bei_c": 38.0,
-    "temperaturfuehler": "auto"
+    "temperaturfuehler": "oben"
   },
   "wochenende": {
     "aktiv": true,
@@ -85,7 +85,8 @@
     "pv_warten_aktiv": true,
     "pv_warten_forecast_schwelle_wh_qm": 1200,
     "pv_warten_bis_uhr": 12,
-    "pv_warten_unten_min_c": 20
+    "pv_warten_unten_min_c": 20,
+    "quelle_warten_min_forecast_wh_qm": 1500
   },
   "forecast": {
     "prioritaet": 57,
@@ -159,7 +160,7 @@
     ]
   },
   "batterie": {
-    "aktiv": true,
+    "aktiv": false,
     "prioritaet": 75,
     "temperaturfuehler": "unten",
     "einschalten_bei_c": 41.0,
@@ -192,7 +193,8 @@
       "probezeit_minuten": 30,
       "pv_start_min_watt": 500.0,
       "batterie_start_min_watt": 50.0,
-      "batterie_start_min_soc_prozent": 90.0
+      "batterie_start_min_soc_prozent": 90.0,
+      "max_tage_ohne_lauf": 14
     },
     "boiler_modell": {
       "volumen_l": 300.0,

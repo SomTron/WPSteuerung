@@ -437,6 +437,21 @@ class AbweichungConfig(BaseModel):
         default=20.0,
         description="Echt-Kalt-Schutz: unter dieser Fuehler-Temperatur sofort netzheizen",
     )
+    # --- Wetterlage-abhaengige Aufhebung des Quellen-Gates ---
+    # "Auf PV warten" ist nur sinnvoll, wenn heute tatsaechlich PV kommt. Bei
+    # trueber Wetterlage (weniger als `quelle_warten_min_forecast_wh_qm` Wh/m2
+    # Tagesprognose) wuerde die Regel sonst den ganzen Tag auf eine Sonne
+    # warten, die nicht kommt - der Speicher laeuft kalt und die Heizung
+    # uebernimmt nur noch der Notfallschutz. Deshalb: unterhalb dieser
+    # Schwelle wird direkt mit Netzstrom geheizt (der PV-Verzicht gilt ja
+    # ohnehin nur bei guter Prognose, siehe pv_warten_forecast_schwelle_wh_qm).
+    quelle_warten_min_forecast_wh_qm: float = Field(
+        default=1500.0,
+        description=(
+            "Unterhalb dieser effektiven Tagesprognose (Wh/m2) wird nicht mehr "
+            "auf PV gewartet, sondern mit Netzstrom geheizt. 0 = nie aufheben."
+        ),
+    )
 
     @model_validator(mode="after")
     def _plausibel(self):
@@ -717,6 +732,18 @@ class LegionellenConfig(BaseModel):
     batterie_start_min_watt: float = Field(default=50.0, description="Mindest-Batterieleistung für Start der Legionellenfahrt (W)")
     batterie_start_min_soc_prozent: float = Field(default=90.0, description="Mindest-SOC für Batterie-Start der Legionellenfahrt (%)")
     max_netzbezug_watt: float = Field(default=-50.0, description="PV/Batterie gelten nur ohne relevanten Netzkauf (W)")
+    # Hygiene-Frist: So viele Tage darf die Prophylaxe maximal auf eine
+    # PV-taugliche Gelegenheit warten. Danach wird sie auch ohne erneuerbare
+    # Quelle mit Netzstrom durchgefuehrt - in PV-armen Winterwochen wuerde
+    # sie sonst vollstaendig ausfallen und 60 C werden nie erreicht.
+    max_tage_ohne_lauf: int = Field(
+        default=14,
+        description=(
+            "Hygiene-Frist in Tagen: nach so vielen Tagen ohne erfolgreichen "
+            "Lauf wird die Prophylaxe auch ohne PV/Batterie gestartet. "
+            "0 = unbegrenzt warten (altes Verhalten)."
+        ),
+    )
 
 
     @model_validator(mode="after")
@@ -757,6 +784,8 @@ class LegionellenConfig(BaseModel):
             raise ValueError("max_netzbezug_watt muss <= 0 sein")
         if not (self.start_uhr <= self.spaeteste_start_uhr <= 23):
             raise ValueError("spaeteste_start_uhr muss zwischen start_uhr und 23 liegen")
+        if not (0 <= self.max_tage_ohne_lauf <= 90):
+            raise ValueError("max_tage_ohne_lauf ausserhalb 0-90 Tagen")
         return self
 
 

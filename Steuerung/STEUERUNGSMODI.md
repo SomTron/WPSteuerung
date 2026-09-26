@@ -599,6 +599,17 @@ Konfigurationsschlüsseln.
 
 ### 5.8 Batterie (Prio 75) – Heizen mit Hausbatterie
 
+> **Status: deaktiviert** (atterie.aktiv: false in der Projektkonfiguration).
+>
+> Die Mehrtages-Simulation (Analyse/sim) hat gezeigt, dass die Regel
+> praktisch nie gewinnt: Sie startet erst bei unten ≤ 41 °C, während der
+> Notfallschutz (Prio 110) den Speicher im Winter auf ~44–45 °C hält. In den
+> Realdaten (September 2026) war das Startfenster nur in 0,65 % der Samples
+> offen (9–11 und 17–18 Uhr); bei Winterwetter ist es geschlossen. Ohne
+> vorherigen Start kann aber die Weiterlauf-Bedingung gar nicht greifen.
+> Reaktivierung nur mit erhöhter Startschwelle **oder** höherer
+> Priorität – beides ist eine bewusste Betriebsentscheidung.
+
 - **Zweck:** Heizen, wenn die Hausbatterie voll genug ist und kein nennenswerter
   Netzbezug stattfindet (Priorität: PV direkt > Batterie > Netz).
 - **Eingänge:** `soc`, `feedin_watt`, `temp_dict[temperaturfuehler]`,

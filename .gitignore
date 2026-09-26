@@ -19,6 +19,14 @@ absturz_historie.json
 
 # Diagnose-/Analyse-Artefakte (lokal ausgewertet, nie committen - teils >10 MB)
 logs/wp_diag_*/
+# Exportierte Betriebsdaten (CSV/Log aus dem realen Betrieb).
+# Sie gehoeren nicht ins Repository - sehr gross und personenbezogen.
+logs/24.9/
+logs/entscheidungs_log_*.txt
+logs/heizungssteuerung*.log
+logs/*_upload*.txt
+logs/sim_*.json
+
 logs/analyse_*/
 
 # Laufzeit-Datei des Services (wird fortlaufend neu geschrieben - nervt sonst
