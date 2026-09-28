@@ -32,6 +32,7 @@ from priority_control import (
     bewerte_alle_regeln,
     calcstart_nachtsperre_konflikt,
     formatiere_ergebnisse,
+    _debug_once,
 )
 
 _REAL_DATETIME = datetime
@@ -339,8 +340,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # Bademodus: Zieltemperatur-Erhoehung aus der Config (fuer warmes Wasser)
         erhoehung = effektive_config.bademodus.solltemperatur_erhoehung_c
         effektive_config.abweichung.solltemperatur_c += erhoehung
-        logging.debug(
-            f"Bademodus aktiv: Solltemperatur +{erhoehung}C auf {effektive_config.abweichung.solltemperatur_c}C"
+        _debug_once(
+            "bademodus",
+            f"Bademodus aktiv: Solltemperatur +{erhoehung}C auf {effektive_config.abweichung.solltemperatur_c}C",
         )
 
     if state.urlaubsmodus_aktiv:
@@ -351,8 +353,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             else 5.0
         )
         effektive_config.abweichung.solltemperatur_c -= absenkung
-        logging.debug(
-            f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C"
+        _debug_once(
+            "urlaubsmodus",
+            f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C",
         )
 
     # Sommer-Modus: Solltemperatur senken bei mehrtÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¤gig guter PV-Prognose.
@@ -365,10 +368,13 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # neutralisiert wird.
         if not state.bademodus_aktiv:
             wende_sommer_offset_an(effektive_config)
-        logging.debug(
+        # Der Sommer-Modus kann tageelang aktiv sein - ohne Deduplizierung
+        # loggte diese Zeile im 10-s-Takt durchgehend mit.
+        _debug_once(
+            "sommer_modus",
             f"Sommer-Modus aktiv: Abweichungs-Soll {effektive_config.abweichung.solltemperatur_c:.1f}C, "
             f"PV-Ausschaltpunkte "
-            f"{', '.join(f'{r.name}:{r.ausschalten_bei_c:.0f}C' for r in effektive_config.pv_regeln)}"
+            f"{', '.join(f'{r.name}:{r.ausschalten_bei_c:.0f}C' for r in effektive_config.pv_regeln)}",
         )
 
     # Forecast-Daten aus State holen

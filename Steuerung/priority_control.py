@@ -37,6 +37,36 @@ _last_calcstart_log: Optional[datetime] = None
 _last_stale_warning: Optional[datetime] = None
 STALE_LOG_INTERVAL_MIN = 5
 
+# Merkspeicher fuer entduplizierte Debug-Zeilen (siehe _debug_once).
+_debug_memo: Dict[str, str] = {}
+
+
+def _debug_once(key: str, message: str, identity: Optional[str] = None) -> None:
+    """Loggt `message` nur, wenn sich die Identität gegenüber dem letzten
+    Aufruf geändert hat.
+
+    Die Regelung läuft im 10-s-Takt. Debug-Zeilen, deren Inhalt im
+    Betrieb konstant bleibt (z.B. ein Sollwert-Offset, solange ein Modus
+    aktiv ist), wurden dadurch stundenlang identisch wiederholt und haben
+    die Logdatei zugefüllt - beobachtet am 28.09.2026 zwischen 14:46 und
+    14:48.
+
+    `identity` trennt "was ist passiert" von "wie sieht es gerade aus":
+    Ohne sie wird die vollständige Meldung verglichen, was bei Zeilen mit
+    mitschwingenden Zahlen (z.B. einem aus der Temperatur berechneten
+    Stundenbedarf) erneut auslöst, sobald nur dieser Wert kippt. Wer eine
+    solche Zahl bewusst entprellen will, übergibt eine Identität aus den
+    stabilen Größen - z.B. dem Ereignis-Zeitstempel.
+
+    Die Regelungslogik wird nicht berührt: Es ändert sich nur, was
+    geschrieben wird.
+    """
+    vergleich = message if identity is None else identity
+    if _debug_memo.get(key) == vergleich:
+        return
+    _debug_memo[key] = vergleich
+    logging.debug(message)
+
 def _parse_sensor(
     temp_dict: Dict[str, Optional[float]], sensor_name: str
 ) -> Optional[float]:
@@ -1547,10 +1577,18 @@ def evaluate_calculated_start(
             hours_needed = max(
                 0.0, hours_needed - usage_drop_gesamt_k / max(heizrate_unten, 0.1)
             )
-            logging.debug(
+            # Nur einmal je Ereignis loggen. Die Identitaet besteht bewusst
+            # NUR aus Zeitstempel und Drop, NICHT aus dem errechneten
+            # 'hours_needed': dieser Wert schwankt mit der Temperatur und
+            # wuerde die Zeile sonst erneut im 10-s-Takt ausloesen - genau
+            # das war der Spam. Die Korrektur selbst bleibt unveraendert bei
+            # jedem Lauf aktiv.
+            _debug_once(
+                "calcstart_nutzungsevent",
                 f"CalcStart: Nutzungsevent {neueste.get('timestamp','')} "
                 f"drop {drop:.1f}K -> Stundenbedarf -{usage_drop_gesamt_k:.2f}h "
-                f"(neu {hours_needed:.2f}h)"
+                f"(neu {hours_needed:.2f}h)",
+                identity=f"{neueste.get('timestamp','')}|{drop:.3f}",
             )
 
     time_left = ziel_uhr - current_time
