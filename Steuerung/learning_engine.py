@@ -1014,16 +1014,48 @@ class LearningEngine:
         self,
         hours: int = 2,
         now: Optional[datetime] = None,
+        nur_unkompensierte: bool = True,
     ) -> List[Dict]:
-        """Gibt alle Zapfungsereignisse der letzten Stunden zurueck.
-        
-        Wird von CalcStart genutzt um den Temperaturverlust aus
-        erkannten Zapfungen in die Startzeitenberechnung einzubeziehen.
+        """Gibt Zapfungsereignisse zurueck, deren Temperaturverlust die
+        Startzeitberechnung noch beeinflusst.
+
+        Zwei Filter:
+
+        1. ``hours`` - harte Obergrenze gegen sehr alte Eintraege.
+        2. ``nur_unkompensierte`` - Ereignisse, die VOR dem zuletzt
+           abgeschlossenen Heizzyklus liegen, fallen weg. Grund: sobald
+           danach geheizt wurde, ist der Temperaturverlust ausgeglichen und
+           der CalcStart darf den Start NICHT mehr verfruehen. Ohne diesen
+           Filter zog derselbe Abzug ueber Stunden weiter den Start vor
+           (Beobachtung 28.09.2026: Zapfung 13:57, Abzug um 14:48 noch
+           aktiv - 0.25h dauerhafte Verfruehung des Starts).
+
+        Der 2-h-Filter allein war dafuer nicht praezise genug: Innerhalb von
+        zwei Stunden kann problemlos ein kompletter Heizzyklus gelaufen
+        sein, der den Verlust laengst ausgeglichen hat.
         """
         if now is None:
             now = datetime.now()
         grenze = to_naive(now - timedelta(hours=hours))
-        return [
+        treffer = [
             e for e in self.data.usage_events
             if (ts := self._parse_ts(e.get("timestamp"))) is not None and ts >= grenze
         ]
+        if nur_unkompensierte:
+            letzter_zyklus = self._letzter_zyklus_ende()
+            if letzter_zyklus is not None:
+                treffer = [
+                    e for e in treffer
+                    if (ts := self._parse_ts(e.get("timestamp"))) is not None
+                    and ts > letzter_zyklus
+                ]
+        return treffer
+
+    def _letzter_zyklus_ende(self) -> Optional[datetime]:
+        """Ende des juengsten abgeschlossenen Heizzyklus (naiv) oder None."""
+        if not self.data.cycles:
+            return None
+        letzter = self.data.cycles[-1]
+        if isinstance(letzter, dict):
+            return self._parse_ts(letzter.get("end_time"))
+        return None

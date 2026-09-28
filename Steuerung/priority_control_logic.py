@@ -448,7 +448,16 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_hourly_wh=hourly_forecast_watt,
         ) if callable(_profil_getter) else None
         _usage_getter = getattr(learning_engine, "get_recent_usage_events", None)
-        recent_usage_events = _usage_getter(hours=2) if callable(_usage_getter) else []
+        # Fenster aus der Config statt Magic Number 2. Zusaetzlich filtert
+        # get_recent_usage_events() bereits kompensierte Zapfungen heraus
+        # (Ereignis vor dem letzten Heizzyklus) - der Abzug verfrueht den
+        # Start also nicht mehr ueber Stunden.
+        _nutzungsfenster = float(
+            getattr(effektive_config.calculated_start, "nutzung_fenster_h", 2.0)
+        )
+        recent_usage_events = (
+            _usage_getter(hours=_nutzungsfenster) if callable(_usage_getter) else []
+        )
     else:
         gelernte_rate_unten = None
         gelernte_rate_gesamt = None

@@ -629,6 +629,14 @@ class CalculatedStartConfig(BaseModel):
         default=0.5,
         description="Sicherheitszuschlag (h) auf die berechnete Heizzeit fuer den Spaetest-Start ohne Quelle",
     )
+    nutzung_fenster_h: float = Field(
+        default=2.0,
+        description=(
+            "Wie lange (h) ein Zapfungs-Abfall den Start vorverlegt. Wird "
+            "zusaetzlich begrenzt: sobald nach der Zapfung ein Heizzyklus "
+            "lief, gilt der Verlust als ausgeglichen und faellt heraus."
+        ),
+    )
     netz_solltemperatur_c: float = Field(
         default=0.0,
         description=(
@@ -661,6 +669,8 @@ class CalculatedStartConfig(BaseModel):
             raise ValueError("calculated_start: tmax_c muss ueber solltemperatur_c liegen")
         if not (0 <= self.netz_fallback_ab_uhr <= 23):
             raise ValueError("calculated_start: netz_fallback_ab_uhr ausserhalb 0-23")
+        if not (0.0 <= self.nutzung_fenster_h <= 24.0):
+            raise ValueError("calculated_start: nutzung_fenster_h ausserhalb 0-24 h")
         if not (-50.0 <= self.notfall_unten_c <= self.solltemperatur_c):
             raise ValueError("calculated_start: notfall_unten_c muss zwischen -50 und Ziel liegen")
         if not (0.0 <= self.netz_solltemperatur_c < self.solltemperatur_c):
