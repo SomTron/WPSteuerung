@@ -75,6 +75,20 @@ verify_service_restart() {
     color_print "$GREEN" "Service-Neustart verifiziert: MainPID=$new_pid, NRestarts=$new_restarts."
 }
 
+# Nach einem Pull kann sich auch DIESES Skript geaendert haben - dann muss es
+# neu geladen werden. Wird das Deploy aus dem Manager-Menue gestartet, setzt
+# dieses WPS_DEPLOY_NO_RELOAD=1: dann wird NICHT neu gestartet, sondern
+# sauber beendet. Grund: der Menueprozess laeuft weiter und startet sich
+# anschliessend ueber den Launcher selbst neu - damit landet man direkt
+# wieder im (dann aktuellen) Manager, statt in einer zweiten Runde des
+# Deploy-Menues zu landen.
+reload_oder_ende() {
+    if [ -n "${WPS_DEPLOY_NO_RELOAD:-}" ]; then
+        exit 0
+    fi
+    exec sh "$SCRIPT_PATH" "$@"
+}
+
 # Holt Remote-Infos fuer die ANZEIGE. Bewusst nicht-interaktiv
 # (BatchMode=yes): ssh fragt dann KEINE Passphrase ab, sondern meldet sofort
 # den Fehler. Sonst wartet der Aufruf im 15-s-Timeout auf eine Passphrase,
@@ -287,10 +301,10 @@ case "$choice" in
             fi
             printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
             sleep 1
-            exec sh "$SCRIPT_PATH" "$@"
+            reload_oder_ende "$@"
         else
             color_print "$YELLOW" "Update abgebrochen."
-            exec sh "$SCRIPT_PATH" "$@"
+            reload_oder_ende "$@"
         fi
         ;;
 
@@ -423,10 +437,10 @@ case "$choice" in
             fi
             printf "${CYAN}Starte Skript neu um Aenderungen zu laden...${NC}\n"
             sleep 1
-            exec sh "$SCRIPT_PATH" "$@"
+            reload_oder_ende "$@"
         else
             color_print "$YELLOW" "Abgebrochen."
-            exec sh "$SCRIPT_PATH" "$@"
+            reload_oder_ende "$@"
         fi
         ;;
 

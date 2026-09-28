@@ -126,6 +126,21 @@ def _updater_scripts():
     )
 
 
+def _hauptmenue_block(manager: str, option: str) -> str:
+    """Holt den Block einer Option des HAUPTmenues bis zur naechsten Option.
+
+    Zwei Stolperfallen, die dieser Helfer vermeidet:
+    * Das Analyse-Untermenue nutzt dieselben Nummern, aber mit 12 statt 8
+      Leerzeichen eingerueckt - der Anker verlangt einen Zeilenumbruch
+      davor, sonst wuerde das falsche Menue getroffen.
+    * Ein Split auf ';;' schneidet zu frueh ab: Option 6 enthaelt ein
+      inneres 'case ... [Jj]*) ;;'. Deshalb laeuft der Block bis zur
+      naechsten Hauptmenue-Option.
+    """
+    rest = manager.split(f"\n        {option}\n", 1)[1]
+    return re.split(r"\n        \d+\)\n", rest, maxsplit=1)[0]
+
+
 def _launcher_text():
     return (UPDATER_DIR / "wp-manager.sh").read_text(encoding="utf-8")
 
@@ -248,14 +263,74 @@ def test_menue_zeichnet_sich_beim_zurueckkehren_neu():
     manager, _ = _updater_scripts()
     # printf '\033[H\033[2J' im Shell-Skript
     assert "\\033[H\\033[2J" in manager
+    # Ein unguarded 'clear' stand frueher an der Header-Ausgabe: fehlt das
+    # Kommando auf dem Pi, schrieb es eine Fehlermeldung und blieb ohne
+    # Wirkung. Das Leeren passiert jetzt nur noch ueber die ANSI-Sequenz.
+    assert "\n    clear\n" not in manager
 
 
 def test_live_logs_kehren_zum_menue_zurueck():
     """Option 1 (tail -f) braucht eine Rueckkehr-Pause - sonst scrollt die
     Ausgabe ohne Halt durch und der Benutzer verliert den Kontext."""
     manager, _ = _updater_scripts()
-    option1 = manager.split("        1)\n", 1)[1].split(";;", 1)[0]
+    # Anker: Zeilenumbruch + 8 Leerzeichen = Hauptmenue. Ohne den Umbruch
+    # wuerde auch das Analyse-Untermenue (12 Leerzeichen) treffen.
+    option1 = _hauptmenue_block(manager, "1)")
+    assert "tail -n 20 -f" in option1
     assert "wait_for_key" in option1
+
+
+def test_header_wird_gecacht_und_nach_zustandswechsel_verworfen():
+    """Der Header startet 4x git und einmal python3. Beim Navigieren durch
+    die Optionen zahlt man das sonst jedes Mal neu.
+
+    Wichtig: Nach Aktionen, die den Zustand veraendern, muss der Cache
+    aktiv verworfen werden - sonst zeigt der Header z.B. weiter 'Dienst
+    INAKTIV', obwohl gerade neu gestartet wurde.
+    """
+    manager, _ = _updater_scripts()
+    assert "header_cache_ist_alt() {" in manager
+    assert "header_verwerfen() {" in manager
+    assert "if header_cache_ist_alt; then" in manager
+    # Cache wird NACH der Berechnung gefuellt, nicht davor.
+    reihenfolge = manager.index("HEADER_CACHE_STAMP=$(date +%s")
+    assert reihenfolge > manager.index("MANAGER_STATUS=$(python3")
+    # Zustandsaendernde Optionen verwerfen den Cache. Anker mit fuehrendem
+    # Zeilenumbruch + exakt 8 Leerzeichen: das Analyse-Untermenue nutzt
+    # dieselben Nummern, aber mit 12 Leerzeichen eingerueckt.
+    for option in ("5)", "6)", "7)"):
+        block = _hauptmenue_block(manager, option)
+        assert "header_verwerfen" in block, f"Option {option} cacht den Header nicht"
+
+
+def test_remote_zeile_gibt_den_vergleich_als_lokal_kenntlich():
+    """'auf aktuellem Stand' war eine Behauptung: der Abstand kommt aus dem
+    lokalen Branch-Ref, es wird gar nicht gefetcht (Timeout/Passphrase).
+    """
+    manager, _ = _updater_scripts()
+    assert "laut lokalem Ref" in manager
+    assert "kein Live-Fetch" in manager
+
+
+def test_deploy_kehrt_in_den_manager_zurueck():
+    """Nach Option 4 (Update & Deploy) muss man im Manager landen, nicht in
+    einer zweiten Runde des Deploy-Menues. rpi-deploy.sh restartet sich
+    deshalb nicht selbst, wenn WPS_DEPLOY_NO_RELOAD gesetzt ist, und das
+    Menue laedt sich ueber den Launcher neu (mit dessen Last-Good-Pruefung).
+    """
+    manager, deploy = _updater_scripts()
+    # Anker: Zeilenumbruch + 8 Leerzeichen (Hauptmenue, nicht Analyse-Untermenue).
+    option4 = _hauptmenue_block(manager, "4)")
+    assert "WPS_DEPLOY_NO_RELOAD=1" in option4
+    assert 'exec sh "$SCRIPT_DIR/wp-manager.sh"' in option4
+    assert "header_verwerfen" in option4
+    # rpi-deploy.sh: Selbst-Neustart nur noch ueber reload_oder_ende().
+    assert "reload_oder_ende() {" in deploy
+    assert "WPS_DEPLOY_NO_RELOAD" in deploy
+    # Genau EIN exec auf SCRIPT_PATH - nämlich in reload_oder_ende().
+    # Weitere direkte Aufrufe wuerden das Deploy-Menue erneut oeffnen.
+    assert deploy.count('exec sh "$SCRIPT_PATH" "$@"') == 1
+    assert deploy.count("reload_oder_ende ") == 4  # 4 Aufrufstellen
 
 
 def test_service_stopp_wird_bestaetigt():

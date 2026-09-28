@@ -2,6 +2,12 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.13: Strg+C beendet nur noch die aktuelle Ansicht statt den Manager
+#       (Trap ohne exit); Header-Cache (TTL 20 s, nach Zustandsaenderungen
+#       verworfen); Remote-Zeile kennzeichnet den Vergleich als "laut lokalem
+#       Ref" statt einen veralteten Stand als "aktuell" auszugeben; Option 4
+#       kehrt ueber den Launcher direkt in den (dann aktuellen) Manager
+#       zurueck; unguarded 'clear' entfernt.
 # v1.12: Sicheres Fast-Forward ohne Datenverlust, verifizierte Serviceaktionen,
 #       Produktionsstatus mit Kompressor/Zyklen/Datenalter, 24-h-Fehler-/OOM-
 #       Diagnose, Analyse-Untermenue und zentraler Datenschutz-Upload.
@@ -723,6 +729,33 @@ analysis_menu() {
     done
 }
 
+# --- Header-Cache -------------------------------------------------------------
+# Der Status-Header startet pro Durchlauf 4x git und einmal python3
+# (manager_status.py). Wer sich durch die 20 Optionen bewegt, zahlt das bei
+# jedem Zurueckkehren erneut. Deshalb wird der Header nur neu berechnet,
+# wenn der Cache abgelaufen ist.
+#
+# WICHTIG: Die Zeitbasis ist bewusst kurz (20 s). Damit bleibt der Header
+# bei langen Ansichten (tail -f laeuft Minuten) automatisch aktuell, ohne
+# Navigation zu verzoegern. Aktionen, die den Zustand veraendern
+# (Service-Restart, Deploy, Auto-Analyse), verwerfen den Cache aktiv -
+# dort darf niemals ein alter Header stehen bleiben.
+HEADER_CACHE_TTL=20
+HEADER_CACHE_STAMP=0
+
+header_cache_ist_alt() {
+    _jetzt=$(date +%s 2>/dev/null || echo 0)
+    case "$_jetzt:$HEADER_CACHE_STAMP" in
+        *[!0-9:]*) return 0 ;;   # kaputte Zeitbasis -> neu berechnen
+    esac
+    [ $((_jetzt - HEADER_CACHE_STAMP)) -ge "$HEADER_CACHE_TTL" ] && return 0
+    return 1
+}
+
+header_verwerfen() {
+    HEADER_CACHE_STAMP=0
+}
+
 while true; do
     # Terminal leeren. Der Status-Header ist ueber 50 Zeilen lang; ohne
     # clear schob sich das Menue bei jedem Zurueckkehren weiter nach unten,
@@ -733,6 +766,14 @@ while true; do
     if [ -t 1 ]; then
         printf '\033[H\033[2J'
     fi
+
+    # Header nur neu berechnen, wenn der Cache abgelaufen ist. Der Block
+    # bis 'fi' unten startet 4x git und einmal python3 (manager_status.py).
+    # Bei 20 Optionen und mehreren Rundwegen durch das Menue summiert sich
+    # das spuerbar. Nach JEDER Aktion, die den Zustand aendert, wird der
+    # Cache per header_verwerfen() verworfen - der Header ist damit nie
+    # veraltet, auch nicht unmittelbar nach einem Service-Neustart.
+    if header_cache_ist_alt; then
 
     # Status Informationen abrufen
     CUR_BRANCH=$(cd "$TARGET_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "Unknown")
@@ -840,9 +881,15 @@ while true; do
             | grep -Eic 'Out of memory|Killed process' || true)
     fi
 
-    clear
+    # Cache erst jetzt fuellen - vorher waeren die Werte noch nicht berechnet.
+    HEADER_CACHE_STAMP=$(date +%s 2>/dev/null || echo 0)
+    fi   # header_cache_ist_alt
+
+    # Terminal wurde oben bereits geleert (nur bei echtem TTY). Ein
+    # unguarded 'clear' stand hier frueher: fehlt das Kommando auf dem Pi,
+    # schrieb es eine Fehlermeldung und blieb wirkungslos.
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.12                 ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager v1.13                 ${NC}\n"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Manager:  %s (Menue: %s)\n" "$MANAGER_REPO" "$SCRIPT_DIR/wp-manager-menu.sh"
@@ -852,13 +899,19 @@ while true; do
     fi
     printf "\n"
     printf "Commit:   %s\n" "$CUR_COMMIT"
+    # ACHTUNG: Der Abstand zum Remote kommt aus dem LOKALEN Branch-Ref.
+    # Es wird hier bewusst NICHT gefetcht - ein Fetch wuerde bei einem
+    # passphrase-geschuetzten Key entweder 15 s blockieren (Timeout) oder
+    # nach der Passphrase fragen. Die Anzeige sagt das jetzt auch, statt
+    # "auf aktuellem Stand" zu behaupten und dabei einen veralteten
+    # Stand zu vergleichen. Wer den echten Stand will: Option 4.
     printf "Remote:   "
     if [ "$GIT_BEHIND" = "0" ]; then
-        printf "${GREEN}auf aktuellem Stand${NC}\n"
+        printf "${GREEN}auf aktuellem Stand${NC} ${DIM}(laut lokalem Ref, kein Live-Fetch)${NC}\n"
     elif [ "$GIT_BEHIND" = "?" ]; then
         printf "${DIM}kein Upstream-Branch konfiguriert${NC}\n"
     else
-        printf "${YELLOW}%s Commit(s) hinterher – Update empfohlen (Option 4)${NC}\n" "$GIT_BEHIND"
+        printf "${YELLOW}%s Commit(s) hinterher – Update empfohlen (Option 4)${NC} ${DIM}(laut lokalem Ref)${NC}\n" "$GIT_BEHIND"
     fi
     printf "Service:  %b" "$SVC_STATUS"
     if [ -n "$SVC_PID" ] && [ "$SVC_PID" != "0" ]; then
@@ -976,10 +1029,23 @@ while true; do
             fi
             wait_for_key
             ;;
-        4) sh "$SCRIPT_DIR/rpi-deploy.sh"; wait_for_key ;;
+        4)
+            # WPS_DEPLOY_NO_RELOAD: rpi-deploy.sh beendet sich danach sauber,
+            # statt sich selbst neu zu starten. Grund: sonst landet man nach
+            # dem Update in einer ZWEITEN Runde des Deploy-Menues, statt
+            # direkt wieder im Manager zu sein.
+            WPS_DEPLOY_NO_RELOAD=1 sh "$SCRIPT_DIR/rpi-deploy.sh"
+            header_verwerfen
+            wait_for_key
+            # Der Deploy hat evtl. auch dieses Menue-Skript aktualisiert.
+            # Neu laden ueber den Launcher - damit greift dessen Syntax-
+            # und Last-Good-Pruefung und der Manager zeigt den neuen Stand.
+            exec sh "$SCRIPT_DIR/wp-manager.sh" "$@"
+            ;;
         5)
             printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
             verify_service_action restart wpsteuerung
+            header_verwerfen
             wait_for_key
             ;;
         6)
@@ -992,11 +1058,13 @@ while true; do
             esac
             printf "${CYAN}Stoppe Service und verifiziere...${NC}\n"
             verify_service_action stop wpsteuerung
+            header_verwerfen
             wait_for_key
             ;;
         7)
             printf "${CYAN}Starte Service und verifiziere...${NC}\n"
             verify_service_action start wpsteuerung
+            header_verwerfen
             wait_for_key
             ;;
         8) ls -la "$TARGET_DIR"; wait_for_key ;;
