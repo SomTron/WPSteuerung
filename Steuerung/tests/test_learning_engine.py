@@ -165,6 +165,62 @@ class TestZapfung:
         )
         assert len(engine.data.usage_events) == 2
 
+    def test_komfort_verletzung_wird_entprellt(self, engine, caplog):
+        """Regression Nutzer-Log 28.09.2026, 18:43:
+
+            18:43:18 WARNING KOMFORT-VERLETZUNG: t_oben 24.4C < 40.0C
+            18:43:28 WARNING KOMFORT-VERLETZUNG: t_oben 24.4C < 40.0C
+            18:43:37 WARNING KOMFORT-VERLETZUNG: t_oben 24.4C < 40.0C
+
+        Eine anhaltende Kuehlphase ist EIN Ereignis. Sie darf weder dreimal
+        gemeldet noch dreimal gezaehlt werden - sonst verzerrt sie
+        `verletzungen_7d` in der WebApp um den Faktor 3.
+        """
+        import logging as _logging
+
+        t = datetime(2026, 9, 28, 18, 43, 18)
+        temps = {"unten": 23.2, "mittig": 23.4, "oben": 24.4, "verd": 9.6}
+
+        with caplog.at_level(_logging.WARNING, logger="root"):
+            for k in range(12):          # 12 Samples im 10-s-Takt = 2 min
+                engine.update(
+                    t + timedelta(seconds=10 * k), temps, False,
+                )
+
+        warnungen = [
+            r for r in caplog.records if "KOMFORT-VERLETZUNG" in r.getMessage()
+        ]
+        assert len(warnungen) == 1, (
+            f"{len(warnungen)} Warnungen statt 1 fuer eine einzige Kuehlphase"
+        )
+        assert len(engine.data.komfort_verletzungen) == 1, (
+            f"{len(engine.data.komfort_verletzungen)} Eintraege statt 1 - "
+            "die Statistik in der WebApp waere dreifach verzerrt"
+        )
+
+    def test_komfort_verletzung_zaehlt_spätere_kuehlphase_getrennt(self, engine):
+        """Nach dem Cooldown ist eine NEUE Kuehlphase wieder ein Ereignis."""
+        t = datetime(2026, 9, 28, 9, 0, 0)
+        engine.update(t, {"unten": 23.0, "mittig": 23.0, "oben": 24.0, "verd": 9.0},
+                      False)
+        engine.update(
+            t + timedelta(minutes=engine.data.config.comfort_cooldown_min + 5),
+            {"unten": 23.0, "mittig": 23.0, "oben": 24.0, "verd": 9.0},
+            False,
+        )
+        assert len(engine.data.komfort_verletzungen) == 2
+
+    def test_komfort_verletzung_ignoriert_nachtsperre_und_warmen_speicher(self, engine):
+        """Nachtsperre und ausreichende Temperatur bleiben unveraendert."""
+        engine.update(datetime(2026, 9, 28, 23, 0),
+                      {"unten": 23.0, "mittig": 23.0, "oben": 24.0, "verd": 9.0},
+                      False)
+        assert engine.data.komfort_verletzungen == []
+        engine.update(datetime(2026, 9, 28, 10, 0),
+                      {"unten": 44.0, "mittig": 44.0, "oben": 45.0, "verd": 9.0},
+                      False)
+        assert engine.data.komfort_verletzungen == []
+
 
 # ── Persistenz ────────────────────────────────────────────────────────
 

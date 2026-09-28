@@ -58,6 +58,12 @@ class LearningConfig:
     comfort_grenz_c: float = 40.0
     comfort_max_pro_tag: int = 3
     comfort_max_entries: int = 200
+    #: Eine anhaltende Kuehlphase ist EIN Ereignis, nicht drei. Ohne diese
+    #: Sperre zaehlte und meldete der 10-s-Takt dieselbe Verletzung dreimal
+    #: hintereinander (Nutzer-Log 28.09.2026, 18:43:18/28/37) und blaehte
+    #: zusaetzlich die Statistik in api.py (`verletzungen_7d`) auf das
+    #: Dreifache. Analog zur Zapfungs-Entprellung `usage_event_cooldown_min`.
+    comfort_cooldown_min: int = 30
     comfort_bonus_schwellwert: int = 2
     comfort_bonus_vorlauf_h: float = 0.5
 
@@ -423,7 +429,13 @@ class LearningEngine:
 
     def _detect_komfort_verletzung(self, now, t_oben, nachtsperre_aktiv, grenz_c=40.0, max_pro_tag=3):
         """Prueft ob t_oben unter die Komfort-Grenze gefallen ist und
-        zaehlt die Verletzung (ausserhalb Nachtsperre, max. max_pro_tag)."""
+        zaehlt die Verletzung (ausserhalb Nachtsperre, max. max_pro_tag).
+
+        Entprellung: Eine anhaltende Kuehlphase ist EIN Ereignis. Ohne die
+        Sperre zaehlte der 10-s-Takt dieselbe Verletzung dreimal in Folge
+        (Nutzer-Log 28.09.2026, 18:43:18/28/37) - dreifache Warnung UND
+        dreifache Verzerrung der Statistik (`verletzungen_7d` in api.py).
+        """
         if t_oben is None or t_oben >= grenz_c or nachtsperre_aktiv:
             return
         heute_mitternacht = to_naive(
@@ -434,6 +446,17 @@ class LearningEngine:
         )
         if heute_count >= self.data.config.comfort_max_pro_tag:
             return
+        # Innerhalb des Cooldowns schon erfasst? Dann zaehlt und meldet
+        # diese Kuehlphase nicht erneut.
+        cooldown_s = max(0, int(self.data.config.comfort_cooldown_min)) * 60
+        if cooldown_s and self.data.komfort_verletzungen:
+            vor_ts = self._parse_ts(self.data.komfort_verletzungen[-1])
+            if vor_ts is not None:
+                try:
+                    if 0 <= (to_naive(now) - vor_ts).total_seconds() < cooldown_s:
+                        return
+                except (TypeError, ValueError):
+                    pass
         ts = now.isoformat(timespec="seconds")
         self.data.komfort_verletzungen.append(ts)
         # Auf letzte config.comfort_max_entries Eintraege begrenzen

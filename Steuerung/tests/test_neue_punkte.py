@@ -47,16 +47,39 @@ class TestKomfortVerletzung:
         assert len(eng.data.komfort_verletzungen) == 0
 
     def test_max_pro_tag_begrenzt(self, tmp_path):
+        """max_pro_tag=3 begrenzt die EREIGNisse pro Tag.
+
+        Die Aufrufe liegen bewusst ausserhalb von `comfort_cooldown_min`:
+        Eine anhaltende Kuehlphase ist EIN Ereignis (siehe
+        test_komfort_verletzung_wird_entprellt). Die Tagesgrenze ist eine
+        eigene Schranke und wird hier mit getrennten Kuehlphasen geprueft.
+        """
         pfad = str(tmp_path / "lern.json")
         eng = LearningEngine(data_path=pfad)
-        now = datetime.now()
-        for minute in range(10):
+        # Fester Vormittag statt datetime.now(): 10 Schritte a 35 min liefen
+        # sonst ueber Mitternacht hinaus, wodurch die Tagesgrenze zurueckgesetzt
+        # wurde und der Test sein Ziel verfehlte.
+        now = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+        schritt = timedelta(minutes=eng.data.config.comfort_cooldown_min + 5)
+        for k in range(10):
             eng._detect_komfort_verletzung(
-                now + timedelta(minutes=minute),
+                now + schritt * k,
                 t_oben=35.0, nachtsperre_aktiv=False,
             )
         # max_pro_tag=3 (Default)
         assert len(eng.data.komfort_verletzungen) == 3
+
+    def test_komfort_verletzung_bleibt_innerhalb_einer_kuehlphase_ein_eintrag(self, tmp_path):
+        """Innerhalb des Cooldowns bleibt es bei EINEM Eintrag."""
+        pfad = str(tmp_path / "lern.json")
+        eng = LearningEngine(data_path=pfad)
+        now = datetime.now()
+        for minute in range(10):        # 1 min in 1-min-Schritten
+            eng._detect_komfort_verletzung(
+                now + timedelta(minutes=minute),
+                t_oben=35.0, nachtsperre_aktiv=False,
+            )
+        assert len(eng.data.komfort_verletzungen) == 1
 
     def test_bonus_vorlauf_ab_drei_verletzungen(self, tmp_path):
         pfad = str(tmp_path / "lern.json")
