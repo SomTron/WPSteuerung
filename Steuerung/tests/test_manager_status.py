@@ -219,10 +219,43 @@ def test_preflight_meldet_fehlende_pflichtprogramme():
     assert "Fehlende Pflichtprogramme" in manager
 
 
-def test_ctrl_c_bricht_mit_sauberer_meldung_ab():
+def test_ctrl_c_beendet_nur_die_ansicht_nicht_den_manager():
+    """Strg+C darf den Manager NICHT beenden (Bug 28.09.2026).
+
+    Vorher rief 'menu_abbruch' per 'exit 130' auf. Da SIGINT an die ganze
+    Prozessgruppe geht, beendete ein Strg+C in 'tail -f' (Option 1) oder
+    'more' den Menueprozess selbst - man landete auf der Shell und musste
+    neu starten. INT behandelt jetzt nur die Ansicht; TERM bleibt fatal.
+    """
     manager, _ = _updater_scripts()
     assert "menu_abbruch()" in manager
-    assert "trap menu_abbruch INT TERM" in manager
+    # menu_abbruch darf den Prozess NICHT mehr beenden.
+    abbruch_body = manager.split("menu_abbruch() {", 1)[1].split("\n}", 1)[0]
+    assert "exit" not in abbruch_body, (
+        "menu_abbruch beendet den Manager - Strg+C wuerde ihn aus dem "
+        "Menue werfen"
+    )
+    # INT ist nicht mehr fatal, TERM schon (kill von aussen).
+    assert "trap menu_abbruch INT\n" in manager
+    assert "trap menu_abbruch INT TERM" not in manager
+    assert "menu_beenden() {" in manager
+    assert "trap menu_beenden TERM" in manager
+
+
+def test_menue_zeichnet_sich_beim_zurueckkehren_neu():
+    """Ohne Terminal-Leeren schob sich der ~50-zeilige Status-Header bei
+    jedem Zurueckkehren weiter nach unten, bis nichts lesbar war."""
+    manager, _ = _updater_scripts()
+    # printf '\033[H\033[2J' im Shell-Skript
+    assert "\\033[H\\033[2J" in manager
+
+
+def test_live_logs_kehren_zum_menue_zurueck():
+    """Option 1 (tail -f) braucht eine Rueckkehr-Pause - sonst scrollt die
+    Ausgabe ohne Halt durch und der Benutzer verliert den Kontext."""
+    manager, _ = _updater_scripts()
+    option1 = manager.split("        1)\n", 1)[1].split(";;", 1)[0]
+    assert "wait_for_key" in option1
 
 
 def test_service_stopp_wird_bestaetigt():

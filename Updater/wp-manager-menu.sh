@@ -165,11 +165,25 @@ preflight() {
     return 0
 }
 
-# Strg+C im Menue soll eine saubere Zeile hinterlassen und nicht mitten in
-# einer Ausgabe abbrechen.
+# Strg+C beendet NUR die aktuelle Ansicht, nicht den Manager.
+#
+# Vorher rief der Trap 'menu_abbruch' mit 'exit 130' auf. Da SIGINT an die
+# ganze Prozessgruppe geht, beendete ein Strg+C in 'tail -f' (Option 1) oder
+# in 'more' (jede Log-Ansicht) den MENUEPROZESS selbst - man landete auf der
+# Shell und musste den Manager neu starten. Das war die gemeldete
+# Beschwerde: nach jeder Ansicht aus dem Manager geschmissen werden.
+#
+# TERM bleibt bewusst fatal: ein 'kill' von aussen soll den Manager beenden.
+CTRL_C_GEDRUECKT=0
 menu_abbruch() {
-    printf "\n\nMenue abgebrochen. Auf Wiedersehen.\n"
-    exit 130
+    CTRL_C_GEDRUECKT=1
+    printf "\n${DIM}Strg+C beendet nur die aktuelle Ansicht - zurueck im Menue.${NC}\n"
+    printf "${DIM}Zum Beenden: Option 0.${NC}\n"
+}
+
+menu_beenden() {
+    printf "\n\nMenue beendet.\n"
+    exit 0
 }
 
 # Pager mit Fallback: 'more' fehlt auf manchen Systemen.
@@ -403,7 +417,8 @@ upload_file() {
 }
 
 preflight
-trap menu_abbruch INT TERM
+trap menu_abbruch INT
+trap menu_beenden TERM
 
 if [ ! -d "$TARGET_DIR" ]; then
     printf "${RED}Error: $TARGET_DIR not found!${NC}\n"
@@ -609,7 +624,10 @@ finde_qualitaets_report() {
 
 wait_for_key() {
     printf "\n${YELLOW}Drücke Enter, um ins Menü zurückzukehren...${NC}"
+    # Strg+C wird auch hier abgefangen und fuehrt zurueck ins Menue
+    # (menu_abbruch beendet den Prozess nicht mehr).
     read dummy
+    return 0
 }
 
 analysis_status() {
@@ -706,6 +724,16 @@ analysis_menu() {
 }
 
 while true; do
+    # Terminal leeren. Der Status-Header ist ueber 50 Zeilen lang; ohne
+    # clear schob sich das Menue bei jedem Zurueckkehren weiter nach unten,
+    # bis nichts mehr lesbar war. '\033[H\033[2J' (Home + Clear) braucht
+    # kein externes Kommando - 'clear' ist auf einem schlanken Pi nicht
+    # immer vorhanden. Nur bei echtem Terminal, damit Piped-Output ganz
+    # bleibt (Testbetrieb mit WPS_MANAGER_* -Variablen).
+    if [ -t 1 ]; then
+        printf '\033[H\033[2J'
+    fi
+
     # Status Informationen abrufen
     CUR_BRANCH=$(cd "$TARGET_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "Unknown")
     CUR_COMMIT=$(cd "$TARGET_DIR" && git log -1 --oneline 2>/dev/null || echo "No commits")
@@ -880,7 +908,7 @@ while true; do
     [ -n "$LOG_SIZE" ] && printf "Log:        heizungssteuerung.log (%s)\n" "$LOG_SIZE"
     printf -- "${BLUE}---------------------------------------------------------${NC}\n\n"
 
-    printf "1) 📜   Live-Logs (tail -f, Strg+C beendet)\n"
+    printf "1) 📜   Live-Logs (tail -f, Strg+C zurück zum Menü)\n"
     printf "2) 📄   Letzte Logzeilen (Standard 200, fragt nach Anzahl)\n"
     printf "3) ⚠️    Letzte Error-Log-Zeilen (Standard 200, fragt nach Anzahl)\n"
     printf "4) 🚀   Update & Deploy (WPSteuerung)\n"
@@ -906,17 +934,25 @@ while true; do
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
+    CTRL_C_GEDRUECKT=0
     read choice
+    # Strg+C an der Prompt-Zeile: nicht als "Ungueltige Auswahl" melden,
+    # sondern einfach das Menue neu zeichnen.
+    if [ "$CTRL_C_GEDRUECKT" = "1" ]; then
+        continue
+    fi
 
     case $choice in
         1)
             if [ ! -f "$LOG_FILE" ]; then
                 printf "${RED}Logdatei nicht gefunden: %s${NC}\n" "$LOG_FILE"
-                wait_for_key
             else
                 printf "${YELLOW}Live-Logs (letzte 20 Zeilen) – Beenden mit Strg+C${NC}\n\n"
                 tail -n 20 -f "$LOG_FILE"
             fi
+            # Ohne dieses wait_for_key sprang das Menue nach dem tail direkt
+            # weiter - die Ausgabe wurde ohne Pause weggescrollt.
+            wait_for_key
             ;;
         2)
             if [ -f "$LOG_FILE" ]; then

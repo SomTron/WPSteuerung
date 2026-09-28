@@ -275,7 +275,7 @@ case "$choice" in
             else
                 # Unter `set -e` wuerde das Skript hier still beenden. Stattdessen
                 # klar benennen - und der Service bleibt unveraendert laufen.
-                color_print "$RED" "FEHLER: 'git pull' fehlgeschlagen - Code nicht aktualisiert."
+                color_print "$RED" "FEHLER: 'git pull --ff-only' fehlgeschlagen - Code nicht aktualisiert."
                 color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
                 exit 1
             fi
@@ -411,7 +411,7 @@ case "$choice" in
                 printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
             else
                 # Klar benennen statt unter `set -e` still zu beenden.
-                color_print "$RED" "FEHLER: 'git pull' fehlgeschlagen - Branch nicht aktualisiert."
+                color_print "$RED" "FEHLER: 'git pull --ff-only' fehlgeschlagen - Branch nicht aktualisiert."
                 color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
                 exit 1
             fi
