@@ -385,11 +385,20 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # CalcStart braucht die HEUTE-Prognose (PV-Erwartung zum Warten/Heizen)
     forecast_today_wh = getattr(state.solar, "forecast_today", None)
     forecast_today_wh = normalize_forecast_wh_qm(forecast_today_wh)
-    # Stundenscharfe Forecast-Daten in Watt (W/mÂ² -> W)
+    # PV-Arrayflaeche: EINE Quelle der Wahrheit fuer alle Umrechnungen
+    # (Stundensprognose Wh/m2 -> W und die Forecast-Kalibrierung der
+    # Lernengine). Bewusst VOR dem hourly-Block gelesen, damit die Flaeche
+    # auch dann verfuegbar ist, wenn keine Stundensprognose vorliegt.
+    try:
+        pv_flaeche = float(getattr(effektive_config.wp, "pv_array_size_qm", 10.0))
+    except (TypeError, ValueError):
+        pv_flaeche = 10.0
+    if not (pv_flaeche > 0):
+        pv_flaeche = 10.0
+    # Stundenscharfe Forecast-Daten in Watt (W/m² -> W)
     hourly_forecast_watt = None
     hourly_mw2 = getattr(state.solar, "forecast_hourly_wm2", None)
     if hourly_mw2 is not None:
-        pv_flaeche = float(getattr(effektive_config.wp, "pv_array_size_qm", 10.0))
         hourly_forecast_watt = {h: w * pv_flaeche for h, w in hourly_mw2.items()}
 
     planned_date = getattr(state, "legionellen_planned_date", None)
@@ -412,6 +421,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             soc=getattr(state.solar, "soc", None),
             forecast_today_wh_qm=forecast_today_wh,
             forecast_hourly_wh=hourly_forecast_watt,
+            pv_array_size_qm=pv_flaeche,
         )
         gelernte_rate_unten = learning_engine.get_learned_heating_rate(
             now_local.month, "unten"

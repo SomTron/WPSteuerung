@@ -79,6 +79,13 @@ class LearningConfig:
     forecast_kalibrierung_ab_stunde: int = 20
     #: PV-Arrayflaeche in m2. Wird fuer die Forecast-Kalibrierung
     #: gebraucht, um die Prognose (Wh/m2) in Wh umzurechnen.
+    #:
+    #: ACHTUNG: Dieselbe Groesse liegt als `wp.pv_array_size_qm` in
+    #: `wp_steuerung_parameter.json` (dort auch fuer die Stundensprognose
+    #: verwendet). Der Wert hier ist nur der Rueckfall, falls die
+    #: LearningEngine die WP-Config nicht bekommt - sonst wuerden zwei
+    #: getrennte Werte auseinanderlaufen. `set_pv_array_size()` in
+    #: `LearningEngine.update()` haelt beide synchron.
     pv_array_size_qm: float = 10.0
 
     # ── Allgemein ──
@@ -552,12 +559,25 @@ class LearningEngine:
         forecast_today_wh_qm: Optional[float] = None,
         legionellen_end_time: Optional[datetime] = None,
         forecast_hourly_wh: Optional[Dict[int, float]] = None,
+        pv_array_size_qm: Optional[float] = None,
     ):
         """
         Wird jeden Regelzyklus aufgerufen.
         Erkennt Heizzykus-Start/Ende und Warmwasser-Zapfung sowie
         Quellen-Attribution, Forecast-Kalibrierung und Surplus-Profil.
+
+        `pv_array_size_qm` ist die PV-Flaeche aus `wp.pv_array_size_qm`. Sie
+        wird hier uebernommen, damit die Forecast-Kalibrierung mit exakt
+        derselben Groesse rechnet wie die Stundensprognose in
+        `priority_control_logic`. Ohne diesen Wert bliebe nur der Default
+        (10 m2) - bei einer anderen Anlagengrösse waere der Faktor dann um
+        den Flaechenquotienten daneben.
         """
+        if isinstance(pv_array_size_qm, (int, float)) and not isinstance(
+            pv_array_size_qm, bool
+        ):
+            if float(pv_array_size_qm) > 0:
+                self.data.config.pv_array_size_qm = float(pv_array_size_qm)
         # ── Solar-Tracking ──
         # now immer auf naive-UTC reduzieren, damit interne Speicherung
         # (JSON naive-Timestamps) mit Produktions-now (timezone-aware)

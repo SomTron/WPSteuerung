@@ -30,11 +30,12 @@ def engine(tmp_path):
     return LearningEngine(data_path=str(tmp_path / "lern.json"))
 
 
-def _schritt(e, now, kompressor, feedin=None, soc=None):
+def _schritt(e, now, kompressor, feedin=None, soc=None, pv_array_size_qm=None):
     e.update(
         now,
         {"oben": 45.0, "mittig": 43.0, "unten": 40.0},
         kompressor, feedin_watt=feedin, soc=soc,
+        pv_array_size_qm=pv_array_size_qm,
     )
 
 
@@ -133,6 +134,50 @@ class TestForecastKalibrierung:
         assert engine.data.forecast_ratio_samples == 1
         # 50000 Wh Einspeisung bei 5000 Wh/m2 x 10 m2 = Faktor 1.0
         assert engine.data.forecast_ratio == pytest.approx(1.0)
+
+    def test_arrayflaeche_statt_doppelter_normalisierung(self, engine):
+        """Regression: Ohne Arrayflaeche klemmte der Faktor am Maximum.
+
+        Realistischer Septembertag: 5000 Wh/m2 Prognose, 10 m2 Array, ca.
+        20000 Wh Eigenverbrauch -> Faktor 0.4. Ohne die Flaeche ergaebe sich
+        20000/5000 = 4.0 und damit dauerhaft der Maximalwert 2.0 - die
+        Kalibrierung waere wirkungslos und wuerde systematisch zu
+        pessimistischen Prognosen fuehren.
+        """
+        self._tag(engine, datetime(2026, 8, 24), 20000.0)
+        _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)
+        assert engine.data.forecast_ratio_samples == 1
+        assert engine.data.forecast_ratio == pytest.approx(0.4, abs=0.01)
+
+    def test_flaeche_kommt_aus_der_wp_config(self, engine):
+        """Die Flaeche wird aus `wp.pv_array_size_qm` uebernommen.
+
+        Sonst wuerde die Kalibrierung dauerhaft mit dem Default (10 m2)
+        rechnen, waehrend die Stundensprognose im selben Zyklus die echte
+        Anlagengrösse verwendet - zwei Werte fuer dieselbe Groesse.
+        """
+        _schritt(engine, datetime(2026, 8, 24, 8, 0), False, feedin=100.0,
+                 pv_array_size_qm=25.0)
+        assert engine.data.config.pv_array_size_qm == 25.0
+        # 25 m2 x 2000 Wh/m2 = 50000 Wh; 20000 Wh Einspeisung -> Faktor 0.4
+        self._tag(engine, datetime(2026, 8, 24), 20000.0)
+        _kalibriere_am_abend(engine, datetime(2026, 8, 24), 2000.0)
+        assert engine.data.forecast_ratio == pytest.approx(0.4, abs=0.01)
+
+    def test_ungueltige_flaeche_ueberschreibt_den_default_nicht(self, engine):
+        """0, None oder NaN duerfen die Konfiguration nicht zerstoeren."""
+        for wert in (0.0, None, float("nan")):
+            _schritt(engine, datetime(2026, 8, 24, 8, 0), False, feedin=50.0,
+                     pv_array_size_qm=wert)
+            assert engine.data.config.pv_array_size_qm == 10.0
+
+    def test_ohne_flaeche_wird_klar_verworfen(self, engine):
+        """Bei Flaeche 0 gibt es kein Ertragspotential -> kein Sample,
+        statt durch eine Division durch 0 zu stuerzen."""
+        engine.data.config.pv_array_size_qm = 0.0
+        self._tag(engine, datetime(2026, 8, 24), 20000.0)
+        _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)
+        assert engine.data.forecast_ratio_samples == 0
 
     def test_clamps_und_leere_tage(self, engine):
         self._tag(engine, datetime(2026, 8, 24), 40.0)      # unter Mindest-Daten
