@@ -11,7 +11,7 @@ Zusaetzlich werden die Prioritaeten-Kaskade (110/100/90/85/78/75) geprueft.
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 
@@ -31,6 +31,119 @@ import priority_control as pc  # noqa: E402
 import priority_control_logic as pcl  # noqa: E402
 
 TZ = pytz.timezone("Europe/Berlin")
+
+
+# ============================================================
+# Startfreigabe gegen Nachtabschaltung (28.09.2026)
+# ============================================================
+class TestNachtabschaltungStart:
+    """Vor jedem Einschalten: passt die Mindestlaufzeit vor bis_uhr?
+
+    Nutzerwunsch: "vor jedem Einschalten pruefen, ob nicht vor Ende
+    der Mindestlaufzeit es zur Nachtabschaltung kommt."
+    """
+
+    @staticmethod
+    def _state(cutoff=22, legionellen=False, regel_name=None, pv_min=10):
+        from types import SimpleNamespace as NS
+
+        cfg = NS(
+            notfallschutz=NS(bis_uhr=cutoff),
+            zyklus=NS(mindestlaufzeit_minuten=60, pv_min_laufzeit_minuten=pv_min),
+            legionellen=NS(legionellen_max_temp_c=65, max_duration_hours=8),
+        )
+        return NS(
+            priority_config=cfg,
+            legionellen_aktiv=legionellen,
+            control=NS(requested_rule_name=regel_name),
+        )
+
+    def test_start_passt_genau_auf_cutoff(self):
+        """21:00 + 60 min = 22:00 -> erlaubt (Grenzfall inklusive)."""
+        st = self._state()
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 0), timedelta(minutes=60), "Regel"
+        )
+        assert ok is True
+
+    def test_start_ueberschreitet_cutoff_gesperrt(self):
+        """21:01 + 60 min = 22:01 -> gesperrt."""
+        st = self._state()
+        ok, grund = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 1), timedelta(minutes=60), "Regel"
+        )
+        assert ok is False
+        assert "22:01" in grund and "22:00" in grund
+
+    def test_start_deutlich_vor_cutoff_erlaubt(self):
+        st = self._state()
+        for h, m in ((18, 0), (19, 30), (20, 30)):
+            ok, _ = pcl._pruefe_nachtabschaltung(
+                st, datetime(2026, 9, 28, h, m), timedelta(minutes=60), "Regel"
+            )
+            assert ok is True, f"{h}:{m:02d} sollte erlaubt sein"
+
+    def test_kein_cutoff_konfiguriert_alte_logik(self):
+        st = self._state(cutoff=None)
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 30), timedelta(minutes=60), "Regel"
+        )
+        assert ok is True
+
+    def test_legionelle_startet_trotz_cutoff(self):
+        """Prophylaxe darf nie an der Startzeit scheitern."""
+        st = self._state(legionellen=True, regel_name="Legionellen")
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 30), timedelta(minutes=60), "Legionellen"
+        )
+        assert ok is True
+
+    def test_pv_lauf_mit_kurzer_mindestlaufzeit_erlaubt(self):
+        """PV hat 10 min Mindestlaufzeit -> 21:30 passt vor 22:00."""
+        st = self._state()
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 30), timedelta(minutes=60), "Einspeisung"
+        )
+        assert ok is True
+
+    def test_pv_lauf_ueber_cutoff_gesperrt(self):
+        st = self._state()
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 55), timedelta(minutes=60), "Einspeisung"
+        )
+        assert ok is False
+
+    def test_start_nach_cutoff_nicht_zweimal_geprueft(self):
+        """Nach 22:00 zaehlt der naechste Cutoff erst morgen."""
+        st = self._state()
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 23, 0), timedelta(minutes=60), "Regel"
+        )
+        assert ok is True
+
+    def test_ungueltiger_cutoff_ignoriert(self):
+        st = self._state(cutoff=99)
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 30), timedelta(minutes=60), "Regel"
+        )
+        assert ok is True
+
+    def test_keine_mindestlaufzeit_nie_gesperrt(self):
+        """Ohne konfigurierte Mindestlaufzeit gibt es nichts zu pruefen."""
+        st = self._state()
+        st.priority_config.zyklus.mindestlaufzeit_minuten = 0
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 30), timedelta(0), "Regel"
+        )
+        assert ok is True
+
+    def test_json_mindestlaufzeit_schlaegt_basiswert(self):
+        """Der JSON-Wert ist fuehrend: 0 als Basis heisst nicht 'kein Schutz'."""
+        st = self._state()
+        ok, _ = pcl._pruefe_nachtabschaltung(
+            st, datetime(2026, 9, 28, 21, 30), timedelta(0), "Regel"
+        )
+        assert ok is False
 
 
 # ============================================================

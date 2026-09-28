@@ -1612,6 +1612,69 @@ def _effektive_ueberhitzung_schwelle(state) -> float:
     return float(base)
 
 
+def _pruefe_nachtabschaltung(state, now, min_laufzeit, regel_name=None):
+    """Passt die Mindestlaufzeit vor der Nachtabschaltung (bis_uhr)?
+
+    Nutzerwunsch 28.09.2026: "vor jedem Einschalten pruefen, ob nicht vor
+    Ende der Mindestlaufzeit es zur Nachtabschaltung kommt."
+
+    Ein Start um 21:40 mit 60 min Mindestlaufzeit wuerde bis 22:40 laufen
+    und damit ueber den Cutoff hinaus. Ohne diese Pruefung wuerde der Lauf
+    entweder hart im Min-Lauf-Zwang abgebrochen (Hardware-Stress) oder -
+    schlimmer - der Cutoff waere wirkungslos.
+
+    Ein Start um 03:00 ist durch die Nachtsperre ohnehin gesperrt; hier
+    zaehlt nur der Fall, dass der Cutoff noch am selben Tag kommt.
+
+    Rueckgabe: (erlaubt, begruendung_bei_gesperrt)
+    """
+    cfg = getattr(state, "priority_config", None)
+    nf_cfg = getattr(cfg, "notfallschutz", None)
+    cutoff = getattr(nf_cfg, "bis_uhr", None)
+    if not isinstance(cutoff, (int, float)) or isinstance(cutoff, bool):
+        return True, None       # kein Cutoff konfiguriert -> alte Logik
+    if int(cutoff) <= 0 or int(cutoff) > 23:
+        return True, None       # ungueltiger Wert -> json_config.validiert bereits
+
+    # Legionella laeuft bewusst ueber die Nacht (Ziel 60 C, bis zu
+    # max_duration_hours) und MUSS starten duerfen, sonst faellt die
+    # Prophylaxe aus. Erkannt ueber den aktiven Lauf ODER die bestaetigte
+    # Wunschregel "Legionellen" (sonst wuerde der Start am Vorabend greifen,
+    # wenn legionellen_aktiv erst nach dem Hardware-Start gesetzt wird).
+    if _effektives_legionellen_limit(state) is not None or (
+        regel_name == "Legionellen"
+    ):
+        return True, None
+
+    jetzt = now if isinstance(now, datetime) else None
+    if jetzt is None:
+        return True, None       # keine Zeitbasis -> nicht blockieren
+
+    eff_ml = _effektive_mindestlaufzeit(state, min_laufzeit, regel_name=regel_name)
+    if eff_ml <= timedelta():
+        return True, None
+
+    ende = jetzt + eff_ml
+    # Nur der heutige Cutoff zaehlt. Laeuft der Start nach dem Cutoff, ist
+    # der naechste Cutoff erst morgen - das regelt die Nachtsperre.
+    ziel = jetzt.replace(
+        hour=int(cutoff), minute=0, second=0, microsecond=0
+    )
+    if ziel <= jetzt:
+        return True, None
+
+    rest = ziel - jetzt
+    return (
+        True,
+        None,
+    ) if eff_ml <= rest else (
+        False,
+        f"Mindestlaufzeit ({int(eff_ml.total_seconds() // 60)} min) "
+        f"endet erst {ende:%H:%M}, Nachtabschaltung ist {int(cutoff):02d}:00 "
+        f"(noch {int(rest.total_seconds() // 60)} min)",
+    )
+
+
 async def handle_compressor_off(
     state,
     session,
@@ -2068,6 +2131,22 @@ async def handle_compressor_on(
             pause_ok = False
             pause_remaining = min_pause - elapsed_pause
 
+    # Nachtabschalt-Pruefung (Nutzerwunsch 28.09.2026): Ein Start wird nur
+    # freigegeben, wenn die Mindestlaufzeit noch VOR der Nachtabschaltung
+    # (notfallschutz.bis_uhr, Standard 22:00) beendet werden kann.
+    # Grund: Ein Start kurz vor 22:00 laeuft zwangslaeufig ueber den
+    # Abschaltpunkt hinaus. Die WP muesste den Lauf dann mitten in der
+    # Mindestlaufzeit abbrechen (Hardware-Stress).
+    #
+    # Ausgenommen: Legionellenfahrten (dauern bis zu
+    # `legionellen.max_duration_hours` und muessen ihr 60-C-Ziel erreichen)
+    # sowie PV-gesteuerte Laeufe, deren verkuerzte Mindestlaufzeit ohnehin
+    # vor dem Cutoff liegt.
+    nacht_ok, nacht_grund = _pruefe_nachtabschaltung(
+        state, now, min_laufzeit,
+        regel_name=getattr(state.control, "requested_rule_name", None),
+    )
+
     # Nur pruefen ob der Regelfuehler der aktiven Regel ueber Ausschaltpunkt liegt.
     # t_oben wird hier NICHT geprueft, da:
     #   1. check_safety_limits() bereits t_oben >= max_temp_c / ueberhitzung_c abfaengt
@@ -2078,7 +2157,7 @@ async def handle_compressor_on(
         # Pruefe ob die Regel einschalten will (ueber state oder Aufruf-Parameter)
         should_on = getattr(state.control, "_soll_einschalten", False)
 
-        if should_on and pause_ok:
+        if should_on and pause_ok and nacht_ok:
             state.control._pending_start_rule = getattr(
                 state.control, "requested_rule_name", None
             ) or getattr(state.control, "previous_modus", None)
@@ -2093,6 +2172,16 @@ async def handle_compressor_on(
                     f"Ausschaltpunkt ({ausschaltpunkt:.1f})"
                 )
                 state.control.blocking_reason = "Zieltemp erreicht"
+                return False
+
+            if not nacht_ok:
+                # Start faellt aus, weil die Mindestlaufzeit die
+                # Nachtabschaltung (bis_uhr) ueberleben wuerde.
+                state.control.blocking_reason = nacht_grund
+                logging.info(
+                    f"Einschalten unterdrueckt: {nacht_grund} "
+                    f"(Mindestlaufzeit {int(_effektive_mindestlaufzeit(state, min_laufzeit, regel_name=getattr(state.control, 'requested_rule_name', None)).total_seconds() // 60)}min)"
+                )
                 return False
 
             pending_rule = getattr(state.control, "_pending_start_rule", None)

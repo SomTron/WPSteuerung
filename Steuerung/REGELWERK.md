@@ -24,7 +24,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 
 | Prio | Regel | Zweck | Quelle |
 |---|---|---|---|
-| 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre); Abschaltung nur am *eigenen* Lauf; **spätestens bis `bis_uhr` (22:00)**, nachts gesperrt | `notfallschutz` |
+| 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre); Abschaltung nur am *eigenen* Lauf; **spätestens bis `bis_uhr` (22:00)**, nachts gesperrt; Start nur, wenn die Mindestlaufzeit vorher endet (Ausnahme Legionella) | `notfallschutz` |
 | 100 | Wochenende | Wochenend-Vorheizen ab `fruehestens_uhr` | `wochenende` |
 | 90 | Legionellen | Legionellenprophylaxe 1×/Woche (Ziel 60 °C, Limit 65 °C); **temporär hebt Boiler-Limit von 48 auf 65 °C** | `legionellen` |
 | 85 | **Einspeisung** | PV-Shaping am Netzlimit (7500 W) – gratis Strom nutzen | `einspeisung` |
