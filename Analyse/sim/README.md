@@ -29,6 +29,37 @@ check_safety_limits  ->  determine_mode_and_setpoints
 Hardware, Telegram, Solax-API und Datei-Logging sind Attrappen. Dadurch
 lassen sich Regeländerungen gegen dieselbe Logik messen, die auf dem Pi läuft.
 
+## Grenzen des Speichermodells (wichtig fuer die Interpretation)
+
+Das Modell mischt **deutlich staerker** als die reale Anlage. Nach der
+Legionellenprophylaxe bleibt im Modell auch `unten` warm (Tiefpunkt 43,2 C
+im 14-Tage-Winterlauf), waehrend die reale Anlage am 28.09.2026 auf
+`unten 22,8 C / mitte 41,2 C / oben 55,0 C` fiel - ein Gefaelle von 32 K.
+
+Ursache: `konvektion_aus_w_k = 12.0` und `konvektion_oben_aus_w_k = 3.0`
+im Leerlauf; die Schichtung bleibt im Modell bei ~14 K.
+
+**Folge fuer den Test:** Der fehlerhafte Zustand aus dem Nutzer-Log laesst
+sich im normalen Szenario-Ablauf nicht erzeugen.
+`check_legionella_zustand.py` setzt ihn deshalb direkt in die Startwerte
+des Speichers. Ausserdem hebt der Legionellen-Nachlauf im
+Simulationszustand das Limit - die Simulation kann die Blockierwirkung von
+`boiler_max_fuehler = "max"` daher nicht abbilden. Der Nachweis fuer diese
+Einstellung kommt aus den Boiler-Max-Tests mit den Logwerten, nicht aus
+der Simulation.
+
+Nichtsdestotrotz hat die Simulation einen echten Absturz gefunden: Die
+Blockiermeldung formatierte `t_mittig` ungeschuetzt - bei ausgefallenem
+Mittig-Fuehler (None) wuerde der f-string die komplette Regelschleife
+abwuergen, die WP staende dann still ohne protokollierten Grund. Behoben,
+gesichert durch
+`test_boiler_max_meldung_uebersteht_fehlenden_mittig_fuehler`.
+
+Aufruf:
+```bash
+py -3 Analyse/sim/check_legionella_zustand.py
+```
+
 ## Szenarien
 
 | Name | Beschreibung |

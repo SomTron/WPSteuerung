@@ -211,6 +211,35 @@ async def test_legionellenrueckstand_sperrt_die_heizung_nicht():
     assert calls and calls[0][0] is True
 
 
+@pytest.mark.asyncio
+async def test_boiler_max_meldung_uebersteht_fehlenden_mittig_fuehler():
+    """Regression: Die Blockiermeldung formatierte `t_mittig` mit '%.1f'.
+    Faellt der Mittig-Fuehler aus (None), wuerde der f-string die komplette
+    Regelschleife abwuergen - die WP stuende dann still, ohne dass ein
+    Grund im Log steht. Gefunden in der Mehrtages-Simulation
+    (Analyse/sim), die den Speicher ohne t_mittig aufruft."""
+    cfg = WPSteuerungConfig()
+    cfg.sicherheit.boiler_max_fuehler = "max"
+    state = baue_state(t_unten=22.8, t_oben=55.0, t_mittig=None, config=cfg)
+    state.control.kompressor_ein = False
+    state.control._soll_einschalten = True
+    calls = []
+
+    async def set_status(s, ein, **kw):
+        calls.append(ein)
+        return True
+
+    erg = await pcl.handle_compressor_on(
+        state, None, regelfuehler=22.8, einschaltpunkt=45.0, ausschaltpunkt=48.0,
+        min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
+        t_oben=55.0, t_mittig=None,
+        set_kompressor_status_func=set_status,
+    )
+    assert erg is False, "ohne Mittig-Fuehler darf die Sperre nicht crashen"
+    assert calls == []
+    assert "n/a" in (state.control.blocking_reason or "")
+
+
 def test_deployment_referenziert_die_geregelte_groesse():
     """Regression: 'max' als Deployment-Default blockierte nach jedem
     Legionellenlauf stundenlang jede Heizung. Das Limit gehoert auf die

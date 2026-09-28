@@ -1818,9 +1818,15 @@ async def handle_compressor_on(
         # genau verkehrt - sie wuerde bei geschichtetem Boiler weiterheizen
         # lassen, obwohl oben bereits am Limit steht (Nutzerentscheidung
         # 28.09.2026). Ohne `max` gilt die alte Zonenlogik unveraendert.
+        #
+        # `t_mittig` wird defensiv formatiert: faellt der Mittig-Fuehler aus,
+        # ist er None, und ein f-string mit 'None:.1f' wuerde die komplette
+        # Regelschleife abwuergen. Gefunden in der Mehrtages-Simulation
+        # (Analyse/sim), die den Speicher ohne t_mittig aufruft.
+        _mittig_txt = "n/a" if t_mittig is None else f"{t_mittig:.1f}C"
         state.control.blocking_reason = (
             f"Boiler-Max-Naehe ({fuehler_nahe} {t_nahe:.1f}C, "
-            f"mittig {t_mittig:.1f}C, "
+            f"mittig {_mittig_txt}, "
             f"Einschalten erst < {nahe_limit - ein_abstand:.1f}C)"
         )
         return False
