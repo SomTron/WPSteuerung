@@ -150,10 +150,6 @@ def test_jede_infofamilie_hat_ihre_eigene_meldung(caplog):
     Bei 24 C Speichertemperatur ist "bereits heiss" eine offensichtlich
     falsche Aussage. Die Meldung muss zur Sperrfamilie passen.
     """
-    import asyncio
-
-    import main as M
-
     for code, erwartet_fragment in (
         ("boiler_bereits_warm", "Boiler bereits heiss"),
         ("mindestpause", "Mindestpause"),

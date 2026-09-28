@@ -45,48 +45,47 @@ ABW = AbweichungConfig(
 
 def _state(t_oben, t_unten=22.8, t_mittig=41.0):
     now = datetime.now(TZ)
+    control = SimpleNamespace(
+        kompressor_ein=False,
+        blocking_reason=None,
+        _soll_einschalten=True,
+        restart_lockout_until=None,
+        requested_rule_name=None,
+        schichtung_oben_max=None,
+        schichtung_oben_start=None,
+        boiler_max_blockiert=None,
+        _lauf_start_regel=None,
+        zyklus_id=1,
+        # Frische Heizraten-Messung, damit die Start-Antizipation den Start
+        # nicht wegen des grossen Hubs blockiert (unten 22.8 -> 48 C waeren
+        # bei der Fallback-Rate 12 C/h ueber zwei Stunden). Sie ist hier nur
+        # Stornoise - getestet wird der Schichtungs-Deckel.
+        _rate_messung={"ts": now - timedelta(minutes=5), "unten": t_unten - 5.0},
+        _rate_messungen=deque(
+            [
+                (now - timedelta(minutes=15), 30.0),
+                (now - timedelta(minutes=10), 30.0),
+                (now - timedelta(minutes=5), 30.0),
+            ],
+            maxlen=5,
+        ),
+        _rate_confidence=0.9,
+    )
     return SimpleNamespace(
         local_tz=TZ,
         sensors=SimpleNamespace(
             t_unten=t_unten, t_oben=t_oben, t_mittig=t_mittig, t_verd=20.0
         ),
         priority_config=WPSteuerungConfig(),
-        control=SimpleNamespace(
-            kompressor_ein=False,
-            blocking_reason=None,
-            _soll_einschalten=True,
-            restart_lockout_until=None,
-            requested_rule_name=None,
-            schichtung_oben_max=None,
-            schichtung_oben_start=None,
-            boiler_max_blockiert=None,
-            _lauf_start_regel=None,
-            zyklus_id=1,
-        ),
+        control=control,
         legionellen_aktiv=False,
         legionellen_temp_override=None,
-        # Frische Heizraten-Messung, damit die Start-Antizipation den Start
-        # nicht wegen des grossen Hubs blockiert (unten 22.8 -> 48 C waeren
-        # bei der Fallback-Rate 12 C/h ueber zwei Stunden). Sie ist hier nur
-        # Stornoise - getestet wird der Schichtungs-Deckel.
         stats=SimpleNamespace(
             last_compressor_on_time=now,
             # Kompressor stand laenger als die Mindestpause still.
             last_compressor_off_time=now - timedelta(hours=2),
         ),
     )
-    state.control._rate_messung = {
-        "ts": now - timedelta(minutes=5), "unten": t_unten - 5.0
-    }
-    state.control._rate_messungen = deque(
-        [
-            (now - timedelta(minutes=15), 30.0),
-            (now - timedelta(minutes=10), 30.0),
-            (now - timedelta(minutes=5), 30.0),
-        ],
-        maxlen=5,
-    )
-    state.control._rate_confidence = 0.9
 
 
 @pytest.mark.asyncio
