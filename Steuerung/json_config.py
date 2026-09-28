@@ -164,6 +164,15 @@ class NotfallschutzConfig(BaseModel):
         default="auto",
         description="Notfall-Fühler: auto=oben→mittig→unten (erster gültiger), oben, mittig, unten oder alle (kältester)",
     )
+    bis_uhr: Optional[int] = Field(
+        default=None,
+        description=(
+            "Spaetester Zeitpunkt (Stunde), bis zu dem der Notfallschutz "
+            "laufen darf. None/0 = ganze Nacht. Nutzerwunsch 28.09.2026: 22. "
+            "Eine aktive Legionellenfahrt ist NICHT betroffen - sie muss ihr "
+            "Ziel erreichen und kann mehrere Stunden dauern."
+        ),
+    )
 
     @model_validator(mode="after")
     def _pruefe_notfallschutz(self):
@@ -179,6 +188,10 @@ class NotfallschutzConfig(BaseModel):
             raise ValueError(
                 "notfallschutz.temperaturfuehler muss 'auto', 'oben', "
                 "'mittig', 'unten' oder 'alle' sein"
+            )
+        if self.bis_uhr is not None and not (0 <= int(self.bis_uhr) <= 23):
+            raise ValueError(
+                "notfallschutz.bis_uhr muss zwischen 0 und 23 liegen"
             )
         return self
 

@@ -618,6 +618,7 @@ def evaluate_notfallschutz(
     kompressor_ein: bool = False,
     legionellen_aktiv: bool = False,
     notfall_aktiv: bool = False,
+    now_hour: Optional[int] = None,
 ) -> RegelErgebnis:
     """Notfallschutz (Prio 110): Reiner Schutzleiter fuer die
     Brauchwasser-Mindesttemperatur.
@@ -675,6 +676,43 @@ def evaluate_notfallschutz(
         result.aktiv = False
         result.grund = f"Sensor '{sensor or strategie}' fuer Notfallschutz nicht verfuegbar"
         return result
+
+    # Tages-Cutoff (Nutzerwunsch 28.09.2026: der Notfall laeuft spaetestens
+    # bis 22:00). Zwei Faelle, bewusst getrennt:
+    #   * EIGENER Notfall-Lauf -> beenden (hartes Ausschalten).
+    #   * fremder Lauf          -> still bleiben. Sonst wuerde der
+    #     Notfallschutz (Prio 110) mit seinem AUS auch PV-/Boiler-Laeufe
+    #     abwuergen, die gar nicht von ihm stammen.
+    # Eine aktive LEGIONELLENfahrt ist ausgenommen: sie zielt auf 60 C,
+    # dauert bis zu `max_duration_hours` und darf nicht bei 22:00
+    # abgeschnitten werden - sonst erreichte die Prophylaxe ihr Ziel nie.
+    # NACHT: "spaetestens 22:00" heisst, dass 22:00-07:59 gesperrt ist.
+    # Der Vergleich darf daher NICHT nur `hour >= 22` sein - 03:00 waere
+    # sonst wieder erlaubt. Gesperrt ist [cutoff, 24) plus
+    # [0, Nachtsperre-Ende).
+    cutoff = getattr(nf_cfg, "bis_uhr", None)
+    if cutoff is not None and now_hour is not None and int(cutoff) > 0:
+        _cut = int(cutoff)
+        _nacht_ende = 8      # wie sicherheit.nachtsperre_ende (Default)
+        if _cut > _nacht_ende:
+            _gesperrt = int(now_hour) >= _cut or int(now_hour) < _nacht_ende
+        else:
+            # Unsinnige Lage (Cutoff <= Nachtende) -> nur im Tagfenster.
+            _gesperrt = _nacht_ende <= int(now_hour) < _cut
+        if _gesperrt and not legionellen_aktiv:
+            if notfall_aktiv and kompressor_ein:
+                result.einschalten = False
+                result.grund = (
+                    f"Notfallschutz: Tages-Cutoff {int(cutoff):02d}:00 erreicht "
+                    f"({sensor} {temp:.1f}C) -> AUS"
+                )
+                return result
+            result.einschalten = None
+            result.grund = (
+                f"Notfallschutz: nur bis {int(cutoff):02d}:00 aktiv "
+                f"({sensor} {temp:.1f}C) -> kein Notfallstart"
+            )
+            return result
 
     if kompressor_ein and legionellen_aktiv and temp > nf_cfg.einschalten_bei_c:
         result.einschalten = None
@@ -2128,6 +2166,7 @@ def bewerte_alle_regeln(
         kompressor_ein=kompressor_ein,
         legionellen_aktiv=bool(legionellen_aktiv),
         notfall_aktiv=notfall_aktiv,
+        now_hour=now_hour,
     )
     ergebnisse.append(ergebnis)
 

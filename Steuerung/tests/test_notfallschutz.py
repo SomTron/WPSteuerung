@@ -74,6 +74,102 @@ class TestPrioritaetenKaskade:
 # ============================================================
 # evaluate_notfallschutz
 # ============================================================
+class TestTagesCutoff:
+    """Nutzerwunsch 28.09.2026: der Notfall laeuft spaetestens bis 22:00."""
+
+    def test_vor_cutoff_startet_der_notfall_wie_gewohnt(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(bis_uhr=22),
+            {"oben": 30.0, "mittig": 30.0, "unten": 30.0},
+            now_hour=20,
+        )
+        assert erg.einschalten is True
+        assert "NOTFALLSCHUTZ" in erg.grund
+
+    def test_nach_cutoff_kein_notfallstart(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(bis_uhr=22),
+            {"oben": 30.0, "mittig": 30.0, "unten": 30.0},
+            now_hour=22,
+        )
+        assert erg.einschalten is None, "nach 22:00 darf nicht gestartet werden"
+        assert "22:00" in erg.grund
+
+    def test_der_eigene_notfalllauf_wird_beim_cutoff_beendet(self):
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(bis_uhr=22),
+            {"oben": 34.0, "mittig": 34.0, "unten": 34.0},
+            kompressor_ein=True, notfall_aktiv=True, now_hour=22,
+        )
+        assert erg.einschalten is False
+        assert "Cutoff" in erg.grund
+
+    def test_fremder_lauf_wird_nicht_abgebrochen(self):
+        """Nach 22:00 darf der Notfallschutz (Prio 110) nicht auch PV- oder
+        Boiler-Laeufe abwuergen, die gar nicht von ihm stammen."""
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(bis_uhr=22),
+            {"oben": 34.0, "mittig": 34.0, "unten": 34.0},
+            kompressor_ein=True, notfall_aktiv=False, now_hour=23,
+        )
+        assert erg.einschalten is None, "fremder Lauf wurde abgebrochen"
+
+    def test_legionellenfahrt_ist_vom_cutoff_ausgenommen(self):
+        """KRITISCH: Die Prophylaxe zielt auf 60 C und dauert bis zu
+        `max_duration_hours`. Ein Cutoff um 22:00 wuerde sie sonst
+        abschneiden, bevor sie ihr Ziel erreicht."""
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(bis_uhr=22),
+            {"oben": 45.0, "mittig": 45.0, "unten": 45.0},
+            kompressor_ein=True, legionellen_aktiv=True, now_hour=23,
+        )
+        assert erg.einschalten is not False, "Legionellenlauf wurde gekappt"
+        assert "Cutoff" not in erg.grund
+
+    def test_nacht_ist_gesperrt(self):
+        """'Spaetestens 22:00' heisst: 22:00-07:59 gesperrt.
+
+        Regression: Ein naiver Vergleich `hour >= 22` liess 03:00 wieder
+        zu - die Nacht liegt naechtlich UEBER Mitternacht.
+        """
+        for stunde in (22, 23, 0, 3, 7):
+            erg = pc.evaluate_notfallschutz(
+                NotfallschutzConfig(bis_uhr=22),
+                {"oben": 30.0, "mittig": 30.0, "unten": 30.0},
+                now_hour=stunde,
+            )
+            assert erg.einschalten is None, (
+                f"{stunde:02d}:00 ist gesperrt, startete aber"
+            )
+
+    def test_erste_stunde_nach_der_nacht_ist_wieder_frei(self):
+        for stunde in (8, 12, 21):
+            erg = pc.evaluate_notfallschutz(
+                NotfallschutzConfig(bis_uhr=22),
+                {"oben": 30.0, "mittig": 30.0, "unten": 30.0},
+                now_hour=stunde,
+            )
+            assert erg.einschalten is True, f"{stunde:02d}:00 sollte starten duerfen"
+
+    def test_nachtlauf_wird_beendet(self):
+        """Auch nachts muss ein eigener Notfalllauf enden (hier 03:00)."""
+        erg = pc.evaluate_notfallschutz(
+            NotfallschutzConfig(bis_uhr=22),
+            {"oben": 34.0, "mittig": 34.0, "unten": 34.0},
+            kompressor_ein=True, notfall_aktiv=True, now_hour=3,
+        )
+        assert erg.einschalten is False
+        assert "Cutoff" in erg.grund
+
+    def test_ohne_cutoff_unveraendert_ganze_nacht(self):
+        """None/0 = alte Logik, der Notfall darf die ganze Nacht laufen."""
+        for cfg in (NotfallschutzConfig(), NotfallschutzConfig(bis_uhr=0)):
+            erg = pc.evaluate_notfallschutz(
+                cfg, {"oben": 30.0, "mittig": 30.0, "unten": 30.0}, now_hour=3,
+            )
+            assert erg.einschalten is True, f"Cutoff wirkt unerwartet bei {cfg.bis_uhr}"
+
+
 class TestEvaluateNotfallschutz:
     def test_unter_36_einschalten(self):
         erg = pc.evaluate_notfallschutz(

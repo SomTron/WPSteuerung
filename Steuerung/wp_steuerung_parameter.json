@@ -31,7 +31,8 @@
     "prioritaet": 110,
     "einschalten_bei_c": 36.0,
     "ausschalten_bei_c": 38.0,
-    "temperaturfuehler": "oben"
+    "temperaturfuehler": "oben",
+    "bis_uhr": 22
   },
   "wochenende": {
     "aktiv": true,
