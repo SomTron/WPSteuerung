@@ -135,10 +135,13 @@ class TestEvaluateNotfallschutz:
         assert "oben" in erg.grund
 
     def test_hysterese_bekommt_laufenden_notfall_zuerst_wieder_aus(self):
+        """Der EIGENE Notfall-Lauf (notfall_aktiv=True) wird per Hysterese
+        beendet, sobald der Fühler die Ausschaltschwelle erreicht."""
         erg = pc.evaluate_notfallschutz(
             NotfallschutzConfig(),
             {"oben": 39.0, "mittig": 40.0, "unten": 41.0},
             kompressor_ein=True,
+            notfall_aktiv=True,
         )
         assert erg.einschalten is False
         assert "Hysterese" in erg.grund
@@ -168,12 +171,48 @@ class TestEvaluateNotfallschutz:
             NotfallschutzConfig(),
             {"oben": 37.0, "mittig": 38.0, "unten": 39.0},
             kompressor_ein=True,
+            notfall_aktiv=True,
         )
         assert erg.einschalten is True
         assert "laeuft weiter" in erg.grund
 
         erg = pc.evaluate_notfallschutz(NotfallschutzConfig(), {})
         assert erg.aktiv is False
+
+    def test_fremder_lauf_wird_nicht_von_der_hysterese_abgebrochen(self):
+        """Regression Log 28.09.2026, 08:02: `oben` 57.8C, Komfort startet
+        (Prio 60), der Notfallschutz (Prio 110) lieferte trotzdem
+        "Hysterese -> AUS" und wuergte den fremden Start im nächsten 10-s-Takt
+        wieder ab. Ohne notfall_aktiv bleibt der Schutzleiter stumm."""
+        for temp_oben, erwartet in ((57.8, None), (39.0, None)):
+            erg = pc.evaluate_notfallschutz(
+                NotfallschutzConfig(),
+                {"oben": temp_oben, "mittig": 40.0, "unten": 23.7},
+                kompressor_ein=True,
+                notfall_aktiv=False,   # Lauf kam von Komfort, nicht vom Notfall
+            )
+            assert erg.einschalten is erwartet
+            assert "fremder Lauf" in erg.grund
+
+    def test_echter_notfall_startet_und_beendet_ueber_hysterese(self):
+        """Vollstaendiger Zyklus: Notfall schaltet ein, laeuft, und beendet
+        sich ueber die Hysterese selbst - ohne eine andere Regel zu stoeren."""
+        cfg = NotfallschutzConfig()
+        temps = {"oben": 34.0, "mittig": 36.0, "unten": 38.0}
+
+        # 1) Kalt -> Notfall schaltet ein
+        ein = pc.evaluate_notfallschutz(cfg, temps)
+        assert ein.einschalten is True and "NOTFALLSCHUTZ" in ein.grund
+
+        # 2) Lauf laeuft, Fühler noch im Band -> weiter
+        lauf = pc.evaluate_notfallschutz(cfg, {**temps, "oben": 37.0},
+                                         kompressor_ein=True, notfall_aktiv=True)
+        assert lauf.einschalten is True and "laeuft weiter" in lauf.grund
+
+        # 3) Fühler ueber Ausschaltschwelle -> Notfall beendet selbst
+        aus = pc.evaluate_notfallschutz(cfg, {**temps, "oben": 38.5},
+                                        kompressor_ein=True, notfall_aktiv=True)
+        assert aus.einschalten is False and "Hysterese" in aus.grund
 
 
 # ============================================================
@@ -236,6 +275,49 @@ class TestNotfallschutzPrioritaet:
         assert gewinner is None or gewinner.name != "Notfallschutz"
         nf = next(e for e in alle if e.name == "Notfallschutz")
         assert nf.einschalten is None
+
+    def test_notfallschutz_beendet_fremden_lauf_nicht(self):
+        """Kaskaden-Regression (Log 28.09.2026 08:02, oben 57.8C): Ein laufender
+        Kompressor, der NICHT vom Notfallschutz gestartet wurde, wird von der
+        Notfall-Hysterese nicht mehr mit Prio 110 abgeschaltet - der Gewinner
+        muss dann eine echte Heizregel sein und nicht 'Notfallschutz'."""
+        config = WPSteuerungConfig()
+        config.calculated_start.aktiv = False
+        config.forecast.aktiv = False
+        config.adaptive_pv.aktiv = False
+        gewinner, alle = pc.bewerte_alle_regeln(
+            config=config,
+            temp_dict={"oben": 57.8, "mittig": 40.0, "unten": 23.7},
+            pv_leistung=200.0,
+            kompressor_ein=True,      # Kompressor laeuft bereits
+            now=TZ.localize(datetime(2026, 9, 28, 8, 2)),
+            notfall_aktiv=False,      # ... gestartet von einer anderen Regel
+        )
+        nf = next(e for e in alle if e.name == "Notfallschutz")
+        assert nf.einschalten is None
+        assert "fremder Lauf" in nf.grund
+        # Vor dem Fix war hier "Notfallschutz" mit einschalten=False der Gewinner.
+        assert gewinner is None or gewinner.name != "Notfallschutz"
+
+    def test_notfallschutz_darf_eigenen_lauf_beenden(self):
+        """Gegenprobe: Ein echter Notfall-Lauf wird weiterhin per Hysterese
+        beendet - der Schutzleiter verliert seine Abschaltfunktion nicht."""
+        config = WPSteuerungConfig()
+        config.calculated_start.aktiv = False
+        config.forecast.aktiv = False
+        config.adaptive_pv.aktiv = False
+        gewinner, alle = pc.bewerte_alle_regeln(
+            config=config,
+            temp_dict={"oben": 40.0, "mittig": 41.0, "unten": 42.0},
+            pv_leistung=0.0,
+            kompressor_ein=True,
+            now=TZ.localize(datetime(2026, 9, 28, 8, 2)),
+            notfall_aktiv=True,
+        )
+        nf = next(e for e in alle if e.name == "Notfallschutz")
+        assert nf.einschalten is False
+        assert "Hysterese" in nf.grund
+        assert gewinner is not None and gewinner.name == "Notfallschutz"
 
 
 class TestNotfallschutzExtract:

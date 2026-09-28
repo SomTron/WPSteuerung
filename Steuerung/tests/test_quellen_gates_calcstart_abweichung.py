@@ -40,6 +40,10 @@ def _calc_cfg(**overrides):
         soc_min_prozent=90.0,
         max_netzbezug_watt=-50.0,
         spaetstart_puffer_h=0.5,
+        # Netz-Sollwert: 0 = aus (alte Logik: ohne Quelle wird gewartet).
+        # Die Tests unten schalten ihn bewusst einzeln ein.
+        netz_solltemperatur_c=0.0,
+        netz_einschalten_ab_k=1.0,
     )
     for k, v in overrides.items():
         setattr(cfg, k, v)
@@ -112,6 +116,90 @@ class TestCalcStartQuellenGate:
         )
         assert erg.einschalten is True
         assert "[Batterie" in erg.grund
+
+    # ── Netz-Start mit reduziertem Soll (Nutzerwunsch 28.09.2026) ──
+
+    def test_netz_start_auf_reduziertem_soll_ohne_pv(self):
+        """Ohne PV, aber zeitlich noch moeglich: EIN auf den reduzierten Soll
+        (38C statt 42C). Damit faellt die Zapfgarantie nicht aus, der
+        Netzstrom-Verbrauch bleibt aber geringer."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0), _temps(unten=34.0, mitte=36.0),
+            16, 0, feedin_watt=0.0, soc=None,
+        )
+        # 4K/3C/h = 1.33h noetig, 1.0h Restzeit reicht nicht -> spaeter
+        assert erg.einschalten is None
+
+        erg2 = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0), _temps(unten=36.0, mitte=37.0),
+            16, 0, feedin_watt=0.0, soc=None,
+        )
+        # 2K/3C/h = 0.67h <= 1.0h Restzeit -> Netz-Start auf 38C
+        assert erg2.einschalten is True
+        assert "Netz-Start ohne PV" in erg2.grund
+        assert "38C" in erg2.grund
+
+    def test_reduzierter_soll_startet_spaeter_als_voller_soll(self):
+        """Der reduzierte Soll braucht weniger Zeit -> der Netz-Start darf
+        spaeter liegen als der Start bis zum vollen Soll."""
+        # voller Soll 42C, unten 40C -> 2K/3C/h = 0.67h; Restzeit 1.0h reicht
+        voll = evaluate_calculated_start(
+            _calc_cfg(netz_fallback_erlaubt=True, netz_fallback_ab_uhr=0),
+            _temps(), 16, 0, feedin_watt=0.0, soc=None,
+        )
+        assert voll.einschalten is True
+        # Reduzierter Soll 38C ist mit unten 40C bereits erfuellt -> kein EIN
+        reduziert = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0), _temps(), 16, 0,
+            feedin_watt=0.0, soc=None,
+        )
+        assert reduziert.einschalten is None
+        assert "nahezu erreicht" in reduziert.grund
+
+    def test_netz_start_nutzt_reduzierten_soll_statt_zu_warten(self):
+        """Ohne PV startet CalcStart, sobald der reduzierte Soll zeitlich
+        erreichbar ist - es wird NICHT mehr auf eine Quelle gewartet."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0), _temps(unten=30.0, mitte=31.0),
+            12, 0, feedin_watt=0.0, soc=None,
+        )
+        # 8K/3C/h = 2.67h noetig, 5h Restzeit bis 17:00 -> machbar
+        assert erg.einschalten is True
+        assert "Netz-Start ohne PV" in erg.grund
+        assert "38C" in erg.grund
+
+    def test_netz_start_wartet_wenn_restzeit_zu_klein(self):
+        """Restzeit reicht nicht fuer den reduzierten Soll: weiter warten.
+        16:00 -> 1h bis 17:00, aber 6K/3C/h = 2h noetig."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0), _temps(unten=32.0, mitte=33.0),
+            16, 0, feedin_watt=0.0, soc=None,
+        )
+        assert erg.einschalten is None
+        assert "noch zu frueh" in erg.grund
+
+    def test_kleines_defizit_startet_nicht(self):
+        """0.5K Defizit zum Netz-Soll: zu wenig, um Netzstrom zu verbrauchen."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0, netz_einschalten_ab_k=1.0),
+            _temps(unten=37.5, mitte=38.5), 16, 0,
+            feedin_watt=0.0, soc=None,
+        )
+        assert erg.einschalten is None
+        assert "Defizit" in erg.grund
+
+    def test_mit_pv_bleibt_der_reduzierte_soll_aussen_vor_spiel(self):
+        """Bei vorhandener Quelle gilt der normale Voll-Soll-Pfad."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0), _temps(unten=35.0, mitte=36.0),
+            16, 0, feedin_watt=150.0, soc=None,
+        )
+        assert erg.einschalten is True
+        assert "Netz-Start ohne PV" not in erg.grund
+
+    def test_standard_default_ist_deaktiviert(self):
+        """Ohne explizite Konfiguration bleibt die alte Warte-Logik."""
+        assert WPSteuerungConfig().calculated_start.netz_solltemperatur_c == 0.0
 
     def test_spaetstart_puffer_konfigurierbar(self):
         erg = evaluate_calculated_start(

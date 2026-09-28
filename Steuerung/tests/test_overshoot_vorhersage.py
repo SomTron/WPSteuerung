@@ -23,6 +23,13 @@ TZ = pytz.timezone("Europe/Berlin")
 
 
 def _state(t_unten=48.0, lauf_min=4, mz_abstand_min=6, rate_diff_k=None):
+    """Fixture fuer die Overshoot-Prognose am `unten`-Fuehler.
+
+    `t_oben`/`t_mittig` liegen bewusst knapp unter `t_unten`: seit der
+    Umstellung auf `boiler_max_fuehler = "max"` (Nutzerentscheidung 28.09.2026)
+    wuerde sonst der oberste Fuehler das harte Boiler-Maximum ausloesen und die
+    hier gepruefte Prognose-Logik verdecken.
+    """
     state = SimpleNamespace(
         local_tz=TZ,
         priority_config=WPSteuerungConfig(),
@@ -33,8 +40,8 @@ def _state(t_unten=48.0, lauf_min=4, mz_abstand_min=6, rate_diff_k=None):
         ),
         stats=SimpleNamespace(
             last_compressor_on_time=datetime.now(TZ) - timedelta(minutes=lauf_min)),
-        sensors=SimpleNamespace(t_unten=t_unten, t_oben=50.0,
-                                t_mittig=48.0, t_verd=12.0),
+        sensors=SimpleNamespace(t_unten=t_unten, t_oben=t_unten - 1.0,
+                                t_mittig=t_unten - 2.0, t_verd=12.0),
         solar=SimpleNamespace(feedinpower=5000.0, soc=80.0),
     )
     if rate_diff_k is not None:

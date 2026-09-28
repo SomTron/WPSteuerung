@@ -69,17 +69,17 @@ def test_default_ueberschreibt_weiterhin():
     assert "Nachtsperre ueberschrieben" in e.grund
 
 
-def test_mittag_oben_unveraendert():
+def test_mittag_mitte_unveraendert():
     """Mittags-Garantie (Default-Flag) bleibt vom neuen Feld unberuehrt."""
     config = WPSteuerungConfig()
     for eintrag in config.mindest_temp.eintraege:
-        if eintrag.name == "Mittag-Oben":
+        if eintrag.name == "Mittag-Mitte":
             assert eintrag.nachtsperre_ueberschreiben is True
     erg = pc.evaluate_mindesttemp(
-        config.mindest_temp, {"oben": 39.0}, 12,
+        config.mindest_temp, {"mittig": 39.0}, 12,
         config.sicherheit.nachtsperre_start, config.sicherheit.nachtsperre_ende,
     )
-    e = next(x for x in erg if "Mittag-Oben" in x.name)
+    e = next(x for x in erg if "Mittag-Mitte" in x.name)
     assert e.aktiv and e.einschalten is True
 
 

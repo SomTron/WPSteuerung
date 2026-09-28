@@ -47,9 +47,27 @@ class SicherheitConfig(BaseModel):
     ueberhitzung_c: float = Field(default=58.0, description="Überhitzungsschutz (°C)")
     notfall_c: float = Field(default=36.0, description="Notfall-Einschalttemperatur (°C)")
 
-    boiler_max_fuehler: str = Field(default="unten", description="Bezugsfuehler fuer das Boiler-Maximum (unten/mittig/oben)")
+    boiler_max_fuehler: str = Field(
+        default="max",
+        description=(
+            "Bezugsfuehler fuer das Boiler-Maximum. 'max' = der HEISSESTE "
+            "verfuegbare Fühler (schuetzt bei Schichtung, in der der untere "
+            "kalt bleibt, waehrend oben am Limit steht); sonst unten/mittig/oben"
+        ),
+    )
     boiler_max_hysterese_k: float = Field(default=2.0, description="Nach einem Maximum-Abschalten erst wieder einschalten, wenn der Bezugsfuehler <= max_temp_c - Hysterese ist")
     boiler_max_ein_abstand_k: float = Field(default=2.0, description="Kein Einschalten, wenn der Bezugsfuehler bereits naeher als dieser Abstand an max_temp_c heranreicht (verhindert Kurzlaufe am Limit)")
+    legionellen_nachlauf_min: float = Field(
+        default=180.0,
+        description=(
+            "Minuten NACH dem Ende der Legionellenprophylaxe, in denen das "
+            "Boiler-Maximum auf legionellen_max_temp_c (65 C) angehoben "
+            "bleibt. Grund: Nach der Prophylaxe ist der Boiler bewusst sehr "
+            "heiss (Log 28.09.: oben 57.8 C waehrend unten 23.7 C) - ohne "
+            "Nachlauf wuerde das 48-C-Limit sofort den naechsten Lauf "
+            "abwuergen und der Boiler kaeme nie wieder auf Solltemperatur."
+        ),
+    )
 
     # --- Vorausschauende Overshoot-Vermeidung (Empfehlung 3.1) ---
     # EIN-Antizipation: Nur einschalten, wenn der freie Hub bis zum
@@ -95,11 +113,13 @@ class SicherheitConfig(BaseModel):
 
     @model_validator(mode="after")
     def _pruefe_sicherheit(self):
-        if self.boiler_max_fuehler not in ("unten", "mittig", "oben"):
+        if self.boiler_max_fuehler not in ("unten", "mittig", "oben", "max"):
             raise ValueError(
-                f"boiler_max_fuehler muss 'unten', 'mittig' oder 'oben' sein, "
-                f"nicht '{self.boiler_max_fuehler}'"
+                f"boiler_max_fuehler muss 'max', 'unten', 'mittig' oder 'oben' "
+                f"sein, nicht '{self.boiler_max_fuehler}'"
             )
+        if self.legionellen_nachlauf_min < 0:
+            raise ValueError("legionellen_nachlauf_min darf nicht negativ sein")
         if self.boiler_max_hysterese_k < 0:
             raise ValueError("boiler_max_hysterese_k darf nicht negativ sein")
         if self.boiler_max_ein_abstand_k < 0:
@@ -245,7 +265,11 @@ class MindestTempConfig(BaseModel):
             MindestTempEintrag(name="Frueh-Mitte", temperaturfuehler="mitte",
                                min_temp_c=38.0, start_uhr=6, ende_uhr=8,
                                fenster_aus_lernen=True, hysterese_k=2.0),
-            MindestTempEintrag(name="Mittag-Oben", temperaturfuehler="oben",
+            # Mittags-Garantie auf `mittig` (Nutzerentscheidung 28.09.2026):
+            # Der obere Fuehler bleibt waehrend des Nachmittags oft ueber der
+            # Boiler-Max-Grenze und wuerde als Mittags-Soll nie ausschlagen -
+            # `mittig` ist der stabile Indikator fuer die Trinkwassertemperatur.
+            MindestTempEintrag(name="Mittag-Mitte", temperaturfuehler="mitte",
                                min_temp_c=42.0, start_uhr=11, ende_uhr=16,
                                hysterese_k=0.0),
             MindestTempEintrag(name="Abend-Mitte", temperaturfuehler="mitte",
@@ -605,6 +629,25 @@ class CalculatedStartConfig(BaseModel):
         default=0.5,
         description="Sicherheitszuschlag (h) auf die berechnete Heizzeit fuer den Spaetest-Start ohne Quelle",
     )
+    netz_solltemperatur_c: float = Field(
+        default=0.0,
+        description=(
+            "Reduzierter Sollwert fuer den Start MIT Netzstrom, wenn keine "
+            "PV/Batterie verfuegbar ist (Nutzerwunsch 28.09.2026). 0 = "
+            "deaktiviert (alte Logik: ohne Quelle wird gewartet). Beispiel 38: "
+            "Ohne PV wird nur noch bis 38 C vorgeheizt statt bis 42 C - das "
+            "spart Netzstrom und der Start wird spaeter, aber die Zapfgarantie "
+            "faellt nicht aus."
+        ),
+    )
+    netz_einschalten_ab_k: float = Field(
+        default=1.0,
+        description=(
+            "Mindestdefizit zum Netz-Sollwert, bevor der Netz-Start ohne Quelle "
+            "ueberhaupt sinnvoll ist. Verhindert, dass die WP fuer 0.5 K "
+            " Netzstrom verbrennt."
+        ),
+    )
 
 
     @model_validator(mode="after")
@@ -620,6 +663,13 @@ class CalculatedStartConfig(BaseModel):
             raise ValueError("calculated_start: netz_fallback_ab_uhr ausserhalb 0-23")
         if not (-50.0 <= self.notfall_unten_c <= self.solltemperatur_c):
             raise ValueError("calculated_start: notfall_unten_c muss zwischen -50 und Ziel liegen")
+        if not (0.0 <= self.netz_solltemperatur_c < self.solltemperatur_c):
+            raise ValueError(
+                "calculated_start: netz_solltemperatur_c muss 0 (aus) oder "
+                "kleiner als solltemperatur_c sein"
+            )
+        if self.netz_einschalten_ab_k < 0:
+            raise ValueError("calculated_start: netz_einschalten_ab_k nicht negativ")
         return self
 
 

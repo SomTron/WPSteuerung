@@ -574,6 +574,7 @@ def evaluate_notfallschutz(
     temp_dict: Dict[str, Optional[float]],
     kompressor_ein: bool = False,
     legionellen_aktiv: bool = False,
+    notfall_aktiv: bool = False,
 ) -> RegelErgebnis:
     """Notfallschutz (Prio 110): Reiner Schutzleiter fuer die
     Brauchwasser-Mindesttemperatur.
@@ -583,6 +584,15 @@ def evaluate_notfallschutz(
     Wassertemperatur unter einschalten_bei_c, wird eingeschaltet. Im
     Normalbetrieb ist die Regel STUMM (einschalten=None) - sie blockt
     dadurch niemals andere Heizwuensche.
+
+    `notfall_aktiv` (aus dem State) unterscheidet "der Kompressor laeuft
+    ueberhaupt" von "der Kompressor laeuft WEIL der Notfallschutz ihn
+    gestartet hat". Nur im zweiten Fall duerfen die Hysterese-Zweige
+    einschalten=False liefern. Sonst wuerde der Schutzleiter bei warmem
+    `oben` jeden Lauf einer beliebigen anderen Regel (Prio 60/47/78) ab
+    Prio 110 abwuergen - genau das erzeugte das Flattern im Log vom
+    28.09. (oben 57.8C -> "Hysterese -> AUS" waehrend ein Komfort-Start
+    anlag).
     """
     result = RegelErgebnis(
         name="Notfallschutz",
@@ -637,18 +647,28 @@ def evaluate_notfallschutz(
             f"{nf_cfg.einschalten_bei_c}C -> EIN"
         )
         return result
-    if kompressor_ein and temp >= nf_cfg.ausschalten_bei_c:
+    if notfall_aktiv and kompressor_ein and temp >= nf_cfg.ausschalten_bei_c:
         result.einschalten = False
         result.grund = (
             f"Notfallschutz-Hysterese: {sensor} {temp:.1f}C >= "
             f"{nf_cfg.ausschalten_bei_c}C -> AUS"
         )
         return result
-    if kompressor_ein:
+    if notfall_aktiv and kompressor_ein:
         result.einschalten = True
         result.grund = (
             f"Notfallschutz-Hysterese: {sensor} {temp:.1f}C zwischen "
             f"{nf_cfg.einschalten_bei_c}-{nf_cfg.ausschalten_bei_c}C -> laeuft weiter"
+        )
+        return result
+    if kompressor_ein:
+        # Der Kompressor laeuft, aber NICHT ueber den Notfallschutz. Der
+        # Schutzleiter hat dann nichts zu tun: insbesondere darf er den
+        # fremden Lauf nicht beenden (Prio 110 wuerde sonst jede andere
+        # Regel aushebeln, sobald `oben` ueber der Abschaltschwelle liegt).
+        result.grund = (
+            f"Notfallschutz: {sensor} {temp:.1f}C > {nf_cfg.einschalten_bei_c}C, "
+            "fremder Lauf - kein Eingriff"
         )
         return result
 
@@ -1612,6 +1632,48 @@ def evaluate_calculated_start(
         "effective_buffer_hours": round(effektiver_puffer, 2),
     }
 
+    # Netz-Start mit REDUZIERTEM Soll (Nutzerwunsch 28.09.2026).
+    # Steht bewusst VOR dem Zeitablauf-/Spätest-Start-Zweig: Ohne PV wird
+    # nicht mehr auf eine Quelle gewartet, sondern nur noch bis
+    # `netz_solltemperatur_c` vorgeheizt. Die Zapfgarantie bleibt damit
+    # erhalten, der Netzstrom-Verbrauch faellt aber kleiner aus als beim
+    # Start bis zum vollen Soll. 0 = deaktiviert (alte Warte-Logik).
+    netz_soll = float(getattr(calc_cfg, "netz_solltemperatur_c", 0.0) or 0.0)
+    if not quelle_ok and netz_soll > 0.0:
+        min_defizit = float(getattr(calc_cfg, "netz_einschalten_ab_k", 1.0))
+        # Bedarf NUR fuer das reduzierte Ziel (unten bzw. mitte, der kältere zählt).
+        std_n = max(
+            max(0.0, netz_soll - float(temp_unten)),
+            max(0.0, netz_soll - float(temp_mitte)),
+        )
+        stunden_n = std_n / max(heizrate_unten, 0.1)
+        if std_n < min_defizit:
+            # Reduzierter Soll praktisch erreicht: Netzstrom für <1 K lohnt nicht.
+            result.einschalten = None
+            result.grund = (
+                f"CalcStart: reduzierter Netz-Soll {netz_soll:.0f}C nahezu "
+                f"erreicht (unten {temp_unten:.1f}C, Defizit {std_n:.1f}K < "
+                f"{min_defizit:.1f}K) -> warte auf PV/Batterie ({quelle_grund})"
+            )
+            return result
+        if stunden_n <= time_left:
+            result.einschalten = True
+            result.grund = (
+                f"CalcStart: Netz-Start ohne PV auf reduziertem Soll "
+                f"{netz_soll:.0f}C statt {calc_cfg.solltemperatur_c:.0f}C "
+                f"(unten {temp_unten:.1f}C = {std_n:.1f}K, {stunden_n:.1f}h <= "
+                f"{time_left:.1f}h Restzeit bis {ziel_uhr:.0f}:00) -> EIN "
+                f"({quelle_grund})"
+            )
+            return result
+        result.einschalten = None
+        result.grund = (
+            f"CalcStart: Netz-Start auf reduziertem Soll {netz_soll:.0f}C noch "
+            f"zu frueh (brauche {stunden_n:.1f}h, habe {time_left:.1f}h bis "
+            f"{ziel_uhr:.0f}:00); warte auf PV/Batterie ({quelle_grund})"
+        )
+        return result
+
     if buffer_hours < 0:
         # Bereits ueber Zielzeit oder zu spaet -> sofort heizen.
         # Netzfallback ist nur erlaubt, wenn explizit aktiviert und ab der
@@ -1989,6 +2051,7 @@ def bewerte_alle_regeln(
     wochenende_cfg=None,
     legionellen_planned_tag=None,
     legionellen_planned_date=None,
+    notfall_aktiv: bool = False,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -2013,6 +2076,7 @@ def bewerte_alle_regeln(
         temp_dict,
         kompressor_ein=kompressor_ein,
         legionellen_aktiv=bool(legionellen_aktiv),
+        notfall_aktiv=notfall_aktiv,
     )
     ergebnisse.append(ergebnis)
 

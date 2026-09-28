@@ -139,8 +139,8 @@ def test_ohne_forecast_sind_pv_regeln_wieder_aktiv():
 def test_min_temp_komfort_abweichung_bleiben_bei_stale():
     """Bei Stale bleiben Sicherheitsgarantien (MinTemp, Komfort, Abweichung) aktiv."""
     config = baue_config()
-    # MinTemp Mittag-Oben deckt 11-16 Uhr, 40C
-    temp = {"oben": 38.0, "mittig": 42.0, "unten": 41.0}  # oben kalt -> MinTemp
+    # MinTemp Mittag-Mitte deckt 11-16 Uhr, 42C
+    temp = {"oben": 44.0, "mittig": 38.0, "unten": 41.0}  # mittig kalt -> MinTemp
     gewinner, alle = pc.bewerte_alle_regeln(
         config=config, temp_dict=temp, pv_leistung=200.0, kompressor_ein=False,
         now=datetime(2026, 1, 15, 12, 0),

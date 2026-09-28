@@ -32,36 +32,36 @@ def finde(ergebnisse, name_teil):
         return next(e for e in ergebnisse if name_teil in e.name)
 
 
-# ── Mittag-Oben-Fenster (11-16 Uhr) ──
+# ── Mittag-Mitte-Fenster (11-16 Uhr) ──
 
-def test_mittags_oben_zu_kalt_einschalten():
-    erg = bewerte({"oben": 39.5, "mittig": 41.0, "unten": 38.0}, now_hour=12)
-    e = finde(erg, "Mittag-Oben")
+def test_mittags_mitte_zu_kalt_einschalten():
+    erg = bewerte({"oben": 44.0, "mittig": 41.0, "unten": 38.0}, now_hour=12)
+    e = finde(erg, "Mittag-Mitte")
     assert e.aktiv and e.einschalten is True
 
 
-def test_mittags_oben_warm_tritt_stumm_zurueck():
+def test_mittags_mitte_warm_tritt_stumm_zurueck():
     # 42.5 >= 42 + 0 -> Garantie erfuellt -> stumm (kein AUS-Befehl)
-    erg = bewerte({"oben": 42.5}, now_hour=12)
-    e = finde(erg, "Mittag-Oben")
+    erg = bewerte({"mittig": 42.5}, now_hour=12)
+    e = finde(erg, "Mittag-Mitte")
     assert e.einschalten is None
     assert "Garantie erfuellt" in e.grund
 
     # 41.0 liegt knapp unter 42 -> EIN
-    erg = bewerte({"oben": 41.0}, now_hour=12)
-    e = finde(erg, "Mittag-Oben")
+    erg = bewerte({"mittig": 41.0}, now_hour=12)
+    e = finde(erg, "Mittag-Mitte")
     assert e.einschalten is True
 
     # Genau 42 °C: Ziel erreicht, aber die MinTemp-Regel liefert kein AUS.
-    erg = bewerte({"oben": 42.0}, now_hour=12)
-    e = finde(erg, "Mittag-Oben")
+    erg = bewerte({"mittig": 42.0}, now_hour=12)
+    e = finde(erg, "Mittag-Mitte")
     assert e.einschalten is None
 
 
 def test_mittags_ausserhalb_fenster_inaktiv():
     for stunde in (10, 16, 18):
-        erg = bewerte({"oben": 35.0}, now_hour=stunde)
-        assert not finde(erg, "Mittag-Oben").aktiv
+        erg = bewerte({"mittig": 35.0}, now_hour=stunde)
+        assert not finde(erg, "Mittag-Mitte").aktiv
 
 
 # ── Abend-Mitte-Fenster (17-22 Uhr) ──
@@ -121,13 +121,15 @@ def test_mindesttemp_blockiert_keine_anderen_regeln():
 
 # ── Sensor-Ausfall ──
 
-def test_mittag_oben_bleibt_ohne_pv_bei_42():
+def test_mittag_mitte_bleibt_ohne_pv_bei_42():
     config = baue_config()
     config.calculated_start.aktiv = False
     config.forecast.aktiv = False
     config.pv_regeln = []
     config.adaptive_pv.aktiv = False
     config.komfort.min_pv_fuer_komfort_watt = 999999.0
+    # `mittig` exakt am Ziel (42C) -> Garantie erfuellt; nur unten ist kalt,
+    # daher gewinnt die Komfort-Regel (Prio 60) gegen die stumme MinTemp.
     ergebnis, alle = pc.bewerte_alle_regeln(
         config=config,
         temp_dict={"oben": 41.0, "mittig": 42.0, "unten": 42.0},
@@ -136,9 +138,21 @@ def test_mittag_oben_bleibt_ohne_pv_bei_42():
         kompressor_ein=False,
         now=__import__('datetime').datetime(2026, 1, 15, 12, 0),
     )
-    assert ergebnis.name == "MinTemp-Mittag-Oben"
-    min_temp = next(e for e in alle if e.name == "MinTemp-Mittag-Oben")
+    min_temp = next(e for e in alle if e.name == "MinTemp-Mittag-Mitte")
+    assert min_temp.einschalten is None  # Ziel erreicht -> kein Eingriff
     assert pc_priority_extract_ausp(min_temp, config) == 42.0
+
+    # Und die Gegenprobe: `mittig` 1 K zu kalt -> die Garantie feuert (Prio 65)
+    ergebnis2, alle2 = pc.bewerte_alle_regeln(
+        config=config,
+        temp_dict={"oben": 41.0, "mittig": 41.0, "unten": 42.0},
+        pv_leistung=0.0,
+        pv_acpower=0.0,
+        kompressor_ein=False,
+        now=__import__('datetime').datetime(2026, 1, 15, 12, 0),
+    )
+    assert ergebnis2.name == "MinTemp-Mittag-Mitte"
+    assert ergebnis2.einschalten is True
 
 
 def test_mittag_oben_mit_pv_kann_bis_48_weiterlaufen():
@@ -174,9 +188,9 @@ def test_mittag_oben_mit_pv_kann_bis_48_weiterlaufen():
 
 
 def test_sensor_fehlt_inaktiv():
-    # Mittag-Oben um 12 Uhr (im Fenster), aber oben=None -> Sensor-Fehler
-    erg = bewerte({"oben": None}, now_hour=12)
-    e = finde(erg, "Mittag-Oben")
+    # Mittag-Mitte um 12 Uhr (im Fenster), aber mittig=None -> Sensor-Fehler
+    erg = bewerte({"mittig": None}, now_hour=12)
+    e = finde(erg, "Mittag-Mitte")
     assert not e.aktiv
     assert "nicht verfuegbar" in e.grund
 
@@ -194,7 +208,7 @@ def test_sensor_fehlt_inaktiv():
 # ── Setpoint-Extraktion (Statusanzeige/Abschaltlogik) ──
 
 @pytest.mark.parametrize("name,eps,ausp", [
-    ("MinTemp-Mittag-Oben", 42.0, 42.0),
+    ("MinTemp-Mittag-Mitte", 42.0, 42.0),
     ("Batterie", 41.0, 42.0),
 ])
 def test_extract_setpoints(name, eps, ausp):

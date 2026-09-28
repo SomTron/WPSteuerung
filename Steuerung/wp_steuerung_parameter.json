@@ -15,7 +15,7 @@
     "nachtsperre_start": 19,
     "nachtsperre_ende": 8,
     "max_temp_c": 48,
-        "boiler_max_fuehler": "unten",
+        "boiler_max_fuehler": "max",
     "boiler_max_hysterese_k": 2.0,
     "boiler_max_ein_abstand_k": 3.0,
     "start_vorhersage_puffer_min": 1.0,
@@ -23,7 +23,8 @@
     "start_vorhersage_hoch_confidence": 0.7,
     "start_vorhersage_niedrig_zusatzpuffer_min": 2.0,
     "ueberhitzung_c": 58,
-    "notfall_c": 36
+    "notfall_c": 36,
+    "legionellen_nachlauf_min": 180
   },
   "notfallschutz": {
     "aktiv": true,
@@ -79,7 +80,7 @@
     "temperaturfuehler": "unten",
     "einschalten_bei_abweichung_k": 4.9,
     "ausschalten_bei_abweichung_k": 0.0,
-    "schichtung_erlaube_start": false,
+    "schichtung_erlaube_start": true,
     "schichtung_max_steig_k": 1.0,
     "netz_notfall_offset_k": 12,
     "pv_warten_aktiv": true,
@@ -122,7 +123,9 @@
     "target_uhr": 17,
     "heizrate_unten_c_h": 3.0,
     "heizrate_gesamt_c_h": 2.0,
-    "tmax_c": 48
+    "tmax_c": 48,
+    "netz_solltemperatur_c": 38,
+    "netz_einschalten_ab_k": 1.0
   },
   "sommer_modus": {
     "aktiv": true,
@@ -140,8 +143,8 @@
     "prioritaet": 65,
     "eintraege": [
       {
-        "name": "Mittag-Oben",
-        "temperaturfuehler": "oben",
+        "name": "Mittag-Mitte",
+        "temperaturfuehler": "mitte",
         "min_temp_c": 42.0,
         "start_uhr": 11,
         "ende_uhr": 16,

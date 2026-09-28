@@ -11,6 +11,9 @@ Bewusst NICHT geaendert (Nutzerentscheidung):
   * Der Notfallschutz bleibt ein reiner Schutzleiter fuer den oberen Fuehler
     mit Abschaltung bei 38 C. Er steuert die Komforttemperatur bewusst nicht
     mit - die Abweichungs-Regel ist dafuer zustaendig.
+    (Nachtrag 28.09.2026: Seine Abschalt-Hysterese ist nun an `notfall_aktiv`
+    gekoppelt, damit er bei warmem `oben` nicht mehr jeden Lauf einer anderen
+    Regel mit Prio 110 abwuergt - siehe test_notfallschutz.py.)
   * Die Batterie-Regel bleibt stillgelegt: sie verliert gegen den
     Notfallschutz (Prio 110) und MinTemp (Prio 65) und wuerde nur mit
     geaenderter Prioritaet oder Schwelle wieder wirksam.

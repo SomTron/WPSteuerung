@@ -58,6 +58,12 @@ class ControlState:
         self._last_alert_failed_type: Optional[str] = None
         self._alert_retry_count: int = 0
         self.komfort_aktiv: bool = False
+        # True, solange der aktuell laufende Zyklus vom Notfallschutz (Prio 110)
+        # gestartet wurde. Die Notfall-Hysterese darf NUR diesen eigenen Lauf
+        # beenden - nie einen Lauf, den Komfort/PV/CalcStart/Abweichung
+        # gestartet haben (sonst wuerde der Schutzleiter bei warmem `oben`
+        # jeden Heizlauf mit Prio 110 abwuergen).
+        self.notfall_aktiv: bool = False
         self._soll_einschalten: bool = False
         self._soll_einschalten_bestaetigt: bool = False
         self._lauf_start_regel: Optional[str] = None

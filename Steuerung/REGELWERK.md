@@ -24,7 +24,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 
 | Prio | Regel | Zweck | Quelle |
 |---|---|---|---|
-| 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre) | `notfallschutz` |
+| 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre); Abschaltung nur am *eigenen* Lauf | `notfallschutz` |
 | 100 | Wochenende | Wochenend-Vorheizen ab `fruehestens_uhr` | `wochenende` |
 | 90 | Legionellen | Legionellenprophylaxe 1×/Woche (Ziel 60 °C, Limit 65 °C); **temporär hebt Boiler-Limit von 48 auf 65 °C** | `legionellen` |
 | 85 | **Einspeisung** | PV-Shaping am Netzlimit (7500 W) – gratis Strom nutzen | `einspeisung` |
@@ -133,7 +133,7 @@ Pro Eintrag (`mindest_temp.eintraege[]`) gilt:
 
 | Eintrag | Fühler | Garantie | Fenster (default) |
 |---|---|---|---|
-| Mittag-Oben | oben | ≥ 42 °C ohne PV / bis 48 °C mit PV | 11–16 Uhr |
+| Mittag-Mitte | mittig | ≥ 42 °C ohne PV / bis 48 °C mit PV | 11–16 Uhr |
 | Abend-Mitte | mittig | ≥ 42 °C ohne PV / bis 48 °C mit PV | 17–22 Uhr *(lernend, effektiv bis Nachtsperren-Beginn)* |
 
 - **EIN**, wenn der Fühler unter der Mindesttemperatur liegt – **auch während der
@@ -214,10 +214,12 @@ warm. Regelfühler ist konfigurierbar (`temperaturfuehler`).
 - AUS, wenn `soll − temp ≤ ausschalten_bei_abweichung_k` (Deployment +0,7 K)
 - **Schichtungsschutz:** Ist `oben ≥ schichtung_min_oben_c` (Default 42 °C),
   entscheidet `schichtung_erlaube_start`:
-  - `false` (Deployment): es wird **NICHT** geheizt – die Regel wartet. Verhindert
+  - `false`: es wird **NICHT** geheizt – die Regel wartet. Verhindert
     die sinnlosen Morgen-Netzläufe bei geschichtetem Boiler (oben heiß, unten kalt).
-  - `true`: Warmstart mit Deckel – oben darf nur um `schichtung_max_steig_k`
-    (Default 1 K) steigen.
+  - `true` (**Deployment seit 28.09.2026**): Warmstart mit Deckel – oben darf nur
+    um `schichtung_max_steig_k` (Deployment 1 K) steigen. Grund: Bei `oben 57.8 °C`
+    / `unten 23.7 °C` (Log 28.09.) blockierte `false` jeden Start – der untere Boiler
+    blieb dauerhaft kalt, weil *keine* Regel den Schichtungs-Check umgehen konnte.
   ⚠️ Dieser Zweig liegt **vor** dem Quellen-Gate: bei `true` kann also auch ohne
   PV/Batterie geheizt werden.
 - Bademodus erhöht den Soll (+3 K), Urlaubsmodus senkt ihn (−5 K)
@@ -335,7 +337,22 @@ positiven Live-Heizraten. Der Status und das Entscheidungslog enthalten
 ### 4.6 Hartes Boiler-Maximum & Ein-Sperre in Limitnaehe
 
 Zwei voneinander unabhaengige Schutzebenen am Bezugsfuehler
-(`boiler_max_fuehler`, default `unten`) gegen das Limit `max_temp_c` (48 C):
+(`boiler_max_fuehler`, **Deployment `max`** = heissester verfuegbarer Fühler)
+gegen das Limit `max_temp_c` (48 C):
+
+- **`max` statt `unten` (Nutzerentscheidung 28.09.2026):** Bei geschichtetem Boiler
+  bleibt `unten` lange kalt, während `oben` bereits am Limit steht. Mit festem
+  Fühler `unten` griff das 48-C-Limit dann **nie** (Log 28.09.: oben 57.8 C /
+  unten 23.7 C nach Legionellenprophylaxe) - der Boiler stand am Limit, ohne dass
+  die Abschaltung ausgeloest wurde. Mit `max` zaehlt der heisseste Fühler.
+  Die 2-Zonen-Ausnahme der Ein-Sperre ("unten nahe am Limit, aber mittig noch
+  kalt -> starten") gilt im `max`-Modus **nicht** mehr - sie wuerde dort genau
+  verkehrt weiterheizen lassen.
+- **Legionellen-Nachlauf (`sicherheit.legionellen_nachlauf_min`, Default 180 min):**
+  Nach dem Ende der Prophylaxe bleibt das Limit noch 3 Stunden auf
+  `legionellen_max_temp_c` (65 C) angehoben. Grund: Der Boiler ist danach
+  bewusst sehr heiss; ohne Nachlauf wuerde das 48-C-Limit sofort jeden weiteren
+  Lauf abwuergen, bis der Boiler wieder abgekuehlt ist.
 
 1. **Abschaltung (nachtraeglich):** Erreicht der Fuehler 48 C, wird der Kompressor
    sofort ausgeschaltet - auch wenn dadurch die Mindestlaufzeit gebrochen wird.

@@ -76,7 +76,12 @@ def test_deployment_config_hat_die_gepruefte_einstellung():
     pfad = os.path.join(os.path.dirname(__file__), "..", "wp_steuerung_parameter.json")
     with open(pfad, encoding="utf-8") as f:
         abw = json.load(f)["abweichung"]
-    assert abw["schichtung_erlaube_start"] is False
+    # Nutzerentscheidung 28.09.2026: Schichtungs-Warmstart ist freigegeben.
+    # Vorher blockierte oben >= 42C jeden Start - bei oben 57.8C / unten 23.7C
+    # (Log 28.09.) blieb der Boiler dadurch dauerhaft stehen. Der Start laeuft
+    # jetzt mit begrenztem Steig (schichtung_max_steig_k).
+    assert abw["schichtung_erlaube_start"] is True
+    assert abw["schichtung_max_steig_k"] == 1.0
     assert abw["netz_notfall_offset_k"] == 12
     assert abw["pv_warten_forecast_schwelle_wh_qm"] == 1200
     # Basisziel ohne PV bleibt 42°C; PV-Regeln dürfen bis 48°C heizen.

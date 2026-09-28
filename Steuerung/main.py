@@ -291,6 +291,11 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
         state.control.effective_source = None
         state.control._lauf_start_regel = None
         state.control.source_at_start = None
+        # Zyklus beendet: Der Notfallschutz-Zustand gehoert zwingend zum Lauf.
+        # Ohne Reset wuerde die naechste Hysterese-Auswertung einen bereits
+        # beendeten Notfall-Lauf noch als "aktiv" fuehren und dann mit
+        # Prio 110 den ERSTEN Lauf einer anderen Regel abwuergen.
+        state.control.notfall_aktiv = False
         _record_hardware_change(state, now, False)
         
         # Statistiken nur bei einem echten Übergang EIN -> AUS aktualisieren.

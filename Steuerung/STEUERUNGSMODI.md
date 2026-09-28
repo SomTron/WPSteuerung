@@ -266,10 +266,13 @@ in `state.control._soll_einschalten` und ruft je nach Kompressor-Status:
    (Standard 58 °C; während Legionellen dynamisch auf `legionellen_max_temp_c`)
    → sofort AUS, `force=True`, `blocking_reason` setzen.
 2. **Boiler-Maximum** (hart, bricht Mindestlaufzeit): Bezugsfühler
-   (`sicherheit.boiler_max_fuehler`, Standard `unten`) ≥ `sicherheit.max_temp_c`
-   (Standard 48 °C) → AUS; Wiedereinschalten erst, wenn Fühler ≤
-   `max_temp_c - boiler_max_hysterese_k` (Standard 46 °C); setzt
-   `boiler_max_blockiert`.
+   (`sicherheit.boiler_max_fuehler`, **Standard/Deployment `max`** = heissester
+   verfügbarer Fühler) ≥ `sicherheit.max_temp_c` (Standard 48 °C) → AUS;
+   Wiedereinschalten erst, wenn Fühler ≤ `max_temp_c - boiler_max_hysterese_k`
+   (Standard 46 °C); setzt `boiler_max_blockiert`.
+   **Legionellen-Nachlauf:** Während der Fahrt *und* `legionellen_nachlauf_min`
+   (Standard 180 min) danach wird das Limit auf `legionellen_max_temp_c`
+   (65 °C) angehoben — nach der Prophylaxe ist der Boiler bewusst sehr heiß.
 3. **Keine Regel aktiv / Regel sagt AUS:** `_soll_einschalten == False` → sofern
    die **Mindestlaufzeit** (`zyklus.mindestlaufzeit_minuten`, Standard 60 min)
    erreicht ist, wird ausgeschaltet. `regel_name` unterscheidet im Log
@@ -384,19 +387,35 @@ Konfigurationsschlüsseln.
   Wassertemperatur unter `einschalten_bei_c` (36 °C), wird **ohne Workaround
   vor allen Sperren** eingeschaltet (Wochenende, Nachtsperre – nichts kann ihn
   blockieren).
-- **Eingänge:** `temp_dict` (Fühler-Priorität: **oben** > **mittig** > **unten**).
+- **Eingänge:** `temp_dict`, `kompressor_ein`, `notfall_aktiv` (aus
+  `state.control.notfall_aktiv`).
+- **Fühler:** `temperaturfuehler` im Deployment explizit auf **`oben`** gesetzt.
+  `auto` (Default) = **oben** → **mittig** → **unten** (erster gültiger),
+  `alle` = kältester Fühler.
 - **Logik** (`evaluate_notfallschutz`):
   1. Config inaktiv → inaktiv.
-  2. Fühler in der Prioritätsreihenfolge auswählen; keiner verfügbar → inaktiv.
+  2. Fühler nach Strategie auswählen; keiner verfügbar → inaktiv.
   3. `temp <= einschalten_bei_c` (36) → `EIN` (`NOTFALLSCHUTZ`).
-  4. Sonst → `einschalten=None` (**stumm** – blockt andere Regeln nie).
+  4. `notfall_activ and kompressor_ein and temp >= ausschalten_bei_c` (38) →
+     `AUS` (Hysterese beendet den **eigenen** Notfall-Lauf).
+  5. `notfall_activ and kompressor_ein` (Fühler im Band) → `EIN` (läuft weiter).
+  6. Sonst → `einschalten=None` (**stumm** – blockt andere Regeln nie).
 - **Besonderheiten:**
   - Kein Nachtsperren-/Wochenende-/Urlaubs-Check nötig – die **Priorität 110**
     gewinnt gegen alle Sperren (früher: Spezialfall in `bewerte_alle_regeln`).
   - Die Abschaltung nach der Notfall-Heizung erfolgt über den normalen Setpoint
     (`ausschalten_bei_c` = 38 °C, via `_extract_ausschaltpunkt`).
+  - ⚠️ **Die Hysterese ist zustandsgebunden (Fix 28.09.2026):** Schritte 4/5
+    greifen nur, wenn `notfall_activ` gesetzt ist – d. h. der laufende Zyklus
+    wurde vom Notfallschutz gestartet. Vor dem Fix reichte `kompressor_ein`:
+    bei `oben 57.8 °C` lieferte der Notfallschutz (Prio 110) dann dauerhaft
+    „Hysterese → AUS" und würgte im 10-s-Takt jeden Start einer niedrigeren
+    Regel (Komfort Prio 60, Abweichung Prio 47) wieder ab.
+    `notfall_activ` wird gesetzt in `handle_compressor_on`
+    (`start_regel == "Notfallschutz"`) und in `set_kompressor_status`
+    beim Abschalten gelöscht.
 - **Konfig:** `notfallschutz.{aktiv (true), prioritaet (110),
-  einschalten_bei_c (36.0), ausschalten_bei_c (38.0)}`.
+  einschalten_bei_c (36.0), ausschalten_bei_c (38.0), temperaturfuehler (oben)}`.
 
 ---
 
@@ -544,6 +563,14 @@ Konfigurationsschlüsseln.
   11. `buffer_hours = time_left - hours_needed`;
       `effektiver_puffer = buffer_hours * pv_faktor`.
   12. **Entscheidung:**
+      - **Ohne PV/Batterie und `netz_solltemperatur_c > 0` (Deployment 38 °C,
+        Nutzerwunsch 28.09.2026):** Es wird *nicht* mehr auf eine Quelle gewartet.
+        Statt bis 42 °C wird nur noch bis `netz_solltemperatur_c` (38 °C)
+        vorgeheizt, sobald das zeitlich erreichbar ist
+        (`Defizit / heizrate_unten ≤ time_left`). Das spart Netzstrom und
+        hält die Zapfgarantie. `netz_einschalten_ab_k` (1.0 K) verhindert
+        Starts für vernachlässigbare 0.x K. Steht in der Config `0`, gilt
+        die alte Warte-Logik.
       - `buffer_hours < 0` → `EIN` („ZU SPÄT! Zeitablauf … (Notfall)") –
         garantiert die Zapf-Versorgung, notfalls ohne PV.
       - Quelle vorhanden **und** `effektiver_puffer < 0.5 h` → `EIN`.
@@ -553,7 +580,8 @@ Konfigurationsschlüsseln.
       - Sonst → `None` („Puffer reicht, warte auf PV/Batterie").
 - **Konfig:** `calculated_start.{aktiv (true), prioritaet (82),
   solltemperatur_c (44), target_uhr (17), heizrate_unten_c_h (3.0),
-  heizrate_gesamt_c_h (2.0), tmax_c (48)}`.
+  heizrate_gesamt_c_h (2.0), tmax_c (48), netz_solltemperatur_c (38),
+  netz_einschalten_ab_k (1.0)}`.
 - **Lernintegration:** nutzt `gelernte_zielzeit`, gelernte Heizraten,
   `fc_ratio` (Forecast-Kalibrierung) und das Surplus-Profil.
 

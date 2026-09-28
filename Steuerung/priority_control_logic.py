@@ -505,6 +505,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             planned_tag if isinstance(planned_tag, int) and 0 <= planned_tag <= 6 else None
         ),
         legionellen_planned_date=planned_date,
+        notfall_aktiv=bool(getattr(state.control, "notfall_aktiv", False)),
     )
 
     # Ergebnisse loggen - KOMPAKT-MODUS (Empfehlung "Logvolumen reduzieren"):
@@ -602,6 +603,31 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         e.name == "Komfort" and e.aktiv and e.einschalten is True
         for e in alle_ergebnisse
     )
+
+    # Notfall-Lauf nachziehen (Prio 110): Der Notfallschutz darf seine
+    # Abschalt-Hysterese nur auf den Lauf anwenden, den er selbst gestartet
+    # hat. Sonst wuerde er bei warmem `oben` jeden Lauf einer anderen Regel
+    # (Prio 60/47/78) ueber den Hysterese-Zweig mit Prio 110 abwuergen.
+    _notfall_erg = next((e for e in alle_ergebnisse if e.name == "Notfallschutz"), None)
+    if _notfall_erg is not None:
+        vorher = bool(getattr(state.control, "notfall_aktiv", False))
+        if _notfall_erg.einschalten is True:
+            # Notfall laeuft (frisch gestartet ODER per Hysterese fortgesetzt)
+            nachher = True
+        elif _notfall_erg.einschalten is False:
+            # Der Notfallschutz beendet seinen eigenen Lauf -> Zustand loeschen
+            nachher = False
+        else:
+            # Stumm: Zustand unveraendert, solange der Kompressor laeuft.
+            # Beendet der Kompressor, wird der Zustand unten zurueckgesetzt.
+            nachher = vorher and bool(state.control.kompressor_ein)
+        state.control.notfall_aktiv = nachher
+        if vorher != nachher:
+            logging.info(
+                f"Notfallschutz-Lauf {'gestartet' if nachher else 'beendet'} "
+                f"(Fühler-Schwelle {effektive_config.notfallschutz.einschalten_bei_c}"
+                f"-{effektive_config.notfallschutz.ausschalten_bei_c}C)"
+            )
 
     # Alle Ergebnisse im State speichern fuer API/HTML-Anzeige
     state.control.alle_ergebnisse = alle_ergebnisse
@@ -1098,19 +1124,77 @@ def _effektives_legionellen_limit(state, include_requested: bool = True):
     return None
 
 
+def _boiler_max_fuehler_und_temp(state, cfg):
+    """Ermittelt (fuehler_name, temp) fuer das harte Boiler-Maximum.
+
+    ``boiler_max_fuehler = "max"`` (Deployment seit 28.09.2026) nimmt den
+    HEISSESTEN verfuegbaren Fühler. Begruendung: Bei geschichtetem Boiler
+    bleibt der untere Fühler lange kalt, während oben bereits am Limit steht
+    (Log 28.09.: oben 57.8 C / unten 23.7 C nach Legionellenprophylaxe). Mit
+    festem Fühler "unten" griff das 48-C-Limit in diesem Zustand nie - der
+    Boiler stand am Limit, ohne dass die Abschaltung ausgeloest wurde.
+    """
+    fuehler_cfg = getattr(cfg, "boiler_max_fuehler", None) or "unten"
+    sensors = getattr(state, "sensors", None)
+    if fuehler_cfg == "max":
+        kandidaten = []
+        for name in ("oben", "mittig", "unten"):
+            wert = getattr(sensors, f"t_{name}", None)
+            if isinstance(wert, (int, float)) and not isinstance(wert, bool):
+                kandidaten.append((float(wert), name))
+        if not kandidaten:
+            return fuehler_cfg, None
+        # Bei Gleichstand gewinnt der hoehere Name ("unten" > "mittig" > "oben");
+        # fuer die Abschaltung ist ohnehin der Wert entscheidend.
+        wert, name = max(kandidaten, key=lambda item: item[0])
+        return name, wert
+    wert = getattr(sensors, f"t_{fuehler_cfg}", None)
+    if not isinstance(wert, (int, float)) or isinstance(wert, bool):
+        return fuehler_cfg, None
+    return fuehler_cfg, float(wert)
+
+
+def _legionellen_nachlauf_aktiv(state, cfg) -> bool:
+    """True, solange das Boiler-Maximum nach der Prophylaxe noch angehoben ist.
+
+    Nach dem Ende der Legionellenprophylaxe bleibt der Boiler bewusst sehr
+    heiss. Ohne diesen Nachlauf wuerde das 48-C-Limit sofort greifen und jeden
+    weiteren Lauf abwuergen, bis der Boiler wieder abgekuehlt ist - die
+    Solltemperatur zu halten waere dann nicht mehr moeglich.
+    """
+    nachlauf = getattr(cfg, "legionellen_nachlauf_min", 0.0)
+    if not isinstance(nachlauf, (int, float)) or isinstance(nachlauf, bool):
+        return False
+    if nachlauf <= 0:
+        return False
+    ende = getattr(state, "legionellen_end_time", None)
+    if not isinstance(ende, datetime):
+        return False
+    try:
+        jetzt = _now_for_state(state)
+        if jetzt.tzinfo is None and ende.tzinfo is not None:
+            jetzt = jetzt.replace(tzinfo=ende.tzinfo)
+        elif jetzt.tzinfo is not None and ende.tzinfo is None:
+            ende = ende.replace(tzinfo=jetzt.tzinfo)
+        vergangen = jetzt - ende
+    except (TypeError, ValueError):
+        return False
+    return vergangen <= timedelta(minutes=float(nachlauf))
+
+
 def _boiler_max_info(state):
     """Infos zum harten Boiler-Maximum: (temp, limit, wiederein, fuehler).
 
     temp kann None sein (Fuehler fehlt) -> die Pruefungen entfallen dann.
-    Bei aktiver Legionellenprophylaxe wird das Limit auf
+    Bei aktiver Legionellenprophylaxe UND waehrend des Nachlaufs
+    (`sicherheit.legionellen_nachlauf_min`) wird das Limit auf
     legionellen_max_temp_c erhoeht (wenn gesetzt).
     """
     cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
     if cfg is None:
         return None, None, None, "unten"
-    fuehler = getattr(cfg, "boiler_max_fuehler", None) or "unten"
-    temp = getattr(getattr(state, "sensors", None), f"t_{fuehler}", None)
-    if temp is None or not isinstance(temp, (int, float)):
+    fuehler, temp = _boiler_max_fuehler_und_temp(state, cfg)
+    if temp is None:
         return None, None, None, fuehler
     # Standard-Limit aus Config
     limit = float(getattr(cfg, "max_temp_c", 48.0))
@@ -1118,6 +1202,13 @@ def _boiler_max_info(state):
     # bestaetigte Wunschregel. Der Standard-Boiler-Schutz wird dabei nicht
     # deaktiviert, nur sein numerisches Limit wird temporaer angehoben.
     legionellen_limit = _effektives_legionellen_limit(state)
+    if legionellen_limit is None and _legionellen_nachlauf_aktiv(state, cfg):
+        lle_cfg = getattr(
+            getattr(state, "priority_config", None), "legionellen", None
+        )
+        kandidat = getattr(lle_cfg, "legionellen_max_temp_c", None)
+        if isinstance(kandidat, (int, float)) and not isinstance(kandidat, bool):
+            legionellen_limit = float(kandidat)
     if legionellen_limit is not None and legionellen_limit > limit:
         limit = legionellen_limit
 
@@ -1633,20 +1724,25 @@ async def handle_compressor_on(
     )
     t_nahe, nahe_limit, _kuehl_schwelle, fuehler_nahe = _boiler_max_info(state)
     t_mittig = getattr(getattr(state, "sensors", None), "t_mittig", None)
-    # Nur blockieren wenn SOWOHL unten ALS AUCH mittig nahe am Limit sind
-    # Wenn nur unten nahe am Limit aber mittig noch kalt ist -> nicht blockieren
+    max_modus = getattr(_sicher_cfg, "boiler_max_fuehler", None) == "max"
     mittig_close = t_mittig is not None and t_mittig >= nahe_limit - ein_abstand if t_mittig is not None else False
-    unten_close = t_nahe is not None and t_nahe >= nahe_limit - ein_abstand
-    if unten_close and mittig_close:
+    ref_close = t_nahe is not None and t_nahe >= nahe_limit - ein_abstand
+    if ref_close and (mittig_close or max_modus):
+        # Im `max`-Modus zaehlt der heisseste Fuehler: Die 2-Zonen-Ausnahme
+        # ("unten nahe am Limit, aber mittig noch kalt -> starten") waere dort
+        # genau verkehrt - sie wuerde bei geschichtetem Boiler weiterheizen
+        # lassen, obwohl oben bereits am Limit steht (Nutzerentscheidung
+        # 28.09.2026). Ohne `max` gilt die alte Zonenlogik unveraendert.
         state.control.blocking_reason = (
-            f"Boiler-Max-Naehe (unten {t_nahe:.1f}C, mittig {t_mittig:.1f}C, "
+            f"Boiler-Max-Naehe ({fuehler_nahe} {t_nahe:.1f}C, "
+            f"mittig {t_mittig:.1f}C, "
             f"Einschalten erst < {nahe_limit - ein_abstand:.1f}C)"
         )
         return False
-    elif unten_close and not mittig_close:
+    elif ref_close and not mittig_close:
         # Unten nahe am Limit aber mittig noch kalt -> nicht blockieren
         pass
-    elif mittig_close and not unten_close:
+    elif mittig_close and not ref_close:
         # Mittig nahe am Limit aber unten noch kalt -> nicht blockieren
         pass
 
@@ -1801,6 +1897,11 @@ async def handle_compressor_on(
                 if not start_regel:
                     start_regel = getattr(state.control, "previous_modus", None)
                 _set_effective_cycle_rule(state, start_regel, pending_source)
+                # Notfall-Zustand am echten Zyklusbeginn festschreiben: Nur
+                # ein von der Regel "Notfallschutz" gestarteter Lauf darf
+                # spaeter ueber die Notfall-Hysterese (Prio 110) beendet
+                # werden. Jeder andere Start setzt den Zustand zurueck.
+                state.control.notfall_aktiv = (start_regel == "Notfallschutz")
                 # Regelnamen + tatsaechliche Ausschaltgrenze loggen (nicht den
                 # nur fuer die Anzeige abgeleiteten Einschaltpunkt - bei der
                 # Einspeisungs-Regel waere das ein Dummy-Wert wie 42.0).

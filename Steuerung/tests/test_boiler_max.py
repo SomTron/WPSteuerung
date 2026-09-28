@@ -7,6 +7,14 @@ aber nicht wenn er unten 48,8 Grad hat."
 Vorher: Unten 48.8 >= Limit 48 -> alle Regeln sagten AUS, aber die
 Mindestlaufzeit hielt den Kompressor noch ~10 min fest und heizte oben
 auf 51.7 C weiter. Neu: Der BoilerMax-Abschalter bricht die Laufzeit.
+
+Nachtrag (Nutzerentscheidung 28.09.2026): `boiler_max_fuehler` ist jetzt
+`"max"` - es zaehlt der HEISSESTE Fuehler, nicht mehr fest "unten". Der
+User-Fall oben ("oben 48,7 / unten 30 -> einschalten") ist damit bewusst
+UMKEHRT: bei geschichtetem Boiler stand oben am Limit, waehrend unten kalt
+war - die WP wurde in den am Limit stehenden Boiler hinein geheizt
+(Log 28.09.: oben 57.8 C / unten 23.7 C nach Legionellenprophylaxe).
+Siehe `test_userfall_oben_warm_unten_kalt_kein_einschalten`.
 """
 import os
 import sys
@@ -25,7 +33,15 @@ from json_config import SicherheitConfig, WPSteuerungConfig  # noqa: E402
 TZ = pytz.timezone("Europe/Berlin")
 
 
-def baue_state(t_unten, t_oben=51.7, t_mittig=50.0, config=None):
+def baue_state(t_unten, t_oben=44.0, t_mittig=43.0, config=None):
+    """Testfixture.
+
+    WICHTIG (Nutzerentscheidung 28.09.2026): `boiler_max_fuehler` ist jetzt
+    "max" - es zaehlt der HEISSESTE Fuehler. Die Standardwerte fuer oben/mittig
+    liegen daher bewusst UNTER dem 48-C-Limit, damit die Tests weiterhin nur das
+    Verhalten am gewaehlten `t_unten` pruefen. Tests, die den heissesten Fuehler
+    pruefen wollen, uebergeben t_oben/t_mittig ausdruecklich.
+    """
     cfg = config or WPSteuerungConfig()
     now = datetime.now(TZ)
     return SimpleNamespace(
@@ -165,9 +181,13 @@ async def test_on_freigabe_nach_abkuehlung_hebt_flag_auf():
 
 
 @pytest.mark.asyncio
-async def test_userfall_oben_warm_unten_kalt_darf_einschalten():
-    """User-Fall: oben 48.7 / unten 30 -> EIN erlaubt (keine pauschale Sperre)."""
-    state = baue_state(t_unten=30.0, t_oben=48.7)
+async def test_userfall_oben_warm_unten_kalt_kein_einschalten():
+    """Umgekehrter User-Fall (Nutzerentscheidung 28.09.2026): oben 48.7 /
+    unten 30 -> EIN ist GESPERRT, weil mit `boiler_max_fuehler = "max"` der
+    heisseste Fuehler zaehlt. Vorher (Fühler fest auf "unten") war hier EIN
+    erlaubt - das liess die WP in einen bereits am Limit stehenden Boiler
+    weiterheizen (dort stieg `oben` laut Testkopf auf 51.7 C)."""
+    state = baue_state(t_unten=30.0, t_oben=48.7, t_mittig=40.0)
     state.control.kompressor_ein = False
     state.control._soll_einschalten = True
     calls = []
@@ -177,8 +197,29 @@ async def test_userfall_oben_warm_unten_kalt_darf_einschalten():
         t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler(calls),
     )
-    assert erg is True
-    assert calls and calls[0][0] is True
+    assert erg is False
+    assert calls == []
+    assert "Boiler-Max" in (state.control.blocking_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_max_zaehlt_oberen_fuehler_bei_schichtung():
+    """Log 28.09.2026: oben 57.8 / mitte 40 / unten 23.7. Mit `max` greift das
+    48-C-Limit am oberen Fühler - der Boiler stand am Limit, ohne dass die
+    Abschaltung ausgeloest wurde."""
+    state = baue_state(t_unten=23.7, t_oben=57.8, t_mittig=40.0)
+    state.control.kompressor_ein = False
+    state.control._soll_einschalten = True
+    calls = []
+    erg = await pcl.handle_compressor_on(
+        state, None, regelfuehler=23.7, einschaltpunkt=42.0, ausschaltpunkt=48.0,
+        min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
+        t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
+        set_kompressor_status_func=_set_status_sammler(calls),
+    )
+    assert erg is False
+    assert calls == []
+    assert "oben 57.8" in (state.control.blocking_reason or "")
 
 
 @pytest.mark.asyncio
@@ -346,9 +387,92 @@ def test_nach_legionellen_gilt_wieder_normaler_boilerschutz():
     state.legionellen_aktiv = False
     state.legionellen_temp_override = None
     state.control.requested_rule_name = None
+    state.legionellen_end_time = None
     _temp, limit, wiederein, _sensor = pcl._boiler_max_info(state)
     assert limit == 48.0
     assert wiederein == 46.0
+
+
+# ---------- Bezugsfuehler "max" + Legionellen-Nachlauf (28.09.2026) ----------
+
+def test_max_waehlt_den_heissesten_fuehler():
+    state = baue_state(t_unten=23.7, t_oben=57.8, t_mittig=40.0)
+    state.legionellen_end_time = None
+    temp, _limit, _wie, fuehler = pcl._boiler_max_info(state)
+    assert fuehler == "oben"
+    assert temp == pytest.approx(57.8)
+
+
+def test_max_meldet_mittig_wenn_oben_ausgefallen_ist():
+    state = baue_state(t_unten=23.7, t_oben=None, t_mittig=41.0)
+    state.legionellen_end_time = None
+    temp, _limit, _wie, fuehler = pcl._boiler_max_info(state)
+    assert fuehler == "mittig"
+    assert temp == pytest.approx(41.0)
+
+
+def test_max_ohne_sensoren_kein_eingriff():
+    state = baue_state(t_unten=None, t_oben=None, t_mittig=None)
+    state.legionellen_end_time = None
+    assert pcl._boiler_max_info(state) == (None, None, None, "max")
+
+
+def test_legionellen_nachlauf_hebt_limit_auf_65():
+    """Direkt nach der Prophylaxe: Limit 65C statt 48C, damit der noch
+    sehr heisse Boiler (oben 57.8C) nicht sofort abgeschaltet wird und
+    die WP ihn wieder auf Solltemperatur bringen kann."""
+    state = baue_state(t_unten=48.5, t_oben=57.8, t_mittig=50.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=30)
+    _temp, limit, wiederein, _f = pcl._boiler_max_info(state)
+    assert limit == 65.0
+    assert wiederein == pytest.approx(63.0)
+
+
+def test_legionellen_nachlauf_laeft_ab():
+    """Nach 180 min ist das normale 48C-Limit wieder aktiv."""
+    state = baue_state(t_unten=48.5, t_oben=57.8, t_mittig=50.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=181)
+    _temp, limit, _wie, _f = pcl._boiler_max_info(state)
+    assert limit == 48.0
+
+
+def test_legionellen_nachlauf_0_deaktiviert():
+    state = baue_state(t_unten=48.5, t_oben=57.8, t_mittig=50.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=1)
+    state.priority_config.sicherheit.legionellen_nachlauf_min = 0.0
+    _temp, limit, _wie, _f = pcl._boiler_max_info(state)
+    assert limit == 48.0
+
+
+@pytest.mark.asyncio
+async def test_nachlauf_verhindert_abwuergen_des_noch_heissen_boilers():
+    """End-to-End: Nach der Prophylaxe darf `handle_compressor_off` bei
+    oben 57.8C / unten 48.5C NICHT abschalten - ohne Nachlauf wuerde der
+    Boiler hier dauerhaft blockiert bleiben."""
+    state = baue_state(t_unten=48.5, t_oben=57.8, t_mittig=50.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=20)
+    calls = []
+    erg = await pcl.handle_compressor_off(
+        state, None, regelfuehler=48.5, ausschaltpunkt=48.0,
+        min_laufzeit=timedelta(minutes=15), t_oben=57.8,
+        set_kompressor_status_func=_set_status_sammler(calls),
+        regel_name="Abweichung",
+    )
+    assert calls == []          # kein Abschalten
+    assert erg is False
+    assert "Boiler-Maximum" not in (state.control.blocking_reason or "")
 
 
 # ---------- Konfiguration ----------
@@ -357,9 +481,11 @@ def test_default_werte_matchen_anforderung():
     cfg = WPSteuerungConfig()
     s = cfg.sicherheit
     assert s.max_temp_c == 48.0
-    assert s.boiler_max_fuehler == "unten"
+    # Nutzerentscheidung 28.09.2026: Bezugsfuehler ist der HEISSESTE (Schichtung)
+    assert s.boiler_max_fuehler == "max"
     assert s.boiler_max_hysterese_k == 2.0
     assert s.boiler_max_ein_abstand_k == 2.0
+    assert s.legionellen_nachlauf_min == 180.0
 
 
 def test_validatoren():
