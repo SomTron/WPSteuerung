@@ -108,30 +108,39 @@ class TestForecastKalibrierung:
             _schritt(e, t0 + timedelta(hours=h), False, feedin=watt)
 
     def test_ratio_lernt_ab_drei_tagen(self, engine):
-        self._tag(engine, datetime(2026, 8, 24), 20000.0)   # ratio 4.0 -> 2.0
+        # Faktor = Einspeisung (Wh) / (Prognose Wh/m2 x Arrayflaeche m2).
+        # Bei 10 m2 und 5000 Wh/m2 sind das 50000 Wh erwartet.
+        self._tag(engine, datetime(2026, 8, 24), 20000.0)   # ratio 0.40
         _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)
         assert engine.get_forecast_ratio() == 1.0           # n<3 -> neutral
-        self._tag(engine, datetime(2026, 8, 25), 6000.0)    # ratio 1.2
+        self._tag(engine, datetime(2026, 8, 25), 6000.0)    # ratio 0.12
         _kalibriere_am_abend(engine, datetime(2026, 8, 25), 5000.0)
-        self._tag(engine, datetime(2026, 8, 26), 4500.0)    # ratio 0.9
+        self._tag(engine, datetime(2026, 8, 26), 45000.0)   # ratio 0.90
         _kalibriere_am_abend(engine, datetime(2026, 8, 26), 5000.0)
         assert engine.data.forecast_ratio_samples == 3
-        # EWMA: 2.0 -> 1.76 -> 1.502
-        assert abs(engine.get_forecast_ratio() - 1.502) < 0.01
+        # Gemessen: 0.400 -> 0.370 -> 0.529 (EWMA alpha=0.3)
+        assert abs(engine.get_forecast_ratio() - 0.529) < 0.01
 
-    def test_kwh_prognose_wird_auf_wh_normiert(self, engine):
-        """Open-Meteo-kWh/m2 darf die Kalibrierung nicht als unbrauchbar verwerfen."""
-        self._tag(engine, datetime(2026, 8, 24), 5000.0)
+    def test_prognose_in_wh_pro_m2_wird_nicht_erneut_umgerechnet(self, engine):
+        """Die Integrationsgrenze liefert bereits Wh/m2.
+
+        Ein frueherer Doppel-Normalisierungsschritt las 5000 Wh/m2 als
+        "5.0 Wh/m2" undwarf die Prognose immer als unbrauchbar - die
+        Kalibrierung lief nie an (Symptom: "samples 0/3" in der WebApp).
+        """
+        self._tag(engine, datetime(2026, 8, 24), 50000.0)
         _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)
         assert engine.data.forecast_ratio_samples == 1
+        # 50000 Wh Einspeisung bei 5000 Wh/m2 x 10 m2 = Faktor 1.0
         assert engine.data.forecast_ratio == pytest.approx(1.0)
 
     def test_clamps_und_leere_tage(self, engine):
         self._tag(engine, datetime(2026, 8, 24), 40.0)      # unter Mindest-Daten
         _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)
         assert engine.data.forecast_ratio_samples == 0      # uebersprungen
-        self._tag(engine, datetime(2026, 8, 25), 30000.0)
-        _kalibriere_am_abend(engine, datetime(2026, 8, 25), 5000.0)  # 6.0->2.0
+        # 300000 Wh bei 5000 Wh/m2 x 10 m2 = 6.0 -> am Max geklemmt
+        self._tag(engine, datetime(2026, 8, 25), 300000.0)
+        _kalibriere_am_abend(engine, datetime(2026, 8, 25), 5000.0)
         assert engine.data.forecast_ratio == 2.0
         # Keine Prognose -> kein Sample
         self._tag(engine, datetime(2026, 8, 26), 8000.0)

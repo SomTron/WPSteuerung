@@ -77,6 +77,9 @@ class LearningConfig:
     forecast_ratio_min: float = 0.3
     forecast_ratio_max: float = 2.0
     forecast_kalibrierung_ab_stunde: int = 20
+    #: PV-Arrayflaeche in m2. Wird fuer die Forecast-Kalibrierung
+    #: gebraucht, um die Prognose (Wh/m2) in Wh umzurechnen.
+    pv_array_size_qm: float = 10.0
 
     # ── Allgemein ──
     max_cycles: int = 50
@@ -576,6 +579,13 @@ class LearningEngine:
             self._day_surplus_wh = 0.0
         if feedin_watt is not None and dt_secs > 0:
             self._day_surplus_wh += max(feedin_watt, 0.0) * dt_secs / 3600.0
+        # Wichtig: Der Aufrufer liefert die HEUTE-Prognose bereits in Wh/m2
+        # (priority_control_logic normalisiert dort mit kwh_m2). Deshalb hier
+        # NUR die Gueltigkeit pruefen, nicht noch einmal umrechnen - eine
+        # zweite Normalisierung mit value_unit="wh_m2" wuerde 5060 Wh/m2 als
+        # "5.06 Wh/m2" lesen und die Tagesprognose immer als zu klein einstufen.
+        # Symptom: "Kalibrierung uebersprungen (keine brauchbare Tagesprognose)"
+        # und ein dauerhaftes "samples 0/3" in der WebApp.
         self._kalibriere_forecast(now, heute, forecast_today_wh_qm)
 
         # Stundensurplus-Profil: Nur bei AUSgeschaltetem Kompressor sampeln,
@@ -691,10 +701,14 @@ class LearningEngine:
         # Forecast-Werte werden an der Integrationsgrenze ausdrücklich
         # normalisiert. Keine Größen-Heuristik: 50 Wh/m² sind ein gültiger
         # niedriger Tageswert und dürfen nicht zu 50.000 Wh/m² werden.
-        from logic_utils import normalize_forecast_wh_qm
-        forecast_today_wh_qm = normalize_forecast_wh_qm(
-            forecast_today_wh_qm, value_unit="wh_m2"
-        )
+        # Einheiten: Der Aufrufer (priority_control_logic) liefert die
+        # HEUTE-Prognose bereits normalisiert in Wh/m2. Hier wird sie
+        # deshalb NICHT erneut umgerechnet.
+        #
+        # Bug (2026-09): value_unit="wh_m2" las einen bereits in Wh/m2
+        # liegenden Wert als kWh/m2. 5060 Wh/m2 wurden so zu "5.06 Wh/m2"
+        # und lagen immer unter der 1000-Wh/m2-Schranke. Folge: keine
+        # Kalibrierung, Faktor dauerhaft x1 und "samples 0/3" in der WebApp.
         if forecast_today_wh_qm is None or forecast_today_wh_qm < 1000:
             logging.info("Learning: Kalibrierung uebersprungen "
                          "(keine brauchbare Tagesprognose)")
@@ -703,8 +717,19 @@ class LearningEngine:
             logging.info("Learning: Kalibrierung uebersprungen "
                          "(zu wenig Surplus-Daten heute)")
             return
+        # Einheiten: _day_surplus_wh ist Wh (Netzeinspeisung),
+        # forecast_today_wh_qm ist Wh/m2. Fuer einen Quotienten wird die
+        # Prognose mit der Arrayflaeche in Wh umgerechnet. Ohne das war
+        # der Quotient um die Flaeche (~10x) zu gross und klemmte im
+        # Testlauf dauerhaft am forecast_ratio_max.
+        flaeche_qm = float(getattr(cfg, "pv_array_size_qm", 0.0) or 0.0)
+        prognose_wh = float(forecast_today_wh_qm) * flaeche_qm
+        if prognose_wh <= 0:
+            logging.info("Learning: Kalibrierung uebersprungen "
+                         "(keine PV-Arrayflaeche konfiguriert)")
+            return
         ratio = max(cfg.forecast_ratio_min, min(
-            cfg.forecast_ratio_max, self._day_surplus_wh / float(forecast_today_wh_qm)))
+            cfg.forecast_ratio_max, self._day_surplus_wh / prognose_wh))
         alpha = cfg.forecast_ewma_alpha
         n = self.data.forecast_ratio_samples + 1
         self.data.forecast_ratio = (
@@ -713,9 +738,10 @@ class LearningEngine:
         self.data.forecast_ratio_samples = n
         self._save()
         logging.info(
-            f"Learning: Forecast-Kalibrierung {heute}: Surplus "
+            f"Learning: Forecast-Kalibrierung {heute}: Einspeisung "
             f"{self._day_surplus_wh:.0f}Wh / Prognose "
-            f"{forecast_today_wh_qm:.0f}Wh/qm -> Faktor "
+            f"{prognose_wh:.0f}Wh ({forecast_today_wh_qm:.0f}Wh/m2 x "
+            f"{flaeche_qm:.0f}m2) -> Faktor "
             f"{self.data.forecast_ratio:.2f} (n={n})")
 
     def _finalize_cycle(self, now: datetime, temp_dict: Dict[str, Optional[float]]):
