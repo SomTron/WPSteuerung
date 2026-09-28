@@ -41,6 +41,43 @@ def _eval(cfg, oben, unten):
     )
 
 
+def test_deckel_holt_ueber_laeufe_nicht_weg():
+    """Regression 28.09.2026: Der erlaubte Spielraum des Schichtungs-
+    Warmstarts darf sich nicht pro Lauf aufstocken.
+
+    Die Basis (schichtung_oben_start) wird in priority_control_logic
+    ueber Laeufe hinweg gehalten, solange der Oberfuehler nicht unter sie
+    faellt. Damit bleibt der Gesamtspielraum schichtung_max_steig_k.
+    Frueher: Lauf 1 deckelt 55->56, Lauf 2 56->57, ... bis 58 C
+    (Ueberhitzungsschutz).
+    """
+    from types import SimpleNamespace
+
+    import priority_control_logic as pcl
+
+    cfg = _cfg(schichtung_erlaube_start=True, schichtung_netz_fallback_erlaubt=True)
+    control = SimpleNamespace(schichtung_oben_max=None, schichtung_oben_start=None)
+    for t_oben in (55.0, 56.0, 56.0):      # drei Laeufe, Oberwert steigt
+        r = _eval(cfg, oben=t_oben, unten=24.6)
+        assert r.einschalten is True, f"Lauf bei oben {t_oben} sollte starten"
+        # Die ECHTE Spiegelung aufrufen, nicht eine nachgebaute.
+        pcl._spiegele_schichtungsdeckel(control, r.regel_dict, t_oben)
+        assert control.schichtung_oben_start == 55.0, (
+            f"Basis wanderte auf {control.schichtung_oben_start} - "
+            "der Spielraum waechst pro Lauf"
+        )
+        assert control.schichtung_oben_max == 56.0, (
+            f"Deckel wanderte auf {control.schichtung_oben_max}"
+        )
+
+    # Erst wenn der Oberfuehler WIRKLICH unter die Basis abgekuehlt ist,
+    # beginnt eine neue Phase mit frischer Basis.
+    r = _eval(cfg, oben=52.0, unten=24.6)
+    pcl._spiegele_schichtungsdeckel(control, r.regel_dict, 52.0)
+    assert control.schichtung_oben_start == 52.0
+    assert control.schichtung_oben_max == 53.0
+
+
 def test_oben_warm_und_start_verboten_wartet():
     """Fall 05.09./08.09./13.09.: oben heiss, unten kalt, keine Quelle -> warten."""
     r = _eval(_cfg(schichtung_erlaube_start=False), oben=48.5, unten=24.6)

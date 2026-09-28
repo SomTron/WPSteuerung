@@ -690,12 +690,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # der Kompressor laeuft (auch bei anderen Gewinnern wie PV/Batterie).
     try:
         if gewinner is not None and gewinner.regel_dict:
-            _sd = gewinner.regel_dict
-            if "schichtung_oben_max" in _sd:
-                state.control.schichtung_oben_max = float(_sd["schichtung_oben_max"])
-                state.control.schichtung_oben_start = float(
-                    _sd.get("schichtung_oben_start", state.sensors.t_oben or 0.0)
-                )
+            _spiegele_schichtungsdeckel(
+                state.control, gewinner.regel_dict, state.sensors.t_oben
+            )
     except Exception:
         # Bei MagicMock/Fehlern defensiv zuruecksetzen
         state.control.schichtung_oben_max = None
@@ -1118,6 +1115,48 @@ def _taktschutz_blockiert(state, cfg) -> float:
         return ts_cfg.zusatz_pause_minuten * 60.0
     _episode_beenden()
     return 0.0
+
+
+def _spiegele_schichtungsdeckel(control, regel_dict, t_oben) -> None:
+    """Uebernimmt Basis und Deckel des Schichtungs-Warmstarts in den State.
+
+    Ausgelagert aus `determine_mode_and_setpoints`, damit die Logik direkt
+    testbar ist (Regression 28.09.2026).
+
+    Kern der Korrektur: Der Deckel der Regel lautet "aktueller Oberwert +
+    schichtung_max_steig_k". Uebernimmt man ihn unveraendert, waechst der
+    erlaubte Spielraum mit jedem Lauf (55->56, 56->57, ... bis zum
+    Ueberhitzungsschutz bei 58 C). Deshalb:
+
+    * Die BASIS ueberlebt Laeufe, solange `oben` nicht unter sie faellt.
+    * Der DECKEL wird zusaetzlich auf `Basis + erlaubter Steig` geklemmt.
+
+    Der erlaubte Gesamtspielraum des Warmstarts ist damit einmalig
+    `schichtung_max_steig_k` und nicht `schichtung_max_steig_k` pro Lauf.
+    Faellt `oben` unter die Basis (echtes Abkuehlen), beginnt eine neue
+    Phase mit frischer Basis.
+    """
+    if not isinstance(regel_dict, dict) or "schichtung_oben_max" not in regel_dict:
+        return
+
+    basis_alt = getattr(control, "schichtung_oben_start", None)
+    if (
+        isinstance(basis_alt, (int, float))
+        and not isinstance(basis_alt, bool)
+        and isinstance(t_oben, (int, float))
+        and not isinstance(t_oben, bool)
+        and float(t_oben) >= float(basis_alt)
+    ):
+        basis = float(basis_alt)          # Oberfühler nicht unter der Basis
+    else:
+        basis = float(
+            regel_dict.get("schichtung_oben_start", t_oben or 0.0)
+        )
+    control.schichtung_oben_start = basis
+    steig = float(regel_dict.get("schichtung_max_steig_k", 1.0))
+    control.schichtung_oben_max = min(
+        float(regel_dict["schichtung_oben_max"]), basis + max(steig, 0.1)
+    )
 
 
 def _effektives_legionellen_limit(state, include_requested: bool = True):
@@ -1581,10 +1620,17 @@ async def handle_compressor_off(
                 f"SCHICHTUNG AUS (cycle={_zyklus_id(state)}) reason=schichtung: "
                 f"oben {t_oben:.1f}C >= {float(schichtung_max):.1f}C{steig_txt}"
             )
-            # Obergrenze zuruecksetzen, damit der naechste normale Lauf nicht
-            # durch eine alte Grenze begrenzt wird.
+            # Nur den DECKEL freigeben, damit der naechste normale Lauf nicht
+            # durch eine alte Grenze begrenzt wird. Die BASIS
+            # (schichtung_oben_start) bleibt bewusst bestehen: sie markiert,
+            # bei welchem Oberwert der Warmstart engage hat. Wuerde sie hier
+            # geloescht, wuerde der naechste Lauf auf dem nun hoeheren
+            # Oberwert neu basen und die obere Schicht schraubte sich pro
+            # Lauf um schichtung_max_steig_k weiter hoch. Sie wird nur
+            # verworfen, wenn der Oberfuehler unter die Basis abgekuehlt ist
+            # (siehe Spiegelung in determine_mode_and_setpoints und
+            # handle_compressor_on).
             state.control.schichtung_oben_max = None
-            state.control.schichtung_oben_start = None
             return True
         return False
 
@@ -1712,14 +1758,28 @@ async def handle_compressor_on(
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = _now_for_state(state)
 
-    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gÃƒÆ’Ã‚Â¼ltige
+    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gültige
     # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
     # eine evtl. alte Grenze aus einem vorherigen Lauf entfernen - sie darf
-    # einen neuen Lauf nicht unnÃƒÆ’Ã‚Â¶tig begrenzen.
+    # einen neuen Lauf nicht unnötig begrenzen.
+    #
+    # Die BASIS (schichtung_oben_start) wird davon getrennt verworfen: Sie
+    # ueberlebt Laeufe und Laeufegrenzen, damit der erlaubte Spielraum des
+    # Warmstarts nicht pro Lauf um schichtung_max_steig_k waechst. Nur wenn
+    # der Oberfuehler inzwischen UNTER die alte Basis gefallen ist (also
+    # wirklich abgekuehlt), beginnt eine neue Phase mit frischer Basis.
     hat_grenze = getattr(state.control, "schichtung_oben_max", None) is not None
     if not state.control.kompressor_ein and not hat_grenze:
         state.control.schichtung_oben_max = None
-        state.control.schichtung_oben_start = None
+        _basis = getattr(state.control, "schichtung_oben_start", None)
+        if (
+            isinstance(_basis, (int, float))
+            and not isinstance(_basis, bool)
+            and isinstance(t_oben, (int, float))
+            and not isinstance(t_oben, bool)
+            and float(t_oben) < float(_basis)
+        ):
+            state.control.schichtung_oben_start = None
 
     # Boiler-Maximum-Kuehlphase: Nur nach einem tatsaechlichen Limit-Abschalten
     # aktiv (Flag boiler_max_blockiert). Der normale EIN-Bereich unterhalb des
