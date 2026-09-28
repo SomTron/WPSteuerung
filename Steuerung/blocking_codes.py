@@ -34,6 +34,20 @@ INFO_BLOCKING_CODES = frozenset({
     "start_antizipation",
 })
 
+#: Passende Logmeldung JE Sperrfamilie. Vorher gab es einen einzigen Text
+#: fuer alle vier Faelle ("Boiler bereits heiss, kein Start noetig"), der
+#: auch bei der Mindestpause erschien - bei 24 C Speichertemperatur also
+#: eine offensichtlich falsche Aussage (Beobachtung 28.09.2026, 18:43:
+#: "Boiler bereits heiss" bei Oben=24.4C, Sperre 'mindestpause').
+INFO_BLOCKING_MELDUNGEN = {
+    "boiler_bereits_warm": "Boiler bereits heiss, kein Start noetig",
+    "mindestpause": "Start gesperrt: Mindestpause nach letztem Lauf",
+    "mindestlaufzeit": "Start gesperrt: Mindestlaufzeit noch nicht erreicht",
+    "start_antizipation": "Start gesperrt: Start-Antizipation",
+}
+#: Fallback, falls eine neue Info-Familie ohne eigene Meldung hinzukommt.
+INFO_BLOCKING_FALLBACK = "Start nicht noetig bzw. gesperrt"
+
 #: Ueberleitungen von Freitext auf diese Sperrfamilien. Werden VOR der
 #: generischen Musterpruefung geprueft, damit eine praezisere Benennung
 #: nicht am generischen ``sonstige_sperre`` klebt.

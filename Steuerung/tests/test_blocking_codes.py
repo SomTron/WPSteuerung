@@ -30,6 +30,7 @@ if str(STEUERUNG) not in sys.path:
 
 from blocking_codes import (  # noqa: E402
     INFO_BLOCKING_CODES,
+    INFO_BLOCKING_MELDUNGEN,
     blocking_code,
     normalisiere_sperrtext,
 )
@@ -127,6 +128,10 @@ def _alert_state(blocking_reason):
     )
     for name in (
         "log_boiler_bereits_warm",
+        "log_sperre_boiler_bereits_warm",
+        "log_sperre_mindestpause",
+        "log_sperre_mindestlaufzeit",
+        "log_sperre_start_antizipation",
         "log_boiler_naehe_alert",
         "last_sensor_error_log",
         "last_forecast_log",
@@ -134,6 +139,81 @@ def _alert_state(blocking_reason):
     ):
         setattr(state, name, None)
     return state
+
+
+def test_jede_infofamilie_hat_ihre_eigene_meldung(caplog):
+    """Regression Nutzer-Log 28.09.2026, 18:43:
+
+        Status: AUS | ... | Sperre 'mindestpause' (noch 29m 34s)
+        -> "Boiler bereits heiss, kein Start noetig (Sperre 'mindestpause')"
+
+    Bei 24 C Speichertemperatur ist "bereits heiss" eine offensichtlich
+    falsche Aussage. Die Meldung muss zur Sperrfamilie passen.
+    """
+    import asyncio
+
+    import main as M
+
+    for code, erwartet_fragment in (
+        ("boiler_bereits_warm", "Boiler bereits heiss"),
+        ("mindestpause", "Mindestpause"),
+        ("mindestlaufzeit", "Mindestlaufzeit"),
+        ("start_antizipation", "Start-Antizipation"),
+    ):
+        assert code in INFO_BLOCKING_CODES
+        assert code in INFO_BLOCKING_MELDUNGEN, f"{code} ohne eigene Meldung"
+        meldung = INFO_BLOCKING_MELDUNGEN[code]
+        assert erwartet_fragment in meldung
+
+    # "mindestpause" darf NICHT als "Boiler bereits heiss" formuliert sein.
+    assert "heiss" not in INFO_BLOCKING_MELDUNGEN["mindestpause"]
+    assert "heiss" not in INFO_BLOCKING_MELDUNGEN["mindestlaufzeit"]
+    assert "heiss" not in INFO_BLOCKING_MELDUNGEN["start_antizipation"]
+
+
+def test_mindestpause_meldet_ihren_eigenen_grund(caplog, monkeypatch):
+    """End-to-End aus Sicht des Logs: Die Sperre 'Min. Pause' erzeugt eine
+    Meldung mit 'Mindestpause' und ohne 'heiss'."""
+    import asyncio
+    import logging
+
+    import main as M
+
+    state = _alert_state("Min. Pause (noch 29m 34s)")
+    _patch_telegram(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="root"):
+        asyncio.run(M.check_and_send_alerts(None, state))
+
+    texte = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
+    treffer = [t for t in texte if "mindestpause" in t]
+    assert treffer, f"keine Meldung fuer mindestpause: {texte}"
+    assert all("heiss" not in t for t in treffer), (
+        "Taktschutz-Sperre wurde als 'Boiler bereits heiss' gemeldet"
+    )
+
+
+def test_sperrwechsel_wird_je_familie_geloggt(caplog, monkeypatch):
+    """Vorher teilten sich alle vier Familien EINEN 30-Min-Merkspeicher:
+    ein Wechsel wurde dadurch gar nicht protokolliert."""
+    import asyncio
+    import logging
+
+    import main as M
+
+    state = _alert_state("Boiler-Max-Naehe (unten 47.9C)")
+    _patch_telegram(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="root"):
+        asyncio.run(M.check_and_send_alerts(None, state))
+        state.control.blocking_reason = "Min. Pause (noch 29m 34s)"
+        asyncio.run(M.check_and_send_alerts(None, state))
+
+    texte = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
+    assert any("boiler_bereits_warm" in t for t in texte), texte
+    assert any("mindestpause" in t for t in texte), (
+        f"Sperrwechsel auf mindestpause wurde nicht protokolliert: {texte}"
+    )
 
 
 def _patch_telegram(monkeypatch):

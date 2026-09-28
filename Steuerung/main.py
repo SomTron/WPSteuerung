@@ -37,6 +37,8 @@ from vpn_manager import check_vpn_status
 from api import app, init_api, update_status_snapshot
 from blocking_codes import (  # noqa: F401  (Re-Export fuer Aufrufer/Tests)
     INFO_BLOCKING_CODES,
+    INFO_BLOCKING_MELDUNGEN as _INFO_MELDUNGEN,
+    INFO_BLOCKING_FALLBACK as _INFO_FALLBACK,
     blocking_code as _blocking_code,
     normalisiere_sperrtext as _normalisiere_sperrtext,
 )
@@ -904,12 +906,18 @@ async def check_and_send_alerts(session, state):
     if current_blocking and current_code in INFO_BLOCKING_CODES:
         state.control.blocking_code = current_code
         state.control.last_blocking_reason = current_blocking
+        # Drosselung je Sperrfamilie: Vorher teilten sich alle vier Faelle
+        # EINEN 30-Minuten-Merkspeicher. Ein Wechsel (z.B. von der
+        # Startnaehe-Sperre zur Mindestpause) wurde dadurch gar nicht
+        # protokolliert - die neue Sperre blieb unsichtbar.
         if check_log_throttle(
-            state, "log_boiler_bereits_warm", interval_minutes=30
+            state, f"log_sperre_{current_code}", interval_minutes=30
         ):
             logging.info(
-                "Boiler bereits heiss, kein Start noetig (Sperre '%s'): %s",
-                current_code, current_blocking,
+                "%s (Sperre '%s'): %s",
+                _INFO_MELDUNGEN.get(current_code, _INFO_FALLBACK),
+                current_code,
+                current_blocking,
             )
         return
 
