@@ -33,14 +33,14 @@ from json_config import SicherheitConfig, WPSteuerungConfig  # noqa: E402
 TZ = pytz.timezone("Europe/Berlin")
 
 
-def baue_state(t_unten, t_oben=44.0, t_mittig=43.0, config=None):
+def baue_state(t_unten, t_oben=51.7, t_mittig=50.0, config=None):
     """Testfixture.
 
-    WICHTIG (Nutzerentscheidung 28.09.2026): `boiler_max_fuehler` ist jetzt
-    "max" - es zaehlt der HEISSESTE Fuehler. Die Standardwerte fuer oben/mittig
-    liegen daher bewusst UNTER dem 48-C-Limit, damit die Tests weiterhin nur das
-    Verhalten am gewaehlten `t_unten` pruefen. Tests, die den heissesten Fuehler
-    pruefen wollen, uebergeben t_oben/t_mittig ausdruecklich.
+    Der Bezugsfuehler des Boiler-Maximums ist `unten` (Deployment). Die
+    Standardwerte fuer oben/mittig sind bewusst HEISS - wie im echten Betrieb
+    nach einer Schichtung bzw. der Legionellenprophylaxe. Sie duerfen das
+    Maximum nicht beeinflussen, weil sie nicht der Bezugsfuehler sind.
+    Tests zum `max`-Modus setzen `boiler_max_fuehler` explizit.
     """
     cfg = config or WPSteuerungConfig()
     now = datetime.now(TZ)
@@ -181,45 +181,65 @@ async def test_on_freigabe_nach_abkuehlung_hebt_flag_auf():
 
 
 @pytest.mark.asyncio
-async def test_userfall_oben_warm_unten_kalt_kein_einschalten():
-    """Umgekehrter User-Fall (Nutzerentscheidung 28.09.2026): oben 48.7 /
-    unten 30 -> EIN ist GESPERRT, weil mit `boiler_max_fuehler = "max"` der
-    heisseste Fuehler zaehlt. Vorher (Fühler fest auf "unten") war hier EIN
-    erlaubt - das liess die WP in einen bereits am Limit stehenden Boiler
-    weiterheizen (dort stieg `oben` laut Testkopf auf 51.7 C)."""
-    state = baue_state(t_unten=30.0, t_oben=48.7, t_mittig=40.0)
+async def test_legionellenrueckstand_sperrt_die_heizung_nicht():
+    """Kernfall aus dem Nutzer-Log vom 28.09.2026, 17:37:
+
+        Oben=55.0 | Mittig=41.2 | Unten=22.8
+        Status: AUS | Info: Boiler-Max-Naehe (oben 55.0C, mittig 41.2C,
+        Einschalten erst < 45.0C) | Modus: AdaptivePV
+
+    Mit `boiler_max_fuehler = "max"` zaehlte der OBERE Fuehler gegen das
+    48-C-Limit. Nach der Legionellenprophylaxe (Ziel 60 C) steht er aber
+    stundenlang ueber 45 C - die Ein-Sperre hat damit jede Heizung blockiert,
+    obwohl `unten` bei 22.8 C nach Wärmete verlangte. Zurueck auf die
+    geregelte Groesse `unten`: das Sperre-Naehe-Verhalten greift wieder am
+    kalten Boiler, der Schutz fuer oben bleibt ueberhitzung_c (58 C)."""
+    state = baue_state(t_unten=22.8, t_oben=55.0, t_mittig=41.2)
     state.control.kompressor_ein = False
     state.control._soll_einschalten = True
     calls = []
     erg = await pcl.handle_compressor_on(
-        state, None, regelfuehler=30.0, einschaltpunkt=45.0, ausschaltpunkt=48.0,
+        state, None, regelfuehler=22.8, einschaltpunkt=45.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
         t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler(calls),
     )
-    assert erg is False
-    assert calls == []
-    assert "Boiler-Max" in (state.control.blocking_reason or "")
+    assert erg is True, (
+        "Ein kalter Boiler (unten 22.8 C) muss heizen duerfen, auch wenn der "
+        "Oberfuehler nach Legionellenprophylaxe noch heiss ist"
+    )
+    assert calls and calls[0][0] is True
+
+
+def test_deployment_referenziert_die_geregelte_groesse():
+    """Regression: 'max' als Deployment-Default blockierte nach jedem
+    Legionellenlauf stundenlang jede Heizung. Das Limit gehoert auf die
+    Groesse, die die Regeln tatsaechlich steuern."""
+    cfg = WPSteuerungConfig()
+    assert cfg.sicherheit.boiler_max_fuehler == "unten"
 
 
 @pytest.mark.asyncio
-async def test_max_zaehlt_oberen_fuehler_bei_schichtung():
-    """Log 28.09.2026: oben 57.8 / mitte 40 / unten 23.7. Mit `max` greift das
-    48-C-Limit am oberen Fühler - der Boiler stand am Limit, ohne dass die
-    Abschaltung ausgeloest wurde."""
-    state = baue_state(t_unten=23.7, t_oben=57.8, t_mittig=40.0)
+async def test_max_modus_sperrt_bei_heissem_oberfuehler():
+    """'max' bleibt als Option erhalten (fuer gleichmaessig durchmischte
+    Boiler) - und sperrt dann erwartungsgemaess. Der Unterschied zum
+    Deployment ist genau der Unterschied, der oben zum Fehlverhalten
+    fuehrte: der Oberfuehler zaehlt."""
+    cfg = WPSteuerungConfig()
+    cfg.sicherheit.boiler_max_fuehler = "max"
+    state = baue_state(t_unten=22.8, t_oben=55.0, t_mittig=41.2, config=cfg)
     state.control.kompressor_ein = False
     state.control._soll_einschalten = True
     calls = []
     erg = await pcl.handle_compressor_on(
-        state, None, regelfuehler=23.7, einschaltpunkt=42.0, ausschaltpunkt=48.0,
+        state, None, regelfuehler=22.8, einschaltpunkt=45.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
         t_oben=state.sensors.t_oben, t_mittig=state.sensors.t_mittig,
         set_kompressor_status_func=_set_status_sammler(calls),
     )
     assert erg is False
     assert calls == []
-    assert "oben 57.8" in (state.control.blocking_reason or "")
+    assert "oben 55.0" in (state.control.blocking_reason or "")
 
 
 @pytest.mark.asyncio
@@ -396,7 +416,10 @@ def test_nach_legionellen_gilt_wieder_normaler_boilerschutz():
 # ---------- Bezugsfuehler "max" + Legionellen-Nachlauf (28.09.2026) ----------
 
 def test_max_waehlt_den_heissesten_fuehler():
-    state = baue_state(t_unten=23.7, t_oben=57.8, t_mittig=40.0)
+    """'max' bleibt als Option fuer gleichmaessig durchmischte Boiler."""
+    cfg = WPSteuerungConfig()
+    cfg.sicherheit.boiler_max_fuehler = "max"
+    state = baue_state(t_unten=23.7, t_oben=57.8, t_mittig=40.0, config=cfg)
     state.legionellen_end_time = None
     temp, _limit, _wie, fuehler = pcl._boiler_max_info(state)
     assert fuehler == "oben"
@@ -404,7 +427,9 @@ def test_max_waehlt_den_heissesten_fuehler():
 
 
 def test_max_meldet_mittig_wenn_oben_ausgefallen_ist():
-    state = baue_state(t_unten=23.7, t_oben=None, t_mittig=41.0)
+    cfg = WPSteuerungConfig()
+    cfg.sicherheit.boiler_max_fuehler = "max"
+    state = baue_state(t_unten=23.7, t_oben=None, t_mittig=41.0, config=cfg)
     state.legionellen_end_time = None
     temp, _limit, _wie, fuehler = pcl._boiler_max_info(state)
     assert fuehler == "mittig"
@@ -412,7 +437,9 @@ def test_max_meldet_mittig_wenn_oben_ausgefallen_ist():
 
 
 def test_max_ohne_sensoren_kein_eingriff():
-    state = baue_state(t_unten=None, t_oben=None, t_mittig=None)
+    cfg = WPSteuerungConfig()
+    cfg.sicherheit.boiler_max_fuehler = "max"
+    state = baue_state(t_unten=None, t_oben=None, t_mittig=None, config=cfg)
     state.legionellen_end_time = None
     assert pcl._boiler_max_info(state) == (None, None, None, "max")
 
@@ -481,8 +508,11 @@ def test_default_werte_matchen_anforderung():
     cfg = WPSteuerungConfig()
     s = cfg.sicherheit
     assert s.max_temp_c == 48.0
-    # Nutzerentscheidung 28.09.2026: Bezugsfuehler ist der HEISSESTE (Schichtung)
-    assert s.boiler_max_fuehler == "max"
+    # Nutzerentscheidung 28.09.2026, korrigiert: Bezugsfuehler ist die
+    # GERE GELTE Groesse 'unten'. 'max' sperrte nach jeder Legionellen-
+    # prophylaxe stundenlang jede Heizung (siehe
+    # test_legionellenrueckstand_sperrt_die_heizung_nicht).
+    assert s.boiler_max_fuehler == "unten"
     assert s.boiler_max_hysterese_k == 2.0
     assert s.boiler_max_ein_abstand_k == 2.0
     assert s.legionellen_nachlauf_min == 180.0

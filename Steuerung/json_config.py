@@ -48,11 +48,20 @@ class SicherheitConfig(BaseModel):
     notfall_c: float = Field(default=36.0, description="Notfall-Einschalttemperatur (°C)")
 
     boiler_max_fuehler: str = Field(
-        default="max",
+        default="unten",
         description=(
-            "Bezugsfuehler fuer das Boiler-Maximum. 'max' = der HEISSESTE "
-            "verfuegbare Fühler (schuetzt bei Schichtung, in der der untere "
-            "kalt bleibt, waehrend oben am Limit steht); sonst unten/mittig/oben"
+            "Bezugsfuehler fuer das Boiler-Maximum. Deployment 'unten', weil "
+            "das die GERE GELTE Groesse ist: alle Heizregeln (Komfort, PV, "
+            "AdaptivePV, Abweichung) steuern nach 'unten'. "
+            "'max' (heissester Fuehler) ist bei diesem Boiler FALSCH: der "
+            "obere Fuehler traegt die Schichtung UND die bewusst erzeugte "
+            "Waerme der Legionellenprophylaxe (60 C). Er steht nach jedem "
+            "Legionellenlauf stundenlang ueber 48 C - mit 'max' sperrt die "
+            "Ein-Sperre dann jede Heizung, bis der Oberfühler unter "
+            "(max_temp_c - ein_abstand) faellt (Beobachtung 28.09.: oben "
+            "55 C, unten 22.8 C -> 'Boiler-Max-Naehe', nie eingeschaltet). "
+            "Der Schutz fuer den oberen Fuehler ist ueberhitzung_c (58 C). "
+            "Weitere Werte: unten/mittig/oben."
         ),
     )
     boiler_max_hysterese_k: float = Field(default=2.0, description="Nach einem Maximum-Abschalten erst wieder einschalten, wenn der Bezugsfuehler <= max_temp_c - Hysterese ist")
