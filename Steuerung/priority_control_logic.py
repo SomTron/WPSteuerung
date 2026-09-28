@@ -13,7 +13,7 @@ import datetime as _datetime_module
 from datetime import date, datetime, timedelta
 from typing import Callable
 
-from utils import safe_timedelta
+from utils import safe_timedelta, to_naive
 from clock import now_for
 from constants import (
     BASIS_COMFORT_TEMP_C,
@@ -33,6 +33,7 @@ from priority_control import (
     calcstart_nachtsperre_konflikt,
     formatiere_ergebnisse,
     _debug_once,
+    _fmt_stunde,
 )
 
 _REAL_DATETIME = datetime
@@ -682,6 +683,31 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         ):
             regelfuehler = state.sensors.t_oben
 
+    # Heiz-/Startplan alle 15 min (Nutzerwunsch 28.09.2026). Laeuft der
+    # Kompressor, wird die Zeit bis zur Solltemperatur geschaetzt; steht er,
+    # der berechnete naechste Start. Bewusst hier: erst jetzt sind
+    # Regelfuehler, Zielgrenze und Heizrate bekannt.
+    try:
+        sensor_txt = {
+            "unten": "unten", "mittig": "mittig", "oben": "oben",
+        }.get(str(getattr(state.control, "active_rule_sensor", "")).lower(), "unten")
+        ziel_c = None
+        if gewinner is not None:
+            ziel_c = _extract_ausschaltpunkt(gewinner, effektive_config)
+        if ziel_c is None:
+            ziel_c = effektive_config.abweichung.solltemperatur_c
+        if regelfuehler is None or regelfuehler is t_unten:
+            rate = gelernte_rate_unten or _rate_fuer_entscheidung(state, regelfuehler)
+        else:
+            rate = gelernte_rate_gesamt or _rate_fuer_entscheidung(state, regelfuehler)
+        _logge_heizplan(
+            state, gewinner, alle_ergebnisse, regelfuehler, sensor_txt,
+            ziel_c, rate, _now_for_state(state),
+        )
+    except Exception:
+        # Diagnosemeldung darf die Regelung nie beeinflussen.
+        logging.debug("Heizplan-Log nicht moeglich", exc_info=True)
+
     # Schichtungs-Warmstart: Der Gewinner (Abweichung) kann eine dynamische
     # Obergrenze fuer die obere Schicht mitgeben (nach Legionellenmodus etc.).
     # Sie wird an state.control gespiegelt, damit handle_compressor_off() den
@@ -1115,6 +1141,102 @@ def _taktschutz_blockiert(state, cfg) -> float:
         return ts_cfg.zusatz_pause_minuten * 60.0
     _episode_beenden()
     return 0.0
+
+
+# --- Heiz-/Startplan-Log (Nutzerwunsch 28.09.2026, alle 15 min) -----------
+#
+# Die Meldung ist bewusst kontextabhaengig: Ein "Startplan" ist sinnlos,
+# wenn der Kompressor bereits laeuft - dann interessiert die Frage, WANN die
+# Solltemperatur erreicht ist und fuer welchen Fuehler (Nutzer-Log 19:13:
+# "Startplan (WP laeuft): kein Start geplant - Nachtsperre aktiv").
+_HEIZPLAN_LOG_INTERVAL_MIN = 15
+_last_heizplan_log = None
+
+
+def _fmt_uhrzeit(dt) -> str:
+    try:
+        return dt.strftime("%H:%M")
+    except (AttributeError, TypeError, ValueError):
+        return "?"
+
+
+def _logge_heizplan(
+    state, gewinner, alle_ergebnisse, regelfuehler, sensor_name,
+    ziel_c, rate_c_h, now,
+) -> None:
+    """Alle 15 min entweder die Heizprognose ODER den Startplan melden."""
+    global _last_heizplan_log
+    jetzt_naiv = to_naive(now) if now is not None else None
+    if _last_heizplan_log is not None and jetzt_naiv is not None:
+        if jetzt_naiv - _last_heizplan_log < timedelta(
+            minutes=_HEIZPLAN_LOG_INTERVAL_MIN
+        ):
+            return
+    _last_heizplan_log = jetzt_naiv
+
+    laeuft = bool(getattr(state.control, "kompressor_ein", False))
+    regel_name = getattr(gewinner, "name", None) or "keine Regel"
+
+    if laeuft:
+        # Die Ausschaltgrenze der aktiven Regel ist genau das Ziel, das der
+        # Lauf erreichen soll (Notfallschutz 38 C, PV 48 C, ...).
+        regel_txt = f", {regel_name}" if gewinner is not None else ""
+        if regelfuehler is None or ziel_c is None:
+            logging.info(
+                f"Heizplan (WP laeuft{regel_txt}): Zieldaten unvollstaendig - "
+                "keine Zeitprognose moeglich"
+            )
+            return
+        ziel_txt = f"{float(ziel_c):.1f}C"
+        rest_k = float(ziel_c) - float(regelfuehler)
+        if rest_k <= 0.05:
+            logging.info(
+                f"Heizplan (WP laeuft{regel_txt}): {sensor_name} "
+                f"{float(regelfuehler):.1f}C hat das Ziel {ziel_txt} bereits erreicht"
+            )
+            return
+        if not isinstance(rate_c_h, (int, float)) or rate_c_h <= 0.2:
+            logging.info(
+                f"Heizplan (WP laeuft{regel_txt}): {sensor_name} "
+                f"{float(regelfuehler):.1f}C -> {ziel_txt}, noch {rest_k:.1f}K, "
+                "aber keine brauchbare Heizrate bekannt -> keine Zeitprognose"
+            )
+            return
+        minuten = rest_k / float(rate_c_h) * 60.0
+        wann = jetzt_naiv + timedelta(minutes=minuten) if jetzt_naiv else None
+        logging.info(
+            f"Heizplan (WP laeuft{regel_txt}): {sensor_name} "
+            f"{float(regelfuehler):.1f}C -> {ziel_txt}, noch {rest_k:.1f}K "
+            f"bei {float(rate_c_h):.1f} C/h -> erreicht ca. {_fmt_uhrzeit(wann)} "
+            f"(in {minuten:.0f} min)"
+        )
+        return
+
+    # Kompressor aus: den berechneten naechsten Start melden.
+    calc = next((e for e in (alle_ergebnisse or []) if e.name == "CalcStart"), None)
+    plan = (calc.regel_dict or {}) if calc is not None else {}
+    geplant = plan.get("planned_start_hour")
+    if geplant is None:
+        grund = (calc.grund if calc is not None and calc.grund else "nicht berechnet")
+        if len(grund) > 110:
+            grund = grund[:107] + "..."
+        logging.info(f"Startplan (WP aus): kein Start geplant - {grund}")
+        return
+    teile = [f"Startplan (WP aus): naechster Start {_fmt_stunde(geplant)}"]
+    spaetester = plan.get("spaetester_start_hour")
+    if spaetester is not None:
+        teile.append(f"spaetestens {_fmt_stunde(spaetester)}")
+    ziel = plan.get("target_hour")
+    if ziel is not None:
+        teile.append(f"Soll {int(round(float(ziel))):02d}:00")
+    for label, schluessel in (
+        ("Heizzeit", "hours_needed"),
+        ("Restzeit", "time_left_hours"),
+    ):
+        wert = plan.get(schluessel)
+        if isinstance(wert, (int, float)) and not isinstance(wert, bool):
+            teile.append(f"{label} {float(wert):.1f}h")
+    logging.info(" | ".join(teile))
 
 
 def _spiegele_schichtungsdeckel(control, regel_dict, t_oben) -> None:

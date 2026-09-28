@@ -12,6 +12,7 @@ sys.path.insert(
 )
 
 import priority_control as pc  # noqa: E402
+import priority_control_logic as pcl  # noqa: E402
 from json_config import CalculatedStartConfig, WPSteuerungConfig  # noqa: E402
 from learning_engine import LearningEngine  # noqa: E402
 
@@ -30,18 +31,37 @@ def sammler():
     alter_level = root.level
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
-    pc._last_startplan_log = None
+    pcl._last_heizplan_log = None
     pc._debug_memo.clear()
     try:
         yield records
     finally:
         root.removeHandler(handler)
         root.setLevel(alter_level)
-        pc._last_startplan_log = None
+        pcl._last_heizplan_log = None
         pc._debug_memo.clear()
 
 
-# ─────────────────────── Startplan-Log (alle 15 min) ───────────────────────
+# ────────── Heiz-/Startplan-Log (alle 15 min, zustandsabhaengig) ──────────
+
+def _aufrufen(records, laeuft, ziel, regel_dict, jetzt=None):
+    """Ruft die Meldung mit dem passenden Zustand auf."""
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(
+        control=SimpleNamespace(
+            kompressor_ein=laeuft, active_rule_sensor="Unten"
+        )
+    )
+    pcl._last_heizplan_log = None
+    pcl._logge_heizplan(
+        state,
+        _Erg(regel_dict, name="CalcStart") if regel_dict is not None or True else None,
+        [_Erg(regel_dict)] if regel_dict is not None else [],
+        40.0, "unten", ziel, 3.0,
+        jetzt or datetime(2026, 9, 28, 14, 0),
+    )
+
 
 def _startplan_zeilen(records):
     return [m for _level, m in records if m.startswith("Startplan")]
@@ -69,15 +89,13 @@ class _Erg:
 
 
 def test_startplan_loggt_geplanten_start(sammler):
-    calc = _Erg({
+    _aufrufen(sammler, False, 42.0, {
         "planned_start_hour": 16.33,
         "spaetester_start_hour": 15.83,
         "target_hour": 17.0,
         "hours_needed": 1.2,
         "time_left_hours": 2.7,
-        "effective_buffer_hours": 0.4,
     })
-    pc._logge_startplan(datetime(2026, 9, 28, 14, 0), calc, False)
     zeilen = _startplan_zeilen(sammler)
     assert len(zeilen) == 1
     z = zeilen[0]
@@ -88,44 +106,165 @@ def test_startplan_loggt_geplanten_start(sammler):
     assert "WP aus" in z
 
 
-def test_startplan_zeigt_laufenden_kompressor(sammler):
-    calc = _Erg({"planned_start_hour": 16.0, "target_hour": 17.0})
-    pc._logge_startplan(datetime(2026, 9, 28, 14, 0), calc, True)
-    assert "WP laeuft" in _startplan_zeilen(sammler)[0]
-
-
 def test_startplan_meldet_fehlende_planung(sammler):
     """Auch 'kein Start geplant' wird geloggt - sonst ist bei stiller WP
     nicht erkennbar, ob das geplant ist oder ein Fehler vorliegt."""
-    calc = _Erg(None, grund="Nachtsperre aktiv")
-    pc._logge_startplan(datetime(2026, 9, 28, 14, 0), calc, False)
+    _aufrufen(sammler, False, 42.0, None)
     zeilen = _startplan_zeilen(sammler)
     assert len(zeilen) == 1
     assert "kein Start geplant" in zeilen[0]
-    assert "Nachtsperre" in zeilen[0]
 
 
 def test_startplan_wird_alle_15_minuten_wiederholt(sammler):
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(
+        control=SimpleNamespace(kompressor_ein=False, active_rule_sensor="Unten")
+    )
     calc = _Erg({"planned_start_hour": 16.0, "target_hour": 17.0})
+    pcl._last_heizplan_log = None
     start = datetime(2026, 9, 28, 14, 0)
     for minute in range(0, 30, 5):
-        pc._logge_startplan(start + timedelta(minutes=minute), calc, False)
+        pcl._logge_heizplan(
+            state, calc, [calc], 40.0, "unten", 42.0, 3.0,
+            start + timedelta(minutes=minute),
+        )
     zeilen = _startplan_zeilen(sammler)
     assert len(zeilen) == 2, f"erwartet 2 Zeilen, erhalten {len(zeilen)}"
 
 
 def test_startplan_wird_nicht_bei_jedem_lauf_geschrieben(sammler):
     """Der 10-s-Takt darf keine Zeile erzeugen - nur alle 15 min."""
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(
+        control=SimpleNamespace(kompressor_ein=False, active_rule_sensor="Unten")
+    )
     calc = _Erg({"planned_start_hour": 16.0, "target_hour": 17.0})
+    pcl._last_heizplan_log = None
     start = datetime(2026, 9, 28, 14, 0)
     for sek in range(0, 120, 10):        # 12 Laeufe in 2 Minuten
-        pc._logge_startplan(start + timedelta(seconds=sek), calc, False)
+        pcl._logge_heizplan(
+            state, calc, [calc], 40.0, "unten", 42.0, 3.0,
+            start + timedelta(seconds=sek),
+        )
     assert len(_startplan_zeilen(sammler)) == 1
 
 
 def test_startplan_kein_ergebnis_ist_kein_absturz(sammler):
-    pc._logge_startplan(datetime(2026, 9, 28, 14, 0), None, False)
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(
+        control=SimpleNamespace(kompressor_ein=False, active_rule_sensor=None)
+    )
+    pcl._last_heizplan_log = None
+    pcl._logge_heizplan(
+        state, None, [], 40.0, "unten", 42.0, 3.0,
+        datetime(2026, 9, 28, 14, 0),
+    )
     assert len(_startplan_zeilen(sammler)) == 1
+
+
+def test_kein_startplan_wenn_der_kompressor_laeuft(caplog):
+    """Regression Nutzer-Log 28.09.2026, 19:13:
+
+        19:13:10 Kompressor EIN ... Regelfuehler=24.437, Ausschaltgrenze=38.0
+        19:13:20 Startplan (WP laeuft): kein Start geplant - Nachtsperre aktiv
+
+    Ein Startplan ist sinnlos, wenn der Start schon geschehen ist.
+    Stattdessen: Zeit bis zur Solltemperatur, mit Angabe des Fuehlers.
+    """
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    import priority_control_logic as pcl
+
+    class E:
+        name = "Notfallschutz"
+        grund = "NOTFALLSCHUTZ: oben 24.4C <= 36.0C -> EIN"
+        regel_dict = None
+
+    state = SimpleNamespace(
+        control=SimpleNamespace(kompressor_ein=True, active_rule_sensor="Oben")
+    )
+    pcl._last_heizplan_log = None
+    with caplog.at_level(logging.INFO, logger="root"):
+        pcl._logge_heizplan(
+            state, E(), [], 24.437, "oben", 38.0, 3.6,
+            datetime(2026, 9, 28, 19, 13, 20),
+        )
+    zeilen = [r.getMessage() for r in caplog.records]
+    assert len(zeilen) == 1, zeilen
+    z = zeilen[0]
+    assert z.startswith("Heizplan (WP laeuft"), z
+    assert "Startplan" not in z, "Startplan gehoert nicht in einen laufenden Lauf"
+    assert "oben" in z
+    assert "38.0C" in z
+    assert "erreicht ca." in z
+    assert "in 226 min" in z      # (38.0-24.437)/3.6*60 = 226.4
+
+
+def test_ohne_heizrate_keine_falsche_zeitprognose(caplog):
+    """Lieber keine Zeitangabe als eine erfundene."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    import priority_control_logic as pcl
+
+    class E:
+        name = "Notfallschutz"
+        grund = "NOTFALLSCHUTZ"
+        regel_dict = None
+
+    state = SimpleNamespace(
+        control=SimpleNamespace(kompressor_ein=True, active_rule_sensor="Oben")
+    )
+    pcl._last_heizplan_log = None
+    with caplog.at_level(logging.INFO, logger="root"):
+        pcl._logge_heizplan(
+            state, E(), [], 24.4, "oben", 38.0, 0.0,
+            datetime(2026, 9, 28, 19, 13, 20),
+        )
+    z = caplog.records[0].getMessage()
+    assert "keine brauchbare Heizrate" in z
+    assert "erreich ca." not in z
+
+
+def test_startplan_nur_wenn_kompressor_aus(caplog):
+    """Ohne laufenden Kompressor bleibt der berechnete Start die Meldung."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    import priority_control_logic as pcl
+
+    class E:
+        name = "CalcStart"
+        grund = "CalcStart: wartet auf PV"
+        regel_dict = {
+            "planned_start_hour": 16.33,
+            "spaetester_start_hour": 15.83,
+            "target_hour": 17.0,
+            "hours_needed": 1.2,
+        }
+
+    state = SimpleNamespace(
+        control=SimpleNamespace(kompressor_ein=False, active_rule_sensor=None)
+    )
+    pcl._last_heizplan_log = None
+    with caplog.at_level(logging.INFO, logger="root"):
+        pcl._logge_heizplan(
+            state, E(), [E()], 40.0, "unten", 42.0, 3.0,
+            datetime(2026, 9, 28, 14, 0),
+        )
+    z = caplog.records[0].getMessage()
+    assert z.startswith("Startplan (WP aus)"), z
+    assert "16:20" in z
+
+
+def test_fmt_uhrzeit_uebersteht_unsinnige_werte():
+    import priority_control_logic as pcl
+    assert pcl._fmt_uhrzeit(None) == "?"
+    assert pcl._fmt_uhrzeit("kein datum") == "?"
 
 
 # ───────────────── Zapfungs-Abzug nur solange unkompensiert ─────────────────

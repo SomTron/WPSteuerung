@@ -36,10 +36,6 @@ from json_config import (
 _last_calcstart_log: Optional[datetime] = None
 _last_stale_warning: Optional[datetime] = None
 STALE_LOG_INTERVAL_MIN = 5
-# Startplan-Log (Nutzerwunsch 28.09.2026): alle 15 Minuten sichtbar machen,
-# wann der naechste WP-Start geplant ist.
-STARTPLAN_LOG_INTERVAL_MIN = 15
-_last_startplan_log: Optional[datetime] = None
 
 
 def _fmt_stunde(dezimalstunde: float) -> str:
@@ -53,60 +49,6 @@ def _fmt_stunde(dezimalstunde: float) -> str:
     gesamt_min = max(0, min(24 * 60, gesamt_min))
     return f"{gesamt_min // 60:02d}:{gesamt_min % 60:02d}"
 
-
-def _logge_startplan(
-    now: datetime,
-    calc: Optional[RegelErgebnis],
-    kompressor_ein: bool,
-) -> None:
-    """Loggt alle 15 min den geplanten naechsten WP-Start (INFO).
-
-    Ohne das sieht man im Log nur die jeweils aktuelle Entscheidung. Der
-    Betreiber kann aber nicht erkennen, WANN die WP das naechste Mal
-    angehen soll - die Planung laeuft sonst unsichtbar in
-    `evaluate_calculated_start` mit.
-    """
-    global _last_startplan_log
-    jetzt_naiv = to_naive(now)
-    if _last_startplan_log is not None:
-        if jetzt_naiv - to_naive(_last_startplan_log) < timedelta(
-            minutes=STARTPLAN_LOG_INTERVAL_MIN
-        ):
-            return
-    _last_startplan_log = now
-
-    zustand = "laeuft" if kompressor_ein else "aus"
-    plan = (calc.regel_dict or {}) if calc is not None else {}
-    geplant = plan.get("planned_start_hour")
-
-    if geplant is None:
-        grund = (calc.grund if calc is not None and calc.grund else "nicht berechnet")
-        # Sehr lange Gruende auf eine Zeile kuerzen.
-        if len(grund) > 110:
-            grund = grund[:107] + "..."
-        logging.info(
-            f"Startplan (WP {zustand}): kein Start geplant - {grund}"
-        )
-        return
-
-    teile = [
-        f"Startplan (WP {zustand}): naechster Start {_fmt_stunde(geplant)}",
-    ]
-    spaetester = plan.get("spaetester_start_hour")
-    if spaetester is not None:
-        teile.append(f"spaetestens {_fmt_stunde(spaetester)}")
-    ziel = plan.get("target_hour")
-    if ziel is not None:
-        teile.append(f"Soll {int(round(float(ziel))):02d}:00")
-    for label, schluessel in (
-        ("Heizzeit", "hours_needed"),
-        ("Restzeit", "time_left_hours"),
-        ("Puffer", "effective_buffer_hours"),
-    ):
-        wert = plan.get(schluessel)
-        if isinstance(wert, (int, float)) and not isinstance(wert, bool):
-            teile.append(f"{label} {float(wert):.1f}h")
-    logging.info(" | ".join(teile))
 
 # Merkspeicher fuer entduplizierte Debug-Zeilen (siehe _debug_once).
 _debug_memo: Dict[str, str] = {}
@@ -2389,15 +2331,6 @@ def bewerte_alle_regeln(
         aktive_regeln,
         key=lambda e: e.prioritaet,
         default=None,
-    )
-
-    # Startplan alle 15 min protokollieren (Nutzerwunsch 28.09.2026). Steht
-    # bewusst VOR dem Return: auch "kein Start geplant" ist eine Antwort, die
-    # man im Log sehen will - gerade dann, wenn die WP unerwartet stillsteht.
-    _logge_startplan(
-        now,
-        next((e for e in ergebnisse if e.name == "CalcStart"), None),
-        kompressor_ein,
     )
 
     if not aktive_regeln:
