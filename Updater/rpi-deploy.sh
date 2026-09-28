@@ -75,6 +75,72 @@ verify_service_restart() {
     color_print "$GREEN" "Service-Neustart verifiziert: MainPID=$new_pid, NRestarts=$new_restarts."
 }
 
+# Holt Remote-Infos fuer die ANZEIGE. Bewusst nicht-interaktiv
+# (BatchMode=yes): ssh fragt dann KEINE Passphrase ab, sondern meldet sofort
+# den Fehler. Sonst wartet der Aufruf im 15-s-Timeout auf eine Passphrase,
+# die der Nutzer an dieser Stelle nicht erwartet - der Fetch laeuft dann in
+# den Timeout und es erscheint die FALSCHE Meldung "offline", obwohl das
+# Netz in Ordnung war und nur der SSH-Key nicht freigeschaltet ist.
+#
+# FETCH_STATUS: 0 = ok, 1 = Netzwerk/Host, 2 = SSH-Authentifizierung,
+#               3 = sonstiges
+FETCH_STATUS=0
+FETCH_OUTPUT=""
+fetch_remote_info() {
+    FETCH_STATUS=0
+    FETCH_OUTPUT=""
+    _fetch_rc=0
+    # Vorhandene GIT_SSH_COMMAND erhalten und BatchMode nur ergaenzen.
+    _ssh_cmd="${GIT_SSH_COMMAND:+$GIT_SSH_COMMAND }-o BatchMode=yes"
+    if command -v timeout >/dev/null 2>&1; then
+        FETCH_OUTPUT=$(GIT_SSH_COMMAND="$_ssh_cmd" timeout 15 git fetch --all 2>&1) || _fetch_rc=1
+    else
+        FETCH_OUTPUT=$(GIT_SSH_COMMAND="$_ssh_cmd" git fetch --all 2>&1) || _fetch_rc=1
+    fi
+    if [ "$_fetch_rc" = "0" ]; then
+        return 0
+    fi
+    case "$FETCH_OUTPUT" in
+        *"Permission denied"*|*"publickey"*|*"Host key verification failed"*|\
+        *"Too many authentication failures"*|*"Bad configuration option"*|\
+        *"Could not open a connection to your authentication agent"*|\
+        *"Load key "*|*"sign_and_send_pubkey"*|*"no matching host key"*|\
+        *"agent refused"*)
+            FETCH_STATUS=2 ;;
+        *"Could not resolve hostname"*|*"Couldn't resolve hostname"*|\
+        *"Temporary failure in name resolution"*|*"Connection refused"*|\
+        *"Connection timed out"*|*"Operation timed out"*|\
+        *"No route to host"*|*"Network is unreachable"*|\
+        *"Connection reset"*|*"Could not read from remote repository"*)
+            FETCH_STATUS=1 ;;
+        *)
+            FETCH_STATUS=3 ;;
+    esac
+    return 0
+}
+
+# Erklaert das Ergebnis von fetch_remote_info knapp und faktisch korrekt.
+print_fetch_hint() {
+    case "$1" in
+        0) : ;;
+        1)
+            color_print "$YELLOW" "Hinweis: GitHub nicht erreichbar (Netzwerk/Host)."
+            color_print "$YELLOW" "        Angaben basieren auf dem letzten erfolgreichen Fetch."
+            ;;
+        2)
+            color_print "$YELLOW" "Hinweis: SSH-Key nicht freigeschaltet - KEIN Netzproblem."
+            color_print "$YELLOW" "        Der Key hat eine Passphrase, die hier nicht abgefragt werden kann."
+            color_print "$YELLOW" "        Rueckstand daher ungeprueft. Option 1 fragt die Passphrase interaktiv ab."
+            color_print "$YELLOW" "        Dauerhaft abhilfreich:  ssh-add ~/.ssh/id_ed25519  (vor dem Menue starten)"
+            ;;
+        *)
+            color_print "$YELLOW" "Hinweis: Remote-Abfrage fehlgeschlagen."
+            color_print "$YELLOW" "        Angaben basieren auf dem letzten erfolgreichen Fetch."
+            color_print "$YELLOW" "        Ursache: $2"
+            ;;
+    esac
+}
+
 color_print "$CYAN" "========================================="
 color_print "$CYAN" "  WPSteuerung Deployment auf Raspberry Pi"
 color_print "$CYAN" "========================================="
@@ -88,13 +154,10 @@ fi
 
 cd "$REPO_DIR"
 # Remote-Refs aktualisieren, damit "wie viele Commits hinten"-Anzeigen
-# (hier und im wp-manager.sh Header) aktuell sind. Mit Timeout, falls offline.
-FETCH_FAILED=0
-if command -v timeout >/dev/null 2>&1; then
-    timeout 15 git fetch --all --quiet >/dev/null 2>&1 || FETCH_FAILED=1
-else
-    git fetch --all --quiet >/dev/null 2>&1 || FETCH_FAILED=1
-fi
+# (hier und im wp-manager.sh Header) aktuell sind. Der Fehlerfall wird
+# klassifiziert, statt alles als "offline" zu melden.
+fetch_remote_info
+FETCH_FAILED=$FETCH_STATUS
 
 # Zeige aktuellen Branch
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -132,17 +195,24 @@ UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null ||
 BEHIND=$(git rev-list --count "HEAD..$UPSTREAM" 2>/dev/null || echo "?")
 
 printf "\n"
-if [ "$FETCH_FAILED" = "1" ]; then
-    color_print "$YELLOW" "Hinweis: Remote nicht erreichbar (offline?) – Angaben basieren auf letztem Fetch."
+if [ "$FETCH_FAILED" != "0" ]; then
+    print_fetch_hint "$FETCH_FAILED" "$FETCH_OUTPUT"
 fi
 if [ "$CURRENT_BRANCH" = "HEAD" ]; then
     : # detached HEAD: keine sinnvolle Vergleichsmoeglichkeit
-elif [ "$BEHIND" = "0" ]; then
-    color_print "$GREEN" "Lokal ist auf dem neuesten Stand von '$UPSTREAM'."
 elif [ "$BEHIND" = "?" ]; then
     color_print "$YELLOW" "Kein Upstream-Branch konfiguriert (kein Vergleich moeglich)."
+elif [ "$FETCH_FAILED" != "0" ]; then
+    # "auf dem neuesten Stand" waere hier eine unbelegte Behauptung: der
+    # Vergleich beruht auf dem letzten erfolgreichen Fetch, nicht auf dem
+    # aktuellen Remote-Stand.
+    color_print "$YELLOW" "Vergleich mit '$UPSTREAM' ungeprueft (laut letztem Fetch: $BEHIND Commit(s) Rueckstand)."
 else
-    color_print "$YELLOW" "Lokal haengt $BEHIND Commit(s) hinter '$UPSTREAM' zurueck – Option 1 holt sie."
+    if [ "$BEHIND" = "0" ]; then
+        color_print "$GREEN" "Lokal ist auf dem neuesten Stand von '$UPSTREAM'."
+    else
+        color_print "$YELLOW" "Lokal haengt $BEHIND Commit(s) hinter '$UPSTREAM' zurueck – Option 1 holt sie."
+    fi
 fi
 
 # Hauptmenue
@@ -165,7 +235,15 @@ case "$choice" in
             exit 1
         fi
         printf "\n${CYAN}Hole Informationen von GitHub...${NC}\n"
-        git fetch --all > /dev/null 2>&1
+        # OHNE BatchMode: hier darf (und soll) ssh nach der Passphrase fragen.
+        # stderr wird deshalb NICHT unterdrueckt - der Passphrase-Hinweis geht
+        # ueber /dev/tty und muss fuer den Nutzer sichtbar bleiben.
+        if ! git fetch --all > /dev/null; then
+            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - GitHub nicht erreichbar?"
+            color_print "$YELLOW" "Bitte Netz/WireGuard pruefen und erneut versuchen."
+            print_fetch_hint 1 ""
+            exit 1
+        fi
 
         # Informationen über aktuellen Stand
         CUR_COMMIT=$(git rev-parse --short HEAD)
@@ -192,8 +270,15 @@ case "$choice" in
         read confirm
         if [ "$confirm" = "j" ] || [ "$confirm" = "J" ]; then
             printf "\n${CYAN}Aktualisiere Branch '%s' (nur Fast-Forward)...${NC}\n" "$CURRENT_BRANCH"
-            git pull --ff-only origin "$CURRENT_BRANCH"
-            printf "${GREEN}Code aktualisiert!${NC}\n"
+            if git pull --ff-only origin "$CURRENT_BRANCH"; then
+                printf "${GREEN}Code aktualisiert!${NC}\n"
+            else
+                # Unter `set -e` wuerde das Skript hier still beenden. Stattdessen
+                # klar benennen - und der Service bleibt unveraendert laufen.
+                color_print "$RED" "FEHLER: 'git pull' fehlgeschlagen - Code nicht aktualisiert."
+                color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
+                exit 1
+            fi
             if systemctl is-active --quiet "$SERVICE_NAME"; then
                 printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
                 verify_service_restart "$SERVICE_NAME"
@@ -211,7 +296,12 @@ case "$choice" in
 
         2)
         printf "\n${CYAN}Hole neueste Branch-Informationen...${NC}\n"
-        git fetch --all > /dev/null 2>&1
+        # Passphrase darf hier interaktiv abgefragt werden (kein BatchMode).
+        if ! git fetch --all > /dev/null; then
+            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - GitHub nicht erreichbar?"
+            print_fetch_hint 1 ""
+            exit 1
+        fi
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
         printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
@@ -254,7 +344,12 @@ case "$choice" in
 
         3)
         printf "\n${CYAN}Hole neueste Branch-Informationen...${NC}\n"
-        git fetch --all > /dev/null 2>&1
+        # Passphrase darf hier interaktiv abgefragt werden (kein BatchMode).
+        if ! git fetch --all > /dev/null; then
+            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - GitHub nicht erreichbar?"
+            print_fetch_hint 1 ""
+            exit 1
+        fi
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
         git branch -a | grep -v HEAD
         printf "Zu welchem Branch wechseln? (z.B. master/refactoring-wip): "
@@ -312,8 +407,14 @@ case "$choice" in
                 git checkout -b "$target_branch" "origin/$target_branch"
             fi
 
-            git pull --ff-only origin "$target_branch"
-            printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
+            if git pull --ff-only origin "$target_branch"; then
+                printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
+            else
+                # Klar benennen statt unter `set -e` still zu beenden.
+                color_print "$RED" "FEHLER: 'git pull' fehlgeschlagen - Branch nicht aktualisiert."
+                color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
+                exit 1
+            fi
             if systemctl is-active --quiet "$SERVICE_NAME"; then
                 printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
                 verify_service_restart "$SERVICE_NAME"
@@ -341,20 +442,23 @@ case "$choice" in
         printf "  Branch:        ${YELLOW}%s${NC}\n" "$(git rev-parse --abbrev-ref HEAD)"
         printf "  Letzter Commit: %s\n" "$(git log -1 --oneline)"
 
-        # Remote-Infos frisch holen (mit Timeout, falls offline)
-        if command -v timeout >/dev/null 2>&1; then
-            timeout 15 git fetch --all --quiet >/dev/null 2>&1 || true
-        else
-            git fetch --all --quiet >/dev/null 2>&1 || true
-        fi
+        # Remote-Infos frisch holen (Fehlerursache wird klassifiziert)
+        fetch_remote_info
         STATUS_UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || true)
         [ -z "$STATUS_UPSTREAM" ] && STATUS_UPSTREAM="origin/$(git rev-parse --abbrev-ref HEAD)"
         STATUS_BEHIND=$(git rev-list --count "HEAD..$STATUS_UPSTREAM" 2>/dev/null || echo "?")
         STATUS_DIRTY=$(git status --porcelain | wc -l | tr -d ' ')
 
         printf "  Upstream:      %s\n" "$STATUS_UPSTREAM"
-        printf "  Rueckstand:    ${YELLOW}%s Commit(s) hinter '%s'${NC}\n" "$STATUS_BEHIND" "$STATUS_UPSTREAM"
+        if [ "$FETCH_STATUS" = "0" ]; then
+            printf "  Rueckstand:    %s Commit(s) hinter '%s'\n" "$STATUS_BEHIND" "$STATUS_UPSTREAM"
+        else
+            printf "  Rueckstand:    ${YELLOW}ungeprueft (Remote-Abfrage fehlgeschlagen)${NC}\n"
+        fi
         printf "  Lokale Aend.:  %s Datei(en)\n" "$STATUS_DIRTY"
+        if [ "$FETCH_STATUS" != "0" ]; then
+            print_fetch_hint "$FETCH_STATUS" "$FETCH_OUTPUT"
+        fi
 
         if systemctl is-active --quiet "$SERVICE_NAME"; then
             printf "  Service:       ${GREEN}✓ AKTIV${NC}\n"
