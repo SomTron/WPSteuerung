@@ -162,7 +162,15 @@ async def _set_hardware_state(state, status: bool) -> bool:
 
 
 def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
-    """Bereinigt den Legionellen-Lifecycle bei jedem echten Hardware-Stopp."""
+    """Bereinigt den Legionellen-Lifecycle bei jedem echten Hardware-Stopp.
+
+    Ein Abbruch vor Erreichen der Zieltemperatur ist KEIN erfolgreicher
+    Abschluss (Befund aus dem Laufzeitlog 18.09.-01.10.2026: am 25.09. drei
+    Anlaeufe bis max. 53,0 C bei Ziel 60 C, jeder Abbruch raeumte Plan und
+    Flag auf). Deshalb wird ein solcher Abbruch als `unvollstaendig`
+    vorgemerkt und der Plan beibehalten - der erneute Start ist dann in
+    evaluate_legionellen ausdruecklich zulaessig.
+    """
     if getattr(state, "legionellen_aktiv", False) is not True:
         return
     cfg = getattr(getattr(state, "priority_config", None), "legionellen", None)
@@ -186,11 +194,26 @@ def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
     state.legionellen_end_time = now
     state._last_was_legionellen = True
     state._legionellen_completion_pending = probe_done
-    if not probe_done:
+    if probe_done:
+        # Erfolgreich: KW ist erledigt, Plan wird hier aufgeraeumt.
         try:
             clear_plan(state, f"Legionellenlauf beendet: {end_grund or 'Stop'}", persist=True)
         except Exception:
             logging.debug("Legionellenplan konnte beim Laufende nicht bereinigt werden", exc_info=True)
+    else:
+        # ABGEBROCHEN vor Erreichen des Ziels. Vorher wurden Plan und Flag
+        # bedingungslos aufgeraeumt - dadurch konnte die Prophylaxe still
+        # ausfallen (Log 18.09.-01.10.2026: 25.09. drei Anlaeufe bis max.
+        # 53,0 C bei Ziel 60 C; naechster Versuch erst am Folgetag kalt).
+        # Jetzt: als unvollstaendig vormerken, Plan BEHALTEN. Nur so ist ein
+        # erneuter Start moeglich (Ausnahme in evaluate_legionellen).
+        state.legionellen_unvollstaendig = True
+        logging.warning(
+            "Legionellenlauf vor dem Ziel abgebrochen (%s, Ziel %.0fC nicht erreicht) - "
+            "unvollstaendig vorgemerkt, erneuter Anlauf zulaessig.",
+            end_grund or "Stop",
+            float(getattr(cfg, "target_temp_c", 60.0) or 60.0),
+        )
 
 
 def _complete_legionellen_lifecycle(state, now) -> None:
@@ -198,6 +221,10 @@ def _complete_legionellen_lifecycle(state, now) -> None:
     state.legionellen_last_done = now.date()
     state.legionellen_wochennummer = now.isocalendar()[1]
     state.legionellen_aktiv = False
+    # Ziel und Probezeit erreicht: die Fahrt gilt als vollstaendig, eine
+    # eventuell gemerkte Unvollstaendigkeit aus einem früheren Abbruch ist
+    # damit erledigt.
+    state.legionellen_unvollstaendig = False
     state.legionellen_temp_override = None
     state.legionellen_started_at = None
     state.legionellen_target_reached_at = None

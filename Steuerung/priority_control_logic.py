@@ -67,6 +67,38 @@ def set_last_compressor_off_time(state, time_val):
     state.stats.last_compressor_off_time = time_val
 
 
+def _sperrinfo_fuer_log(state) -> dict:
+    """Sperrzustand der Takt-/Laufzeitschutzlogik fuer das Entscheidungslog.
+
+    Ohne diese Felder war im Log nicht erkennbar, warum eine Zeile mit
+    "soll_einschalten=True" bei ruhendem Kompressor nicht zu einem Start
+    fuehrte (Log 22.09.: 87 min Standby bei 6,6-7,7 kW PV, Ursache im alten
+    Log nicht aufloesbar). Robust gegen Mock-States - nur getattr.
+    """
+    out = {}
+    jetzt = _now_for_state(state)
+    sperre = getattr(state.control, "restart_lockout_until", None)
+    if isinstance(sperre, datetime):
+        try:
+            out["neustartsperre_bis"] = sperre.isoformat(timespec="seconds")
+            rest = (sperre - jetzt).total_seconds() / 60.0
+            if rest > 0:
+                out["neustartsperre_rest_min"] = round(rest, 1)
+        except (TypeError, ValueError, OverflowError):
+            pass
+    letzte_aus = getattr(state.stats, "last_compressor_off_time", None)
+    if isinstance(letzte_aus, datetime):
+        try:
+            out["seit_letzter_aus_min"] = round(
+                (jetzt - letzte_aus).total_seconds() / 60.0, 1
+            )
+        except (TypeError, ValueError, OverflowError):
+            pass
+    if "neustartsperre_bis" in out:
+        out["sperrend"] = ["neustartsperre_bis"]
+    return out
+
+
 def setze_neustartsperre(state, minuten: int = 10) -> None:
     """Setzt eine explizite Neustartsperre fuer den Kompressor.
 
@@ -522,6 +554,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         legionellen_aktiv=bool(state.legionellen_aktiv),
         legionellen_last_done=state.legionellen_last_done,
         legionellen_started_at=state.legionellen_started_at,
+        legionellen_unvollstaendig=bool(
+            getattr(state, "legionellen_unvollstaendig", False)
+        ),
         legionellen_target_reached_at=getattr(state, "legionellen_target_reached_at", None),
         forecast_day2_wh_qm=normalize_forecast_wh_qm(
             getattr(state.solar, "forecast_day2", None)
@@ -828,6 +863,23 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                     "forecast_age_s": getattr(state, "forecast_age_s", None),
                     "rate_confidence": getattr(state.control, "_rate_confidence", None),
                     "start_anticipation": getattr(state.control, "_last_start_anticipation", {}),
+                    # Warum blieb die WP trotz "soll_einschalten=True" aus?
+                    # Ohne diese Felder war im Log vom 22.09. nicht
+                    # auflösbar, warum die WP 87 min bei 6,6-7,7 kW PV
+                    # stand (PV-Shaping sagte EIN, Komfort sagte AUS).
+                    "blocking_reason": getattr(state.control, "blocking_reason", None),
+                    "blocking_code": getattr(state.control, "blocking_code", None),
+                    "ausschluss_grund": getattr(state.control, "ausschluss_grund", None),
+                    "sperrinfo": _sperrinfo_fuer_log(state),
+                    "soll_einschalten_bestaetigt": bool(
+                        getattr(state.control, "_soll_einschalten_bestaetigt", False)
+                    ),
+                    "legionellen_aktiv": bool(
+                        getattr(state, "legionellen_aktiv", False)
+                    ),
+                    "legionellen_unvollstaendig": bool(
+                        getattr(state, "legionellen_unvollstaendig", False)
+                    ),
                 },
             )
         except Exception as e:  # pragma: no cover

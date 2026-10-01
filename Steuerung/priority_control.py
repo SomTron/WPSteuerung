@@ -489,6 +489,8 @@ def evaluate_einspeisung(
     now_hour: int,
     nachtsperre_start: int,
     nachtsperre_ende: int,
+    legionellen_aktiv: bool = False,
+    legionellen_ziel_c: Optional[float] = None,
 ) -> RegelErgebnis:
     """Einspeise-Begrenzungs-Regel (PV-Shaping am Netzlimit).
 
@@ -501,6 +503,13 @@ def evaluate_einspeisung(
     - WEITERLAUFEN solange feedinpower >= weiterlauf_ab_watt (Abschlag, da die
       WP selbst ~600W zieht und die Einspeisung beim Start einbricht)
     - AUS wenn Fuehler >= ausschalten_bei_c
+
+    LEGIONELLEN-AUSNAHME (Befund aus dem Laufzeitlog 18.09.-01.10.2026):
+    `ausschalten_bei_c` (48 C) ist das Zielt des PV-Puffers, NICHT das Ziel
+    einer Legionellenfahrt (60 C). Ohne Ausnahme hat diese Regel die
+    Prophylaxe am 25.09. nach 199 min bei 53,0 C abgebrochen - das
+    Hygieneziel war noch 7 K entfernt. Waehrend einer aktiven Fahrt gilt
+    daher das Legionellen-Ziel als Abschaltgrenze (nie unter dem Pufferziel).
     """
     result = RegelErgebnis(
         name="Einspeisung",
@@ -524,12 +533,21 @@ def evaluate_einspeisung(
         result.grund = f"Sensor '{einsp_cfg.temperaturfuehler}' nicht verfuegbar"
         return result
 
+    # Abschaltgrenze: waehrend der Legionellenfahrt das Hygieneziel, sonst
+    # der PV-Puffer. `max()` haelt die Grenze nie unter dem Pufferziel.
+    grenze_c = float(einsp_cfg.ausschalten_bei_c)
+    legionellen_grenze = False
+    if legionellen_aktiv and legionellen_ziel_c is not None:
+        grenze_c = max(grenze_c, float(legionellen_ziel_c))
+        legionellen_grenze = True
+
     # 1. AUSSCHALTEN: Ziel erreicht (immer zuerst)
-    if temp >= einsp_cfg.ausschalten_bei_c:
+    if temp >= grenze_c:
         result.einschalten = False
+        suffix = " (Legionellenfahrt: Ziel erreicht)" if legionellen_grenze else ""
         result.grund = (
             f"Einspeisung: {einsp_cfg.temperaturfuehler} {temp:.1f}C >= "
-            f"{einsp_cfg.ausschalten_bei_c}C -> AUS (Einspeisung {feedin_watt:.0f}W)"
+            f"{grenze_c:.1f}C -> AUS (Einspeisung {feedin_watt:.0f}W){suffix}"
         )
         return result
 
@@ -540,7 +558,7 @@ def evaluate_einspeisung(
             f"PV-Shaping Weiterlauf: Einspeisung {feedin_watt:.0f}W >= "
             f"{einsp_cfg.weiterlauf_ab_watt:.0f}W (Grenze {einsp_cfg.einspeisegrenze_watt:.0f}W), "
             f"{einsp_cfg.temperaturfuehler} {temp:.1f}C bis "
-            f"{einsp_cfg.ausschalten_bei_c}C"
+            f"{grenze_c:.1f}C"
         )
         return result
 
@@ -617,6 +635,8 @@ def evaluate_notfallschutz(
     temp_dict: Dict[str, Optional[float]],
     kompressor_ein: bool = False,
     legionellen_aktiv: bool = False,
+    legionellen_max_c: Optional[float] = None,
+    legionellen_angekuendigt: bool = False,
     notfall_aktiv: bool = False,
     now_hour: Optional[int] = None,
 ) -> RegelErgebnis:
@@ -721,6 +741,19 @@ def evaluate_notfallschutz(
             "aktive Legionellenfahrt bleibt bis zum konfigurierten Limit wirksam"
         )
         return result
+    # ANGEKUENDIGTE Legionellenfahrt (Plan betrifft heute / Nachversuch nach
+    # Abbruch): Der Schutzleiter darf einen faelligen Prophylaxe-Start NICHT
+    # wieder abwuergen. Genau das brach am 25.09.2026 zwei Anlaufversuche ab:
+    # der Notfall lief noch (`notfall_aktiv`), die Legionellenfahrt war aber
+    # noch nicht per Hardware-Bestaetigung als aktiv markiert - ihre 38-C-
+    # Hysterese (Prio 110, also ueber Legionelle 90) killte den Start.
+    if kompressor_ein and legionellen_angekuendigt and temp > nf_cfg.einschalten_bei_c:
+        result.einschalten = None
+        result.grund = (
+            f"Notfallschutz: {sensor} {temp:.1f}C > {nf_cfg.einschalten_bei_c:.1f}C; "
+            "angekuendigte Legionellenprophylaxe laeuft - kein Eingriff"
+        )
+        return result
     if temp <= nf_cfg.einschalten_bei_c:
         result.einschalten = True
         result.grund = (
@@ -728,18 +761,28 @@ def evaluate_notfallschutz(
             f"{nf_cfg.einschalten_bei_c}C -> EIN"
         )
         return result
-    if notfall_aktiv and kompressor_ein and temp >= nf_cfg.ausschalten_bei_c:
+    # Abschaltgrenze des Notfallschutzes. Normalerweise die Komfort-
+    # Hysterese (38 C). Waehrend einer Legionellenfahrt gilt das
+    # konfigurierte Legionellen-Limit (65 C): die Regel hat Prio 110 und
+    # wuerde die Prophylaxe sonst bei bereits erreichten 45-58 C abwuergen.
+    # Befund aus dem Laufzeitlog 18.09.-01.10.2026: zwei Abbruchversuche
+    # am 25.09. bei oben 45,7 C, weil die Hysterese bei 38 C griff.
+    nf_ausschalten_c = float(nf_cfg.ausschalten_bei_c)
+    if legionellen_aktiv and legionellen_max_c is not None:
+        nf_ausschalten_c = max(nf_ausschalten_c, float(legionellen_max_c))
+    if notfall_aktiv and kompressor_ein and temp >= nf_ausschalten_c:
         result.einschalten = False
+        suffix = " (Legionellenfahrt)" if nf_ausschalten_c > nf_cfg.ausschalten_bei_c else ""
         result.grund = (
             f"Notfallschutz-Hysterese: {sensor} {temp:.1f}C >= "
-            f"{nf_cfg.ausschalten_bei_c}C -> AUS"
+            f"{nf_ausschalten_c:.1f}C -> AUS{suffix}"
         )
         return result
     if notfall_aktiv and kompressor_ein:
         result.einschalten = True
         result.grund = (
             f"Notfallschutz-Hysterese: {sensor} {temp:.1f}C zwischen "
-            f"{nf_cfg.einschalten_bei_c}-{nf_cfg.ausschalten_bei_c}C -> laeuft weiter"
+            f"{nf_cfg.einschalten_bei_c}-{nf_ausschalten_c:.1f}C -> laeuft weiter"
         )
         return result
     if kompressor_ein:
@@ -1483,11 +1526,23 @@ def evaluate_adaptive_pv(
         elif prognose_eff <= adaptive_cfg.fc_schwelle_schlecht_wh:
             schwelle *= 0.5  # Bewölkt: niedrige Schwelle = PV jetzt nutzen
 
+    # Untergrenze: die gestapelten Multiplikatoren (x0.5 Temperatur und x0.5
+    # Prognose) ergaben im Log bis 75 W. Bei so wenig Ueberschuss zieht die
+    # WP (~600 W) den groessten Teil aus dem Netz - der Start war dann kein
+    # PV-Start mehr. `min_start_watt` begrenzt das nach unten.
+    min_start = float(getattr(adaptive_cfg, "min_start_watt", 0.0) or 0.0)
+    if min_start > 0 and schwelle < min_start:
+        schwelle = min_start
+
     if pv_leistung >= schwelle:
         result.einschalten = True
+        ergebnis_hinweis = ""
+        if min_start > 0 and schwelle == min_start:
+            ergebnis_hinweis = f", auf Mindestwert {min_start:.0f}W angehoben"
         result.grund = (
             f"AdaptivePV: PV {pv_leistung:.0f}W >= {schwelle:.0f}W "
-            f"(Basis {adaptive_cfg.base_threshold_watt:.0f}W, {sensor_name}={temp:.1f}C) -> EIN"
+            f"(Basis {adaptive_cfg.base_threshold_watt:.0f}W, "
+            f"{sensor_name}={temp:.1f}C{ergebnis_hinweis}) -> EIN"
         )
         return result
 
@@ -1906,6 +1961,7 @@ def evaluate_legionellen(
     legionellen_aktiv=False,
     legionellen_last_done=None,
     legionellen_started_at=None,
+    legionellen_unvollstaendig=False,
     kompressor_ein=False,
     legionellen_target_reached_at=None,
     wochenende_cfg=None,
@@ -1968,7 +2024,12 @@ def evaluate_legionellen(
                 f"heize weiter"
             )
             return result
-    if legionellen_last_done is not None:
+    # Nachversuch einer abgebrochenen Fahrt: Das Wochentags-Gate und das
+    # Startfenster werden dann uebersprungen, damit die Prophylaxe nicht
+    # still ausfaellt. Begrenzt wird der Nachversuch weiterhin durch
+    # `hygiene_notfall` / die Frist - er kann also nicht endlos laufen.
+    nachversuch = bool(legionellen_unvollstaendig)
+    if legionellen_last_done is not None and not nachversuch:
         letzte_kw = legionellen_last_done.isocalendar()[1]
         aktuelle_kw = now.isocalendar()[1]
         if letzte_kw == aktuelle_kw:
@@ -2009,14 +2070,14 @@ def evaluate_legionellen(
             "warte auf den Plan"
         )
         return result
-    if legionellen_planned_date is not None and now.date() > legionellen_planned_date:
+    if legionellen_planned_date is not None and now.date() > legionellen_planned_date and not nachversuch:
         result.set_reason_code("planned_day_missed")
         result.grund = (
             f"Legionellen: geplanter Termin {legionellen_planned_date} ist verstrichen; "
             "naechster geeigneter PV-Tag wird geplant"
         )
         return result
-    if legionellen_planned_tag is not None:
+    if legionellen_planned_tag is not None and not nachversuch:
         if heute_wochentag != int(legionellen_planned_tag) and not hygiene_notfall:
             result.aktiv = True
             result.einschalten = None
@@ -2026,7 +2087,7 @@ def evaluate_legionellen(
                 f"{_wochentag_name(heute_wochentag)}"
             )
             return result
-    elif heute_wochentag not in erlaubt_tag and not hygiene_notfall:
+    elif heute_wochentag not in erlaubt_tag and not hygiene_notfall and not nachversuch:
         result.aktiv = True
         result.einschalten = None
         result.grund = (
@@ -2044,14 +2105,14 @@ def evaluate_legionellen(
     if is_weekend and fruehestens is not None:
         frueheste_start_h = max(frueheste_start_h, int(fruehestens))
     aktuelle_zeit = now.hour + now.minute / 60.0
-    if aktuelle_zeit < frueheste_start_h:
+    if aktuelle_zeit < frueheste_start_h and not nachversuch:
         result.aktiv = False
         result.grund = (
             f"Legionellen: vor Startfenster {frueheste_start_h:g}:00"
             + (" (Wochenendfreigabe)" if frueheste_start_h > start_h else "")
         )
         return result
-    if now.hour > spaeteste_start_h and not hygiene_notfall:
+    if now.hour > spaeteste_start_h and not hygiene_notfall and not nachversuch:
         result.set_reason_code("planned_day_missed")
         result.grund = (
             f"Legionellen: Startfenster {frueheste_start_h:g}:00-"
@@ -2135,6 +2196,7 @@ def bewerte_alle_regeln(
     legionellen_aktiv: bool = False,
     legionellen_last_done=None,
     legionellen_started_at=None,
+    legionellen_unvollstaendig: bool = False,
     legionellen_target_reached_at=None,
     forecast_day2_wh_qm: Optional[float] = None,
     wochenende_cfg=None,
@@ -2160,11 +2222,26 @@ def bewerte_alle_regeln(
     # -1. Notfallschutz (Prio 110): hoechste Regel, reiner Schutzleiter.
     #     Greift ohne weitere Bedingungen vor allen Sperren (Wochenende,
     #     Nachtsperre) - im Normalbetrieb stumm.
+    # "Angekuendigt": eine Legionellenfahrt ist aktiv, der Plan betrifft
+    # heute, oder ein Abbruch macht einen Nachversuch noetig. Dann darf die
+    # Hysterese den faelligen Prophylaxe-Start nicht abwuergen (Prio 110
+    # liegt sonst ueber der Legionelle mit 90).
+    _leg_angekuendigt = bool(legionellen_aktiv or legionellen_unvollstaendig)
+    if not _leg_angekuendigt and legionellen_planned_date is not None:
+        try:
+            _leg_angekuendigt = (now.date() == legionellen_planned_date)
+        except (AttributeError, TypeError):
+            _leg_angekuendigt = False
     ergebnis = evaluate_notfallschutz(
         config.notfallschutz,
         temp_dict,
         kompressor_ein=kompressor_ein,
         legionellen_aktiv=bool(legionellen_aktiv),
+        legionellen_max_c=(
+            getattr(config.legionellen, "legionellen_max_temp_c", None)
+            if legionellen_aktiv else None
+        ),
+        legionellen_angekuendigt=_leg_angekuendigt,
         notfall_aktiv=notfall_aktiv,
         now_hour=now_hour,
     )
@@ -2175,6 +2252,8 @@ def bewerte_alle_regeln(
     ergebnisse.append(ergebnis)
 
     # 1. Einspeise-Begrenzung (PV-Shaping am Netzlimit, hoechste Heizen-Prioritaet)
+    #    Waehrend einer Legionellenfahrt gilt deren Ziel (60 C) als Abschalt-
+    #    grenze - sonst bricht der 48-C-Puffer die Prophylaxe vorzeitig ab.
     ergebnis = evaluate_einspeisung(
         config.einspeisung,
         temp_dict,
@@ -2183,6 +2262,11 @@ def bewerte_alle_regeln(
         now_hour,
         nachtsperre_start,
         nachtsperre_ende,
+        legionellen_aktiv=bool(legionellen_aktiv),
+        legionellen_ziel_c=(
+            getattr(config.legionellen, "target_temp_c", None)
+            if legionellen_aktiv else None
+        ),
     )
     ergebnisse.append(ergebnis)
 
@@ -2349,6 +2433,7 @@ def bewerte_alle_regeln(
         legionellen_aktiv=legionellen_aktiv,
         legionellen_last_done=legionellen_last_done,
         legionellen_started_at=legionellen_started_at,
+        legionellen_unvollstaendig=legionellen_unvollstaendig,
         kompressor_ein=kompressor_ein,
         legionellen_target_reached_at=legionellen_target_reached_at,
         pv_acpower=pv_acpower,

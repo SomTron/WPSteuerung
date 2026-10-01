@@ -543,3 +543,90 @@ class TestNotfallschutzExtract:
         from pydantic import ValidationError
         with pytest.raises(ValidationError):
             NotfallschutzConfig(einschalten_bei_c=40.0, ausschalten_bei_c=38.0)
+
+
+# ===========================================================
+# Legionellen-Ausnahme in der Notfallschutz-Hysterese
+# ===========================================================
+
+class TestNotfallschutzLegionelle:
+    """Regression aus dem Laufzeitlog 18.09.-01.10.2026.
+
+    Der Notfallschutz hat Prioritaet 110 und damit VOR der Legionelle (90).
+    Am 25.09.2026 beendete seine 38-C-Hysterese zwei Anlaufversuche der
+    Prophylaxe bei oben 45,7 C, lange vor dem 60-C-Hygieneziel:
+
+        10:23  Legionellenprophylaxe faellig: Starte mit PV auf 60C
+        10:25  Notfallschutz-Hysterese: oben 45.7C >= 38.0C -> AUS
+    """
+
+    def _cfg(self):
+        return NotfallschutzConfig(aktiv=True, prioritaet=110,
+                                   einschalten_bei_c=36.0, ausschalten_bei_c=38.0)
+
+    def test_ohne_legionelle_unveraendert(self):
+        """Normalbetrieb: die 38-C-Hysterese gilt unveraendert."""
+        erg = pc.evaluate_notfallschutz(
+            self._cfg(), {"oben": 45.7}, kompressor_ein=True,
+            notfall_aktiv=True, now_hour=12,
+        )
+        assert erg.einschalten is False
+        assert "38.0C" in erg.grund
+        assert "Legionellenfahrt" not in erg.grund
+
+    def test_legionelle_hebt_die_hysterese_an(self):
+        """Bei 45,7 C darf der Notfall die Fahrt nicht mehr beenden."""
+        erg = pc.evaluate_notfallschutz(
+            self._cfg(), {"oben": 45.7}, kompressor_ein=True,
+            legionellen_aktiv=True, legionellen_max_c=65.0,
+            notfall_aktiv=True, now_hour=12,
+        )
+        assert erg.einschalten is not False, (
+            f"Notfallschutz hat die Legionellenfahrt abgebrochen: {erg.grund}"
+        )
+
+    def test_legionelle_bleibt_bis_zum_limit_wirksam(self):
+        """Der Notfallschutz beendet eine laufende Fahrt gar nicht erst.
+
+        Die harte 65-C-Grenze setzt bewusst NICHT der Notfallschutz: solange
+        `legionellen_aktiv` gilt, gibt er bei zu warmem `oben` bewusst
+        `einschalten=None` ab (siehe Guard in evaluate_notfallschutz). Die
+        obere Grenze wahrt stattdessen die Ueberhitzungssicherung in
+        safety_logic.py. Dieser Test haelt fest, dass der Schutzleiter
+        waehrend der Fahrt nicht eingreift.
+        """
+        for temp in (45.0, 55.0, 64.0, 65.5):
+            erg = pc.evaluate_notfallschutz(
+                self._cfg(), {"oben": temp}, kompressor_ein=True,
+                legionellen_aktiv=True, legionellen_max_c=65.0,
+                notfall_aktiv=True, now_hour=12,
+            )
+            assert erg.einschalten is not False, (
+                f"Notfallschutz beendete die Fahrt bei {temp} C: {erg.grund}"
+            )
+
+    def test_angekuendigte_fahrt_wird_nicht_ausgewaergt(self):
+        """Der reale 25.09.-Fall: Fahrt angekuendigt, aber noch nicht aktiv.
+
+        `legionellen_aktiv` ist in diesem Fenster noch False - der Start
+        wurde erst nach der Hardware-Bestaetigung gesetzt. Genau hier hat
+        die 38-C-Hysterese (Prio 110 > 90) den Start abgebrochen.
+        """
+        erg = pc.evaluate_notfallschutz(
+            self._cfg(), {"oben": 45.7}, kompressor_ein=True,
+            legionellen_aktiv=False, legionellen_angekuendigt=True,
+            notfall_aktiv=True, now_hour=12,
+        )
+        assert erg.einschalten is not False, (
+            f"Prophylaxe-Start abgewaergt: {erg.grund}"
+        )
+        assert "angekuendigte" in erg.grund
+
+    def test_ohne_legelle_gilt_38c_unveraendert(self):
+        """Weder aktiv noch angekuendigt: das alte Verhalten gilt."""
+        erg = pc.evaluate_notfallschutz(
+            self._cfg(), {"oben": 45.0}, kompressor_ein=True,
+            legionellen_aktiv=False, legionellen_angekuendigt=False,
+            notfall_aktiv=True, now_hour=12,
+        )
+        assert erg.einschalten is False and "38.0C" in erg.grund

@@ -595,6 +595,17 @@ class AdaptivePVConfig(BaseModel):
         default=2500.0,
         description="Ab dieser HEUTE-Prognose wird gespart (Wh/m2)",
     )
+    # Untergrenze der dynamischen PV-Schwelle. Die Multiplikatoren fuer
+    # Temperatur (x0.5/x0.7) und Prognose (x0.5) stapelten sich im Log vom
+    # 18.09.-01.10.2026 auf bis zu 75 W (300 x 0.5 x 0.5). Bei 75 W
+    # Ueberschuss zieht die WP aber rund 600 W - der Start kam rechnerisch
+    # zu ueber 80 % aus dem Netz, also genau nicht der Zweck der PV-Regel.
+    min_start_watt: float = Field(
+        default=300.0,
+        description=("Untere Grenze der dynamischen PV-Schwelle (W). "
+                     "Verhindert Starts, bei denen die WP mehr aus dem Netz "
+                     "zieht als die PV deckt. 0 = keine Untergrenze."),
+    )
 
     @model_validator(mode="after")
     def _plausibel(self):
@@ -608,6 +619,8 @@ class AdaptivePVConfig(BaseModel):
             raise ValueError("adaptive_pv: fc_schwelle_schlecht muss <= fc_schwelle_gut sein")
         if not (0.0 <= self.sparen_hysterese_k < 10.0):
             raise ValueError("adaptive_pv.sparen_hysterese_k ausserhalb 0-10 K")
+        if not (0.0 <= self.min_start_watt <= 10000.0):
+            raise ValueError("adaptive_pv.min_start_watt ausserhalb 0-10000 W")
         return self
 
 

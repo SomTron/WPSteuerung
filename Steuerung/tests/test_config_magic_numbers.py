@@ -98,18 +98,54 @@ def test_adaptive_pv_schwellen_default():
     assert "< 450W" in _adaptive_grund(4001)
     # 3999 Wh/qm = neutral -> Basis-Schwelle 300 W
     assert "< 300W" in _adaptive_grund(3999)
-    # 999 Wh/qm = "schlechter Tag" -> Schwelle x0.5 (300 -> 150 W)
-    assert "< 150W" in _adaptive_grund(999)
     # 1001 Wh/qm = neutral -> Basis-Schwelle 300 W
     assert "< 300W" in _adaptive_grund(1001)
 
 
+def test_adaptive_pv_schlechte_prognose_wird_auf_mindestwert_angehoben():
+    """Die x0.5-Stufe (150 W) wird durch min_start_watt (300 W) geboden.
+
+    Befund aus dem Laufzeitlog 18.09.-01.10.2026: die Multiplikatoren
+    stapelten sich bis auf 75 W (300 x 0.5 x 0.5). Bei 75 W Ueberschuss
+    zieht die WP ~600 W - der Start kam zu ueber 80 % aus dem Netz und war
+    damit kein PV-Start. min_start_watt begrenzt das nach unten.
+    """
+    # 999 Wh/qm = "schlechter Tag" -> x0.5 = 150 W, aber auf 300 W gehoben
+    grund = _adaptive_grund(999)
+    assert "< 300W" in grund
+    assert "< 150W" not in grund
+
+    # Bei 200 W PV (ueber 150, aber unter 300) wird NICHT eingeschaltet
+    ergebnis = evaluate_adaptive_pv(
+        AdaptivePVConfig(), {"unten": 40.0}, 200.0, 999.0,
+        False, now_hour=12, forecast_today_wh_qm=999.0,
+    )
+    assert ergebnis.einschalten is None, f"200 W darf nicht starten: {ergebnis.grund}"
+
+    # Oberhalb der Mindestgrenze startet die Regel wieder
+    ergebnis = evaluate_adaptive_pv(
+        AdaptivePVConfig(), {"unten": 40.0}, 320.0, 999.0,
+        False, now_hour=12, forecast_today_wh_qm=999.0,
+    )
+    assert ergebnis.einschalten is True, f"320 W muss starten: {ergebnis.grund}"
+
+
+def test_adaptive_pv_mindestwert_ist_abschaltbar():
+    """min_start_watt=0 stellt das alte Verhalten wieder her."""
+    cfg = AdaptivePVConfig(min_start_watt=0.0)
+    # Ohne Untergrenze greift wieder x0.5 -> 150 W
+    assert "< 150W" in _adaptive_grund(999, cfg)
+    # Validierung: negative Werte sind ungueltig
+    with pytest.raises(ValueError):
+        AdaptivePVConfig(min_start_watt=-1.0)
+
+
 def test_adaptive_pv_schwellen_konfigurierbar():
     cfg = AdaptivePVConfig(fc_schwelle_gut_wh=2000.0, fc_schwelle_schlecht_wh=500.0)
-    # 2500 liegt jetzt im "guten" Bereich -> x1.5
+    # 2500 liegt jetzt im "guten" Bereich -> x1.5 (450 W, ueber der Grenze)
     assert "< 450W" in _adaptive_grund(2500, cfg)
-    # 400 waere jetzt "schlecht" -> x0.5
-    assert "< 150W" in _adaptive_grund(400, cfg)
+    # 400 waere jetzt "schlecht" -> x0.5 = 150 W, auf min_start_watt gehoben
+    assert "< 300W" in _adaptive_grund(400, cfg)
 
 
 # ── Bademodus-Erhoehung ──

@@ -156,6 +156,12 @@ class State:
         self.legionellen_telegram_start_sent: bool = False
         self.legionellen_telegram_done_sent: bool = False
         self.legionellen_temp_override: Optional[float] = None
+        # True, wenn eine Legionellenfahrt vor Erreichen des Ziels abgebrochen
+        # wurde. Solange das Flag steht, darf die Regel erneut starten - auch
+        # ausserhalb des Wochentagsfensters. Ohne dieses Flag fiel die Prophylaxe
+        # bei einem einzigen Abbruch still aus: im Log 18.09.-01.10.2026 wurden
+        # am 25.09. drei Anlaeufe bei max. 53,0 C abgebrochen (Ziel 60 C).
+        self.legionellen_unvollstaendig: bool = False
         self.forecast_stale: bool = False
         self.forecast_age_s: Optional[int] = None
         self.energy_source_detail: str = "Noch keine Solarquelle bewertet"
