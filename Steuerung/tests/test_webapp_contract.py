@@ -188,6 +188,110 @@ def test_webapp_benutzt_textcontent_fuer_fehlertexte():
     assert "text.textContent = e.message" in html
 
 
+def test_webapp_schleust_kein_fremdes_html_ein():
+    """Regression: Fremde API-/Logtexte duerfen NIE per innerHTML gesetzt werden.
+
+    Betroffen waren zuvor (Stand vor dieser Aenderung):
+    - ``errorData.error``            (Fehler-API / HTTP-Body)
+    - ``e.gewinner`` / ``e.grund``   (Entscheidungslog, Regeltexte aus Config)
+    - ``system.exclusion_reason``    (Sperrgrund der Steuerung)
+    - ``compressor.runtime_current`` (Laufzeitanzeige)
+
+    Alle vier setzen die Werte jetzt per textContent. Statisches Markup bzw.
+    durch Number() sanitisiertes Zahlenmaterial (Solarprofil-Balken,
+    Regelliste aus der eigenen Konfiguration) bleibt unveraendert.
+    """
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+
+    for verbot in ("insertAdjacentHTML", "outerHTML", "document.write"):
+        assert verbot not in html, f"{verbot} darf nicht verwendet werden"
+
+    # Keine der verbotenen Stellen darf noch mit innerHTML gearbeitet werden.
+    # Kommentarzeilen sind ausgenommen - dort wird das Muster nur benannt.
+    verbotene_zeilen = [
+        z for z in html.splitlines()
+        if "innerHTML" in z
+        and not z.lstrip().startswith(("//", "*", "/*"))
+        and any(feld in z for feld in (
+            "e.grund", "e.gewinner", "errorData.error", "exclusion_reason",
+            "runtime_current", "e.message", "letzter.message",
+        ))
+    ]
+    assert not verbotene_zeilen, (
+        "Fremde Texte per innerHTML gesetzt:\n" + "\n".join(verbotene_zeilen)
+    )
+
+    # ...und sie tauchen jetzt als textContent auf.
+    assert "fehlerwert.textContent = (errorData && errorData.error)" in html
+    assert "liste.replaceChildren(fehlerzeile)" in html
+    assert "regelB.textContent = e.gewinner || 'Keine'" in html
+    assert "grund.textContent = e.grund || ''" in html
+    assert "val.textContent = system.exclusion_reason" in html
+    assert "wert.textContent = compressor.runtime_current" in html
+
+
+def test_chart_fallback_warnt_statt_still_zu_scheitern():
+    """Ohne CDN (Chart.js) bekommt der Nutzer eine sichtbare Meldung."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "function showChartUnavailable" in html
+    assert "function hideChartUnavailable" in html
+    assert 'id="chart-unavailable"' in html
+    assert "typeof Chart === 'undefined'" in html
+    assert "showChartUnavailable(" in html
+    assert "role=\"status\"" in html
+
+
+def test_aria_live_meldet_kompressor_und_regelwechsel():
+    """Screenreader brauchen den betrieblich relevanten Zustandswechsel."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    for element_id in ("quick-compressor", "quick-rule"):
+        zeile = next(z for z in html.splitlines() if f'id="{element_id}"' in z)
+        assert 'aria-live="polite"' in zeile, f"{element_id} ohne aria-live"
+        assert 'aria-atomic="true"' in zeile, f"{element_id} nicht atomar"
+
+
+def test_alle_api_aufe_mit_api_key():
+    """Jeder API-Aufruf schickt den Key mit - auch die Leserouten.
+
+    Serverseitig ist der Key nur fuer Schreib-/Exportrouten Pflicht, aber
+    das mitschleusen haelt die WebApp konsistent und zukunftssicher.
+    """
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    import re
+    aufrufe = re.findall(r"fetch\(`\$\{API_BASE\}(/[^`?]+)", html)
+    assert aufrufe, "keine API-Aufrufe gefunden"
+    for pfad in aufrufe:
+        block = html.split(f"fetch(`${{API_BASE}}{pfad}", 1)[1][:400]
+        assert "apiHeaders(" in block, f"{pfad} schickt keinen API-Key mit"
+
+
+def test_versionsangabe_ist_eindeutig_und_aktuell():
+    """Die Version darf nicht doppelt und veraltet im HTML stehen."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    import re
+    # Keine veralteten Versionsnummern mehr irgendwo im Dokument - auch nicht
+    # in Kommentaren, die beim naechsten Release sonst wieder zur Vorlage
+    # eines falschen Werts werden.
+    assert "v1.4.0" not in html, "veraltete Version v1.4.0 noch im HTML"
+    # Genau EINE Versionsangabe: die APP_VERSION-Konstante.
+    assert html.count("const APP_VERSION = ") == 1
+    assert 'id="app-version"' in html
+    assert "document.title = `WP Steuerung v${APP_VERSION}`" in html
+    versionen = re.findall(r"const APP_VERSION = '([\d.]+)'", html)
+    assert len(versionen) == 1, f"mehrere APP_VERSION-Angaben: {versionen}"
+    # Die Versionsnummer ist mindestens zweistellig (Schema major.minor.patch).
+    assert re.fullmatch(r"\d+\.\d+\.\d+", versionen[0]), versionen[0]
+
+
+def test_fehlerzaehler_zeigt_tail_einschraenkung():
+    """Der 24-h-Zaehler darf keine scheinbar vollstaendige Zahl vortaeuschen."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "errorData.vollstaendig === false" in html
+    assert "(Log-Tail)" in html
+    assert "mind. (Log-Tail)" in html
+    assert "anzahl.title = nurTail" in html
+
+
 def test_webapp_belastet_das_status_polling_nicht():
     """Die Fehlerhistorie wird separat, nicht alle 5 s, abgerufen."""
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")

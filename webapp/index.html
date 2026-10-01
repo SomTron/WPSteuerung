@@ -8,7 +8,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>WP Steuerung v1.4.0</title>
+    <title>WP Steuerung</title>
     <link rel="manifest" href="manifest.json">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1064,15 +1064,30 @@
                 <span class="status-badge badge-info" id="header-health" style="display:none"></span>
                 <span class="status-badge badge-info" id="control-feedback" style="display:none"></span>
             </div>
+            <!--
+                aria-live: Der Kompressor-/Regelstatus ist fuer Screenreader
+                relevant (unerwarteter Heizstopp ist betrieblich wichtig).
+                "polite" statt "assertive", weil der Zustand alle 5 s neu
+                geschrieben wird und assertive bei jedem Takt stoeren wuerde.
+                aria-atomic sorgt dafuer, dass der komplette Text vorgelesen
+                wird, nicht nur die geaenderte Ziffer.
+            -->
             <div class="quick-status" aria-label="Aktueller Betriebsstatus">
-                <div class="quick-status-item"><span class="quick-status-label">Kompressor</span><span class="quick-status-value is-off" id="quick-compressor">—</span></div>
-                <div class="quick-status-item"><span class="quick-status-label">Regel</span><span class="quick-status-value" id="quick-rule">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Kompressor</span><span class="quick-status-value is-off" id="quick-compressor" aria-live="polite" aria-atomic="true">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Regel</span><span class="quick-status-value" id="quick-rule" aria-live="polite" aria-atomic="true">—</span></div>
                 <div class="quick-status-item"><span class="quick-status-label">Modus</span><span class="quick-status-value" id="quick-mode">—</span></div>
                 <div class="quick-status-item"><span class="quick-status-label">Solar</span><span class="quick-status-value" id="quick-solar">—</span></div>
                 <div class="quick-status-item"><span class="quick-status-label">Boiler</span><span class="quick-status-value" id="quick-boiler">—</span></div>
                 <div class="quick-status-item"><span class="quick-status-label">Aktualisiert</span><span class="quick-status-value" id="quick-updated">—</span></div>
             </div>
-            <span class="status-badge badge-info" style="font-size: 12px;">v1.4.0</span>
+            <!--
+            Einzige Versionsangabe der WebApp. Der Titel wird zur Laufzeit
+            gesetzt, damit die Version nicht an zwei Stellen auseinanderlaufen
+            kann (vorher stand dieselbe Zahl doppelt im HTML und war veraltet).
+            Pflege: bei jedem Release mit dem Verzeichnisnamen der Log-Ablage
+            abgleichen (logs/<Version>/).
+        -->
+        <span class="status-badge badge-info" id="app-version" style="font-size: 12px;" title="Version der WebApp / des ausgelieferten Stands">—</span>
         </header>
 
         <div id="app">
@@ -1145,6 +1160,15 @@
 
         <script>
                 const API_BASE = window.location.origin;
+        // EINZIGE Versionsangabe der WebApp (Badge + Dokumenttitel).
+        // Vorher stand dieselbe Version doppelt im HTML und war veraltet.
+        // Bei jedem Release mit dem Log-Verzeichnisnamen abgleichen.
+        const APP_VERSION = '1.10.26';
+        document.title = `WP Steuerung v${APP_VERSION}`;
+        document.addEventListener('DOMContentLoaded', () => {
+            const versionBadge = document.getElementById('app-version');
+            if (versionBadge) versionBadge.textContent = 'v' + APP_VERSION;
+        });
         const STATUS_TIMEOUT_MS = 8000;
         // Optionaler Schreibschutz. Den Key einmalig im Browser hinterlegen:
         // localStorage.setItem('wp_api_key', 'DEIN_KEY');
@@ -1157,6 +1181,12 @@
         const valueOrDash = (value) => value === null || value === undefined || value === '' ? NO_DATA : value;
 
         function apiHeaders(extra = {}) {
+            // Der Key wird grundsaetzlich an JEDEN API-Aufruf mitgeschickt.
+            // Serverseitig ist er nur fuer Schreib-/Exportrouten Pflicht
+            // (api.py: _check_api_key bei /config, /command, Export, Debug-CSV);
+            // die Leserouten /status, /health, /history sind absichtlich offen.
+            // Durch das mitschleusen bleibt die WebApp aber konsistent und
+            // funktionsfaehig, falls eine Leseroute spaeter geschuetzt wird.
             const headers = Object.assign({}, extra);
             const key = localStorage.getItem('wp_api_key');
             if (key) headers['X-API-Key'] = key;
@@ -1266,12 +1296,27 @@
             stufe.textContent = (letzter.stufe || '').toUpperCase();
             stufe.className = 'info-value ' + (ERROR_STUFE_BADGE[letzter.stufe] || 'badge badge-info');
             // Zaehler der letzten 24 h aus der gelieferten Historie ableiten.
+            // ACHTUNG: Der Endpunkt liest aus RAM-Schutzgruenden nur einen
+            // Log-Tail (api.py: "vollstaendig": False). Der Zaehler kann daher
+            // zu niedrig sein. Statt eine scheinbar vollstaendige Zahl zu
+            // zeigen, wird die Abweichung direkt am Wert ausgewiesen.
             const grenze = Date.now() - 24 * 3600 * 1000;
             const letzte24 = (errorData.eintraege || []).filter((e) => {
                 const d = new Date(e.timestamp);
                 return !isNaN(d.getTime()) && d.getTime() >= grenze;
             });
-            anzahl.textContent = String(letzte24.length);
+            const nurTail = errorData.vollstaendig === false;
+            // Deckt der Tail den ganzen Tag ab? Sonst ist der Wert zwingend
+            // ein Untergrenz und wird als solcher gekennzeichnet.
+            const reicht = errorData.zeitraum_von
+                ? (new Date(errorData.zeitraum_von).getTime() <= grenze)
+                : false;
+            anzahl.textContent = String(letzte24.length)
+                + (nurTail ? (reicht ? ' (Log-Tail)' : ' mind. (Log-Tail)') : '');
+            anzahl.title = nurTail
+                ? 'Aus Log-Tail gezaehlt, nicht die vollstaendige 24-h-Historie: '
+                  + 'oeffne die Fehlerhistorie fuer Details.'
+                : 'Fehler der letzten 24 Stunden';
         }
 
         function renderErrorHistory() {
@@ -1279,9 +1324,19 @@
             const quelle = document.getElementById('error-history-source');
             if (!liste) return;
             if (!errorData || errorData.error) {
-                liste.innerHTML = '<div class="info-row"><span class="info-value">'
-                    + (errorData && errorData.error ? errorData.error : 'Lade …')
-                    + '</span></div>';
+                // SICHERHEIT: keine innerHTML-Zusammensetzung. errorData.error
+                // stammt aus der Fehler-API bzw. dem HTTP-Body und ist
+                // fremder Text - mit innerHTML koennte eine Meldung wie
+                // '<img src=x onerror=...>' Skriptcode einschleusen. Der Rest
+                // der Datei setzt Fehlertexte bereits korrekt per textContent.
+                const fehlerzeile = document.createElement('div');
+                fehlerzeile.className = 'info-row';
+                const fehlerwert = document.createElement('span');
+                fehlerwert.className = 'info-value';
+                fehlerwert.textContent = (errorData && errorData.error)
+                    ? errorData.error : 'Lade …';
+                fehlerzeile.appendChild(fehlerwert);
+                liste.replaceChildren(fehlerzeile);
                 return;
             }
             if (quelle) quelle.textContent = errorData.quelle || NO_DATA;
@@ -1300,8 +1355,13 @@
                 }
             }
             if (!eintraege.length) {
-                liste.innerHTML = '<div class="info-row"><span class="info-value">'
-                    + 'Keine Fehler ab Stufe WARNING gefunden.</span></div>';
+                const leerzeile = document.createElement('div');
+                leerzeile.className = 'info-row';
+                const wert = document.createElement('span');
+                wert.className = 'info-value';
+                wert.textContent = 'Keine Fehler ab Stufe WARNING gefunden.';
+                leerzeile.appendChild(wert);
+                liste.replaceChildren(leerzeile);
                 return;
             }
             // textContent statt innerHTML fuer den Text, damit Logeintrae
@@ -1388,7 +1448,8 @@
             try {
                 const response = await fetch(`${API_BASE}/health?ts=${Date.now()}`, {
                     signal: controller.signal,
-                    cache: 'no-store'
+                    cache: 'no-store',
+                    headers: apiHeaders()
                 });
                 if (!response.ok) throw new Error(await responseError(response, 'Health API Fehler ' + response.status));
                 healthData = await response.json();
@@ -1485,7 +1546,8 @@
             try {
                 const response = await fetch(`${API_BASE}/status?ts=${Date.now()}`, {
                     signal: controller.signal,
-                    cache: 'no-store'
+                    cache: 'no-store',
+                    headers: apiHeaders()
                 });
                 if (!response.ok) {
                     throw new Error(await responseError(response, 'API-Fehler ' + response.status));
@@ -1551,7 +1613,8 @@
 
             try {
                 const response = await fetch(`${API_BASE}/history?hours=${hours}&v=${Date.now()}`, {
-                    cache: 'no-store'
+                    cache: 'no-store',
+                    headers: apiHeaders()
                 });
                 if (!response.ok) {
                     throw new Error(await responseError(response, 'History API Fehler ' + response.status));
@@ -1755,13 +1818,36 @@
                     const pad = Math.max((max - min) * 0.15, 3);
                     return { min: Math.floor(min - pad), max: Math.ceil(max + pad) };
                 }
-                function createChart() {
-                    // Zoom-Plugin registrieren
-                    if (typeof Chart !== 'undefined' && Chart.register) {
-                        try { Chart.register(chartjsPluginZoom); } catch(e) {}
-                    }
+        function showChartUnavailable(text) {
+            const box = document.getElementById('chart-unavailable');
+            if (!box) return;
+            box.textContent = text;
+            box.style.display = '';
+        }
+
+        function hideChartUnavailable() {
+            const box = document.getElementById('chart-unavailable');
+            if (box) box.style.display = 'none';
+        }
+
+        function createChart() {
                     const ctx = document.getElementById('tempChart');
                     if (!ctx) return;
+                    // Chart.js kommt vom CDN. Faellt das CDN aus (WLAN/Pi-
+                    // Offline), waere der Chart sonst stillschweigend leer -
+                    // ohne jede Meldung an den Nutzer. Deshalb explizit
+                    // pruefen und sichtbar hinweisen.
+                    if (typeof Chart === 'undefined') {
+                        showChartUnavailable('Chart-Bibliothek nicht geladen '
+                            + '(kein Internet?). Temperaturen und KPI bleiben '
+                            + 'sichtbar, der Temperaturverlauf fehlt.');
+                        return;
+                    }
+                    // Zoom-Plugin registrieren
+                    if (typeof Chart.register === 'function') {
+                        try { Chart.register(chartjsPluginZoom); } catch(e) {}
+                    }
+                    hideChartUnavailable();
                     if (chart) chart.destroy();
                     chart = new Chart(ctx, {
                         type: 'line',
@@ -1947,7 +2033,14 @@
                 if (!rcr) {
                     const row = document.createElement('div');
                     row.className = 'info-row'; row.id = 'runtime-current-row';
-                    row.innerHTML = '<span class="info-label">Aktuelle Laufzeit</span><span class="info-value" id="runtime-current">' + compressor.runtime_current + '</span>';
+                    // Nur statisches Markup, der Wert kommt per textContent.
+                    const label = document.createElement('span');
+                    label.className = 'info-label';
+                    label.textContent = 'Aktuelle Laufzeit';
+                    const wert = document.createElement('span');
+                    wert.className = 'info-value'; wert.id = 'runtime-current';
+                    wert.textContent = compressor.runtime_current;
+                    row.append(label, wert);
                     document.getElementById('runtime-today-row').after(row);
                 } else {
                     document.getElementById('runtime-current').textContent = compressor.runtime_current;
@@ -2241,6 +2334,24 @@
                 el('kpi-woche-pv').textContent = woche.anteil_pv_batterie_prozent != null
                     ? woche.anteil_pv_batterie_prozent + ' % (' + (woche.energie_kwh ?? 0).toFixed(1) + ' kWh)' : NO_DATA;
                 el('kpi-woche-kosten').textContent = (woche.kosten_netz_eur ?? 0).toFixed(2) + ' EUR';
+                // Aufschluesselung der Solarquelle + "unklar"-Anteil. Ohne diesen
+                // Hinweis war der Solaranteil systematisch zu hoch: frueher wurden
+                // Laufzeiten ohne PV-/Batterie-Nachweis pauschal als Solarstrom
+                // verbucht (100 % statt ~79 %).
+                if (el('kpi-heute-quellen')) {
+                    const pvK = heute.pv_kwh ?? 0, battK = heute.batterie_kwh ?? 0,
+                          netzK = heute.netz_kwh ?? 0, unklarK = heute.unklar_kwh ?? 0;
+                    el('kpi-heute-quellen').textContent =
+                        'PV ' + pvK.toFixed(2) + ' | Batt ' + battK.toFixed(2) +
+                        ' | Netz ' + netzK.toFixed(2) + ' | unklar ' + unklarK.toFixed(2) + ' kWh';
+                }
+                if (el('kpi-heute-unklar')) {
+                    const unklarMin = heute.unklar_laufzeit_min ?? 0;
+                    const unklarPct = heute.anteil_unklar_prozent;
+                    el('kpi-heute-unklar').textContent = unklarMin > 0
+                        ? Math.round(unklarMin) + ' min / ' + unklarPct + ' % ohne PV-Nachweis'
+                        : 'keine';
+                }
             }
 
             // --- Boiler-Vorrat (Punkt A) ---
@@ -2342,19 +2453,43 @@
             if (entEl && statusData.entscheidungen) {
                 const liste = statusData.entscheidungen;
                 if (!liste.length) {
-                    entEl.innerHTML = '<div style="color:var(--text-secondary)">Noch keine Eintraege</div>';
+                    entEl.replaceChildren(Object.assign(
+                        document.createElement('div'),
+                        { textContent: 'Noch keine Eintraege', style: 'color:var(--text-secondary)' }
+                    ));
                 } else {
-                    entEl.innerHTML = liste.map(function(e) {
+                    // SICHERHEIT: pro DOM-Element aufbauen statt innerHTML.
+                    // `gewinner`/`grund` stammen aus dem Entscheidungslog
+                    // (Regeltexte aus der Konfiguration) und sind fremde Daten -
+                    // per innerHTML koennte ein Regelname HTML einschleusen.
+                    const frag = document.createDocumentFragment();
+                    liste.forEach(function(e) {
                         const zeit = (e.ts || '').split('T')[1] || e.ts;
                         const farbe = e.laeuft ? '#51cf66' : 'var(--text-secondary)';
-                        return '<div style="margin-bottom:5px;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:4px">' +
-                            '<b style="color:' + farbe + '">' + zeit.slice(0, 5) + '</b> ' +
-                            '<b>' + (e.gewinner || 'Keine') + '</b> ' +
-                            '<span class="' + (e.soll_einschalten ? 'decision-ein' : 'decision-aus') + '">' +
-                            (e.soll_einschalten ? 'EIN' : 'AUS') + '</span>' +
-                            '<div style="font-size:0.72rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
-                            (e.grund || '') + '</div></div>';
-                    }).join('');
+                        const zeile = document.createElement('div');
+                        zeile.style.marginBottom = '5px';
+                        zeile.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+                        zeile.style.paddingBottom = '4px';
+                        const zeitB = document.createElement('b');
+                        zeitB.style.color = farbe;
+                        zeitB.textContent = String(zeit).slice(0, 5);
+                        const regelB = document.createElement('b');
+                        regelB.textContent = e.gewinner || 'Keine';
+                        const zustand = document.createElement('span');
+                        zustand.className = e.soll_einschalten ? 'decision-ein' : 'decision-aus';
+                        zustand.textContent = e.soll_einschalten ? 'EIN' : 'AUS';
+                        const grund = document.createElement('div');
+                        grund.style.fontSize = '0.72rem';
+                        grund.style.color = 'var(--text-secondary)';
+                        grund.style.whiteSpace = 'nowrap';
+                        grund.style.overflow = 'hidden';
+                        grund.style.textOverflow = 'ellipsis';
+                        grund.textContent = e.grund || '';
+                        grund.title = e.grund || '';
+                        zeile.append(zeitB, ' ', regelB, ' ', zustand, grund);
+                        frag.appendChild(zeile);
+                    });
+                    entEl.replaceChildren(frag);
                     entEl.scrollTop = entEl.scrollHeight;
                 }
             }
@@ -2415,7 +2550,15 @@
                 if (!errEl) {
                     const row = document.createElement('div');
                     row.className = 'info-row'; row.id = 'exclusion-reason-row';
-                    row.innerHTML = '<span class="info-label">Fehler</span><span class="info-value badge badge-warning" id="exclusion-reason">' + system.exclusion_reason + '</span>';
+                    // Statisches Markup, Sperrgrund per textContent (fremder Text).
+                    const lbl = document.createElement('span');
+                    lbl.className = 'info-label';
+                    lbl.textContent = 'Fehler';
+                    const val = document.createElement('span');
+                    val.className = 'info-value badge badge-warning';
+                    val.id = 'exclusion-reason';
+                    val.textContent = system.exclusion_reason;
+                    row.append(lbl, val);
                     document.getElementById('system-update-row').after(row);
                 } else {
                     document.getElementById('exclusion-reason').textContent = system.exclusion_reason;
@@ -2501,6 +2644,8 @@
                                 <kbd>Mausrad</kbd> zoomen &middot; <kbd>Ziehen</kbd> pan &middot; <kbd>⟲</kbd> reset
                             </div>
                             <div id="history-quality" class="chart-info" aria-live="polite"></div>
+                            <div id="chart-unavailable" class="chart-info" role="status"
+                                 style="display: none; color: var(--accent-warning);"></div>
                             <div class="chart-inner">
                                 <div style="height: 300px;"><canvas id="tempChart"></canvas></div>
                             </div>
@@ -2657,6 +2802,8 @@
                         <div class="info-row"><span class="info-label">Laufzeit heute</span><span class="info-value" id="kpi-heute-laufzeit">0 min</span></div>
                         <div class="info-row"><span class="info-label">7 Tage: PV/Batterie-Anteil</span><span class="info-value" id="kpi-woche-pv">—</span></div>
                         <div class="info-row"><span class="info-label">7 Tage: Netzkosten</span><span class="info-value" id="kpi-woche-kosten">0.00 EUR</span></div>
+                        <div class="info-row"><span class="info-label">Quellen heute</span><span class="info-value" id="kpi-heute-quellen">—</span></div>
+                        <div class="info-row"><span class="info-label">Ohne PV-Nachweis</span><span class="info-value" id="kpi-heute-unklar">—</span></div>
                     </div>
 
                     <!-- Selbstlernen -->
