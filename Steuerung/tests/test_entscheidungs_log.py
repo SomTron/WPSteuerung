@@ -737,3 +737,64 @@ def test_dedupe_verhindert_kein_log_geradebeits_vollem_regelwechsel(tmp_path):
     # 300 Wechsel / MAX 20 => mindestens 10 Zustandszeilen muessen entstehen
     assert len(zeilen) >= 300 / el.MAX_PENDING_REGELWECHSEL, \
         f"Log verstummt bei Dauer-Regelwechsel: nur {len(zeilen)} Zeilen"
+
+
+# --- Schichtungs-/Setpoint-Sichtbarkeit (Log 18.09.-01.10.2026) ---------
+
+def test_log_enthaelt_mittelfuehler_und_verdampfer(tmp_path):
+    """Die Schichtungslogik entscheidet an 'mittig' - das stand nie im Log.
+
+    Im Log 18.09.-01.10.2026 nannten 103 Zeilen einen "Schichtungs-Start",
+    aber `t_mitte` war in 0 von 2950 Zeilen gesetzt. Die Regel war damit
+    aus dem Log nicht nachvollziehbar.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        assert el.schreibe_eintrag(
+            "Abweichung", "Schichtungs-Start", True, True,
+            t_unten=29.0, t_oben=46.4, t_mitte=41.2, t_verdampfer=7.5,
+        ) is True
+        with open(log_datei, encoding="utf-8") as f:
+            z = json.loads(f.readline())
+    assert z["t_mitte"] == 41.2
+    assert z["t_verdampfer"] == 7.5
+    assert z["t_unten"] == 29.0
+    assert z["t_oben"] == 46.4
+
+
+def test_log_enthaelt_die_angewandten_setpoints(tmp_path):
+    """Welche Schwellen hat die Regel tatsaechlich benutzt?"""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag("AdaptivePV", "PV 981W >= 450W -> EIN", True, True,
+                            t_unten=41.9, setpoint_ein=45.0, setpoint_aus=48.0)
+        with open(log_datei, encoding="utf-8") as f:
+            z = json.loads(f.readline())
+    assert z["setpoint_ein"] == 45.0
+    assert z["setpoint_aus"] == 48.0
+
+
+def test_neue_felder_werden_auch_bei_altem_aufruf_geschrieben(tmp_path):
+    """Rueckwaertskompatibel: ohne die neuen Parameter bleiben sie None."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag("Komfort", "AUS", False, False, t_unten=42.0)
+        with open(log_datei, encoding="utf-8") as f:
+            z = json.loads(f.readline())
+    for feld in ("t_mitte", "t_verdampfer", "setpoint_ein", "setpoint_aus"):
+        assert feld in z, f"{feld} fehlt im Eintrag"
+        assert z[feld] is None
+
+
+def test_pcl_reicht_mittelfuehler_und_setpoints_an():
+    """Vertrag: die Aufrufstelle fuettert die neuen Felder wirklich."""
+    import inspect
+    import priority_control_logic as pcl
+    quelle = inspect.getsource(pcl.determine_mode_and_setpoints)
+    assert 't_mitte=getattr(state.sensors, "t_mittig"' in quelle
+    assert 't_verdampfer=getattr(state.sensors, "t_verd"' in quelle
+    assert 'setpoint_ein=getattr(state.control, "aktueller_einschaltpunkt"' in quelle
+    assert 'setpoint_aus=getattr(state.control, "aktueller_ausschaltpunkt"' in quelle
+    # CalcStart-Nachrechnung: Prognose, erlernte Zielzeit und Kalibrierung
+    assert '"forecast_today_wh_qm": forecast_today_wh' in quelle
+    assert '"learned_target_hour": gelernte_zielzeit' in quelle

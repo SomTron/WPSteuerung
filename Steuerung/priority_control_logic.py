@@ -851,6 +851,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 soc=getattr(state.solar, "soc", None),
                 t_unten=t_unten,
                 t_oben=getattr(state.sensors, "t_oben", None),
+                t_mitte=getattr(state.sensors, "t_mittig", None),
+                t_verdampfer=getattr(state.sensors, "t_verd", None),
+                setpoint_ein=getattr(state.control, "aktueller_einschaltpunkt", None),
+                setpoint_aus=getattr(state.control, "aktueller_ausschaltpunkt", None),
                 stale_s=stale_s,
                 reason_code=getattr(gewinner, "reason_code", None) if gewinner else None,
                 ts=_now_for_state(state),
@@ -862,6 +866,15 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                     "forecast_stale": bool(getattr(state, "forecast_stale", False)),
                     "forecast_age_s": getattr(state, "forecast_age_s", None),
                     "rate_confidence": getattr(state.control, "_rate_confidence", None),
+                    # Prognose- und Zielwerte: ohne sie laesst sich die
+                    # CalcStart-Entscheidung nicht nachrechnen. Im Log
+                    # 18.09.-01.10.2026 stand "ZU SPAET! Zeitablauf
+                    # (-0.6h < 0.0h)" bei 14:50 Uhr und Ziel 17:00 - nur mit
+                    # learned_target_hour ist erkennbar, dass die erlernte
+                    # Zielzeit (nicht die konfigurierte) ueberschritten war.
+                    "forecast_today_wh_qm": forecast_today_wh,
+                    "learned_target_hour": gelernte_zielzeit,
+                    "fc_ratio": fc_ratio,
                     "start_anticipation": getattr(state.control, "_last_start_anticipation", {}),
                     # Warum blieb die WP trotz "soll_einschalten=True" aus?
                     # Ohne diese Felder war im Log vom 22.09. nicht

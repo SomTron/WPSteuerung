@@ -195,6 +195,10 @@ def schreibe_eintrag(
     soc: Optional[float] = None,
     t_unten: Optional[float] = None,
     t_oben: Optional[float] = None,
+    t_mitte: Optional[float] = None,
+    t_verdampfer: Optional[float] = None,
+    setpoint_ein: Optional[float] = None,
+    setpoint_aus: Optional[float] = None,
     stale_s: Optional[int] = None,
     reason_code: Optional[str] = None,
     diagnostics: Optional[Dict] = None,
@@ -207,6 +211,13 @@ def schreibe_eintrag(
              PV-Daten zu erkennen (Empfehlung 3.5).
 
     Rueckgabe: True, wenn geschrieben wurde; False bei unterdruecktem Duplikat.
+
+    t_mitte/t_verdampfer und die beiden Setpoints ergaenzen die bislang
+    fehlenden Sichtachsen: Die Schichtungslogik entscheidet an `mittig`
+    (im Log 18.09.-01.10.2026 in 103 Zeilen als "Schichtungs-Start"
+    genannt), ohne diesen Wert war sie aus dem Log nicht nachvollziehbar.
+    Die Setpoints zeigen, welche Schwellen die Regel tatsaechlich angewandt
+    hat - aus der 48-C-Pufferregel allein war das nicht ableitbar.
     """
     # Leerer Gewinner/Grund waere im Log nicht interpretierbar ("Dienst laeuft,
     # aber keine Regel will" vs. "Regel hat entschieden: AUS"). Deshalb wird
@@ -231,6 +242,10 @@ def schreibe_eintrag(
         "soc": round(float(soc), 1) if soc is not None else None,
         "t_unten": round(float(t_unten), 2) if t_unten is not None else None,
         "t_oben": round(float(t_oben), 2) if t_oben is not None else None,
+        "t_mitte": round(float(t_mitte), 2) if t_mitte is not None else None,
+        "t_verdampfer": round(float(t_verdampfer), 2) if t_verdampfer is not None else None,
+        "setpoint_ein": round(float(setpoint_ein), 1) if setpoint_ein is not None else None,
+        "setpoint_aus": round(float(setpoint_aus), 1) if setpoint_aus is not None else None,
         "stale_s": stale_s,
         "reason_code": reason_code,
         "diagnostics": dict(diagnostics) if isinstance(diagnostics, dict) else {},
