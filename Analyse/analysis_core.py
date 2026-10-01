@@ -15,6 +15,41 @@ from zoneinfo import ZoneInfo
 
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
 _EXCEL_EPOCH = datetime(1899, 12, 30)
+
+
+def _lade_steuerung_konstanten() -> dict[str, float]:
+    """Laedt die Schwellen aus Steuerung/constants.py ohne harte Abhaengigkeit.
+
+    Die Analyse-Werkzeuge sind bewusst standalone aufrufbar (kein sys.path-
+    Eingriff, keine Import-Kette durch die ganze Steuerung). Fuer die
+    Stromquellen-Schwelle wird die Datei deshalb direkt per Pfad geladen -
+    sonst stand die Magic Number "-50" hier DUPLIZIERT und driftete bei jeder
+    Aenderung der Schwelle gegen die KPI-Anzeige der Steuerung.
+    """
+    fallback = {"NETZKAUF_GRENZE_W": -50.0}
+    kandidaten = [
+        Path(__file__).resolve().parents[1] / "Steuerung" / "constants.py",
+        Path(__file__).resolve().parent / "constants.py",
+    ]
+    for pfad in kandidaten:
+        if not pfad.is_file():
+            continue
+        try:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("_wp_steuerung_constants", pfad)
+            if spec is None or spec.loader is None:
+                continue
+            modul = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(modul)
+            return {k: getattr(modul, k) for k in fallback if hasattr(modul, k)}
+        except Exception:  # pragma: no cover - Analyse darf nie daran scheitern
+            continue
+    return fallback
+
+
+_KONSTANTEN = _lade_steuerung_konstanten()
+NETZKAUF_GRENZE_W: float = _KONSTANTEN["NETZKAUF_GRENZE_W"]
 CURRENT_CYCLE_FIELDS = (
     "start", "ende", "dauer_min", "quelle", "source_at_start", "start_regel", "end_grund",
     "reason_code", "start_unten", "start_mittig", "start_oben", "max_unten", "max_mittig", "max_oben",
@@ -147,9 +182,16 @@ def classify_source(row: dict[str, Any]) -> tuple[str, str]:
             return "batterie", "inferred_rule"
         if start_rule in {"abweichung", "calcstart", "komfort", "notfallschutz", "legionellen", "wochenende", "mindesttemp"}:
             return "netz", "inferred_rule"
-    feedin = finite_number(row.get("feedin_w") or row.get("feedin_watt"))
+    # Achtung: kein `or`-Fallback - 0.0 ist ein realer Messwert (PV liefert
+    # nichts), wird von `or` aber als falsy behandelt und faelschlich als
+    # "fehlend" verworfen. Deshalb erst auf None/"" pruefen.
+    roh_feedin = row.get("feedin_w")
+    if roh_feedin is None or roh_feedin == "":
+        roh_feedin = row.get("feedin_watt")
+    feedin = finite_number(roh_feedin)
     if feedin is not None:
-        return ("pv" if feedin >= -50 else "netz"), "inferred_feedin"
+        # Schwelle kommt aus Steuerung/constants.py (siehe _lade_steuerung_konstanten)
+        return ("pv" if feedin >= NETZKAUF_GRENZE_W else "netz"), "inferred_feedin"
     return "unbekannt", "missing"
 
 

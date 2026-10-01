@@ -90,6 +90,26 @@ TELEGRAM_MAX_RETRIES: int = 10
 TELEGRAM_RETRY_DELAY_SEC: float = 2.0
 TELEGRAM_RATE_LIMIT_SECONDS: float = 2.0
 
+# --- Energiebilanz / Stromquellen-Klassifikation ---
+# EINE Quelle der Wahrheit fuer die Zuordnung "WP laeuft mit PV / Batterie /
+# Netz". Vorher stand -50 W zusaetzlich in entscheidungs_log.py UND
+# (dupliziert) in Analyse/analysis_core.py - bei Aenderung einer Schwelle
+# drifteten KPI-Anzeige und Offline-Analyse auseinander.
+#
+# Warum die alte Heuristik nicht mehr ausreichte: `feedin` ist die PV-Leistung,
+# nicht die Netzeinspeisung. Bei Einspeisegrenze/Regelbegrenzung liefert die
+# Anlage dauerhaft 0 W, was die alte Regel "feedin >= -50 -> pv_batterie" als
+# Solarstrom verbuchte. Folge im Log 18.09.-01.10.2026: 100 % PV-Anteil an
+# 13 von 14 Tagen, obwohl real nur ~79 % der Laufzeit PV-ueberschuss war.
+NETZKAUF_GRENZE_W: float = -50.0
+# Ab hier ist es ein echter, nutzbarer PV-Ueberschuss (nicht nur "kein
+# Netzzukauf"). Darunter entscheidet das Batterie-Feld.
+PV_UEBERSCHUSS_MIN_W: float = 100.0
+# Kennzeichnung fuer Luecken in der Messung: unterhalb dieser Leistung UND ohne
+# Batterie-Entladung laesst sich die Quelle nicht bestimmen (weder PV noch
+# Batterie). Wird als "unklar" ausgewiesen, statt faelschlich als PV.
+QUELLE_UNKLAR_MAX_W: float = 0.0
+
 # --- Safety ---
 SOLAR_ERROR_MIN_PAUSE_MIN: int = 30
 

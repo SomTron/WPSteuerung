@@ -802,6 +802,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                     ))
                 except (TypeError, ValueError):
                     stale_s = None
+            # Kein Gewinner heisst: keine Regel fordert Heizbetrieb. Der Idle-
+            # Fall (Name "Idle" + Zustandsbegruendung) wird zentral in
+            # entscheidungs_log.schreibe_eintrag erzeugt - dort steht auch die
+            # Formatierung der Messwerte, hier bleibt der Aufruf schlicht.
             entscheidungs_log.schreibe_eintrag(
                 gewinner_name=gewinner.name if gewinner else None,
                 gewinner_grund=gewinner.grund if gewinner else "",

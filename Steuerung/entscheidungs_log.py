@@ -11,14 +11,28 @@ Daraus leitet sich ab:
 - Tages-/Wochen-KPIs: WP-Energie und Anteil PV/Batterie vs. Netz
 
 Schreibstrategie (gegen Spam bei identischen Zyklen):
-- geschrieben wird nur bei AENDERUNG der Entscheidung (gewinner /
-  soll_einschalten / kompressor_laeuft) oder als Herzschlag alle
-  HEARTBEAT_SEKUNDEN, solange die WP laeuft (fuer exakte Energiebilanz).
+- geschrieben wird bei AENDERUNG der HANDLUNG (soll_einschalten /
+  kompressor_laeuft) oder als Herzschlag: alle HEARTBEAT_SEKUNDEN, solange
+  die WP laeuft (fuer exakte Energiebilanz), bzw. alle
+  HEARTBEAT_STILLSTAND_SEKUNDEN im Stillstand (Lebenszeichen).
+- Ein blosser Wechsel der GEWINNER-Regel bei unveraenderter Handlung ist
+  KEIN eigener Eintrag mehr, sondern wird als pending-Regelwechsel gesammelt
+  und der naechsten Zeile in diagnostics.bei_laueufigem_regelwechsel
+  beigefuegt. Im Log 18.09.-01.10.2026 waren das 209 von 2.950 Zeilen (7,1 %)
+  reines Rauschen (Median-Abstand 119 s, Minimum 10 s).
 - Im Webapp erscheinen dadurch echte Umschaltzeitpunkte statt Wiederholungen.
 
-Klassifikation der Stromquelle (vereinfacht, dokumentiert):
-- feedin >= NETZKAUF_GRENZE_W  -> "pv_batterie" (kein nennenswerter Netzkauf)
-- feedin <  NETZKAUF_GRENZE_W  -> "netz"
+Lebenszeichen im Stillstand: ohne Eintrag ist ein langer Stillstand von einem
+abgestuerzten Dienst nicht unterscheidbar - im Log 18.09.-01.10.2026 standen
+12,9 h ohne Zeile, deren Vorzeile noch "kompressor_laeuft: true" behauptete.
+
+Klassifikation der Stromquelle (dreistufig, Schwellen in constants.py):
+- "pv"        -> feedin >= PV_UEBERSCHUSS_MIN_W  (echter nutzbarer Ueberschuss)
+- "batterie"  -> kein Ueberschuss, aber batpower < 0 (Batterie speist)
+- "netz"      -> feedin < NETZKAUF_GRENZE_W      (Haus kauft Netzstrom)
+- "unklar"    -> weder PV noch Batterie nachweisbar (z. B. 0 W ohne
+                 Batterie-Entladung). Wird NICHT als PV verbucht, sondern
+                 separat ausgewiesen.
 """
 import json
 import logging
@@ -28,14 +42,27 @@ from typing import Dict, List, Optional
 
 import pytz
 
-from constants import DEFAULT_TIMEZONE
+from constants import (
+    DEFAULT_TIMEZONE,
+    NETZKAUF_GRENZE_W,
+    PV_UEBERSCHUSS_MIN_W,
+    QUELLE_UNKLAR_MAX_W,
+)
 
 LOG_DATEI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entscheidungs_log.jsonl")
-MAX_BYTES = 2_000_000          # Rotation bei ~2 MB -> .old
+MAX_BYTES = 2_000_000          # Rotation bei ~2 MB -> naechste Generation
+MAX_GENERATIONEN = 7           # .old.1 ... .old.7, ~4 Monate Historie
 MAX_EINTRAEGE_LESEN = 5000
-NETZKAUF_GRENZE_W = -50.0      # darunter gilt: Haus kauft Netzstrom
 HEARTBEAT_SEKUNDEN = 75.0      # Zwangsschreibintervall laufender WP (< dt-Cap 120 s)
+HEARTBEAT_STILLSTAND_SEKUNDEN = 1_800.0  # Lebenszeichen bei Stillstand (30 min)
 LOG_TIMEZONE = pytz.timezone(DEFAULT_TIMEZONE)
+IDLE_GEWINNER = "Idle"         # keine Regel fordert Heizbetrieb
+
+# Quellnamen der Energiebilanz
+QUELLE_PV = "pv"
+QUELLE_BATTERIE = "batterie"
+QUELLE_NETZ = "netz"
+QUELLE_UNKLAR = "unklar"
 
 
 def _parse_log_datetime(raw) -> Optional[datetime]:
@@ -54,10 +81,25 @@ def _parse_log_datetime(raw) -> Optional[datetime]:
 def _log_now() -> datetime:
     return datetime.now(LOG_TIMEZONE)
 
+
+def _zahl(wert) -> str:
+    """Formatiert einen Messwert fuer den Grundtext (ohne 'None')."""
+    if wert is None:
+        return "-"
+    try:
+        return f"{float(wert):g}"
+    except (TypeError, ValueError):
+        return "-"
+
 # Cache der zuletzt geschriebenen Zeile (pfad-gebunden, damit Tests mit
 # umgeleitetem LOG_DATEI nicht gegenseitig stoeren).
 _cache_pfad: Optional[str] = None
 _cache_zeile: Optional[Dict] = None
+# Gesammelte Gewinner-Wechsel OHNE Handlungsaenderung, bis zur naechsten
+# geschriebenen Zeile (pfad-gebunden wie der Cache darueber).
+_pending_pfad: Optional[str] = None
+_pending_regelwechsel: List[Dict] = []
+MAX_PENDING_REGELWECHSEL = 20  # verhindert unbegrenztes Wachstum im Stillstand
 
 
 def _letzte_logzeile() -> Optional[Dict]:
@@ -82,26 +124,63 @@ def _letzte_logzeile() -> Optional[Dict]:
         return None
 
 
+def klassifiziere_quelle(feedin_w, batpower_w) -> str:
+    """Ordnet einer laufenden WP die Stromquelle zu.
+
+    Rueckwaertskompatibel zur Zweiteilung, aber ehrlicher: die alte Regel
+    ("feedin >= -50 -> pv_batterie") verbuchte auch 0 W ohne Batterie-Entladung
+    als Solarstrom und lieferte dadurch 100 % PV-Anteil an 13 von 14 Tagen.
+    Jetzt wird die vierte Stufe "unklar" ausgewiesen, statt sie als PV zu
+    verbuchen. Alt-Datensaetze ohne Batterie-Feld werden nachgerechnet:
+    batpower=None verhaelt sich wie 0 (kein Entladungsnachweis).
+    """
+    if feedin_w is None:
+        return QUELLE_UNKLAR
+    if feedin_w >= PV_UEBERSCHUSS_MIN_W:
+        return QUELLE_PV
+    if feedin_w < NETZKAUF_GRENZE_W:
+        return QUELLE_NETZ
+    # Zwischen Netzkaufgrenze und echtem Ueberschuss: nur die Batterie
+    # entscheidet, ob Solarstrom im Spiel war.
+    if batpower_w is not None and batpower_w < 0:
+        return QUELLE_BATTERIE
+    if feedin_w <= QUELLE_UNKLAR_MAX_W:
+        return QUELLE_UNKLAR
+    return QUELLE_BATTERIE
+
+
 def _soll_schreiben(vorher: Optional[Dict], eintrag: Dict) -> bool:
-    """True bei Entscheidungsaenderung oder Herzschlag laufender WP."""
+    """True bei Handlungsaenderung oder Herzschlag.
+
+    Ein blosser Wechsel der Gewinner-Regel bei UNVERAENDERTER Handlung
+    erzeugt keinen eigenen Eintrag mehr (Log-Rauschen, siehe Modul-Docstring).
+    Der Aufrufer sammelt solche Wechsel in `_pending_regelwechsel` und haengt
+    sie der naechsten geschriebenen Zeile an.
+    """
     if vorher is None:
         return True
-    identisch = (
-        vorher.get("gewinner") == eintrag.get("gewinner")
-        and vorher.get("soll_einschalten") == eintrag.get("soll_einschalten")
+    handlung_unveraendert = (
+        vorher.get("soll_einschalten") == eintrag.get("soll_einschalten")
         and vorher.get("kompressor_laeuft") == eintrag.get("kompressor_laeuft")
     )
-    if not identisch:
+    gewinner_unveraendert = vorher.get("gewinner") == eintrag.get("gewinner")
+    if not handlung_unveraendert:
         return True
-    if not eintrag.get("kompressor_laeuft"):
-        return False  # Stillstand: identische Zyklen nicht weiterschreiben
+    if not gewinner_unveraendert:
+        return False  # nur Regel-Wechsel -> an naechste Zeile haengen
+    # Zustand stabil: nur nach Herzschlag-Intervall erneut schreiben.
+    grenze = (
+        HEARTBEAT_SEKUNDEN
+        if eintrag.get("kompressor_laeuft")
+        else HEARTBEAT_STILLSTAND_SEKUNDEN
+    )
     try:
         aktuell = _parse_log_datetime(eintrag.get("ts"))
         vorher_ts = _parse_log_datetime(vorher.get("ts"))
         if aktuell is None or vorher_ts is None:
             return True
         dt = (aktuell - vorher_ts).total_seconds()
-        return dt >= HEARTBEAT_SEKUNDEN
+        return dt >= grenze
     except (TypeError, ValueError):
         return True  # im Zweifel lieber schreiben als Zustand verlieren
 
@@ -129,10 +208,22 @@ def schreibe_eintrag(
 
     Rueckgabe: True, wenn geschrieben wurde; False bei unterdruecktem Duplikat.
     """
+    # Leerer Gewinner/Grund waere im Log nicht interpretierbar ("Dienst laeuft,
+    # aber keine Regel will" vs. "Regel hat entschieden: AUS"). Deshalb wird
+    # der Idle-Zustand explizit benannt - im Log 18.09.-01.10.2026 gab es 63
+    # solche Zeilen, davon 39 bei laufender WP.
+    if not gewinner_name:
+        gewinner_name = IDLE_GEWINNER
+    if not gewinner_grund:
+        gewinner_grund = (
+            "keine Regel fordert Heizbetrieb "
+            f"(unten {_zahl(t_unten)}C, oben {_zahl(t_oben)}C, "
+            f"PV {_zahl(feedin_watt)}W, SOC {_zahl(soc)}%)"
+        )
     eintrag = {
         "ts": (ts or _log_now()).isoformat(timespec="seconds"),
-        "gewinner": gewinner_name or "",
-        "grund": (gewinner_grund or "")[:200],
+        "gewinner": gewinner_name,
+        "grund": gewinner_grund[:200],
         "soll_einschalten": bool(soll_einschalten),
         "kompressor_laeuft": bool(kompressor_laeuft),
         "feedin_w": round(float(feedin_watt), 1) if feedin_watt is not None else None,
@@ -145,17 +236,39 @@ def schreibe_eintrag(
         "diagnostics": dict(diagnostics) if isinstance(diagnostics, dict) else {},
     }
     try:
-        global _cache_pfad, _cache_zeile
+        global _cache_pfad, _cache_zeile, _pending_pfad, _pending_regelwechsel
+        if _pending_pfad != LOG_DATEI:
+            _pending_pfad = LOG_DATEI
+            _pending_regelwechsel = []
         vorher = _letzte_logzeile()
-        if not _soll_schreiben(vorher, eintrag):
+        # Ist die Liste voller Regelwechsel ohne Handlungsaenderung, wird der
+        # aktuelle Zustand erzwungen geschrieben. Sonst koennte das Log bei
+        # dauerhaft alternierenden Regeln (z. B. PV-Schaping gegen Komfort)
+        # vollstaendig verstummen - im Log 18.09.-01.10.2026 gab es 57 schnelle
+        # Gegenwechsel, also genau diese Konstellation.
+        erzwungen = len(_pending_regelwechsel) >= MAX_PENDING_REGELWECHSEL
+        if not erzwungen and not _soll_schreiben(vorher, eintrag):
+            # Regel-Wechsel ohne Handlungsaenderung: nicht als eigene Zeile
+            # schreiben, sondern fuer die naechste Zeile vormerken.
+            if vorher is not None and vorher.get("gewinner") != eintrag["gewinner"]:
+                _pending_regelwechsel.append({
+                    "ts": eintrag["ts"],
+                    "von": vorher.get("gewinner") or IDLE_GEWINNER,
+                    "nach": eintrag["gewinner"],
+                })
+                del _pending_regelwechsel[:-MAX_PENDING_REGELWECHSEL]
+                # Der Cache muss den neuen Gewinner fuehren, sonst wiederholt
+                # sich derselbe Wechsel bei jedem Takt.
+                if _cache_pfad == LOG_DATEI and _cache_zeile is not None:
+                    _cache_zeile = dict(_cache_zeile, gewinner=eintrag["gewinner"])
             return False
+        # Gesammelte Regelwechsel an diese Zeile haengen.
+        if _pending_regelwechsel:
+            eintrag["diagnostics"]["bei_laueufigem_regelwechsel"] = list(_pending_regelwechsel)
+            _pending_regelwechsel = []
         if os.path.exists(LOG_DATEI) and os.path.getsize(LOG_DATEI) > MAX_BYTES:
-            alt = LOG_DATEI + ".old"
-            if os.path.exists(alt):
-                os.remove(alt)
-            os.replace(LOG_DATEI, alt)
+            _rotiere()
             _cache_zeile = None
-            logging.info("Entscheidungslog rotiert auf .old")
         with open(LOG_DATEI, "a", encoding="utf-8") as f:
             f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
         _cache_pfad = LOG_DATEI
@@ -167,12 +280,52 @@ def schreibe_eintrag(
         return False
 
 
+def _rotiere() -> None:
+    """Schiebt das Log eine Generation weiter: .old.N-1 -> .old.N.
+
+    Vorher gab es nur EINE Generation (.old), die bei jeder Rotation ueberschrieben
+    wurde: bei ~227 Zeilen/Tag und 2 MB war das Historie von maximal ~16 Tagen -
+    zu wenig fuer Saison- und Wettervergleiche. MAX_GENERATIONEN aelterer
+    Dateien ergeben stattdessen rund vier Monate.
+    """
+    try:
+        generationen = max(int(MAX_GENERATIONEN), 1)
+        # aelteste Generation faellt raus
+        veraltet = f"{LOG_DATEI}.old.{generationen}"
+        if os.path.exists(veraltet):
+            os.remove(veraltet)
+        for n in range(generationen - 1, 0, -1):
+            quelle = f"{LOG_DATEI}.old.{n}"
+            if os.path.exists(quelle):
+                os.replace(quelle, f"{LOG_DATEI}.old.{n + 1}")
+        if os.path.exists(LOG_DATEI):
+            os.replace(LOG_DATEI, f"{LOG_DATEI}.old.1")
+        logging.info(f"Entscheidungslog rotiert auf .old.1 (max {generationen} Generationen)")
+    except OSError as e:
+        logging.debug(f"Entscheidungslog-Rotation nicht moeglich: {e}")
+
+
+def _alle_logpfade() -> List[str]:
+    """Alle Loggenerationen, aelteste zuerst (fuer _lies_zeilen)."""
+    pfade: List[str] = []
+    for n in range(MAX_GENERATIONEN, 0, -1):
+        pfade.append(f"{LOG_DATEI}.old.{n}")
+    pfade.append(LOG_DATEI)
+    return pfade
+
+
 def _lies_zeilen() -> List[Dict]:
-    """Liest aktuelles + rotiertes Log, aelteste zuerst."""
-    zeilen: List[Dict] = []
-    for pfad in (LOG_DATEI + ".old", LOG_DATEI):
+    """Liest alle Log-Generationen, aelteste zuerst.
+
+    Liest die Generationen von der JUENGSTEN zur aeltesten und bricht ab,
+    sobald MAX_EINTRAEGE_LESEN Eintraege zusammen sind. Bei 7 Generationen
+    x 2 MB waere ein vollstaendiges Einlesen auf dem Pi unnoetig teuer.
+    """
+    bloecke: List[List[Dict]] = []
+    for pfad in reversed(_alle_logpfade()):  # juengste Datei zuerst
         if not os.path.exists(pfad):
             continue
+        zeilen: List[Dict] = []
         try:
             with open(pfad, encoding="utf-8") as f:
                 for z in f:
@@ -185,7 +338,16 @@ def _lies_zeilen() -> List[Dict]:
                         continue  # abgebrochene letzte Zeile tolerieren
         except OSError as e:
             logging.debug(f"Entscheidungslog nicht lesbar ({pfad}): {e}")
-    return zeilen[-MAX_EINTRAEGE_LESEN:]
+            continue
+        if zeilen:
+            # Die Datei wird von vorn gelesen, enthaelt also bereits
+            # aelteres zuerst - die Reihenfolge bleibt unveraendert.
+            bloecke.append(zeilen)
+        if sum(len(b) for b in bloecke) >= MAX_EINTRAEGE_LESEN:
+            break
+    # Bloecke liegen juengste Datei zuerst -> fuer die Ausgabe umkehren.
+    zeilen_gesamt = [z for b in reversed(bloecke) for z in b]
+    return zeilen_gesamt[-MAX_EINTRAEGE_LESEN:]
 
 
 def historie(stunden: float = 24, limit: int = 100) -> List[Dict]:
@@ -210,11 +372,19 @@ def _aggregiere(eintraege: List[Dict], wp_leistung_watt: float,
     waehrend des gesamten Intervalls galt - wichtig bei aenderungsbasiertem
     Schreiben, damit der WP-Start keine Phantom-Minuten aus der Stillstandsluecke
     erzeugt.
+
+    Quellen (siehe klassifiziere_quelle): "pv", "batterie", "netz", "unklar".
+    Der Solaranteil wird ueber die GESAMTE Laufzeit berechnet: Laufzeit ohne
+    PV- und ohne Batterie-Nachweis ("unklar") senkt ihn, statt als Solarstrom
+    durchgewunken zu werden. Sonst stuende weiterhin jeden Tag "100 %"
+    (historisch 13 von 14 Tage), obwohl real nur ~77 % Solarstrom waren.
     """
-    laufzeit_s = {"pv_batterie": 0.0, "netz": 0.0}
+    laufzeit_s = {QUELLE_PV: 0.0, QUELLE_BATTERIE: 0.0,
+                  QUELLE_NETZ: 0.0, QUELLE_UNKLAR: 0.0}
     vorher_ts: Optional[datetime] = None
     vorher_laeuft = False
     vorher_feedin: Optional[float] = None
+    vorher_batpower: Optional[float] = None
     for e in eintraege:
         ts = _parse_log_datetime(e.get("ts"))
         if ts is None:
@@ -224,25 +394,41 @@ def _aggregiere(eintraege: List[Dict], wp_leistung_watt: float,
         dt_s = 0.0
         if vorher_ts is not None:
             dt_s = min(max((ts - vorher_ts).total_seconds(), 0.0), 120.0)
-        if vorher_ts is not None and vorher_laeuft:
-            quelle = ("netz" if vorher_feedin is not None
-                      and vorher_feedin < NETZKAUF_GRENZE_W else "pv_batterie")
-            laufzeit_s[quelle] += dt_s
+        if vorher_ts is not None and vorher_laeuft and dt_s > 0:
+            laufzeit_s[klassifiziere_quelle(vorher_feedin, vorher_batpower)] += dt_s
         vorher_ts = ts
         vorher_laeuft = bool(e.get("kompressor_laeuft"))
         vorher_feedin = e.get("feedin_w")
+        vorher_batpower = e.get("batpower_w")
 
     gesamt_min = sum(laufzeit_s.values()) / 60.0
-    energie_kwh = {q: s / 3600.0 * wp_leistung_watt / 1000.0 for q, s in laufzeit_s.items()}
-    netz_kwh = energie_kwh["netz"]
-    pvb_kwh = energie_kwh["pv_batterie"]
-    gesamt_kwh = pvb_kwh + netz_kwh
-    anteil_pv = round(100.0 * pvb_kwh / gesamt_kwh, 1) if gesamt_kwh > 0 else None
+    energie_kwh = {q: s / 3600.0 * wp_leistung_watt / 1000.0
+                   for q, s in laufzeit_s.items()}
+    netz_kwh = energie_kwh[QUELLE_NETZ]
+    pv_kwh = energie_kwh[QUELLE_PV]
+    batterie_kwh = energie_kwh[QUELLE_BATTERIE]
+    unklar_kwh = energie_kwh[QUELLE_UNKLAR]
+    solar_kwh = pv_kwh + batterie_kwh
+    gesamt_kwh = solar_kwh + netz_kwh + unklar_kwh
+    unklar_min = laufzeit_s[QUELLE_UNKLAR] / 60.0
     return {
         "laufzeit_min": round(gesamt_min, 1),
         "energie_kwh": round(gesamt_kwh, 2),
-        "anteil_pv_batterie_prozent": anteil_pv,
+        # Der Nenner ist die GESAMTE Laufzeit - auch die unklaren Anteile.
+        # Wuerde man sie herausrechnen, stuende bei jedem Tag "100 % PV" und
+        # genau die Luecke verdeckt, die man aufdecken wollte (real ~77 %
+        # Solar plus ~23 % ohne Nachweis statt pauschal 100 %).
+        "anteil_pv_batterie_prozent": (
+            round(100.0 * solar_kwh / gesamt_kwh, 1) if gesamt_kwh > 0 else None
+        ),
+        "pv_kwh": round(pv_kwh, 2),
+        "batterie_kwh": round(batterie_kwh, 2),
         "netz_kwh": round(netz_kwh, 2),
+        "unklar_kwh": round(unklar_kwh, 2),
+        "unklar_laufzeit_min": round(unklar_min, 1),
+        "anteil_unklar_prozent": (
+            round(100.0 * unklar_kwh / gesamt_kwh, 1) if gesamt_kwh > 0 else None
+        ),
         "kosten_netz_eur": round(netz_kwh * strompreis_eur_kwh, 2),
     }
 

@@ -21,7 +21,9 @@ absturz_historie.json
 logs/wp_diag_*/
 # Exportierte Betriebsdaten (CSV/Log aus dem realen Betrieb).
 # Sie gehoeren nicht ins Repository - sehr gross und personenbezogen.
-logs/24.9/
+# Muster deckt alle Versionsordner (logs/24.9/, logs/1.10.26/, ...);
+# der Punkt im Muster verhindert Treffer auf lose Dateien wie logs/941fgu.
+logs/[0-9]*.*/
 logs/entscheidungs_log_*.txt
 logs/heizungssteuerung*.log
 logs/*_upload*.txt
@@ -75,3 +77,7 @@ Steuerung/entscheidungs_log.jsonl.old
 
 # Lokale Backups fremder Aenderungen
 _fremde_aenderungen_backup/
+
+# Wegwerf-Debugskripte (Einmal-Analyse im Projektordner). Sie brechen den
+# CI-Lint (ruff prueft "Steuerung" komplett) und gehoeren nicht ins Repo.
+Steuerung/_demo*.py
