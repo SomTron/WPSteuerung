@@ -1,8 +1,17 @@
 """Einheitliche Klassifikation der aktuellen WP-Energiequelle.
 
-Die Regel-Engine verwendet ausschließlich positive Entladeleistung als
-Batterie-Signal und verlangt für PV/Batterie, dass gleichzeitig kein relevanter
-Netzbezug gemessen wird.
+VORZEICHEN-KONVENTION ``batPower`` (am 02.10.2026 gegen echte Messreihen
+geprueft, siehe tests/test_energy_source.py):
+    batPower > 0  -> die Batterie LAEDT (nimmt Solarueberschuss auf)
+    batPower < 0  -> die Batterie SPEIST (entlaedt sich)
+Beleg: In 11.078 Live-Logzeilen und 254.305 CSV-Zeilen liegt der Median
+waehrend steigender SOC bei +1180 W bis +1335 W, waehrend fallender SOC
+bei -330 W bis -355 W. Der frueher dokumentierte "Vertrag"
+("+ = Entladung") war invertiert und ist korrigiert.
+
+Die Regel-Engine verwendet ausschliesslich positive Entladeleistung als
+Batterie-Signal und verlangt fuer PV/Batterie, dass gleichzeitig kein
+relevanter Netzbezug gemessen wird.
 """
 from __future__ import annotations
 
@@ -46,26 +55,29 @@ def _finite(value: object) -> Optional[float]:
 
 
 def batterie_entladung_watt(raw_batpower: object) -> Optional[float]:
-    """Normalisiert Solax ``batPower`` zu positiver Entladeleistung.
+    """Normalisiert Solax ``batPower`` zu positiver ENTLADEleistung.
 
-    Vertrag des Projekts: ``batPower > 0`` = Entladung, ``batPower < 0`` =
-    Ladung. Der unveränderte Rohwert bleibt für Diagnose erhalten.
+    ``batPower < 0`` = Entladung, daher wird das Vorzeichen gedreht. Der
+    Rohwert bleibt fuer Diagnose unveraendert erhalten.
     """
     value = _finite(raw_batpower)
-    return None if value is None else max(0.0, value)
+    return None if value is None else max(0.0, -value)
 
 
 def batterie_ladung_watt(raw_batpower: object) -> Optional[float]:
-    """Normalisiert negative Solax-Ladeleistung zu einem positiven Betrag."""
+    """Normalisiert Solax ``batPower`` zu positiver LADEleistung.
+
+    ``batPower > 0`` = Ladung (Solarueberschuss wandert in die Batterie).
+    """
     value = _finite(raw_batpower)
-    return None if value is None else max(0.0, -value)
+    return None if value is None else max(0.0, value)
 
 
 def classify_energy_source(
     *,
     pv_acpower: object,
     feedin_watt: object,
-    battery_discharge_watt: object,
+    batpower_raw: object,
     soc: object,
     solar_stale: bool = False,
     pv_min_watt: float = 50.0,
@@ -75,13 +87,22 @@ def classify_energy_source(
 ) -> EnergiequellenStatus:
     """Klassifiziert PV > Batterie > Netz anhand aktueller und valider Werte.
 
+    ``batpower_raw`` ist der UNVERAENDERTE, vorzeichenbehaftete Solax-Rohwert
+    (``+`` = Ladung, ``-`` = Entladung). Er wird hier genau einmal auf die
+    Entladeleistung normalisiert.
+
+    Wichtig: Der Parameter darf KEIN bereits normalisiertes
+    ``state.solar.battery_discharge_watt`` entgegennehmen - das war vorher
+    moeglich und normalisierte ein zweites Mal, wodurch sich Vorzeichen und
+    Betrag gegenseitig aufhoben und jede Entladung als 0 W gemeldet wurde.
+
     Für direkte Rule-Unit-Tests bleibt ``feedin_watt`` als PV-Signal-Fallback
     erhalten, wenn kein separates ``pv_acpower`` angegeben wurde. Produktiv
     liefert ``determine_mode_and_setpoints`` beide Messungen aus dem State.
     """
     pv = _finite(pv_acpower)
     feedin = _finite(feedin_watt)
-    discharge = batterie_entladung_watt(battery_discharge_watt)
+    discharge = batterie_entladung_watt(batpower_raw)
     soc_value = _finite(soc)
     pv_threshold = max(0.0, float(pv_min_watt))
     battery_threshold = max(0.0, float(battery_min_watt))

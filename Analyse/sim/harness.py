@@ -509,8 +509,9 @@ class Simulation:
         solar = self.state.solar
         solar.acpower = round(pv_w, 1)
         solar.feedinpower = round(einspeisung_w, 1)
-        # Solax-Konvention: batpower > 0 = Entladung, < 0 = Ladung
-        solar.batpower = round(entladung_w - ladung_w, 1)
+        # Solax-Konvention: batpower > 0 = Ladung, < 0 = Entladung
+        # (gegen echte Messreihen geprueft, siehe Steuerung/energy_source.py)
+        solar.batpower = round(ladung_w - entladung_w, 1)
         solar.battery_discharge_watt = round(entladung_w, 1)
         solar.battery_charge_watt = round(ladung_w, 1)
         solar.soc = round(self.batterie.soc, 1) if self.batterie else None

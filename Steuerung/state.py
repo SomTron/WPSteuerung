@@ -22,7 +22,9 @@ class SolarState:
     def __init__(self):
         self.acpower: Optional[float] = None
         self.feedinpower: Optional[float] = None
-        self.batpower: Optional[float] = None  # Solax-Rohwert: + Entladung, - Ladung
+        # Solax-Rohwert: + Ladung, - Entladung (gegen Messreihen geprueft,
+        # siehe energy_source.py Modul-Docstring)
+        self.batpower: Optional[float] = None
         self.battery_discharge_watt: Optional[float] = None
         self.battery_charge_watt: Optional[float] = None
         self.energy_source: str = "Netz"

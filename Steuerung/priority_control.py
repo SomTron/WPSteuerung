@@ -1238,7 +1238,7 @@ def _energiequelle_ok(
     return classify_energy_source(
         pv_acpower=pv_acpower,
         feedin_watt=feedin_watt,
-        battery_discharge_watt=battery_power,
+        batpower_raw=battery_power,
         soc=soc,
         solar_stale=solar_stale,
         pv_min_watt=pv_min_watt,
@@ -1264,7 +1264,7 @@ def _energiequelle_mit_grund(
     status = classify_energy_source(
         pv_acpower=pv_acpower,
         feedin_watt=feedin_watt,
-        battery_discharge_watt=battery_power,
+        batpower_raw=battery_power,
         soc=soc,
         solar_stale=solar_stale,
         pv_min_watt=pv_min_watt,
@@ -1974,7 +1974,7 @@ def _legionellen_quelle_status(cfg, pv_leistung, battery_power, soc, solar_stale
     status = classify_energy_source(
         pv_acpower=pv_acpower,
         feedin_watt=pv_leistung,
-        battery_discharge_watt=battery_power,
+        batpower_raw=battery_power,
         soc=soc,
         solar_stale=solar_stale,
         pv_min_watt=float(getattr(cfg, "pv_start_min_watt", 500.0)),

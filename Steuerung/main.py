@@ -634,7 +634,9 @@ async def update_system_data(session, state, refresh_solar: bool = True):
     source_status = classify_energy_source(
         pv_acpower=state.solar.acpower,
         feedin_watt=state.solar.feedinpower,
-        battery_discharge_watt=state.solar.battery_discharge_watt,
+        # Rohwert, nicht das bereits normalisierte battery_discharge_watt -
+        # sonst wuerde die Entladung ein zweites Mal normalisiert.
+        batpower_raw=state.solar.batpower,
         soc=state.solar.soc,
         solar_stale=not frisch,
         pv_min_watt=float(getattr(cfg, "pv_einspeisung_min_watt", 50.0)),
@@ -1305,24 +1307,25 @@ def build_heizungsdaten_zeile(state):
         source_status = classify_energy_source(
             pv_acpower=getattr(state.solar, "acpower", None),
             feedin_watt=getattr(state.solar, "feedinpower", None),
-            battery_discharge_watt=(
-                getattr(state.solar, "battery_discharge_watt", None)
-                if getattr(state.solar, "battery_discharge_watt", None) is not None
-                else batterie_entladung_watt(getattr(state.solar, "batpower", None))
-            ),
+            # Rohwert uebergeben: classify_energy_source normalisiert genau
+            # einmal. Der bereits normalisierte battery_discharge_watt wurde
+            # hier frueher ein zweites Mal normalisiert und hob das
+            # Vorzeichen dadurch auf.
+            batpower_raw=getattr(state.solar, "batpower", None),
             soc=getattr(state.solar, "soc", None),
             solar_stale=bool(getattr(state, "solar_stale", False)),
         )
         power_source = source_status.quelle.value
-        # Rückwärtskompatibilität für historische/teilweise befüllte States:
-        # Die Produktionsklassifikation verlangt für Batterie zusätzlich SOC.
-        # Im Diagnose-CSV darf ein eindeutig positives BatPower-Signal bei
+        # Rueckwaertskompatibilitaet fuer historische/teilweise befuellte States:
+        # Die Produktionsklassifikation verlangt fuer Batterie zusaetzlich SOC.
+        # Im Diagnose-CSV darf ein eindeutig negatives BatPower-Signal bei
         # fehlendem SOC dennoch als historische Batteriequelle markiert werden.
+        # Vorzeichen: negativ = Entladung (siehe energy_source.py).
         if (
             power_source == "Netz"
             and not bool(getattr(state, "solar_stale", False))
             and batterie_entladung_watt(getattr(state.solar, "batpower", None)) is not None
-            and float(getattr(state.solar, "batpower", 0.0)) >= 50.0
+            and float(getattr(state.solar, "batpower", 0.0)) <= -50.0
             and getattr(state.solar, "feedinpower", None) is not None
             and float(state.solar.feedinpower) >= -50.0
         ):

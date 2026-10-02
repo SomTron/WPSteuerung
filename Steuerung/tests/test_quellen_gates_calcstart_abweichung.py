@@ -112,7 +112,7 @@ class TestCalcStartQuellenGate:
     def test_batterie_als_fruehquelle(self):
         erg = evaluate_calculated_start(
             _calc_cfg(netz_fallback_erlaubt=True), _temps(), 16, 0,
-            feedin_watt=-20.0, soc=92.0, battery_power=100.0,
+            feedin_watt=-20.0, soc=92.0, battery_power=-100.0,
         )
         assert erg.einschalten is True
         assert "[Batterie" in erg.grund
@@ -299,7 +299,7 @@ class TestAbweichungQuellenGate:
         erg = evaluate_abweichung(
             _abw_cfg(), {"oben": 35.0, "mittig": 34.0, "unten": 33.0},
             False, 12, 19, 8, feedin_watt=-20.0, soc=90.0,
-            battery_power=100.0,
+            battery_power=-100.0,
         )
         assert erg.einschalten is True
 

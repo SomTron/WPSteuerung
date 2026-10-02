@@ -238,13 +238,13 @@ def test_legionellen_verpasster_tag_wird_zurueckgestellt_variante_c():
     assert "mit PV" in mit_pv.grund
 
     mit_batterie = evaluate_legionellen(
-        cfg, temps, now, pv_leistung=0.0, battery_power=50.0, soc=90.0
+        cfg, temps, now, pv_leistung=0.0, battery_power=-50.0, soc=90.0
     )
     assert mit_batterie.einschalten is True
     assert "mit Batterie" in mit_batterie.grund
 
     zu_wenig_soc = evaluate_legionellen(
-        cfg, temps, now, battery_power=50.0, soc=89.9
+        cfg, temps, now, battery_power=-50.0, soc=89.9
     )
     assert zu_wenig_soc.einschalten is None
 

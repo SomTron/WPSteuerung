@@ -100,7 +100,7 @@ class TestZeilenSemantik:
         assert build_heizungsdaten_zeile(state)[18] == "Solar"
 
         state.solar.feedinpower = 0
-        state.solar.batpower = 3000
+        state.solar.batpower = -3000  # negativ = Entladung (energy_source.py)
         assert build_heizungsdaten_zeile(state)[18] == "Batterie"
 
     def test_power_source_stale_ist_unbekannt(self):

@@ -29,7 +29,9 @@ def baue_config(calcstart_aus=True):
     return config
 
 
-def bewerte(temp_dict, soc, feedin, kompressor_ein=False, now_hour=12, config=None, battery_power=1000.0):
+# battery_power ist der Solax-Rohwert: negativ = Entladung, positiv = Ladung
+# (siehe energy_source.py). Der Default beschreibt eine SPEISENDE Batterie.
+def bewerte(temp_dict, soc, feedin, kompressor_ein=False, now_hour=12, config=None, battery_power=-1000.0):
     config = config or baue_config()
     return pc.evaluate_batterie(
         config.batterie, temp_dict, feedin, soc, kompressor_ein,
@@ -109,7 +111,7 @@ def test_integration_batterie_gewinnt_wenn_pv_schwelle_nicht_erreicht():
         config=config, temp_dict=temp, pv_leistung=200.0, kompressor_ein=False,
         now=datetime(2026, 1, 15, 12, 0),
         forecast_wh_qm=2500.0, forecast_today_wh_qm=2800.0,
-        soc=95.0, battery_power=1500.0,
+        soc=95.0, battery_power=-1500.0,
     )
     namen = {e.name for e in alle}
     assert "Batterie" in namen
@@ -131,7 +133,7 @@ def test_integration_forecast_vorhanden_adaptive_gewinnt():
     gewinner, alle = pc.bewerte_alle_regeln(
         config=config, temp_dict=temp, pv_leistung=1000.0, kompressor_ein=False,
         now=datetime(2026, 1, 15, 12, 0),
-        forecast_wh_qm=2500.0, soc=95.0, battery_power=1500.0,
+        forecast_wh_qm=2500.0, soc=95.0, battery_power=-1500.0,
     )
     assert gewinner.name == "AdaptivePV"
     assert gewinner.einschalten is True
@@ -153,7 +155,7 @@ def test_integration_ohne_forecast_pv_regel_als_backup():
     gewinner, alle = pc.bewerte_alle_regeln(
         config=config, temp_dict=temp, pv_leistung=1000.0, kompressor_ein=False,
         now=datetime(2026, 1, 15, 12, 0),
-        forecast_wh_qm=None, soc=95.0, battery_power=1500.0,
+        forecast_wh_qm=None, soc=95.0, battery_power=-1500.0,
     )
     assert gewinner.name.startswith("PV_")
     assert gewinner.einschalten is True
@@ -181,7 +183,7 @@ async def test_determine_mode_reicht_soc_durch():
         legionellen_started_at=None,
         sensors=SimpleNamespace(t_oben=43.0, t_unten=41.0, t_mittig=42.0, t_verd=30.0),
         solar=SimpleNamespace(
-            feedinpower=0.0, battery_discharge_watt=1200.0, batpower=1200.0, soc=95.0,
+            feedinpower=0.0, battery_discharge_watt=1200.0, batpower=-1200.0, soc=95.0,
             forecast_today=None, forecast_tomorrow=None,
             forecast_day2=None,
             # frische API-Daten -> solar_stale=False (Stale-Guard)

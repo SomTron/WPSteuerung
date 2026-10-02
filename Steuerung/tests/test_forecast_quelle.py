@@ -69,7 +69,7 @@ class TestForecastQuellenGate:
         assert "PV" in erg.grund
 
     def test_volle_batterie_ohne_netzkauf_schaltet_frei(self):
-        erg = self._rufe(feedin=-20.0, soc=90.0, battery_power=100.0)  # -20 >= -50: kein Netzkauf
+        erg = self._rufe(feedin=-20.0, soc=90.0, battery_power=-100.0)  # -20 >= -50: kein Netzkauf
         assert erg.einschalten is True
         assert "Batterie" in erg.grund
 
@@ -145,7 +145,7 @@ class TestVerdrahtungInBewerteAlleRegeln:
         return next(e for e in ergebnisse if e.name == "Forecast")
 
     def test_soc_durchgereicht_batteriequelle_feuert(self):
-        f = self._forecast(self._bewerte(feedin=-10.0, soc=95.0, battery_power=100.0))
+        f = self._forecast(self._bewerte(feedin=-10.0, soc=95.0, battery_power=-100.0))
         assert f.einschalten is True
 
     def test_ohne_quelle_wartet_die_regel(self):
