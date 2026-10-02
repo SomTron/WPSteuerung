@@ -211,6 +211,8 @@ def schreibe_eintrag(
     feedin_watt: Optional[float] = None,
     batpower_watt: Optional[float] = None,
     pv_acpower_watt: Optional[float] = None,
+    hausverbrauch_watt: Optional[float] = None,
+    pv_ueberschuss_watt: Optional[float] = None,
     soc: Optional[float] = None,
     t_unten: Optional[float] = None,
     t_oben: Optional[float] = None,
@@ -243,6 +245,12 @@ def schreibe_eintrag(
     Schichtungsregel arbeitet mit der Erzeugung, nicht mit der Einspeisung;
     ohne dieses Feld war aus dem Log nicht erkennbar, ob eine Freigabe auf
     tatsaechlicher PV-Leistung oder nur auf einem Exporterfolg beruhte.
+
+    `hausverbrauch_watt` und `pv_ueberschuss_watt` sind ABGELEITET aus der
+    Wechselrichterbilanz (energy_source.hausverbrauch_watt). Der
+    Ueberschuss sagt, wieviel PV-Leistung nach Deckung des Hauses fuer die
+    Waermepumpe uebrig bleibt - die eigentliche Groesse fuer eine
+    solarbetriebene Zuschaltung.
     """
     # Leerer Gewinner/Grund waere im Log nicht interpretierbar ("Dienst laeuft,
     # aber keine Regel will" vs. "Regel hat entschieden: AUS"). Deshalb wird
@@ -255,7 +263,8 @@ def schreibe_eintrag(
             "keine Regel fordert Heizbetrieb "
             f"(unten {_zahl(t_unten)}C, oben {_zahl(t_oben)}C, "
             f"PV-Erzeugung {_zahl(pv_acpower_watt)}W, "
-            f"Einspeisung {_zahl(feedin_watt)}W, SOC {_zahl(soc)}%)"
+            f"Ueberschuss {_zahl(pv_ueberschuss_watt)}W, "
+            f"Haus {_zahl(hausverbrauch_watt)}W, SOC {_zahl(soc)}%)"
         )
     eintrag = {
         "ts": (ts or _log_now()).isoformat(timespec="seconds"),
@@ -266,6 +275,8 @@ def schreibe_eintrag(
         "feedin_w": round(float(feedin_watt), 1) if feedin_watt is not None else None,
         "batpower_w": round(float(batpower_watt), 1) if batpower_watt is not None else None,
         "pv_acpower_w": round(float(pv_acpower_watt), 1) if pv_acpower_watt is not None else None,
+        "hausverbrauch_w": round(float(hausverbrauch_watt), 1) if hausverbrauch_watt is not None else None,
+        "pv_ueberschuss_w": round(float(pv_ueberschuss_watt), 1) if pv_ueberschuss_watt is not None else None,
         "soc": round(float(soc), 1) if soc is not None else None,
         "t_unten": round(float(t_unten), 2) if t_unten is not None else None,
         "t_oben": round(float(t_oben), 2) if t_oben is not None else None,

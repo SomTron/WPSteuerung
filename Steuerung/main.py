@@ -52,6 +52,8 @@ from energy_source import (
     batterie_entladung_watt,
     batterie_ladung_watt,
     classify_energy_source,
+    hausverbrauch_watt,
+    pv_ueberschuss_watt,
 )
 from logic_utils import (
     check_log_throttle,
@@ -630,6 +632,21 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         # Aussage "laeuft die WP gerade auf Solar?" beantwortet
         # `kein_netzkauf` in classify_energy_source.
         state.solar.consumeenergy = state.solar.last_api_data.get("consumeenergy")
+        # Aus der Wechselrichterbilanz abgeleitet (siehe energy_source.py):
+        #   Hausverbrauch = acpower - feedinpower - batPower
+        # Der API-Zaehler `consumeenergy` ist KEINE Leistung, sondern ein
+        # Fortlaufzaehler (Wechselabstand ~232 min im Betriebslog) und taugt
+        # nicht fuer die Regelung. Die Ableitung dagegen schon.
+        state.solar.hausverbrauch = hausverbrauch_watt(
+            state.solar.acpower,
+            state.solar.feedinpower,
+            state.solar.batpower,
+        )
+        state.solar.pv_ueberschuss = pv_ueberschuss_watt(
+            state.solar.acpower,
+            state.solar.feedinpower,
+            state.solar.batpower,
+        )
     else:
         state.solar.acpower = 0.0
         state.solar.feedinpower = 0.0

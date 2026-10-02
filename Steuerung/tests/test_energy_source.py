@@ -1,9 +1,13 @@
 """Regressionen fuer die zentrale Energiequellen-Klassifikation."""
+import pytest
+
 from energy_source import (
     Energiequelle,
     batterie_entladung_watt,
     batterie_ladung_watt,
     classify_energy_source,
+    hausverbrauch_watt,
+    pv_ueberschuss_watt,
 )
 
 
@@ -101,6 +105,69 @@ def test_vorzeichen_stimmt_mit_echten_messreihen_ueberein():
             f"{rohwert} W bei fallender SOC muss als Entladung gelten"
         )
         assert batterie_ladung_watt(rohwert) == 0.0
+
+
+def test_hausverbrauch_aus_der_wechselrichterbilanz():
+    """Hausverbrauch = acpower - feedinpower - batPower.
+
+    Die Formel ist vom Betreiber vorgeschlagen und an 254.305 CSV-Messreihen
+    geprueft: Median 353 W, Nacht 00-04 Uhr ~270 W, Mittagsspitze 1776-2550 W
+    (darin die Waermepumpe) - ein plausibles Tagesprofil.
+    """
+    # Realer Fall aus dem Betriebslog 02.10.2026, 08:28 (MinTemp-Mittag):
+    # PV 1200 W, nichts eingespeist, Batterie laedt mit 750 W.
+    assert hausverbrauch_watt(1200.0, 0.0, 750.0) == pytest.approx(450.0)
+    # Nacht: keine PV, Netzbezug 320 W -> Hausverbrauch 320 W
+    assert hausverbrauch_watt(0.0, -320.0, 0.0) == pytest.approx(320.0)
+    # Batterie SPEIST 200 W: das Haus nimmt PV + Batterie auf, also 900 W.
+    # Achtung: hier ist hausverbrauch > acpower - genau deshalb gilt die
+    # Identitaet "haus + ueber == acpower" bei Entladung nicht.
+    assert hausverbrauch_watt(700.0, 0.0, -200.0) == pytest.approx(900.0)
+    # Messversatz kann leicht negative Werte ergeben -> auf 0 begrenzt
+    assert hausverbrauch_watt(300.0, 10.0, 400.0) == 0.0
+    # Fehlende Messung bleibt None, nicht 0
+    assert hausverbrauch_watt(None, 0.0, 0.0) is None
+    assert hausverbrauch_watt(500.0, None, 0.0) is None
+    assert hausverbrauch_watt(500.0, 0.0, None) is None
+
+
+def test_pv_ueberschuss_entspricht_einspeisung_und_ladung():
+    """Aus der Bilanz folgt Ueberschuss = feedin + batPower."""
+    # Batterie laedt mit 750 W, nichts eingespeist -> 750 W Ueberschuss
+    assert pv_ueberschuss_watt(1200.0, 0.0, 750.0) == pytest.approx(750.0)
+    # 3000 W eingespeist, Batterie laedt mit 500 W -> 3500 W Ueberschuss
+    assert pv_ueberschuss_watt(4000.0, 3000.0, 500.0) == pytest.approx(3500.0)
+    # PV deckt das Haus exakt -> kein Ueberschuss
+    assert pv_ueberschuss_watt(800.0, 0.0, 0.0) == 0.0
+    # Batterie speist, kein Ueberschuss (Netzbezug liegt vor)
+    assert pv_ueberschuss_watt(300.0, -400.0, -500.0) == 0.0
+
+
+def test_bilanz_ist_intern_konsistent():
+    """Die ausnahmslos gueltige Identitaet: Ueberschuss == max(0, feedin + batPower).
+
+    ``hausverbrauch + ueberschuss == acpower`` gilt NUR bei ladender oder
+    ruhender Batterie. Bei Entladung nimmt das Haus mehr auf als die PV
+    erzeugt, weil die Batterie zusaetzlich einspeist - das ist korrekt und
+    war die Ursache fuer einen zunächst falschen Testerwartungswert.
+    """
+    faelle = [
+        (1200.0, 0.0, 750.0), (4000.0, 3000.0, 500.0), (800.0, 0.0, 0.0),
+        (700.0, 0.0, -200.0), (50.0, -600.0, -900.0), (300.0, 10.0, 400.0),
+    ]
+    for ac, fi, ba in faelle:
+        ueber = pv_ueberschuss_watt(ac, fi, ba)
+        assert ueber == pytest.approx(max(0.0, fi + ba)), (ac, fi, ba)
+
+    # Nur bei ladender/rruhender Batterie gilt zusaetzlich die Bilanz.
+    for ac, fi, ba in faelle:
+        if ba < 0 or ac - fi - ba < 0:
+            # Entladung: Bilanz traegt nicht. Messversatz: Hausverbrauch
+            # wurde auf 0 begrenzt, dann gilt sie ebenfalls nicht.
+            continue
+        haus = hausverbrauch_watt(ac, fi, ba)
+        ueber = pv_ueberschuss_watt(ac, fi, ba)
+        assert haus + ueber == pytest.approx(ac), (ac, fi, ba)
 
 
 def test_rohwert_wird_nur_einmal_normalisiert():

@@ -849,6 +849,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 feedin_watt=pv_leistung,
                 batpower_watt=getattr(state.solar, "batpower", None),
                 pv_acpower_watt=getattr(state.solar, "acpower", None),
+                hausverbrauch_watt=getattr(state.solar, "hausverbrauch", None),
+                pv_ueberschuss_watt=getattr(state.solar, "pv_ueberschuss", None),
                 soc=getattr(state.solar, "soc", None),
                 t_unten=t_unten,
                 t_oben=getattr(state.sensors, "t_oben", None),

@@ -552,8 +552,14 @@ for e in eintraege:
     # Regelung arbeitet mit der Erzeugung, nicht mit dem Export ins Netz.
     p = e.get("pv_acpower_w")
     p_txt = ("%.0fW" % p) if isinstance(p, (int, float)) else "-"
-    print("%s | %s | soll=%s | WP=%s | PV=%s | einsp=%s | SOC=%s | unten=%sC | %s" % (
-        e.get("ts", "?"), e.get("gewinner", "-"), soll, laeuft, p_txt, f_txt,
+    # Aus der Wechselrichterbilanz abgeleitet: Hausverbrauch und der fuer die
+    # WP verbleibende PV-Ueberschuss (energy_source.hausverbrauch_watt).
+    hb = e.get("hausverbrauch_w")
+    hb_txt = ("%.0fW" % hb) if isinstance(hb, (int, float)) else "-"
+    ub = e.get("pv_ueberschuss_w")
+    ub_txt = ("%.0fW" % ub) if isinstance(ub, (int, float)) else "-"
+    print("%s | %s | soll=%s | WP=%s | PV=%s | Ueber=%s | Haus=%s | einsp=%s | SOC=%s | unten=%sC | %s" % (
+        e.get("ts", "?"), e.get("gewinner", "-"), soll, laeuft, p_txt, ub_txt, hb_txt, f_txt,
         e.get("soc"), e.get("t_unten"), str(e.get("grund", ""))[:60]))
 print("-" * 78)
 

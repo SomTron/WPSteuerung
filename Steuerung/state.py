@@ -29,7 +29,11 @@ class SolarState:
         self.battery_charge_watt: Optional[float] = None
         self.energy_source: str = "Netz"
         self.soc: Optional[float] = None
-        self.consumeenergy: Optional[float] = None
+        self.consumeenergy: Optional[float] = None  # API-Zaehler, KEINE Leistung
+        # Aus der Bilanz abgeleitet (energy_source.hausverbrauch_watt):
+        #   hausverbrauch = acpower - feedinpower - batPower
+        self.hausverbrauch: Optional[float] = None
+        self.pv_ueberschuss: Optional[float] = None  # acpower - hausverbrauch
         self.last_api_call: Optional[datetime] = None
         self.last_api_data: Optional[dict] = None
         self.forecast_today: Optional[float] = None

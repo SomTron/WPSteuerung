@@ -99,8 +99,8 @@ def test_pv_erzeugung_wird_getrennt_von_einspeisung_geloggt(tmp_path):
         assert eintrag["batpower_w"] == 750.0
 
 
-def test_idle_grund_nennt_erzeugung_und_einspeisung_getrennt(tmp_path):
-    """Der Idle-Text darf Einspeisung nicht mehr als "PV" ausgeben."""
+def test_idle_grund_nennt_erzeugung_ueberschuss_und_haus(tmp_path):
+    """Der Idle-Text trennt Erzeugung, Ueberschuss und Hausverbrauch."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
         el.schreibe_eintrag(
@@ -109,15 +109,21 @@ def test_idle_grund_nennt_erzeugung_und_einspeisung_getrennt(tmp_path):
             soll_einschalten=False,
             kompressor_laeuft=False,
             feedin_watt=0.0,
-            pv_acpower_watt=800.0,
+            pv_acpower_watt=1200.0,
+            hausverbrauch_watt=450.0,
+            pv_ueberschuss_watt=750.0,
             soc=70.0,
             t_unten=36.0,
             t_oben=45.0,
         )
         with open(log_datei, encoding="utf-8") as f:
-            grund = json.loads(f.readlines()[-1])["grund"]
-    assert "PV-Erzeugung 800W" in grund, grund
-    assert "Einspeisung 0W" in grund, grund
+            eintrag = json.loads(f.readlines()[-1])
+    grund = eintrag["grund"]
+    assert "PV-Erzeugung 1200W" in grund, grund
+    assert "Ueberschuss 750W" in grund, grund
+    assert "Haus 450W" in grund, grund
+    assert eintrag["hausverbrauch_w"] == 450.0
+    assert eintrag["pv_ueberschuss_w"] == 750.0
 
 
 def test_ohne_pv_erzeugung_bleibt_feld_null(tmp_path):
