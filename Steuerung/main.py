@@ -545,6 +545,16 @@ async def solar_refresh_loop(session, state) -> None:
             )
         except asyncio.CancelledError:
             raise
+        except asyncio.TimeoutError:
+            # Erwarteter Betriebsfall: DNS/Netz weg (Befund Betriebslog
+            # 02.10.2026). Der Detailtraceback bringt hier nichts - er zeigt
+            # nur, dass die Deadline gegriffen hat. Die PV-Daten altern
+            # und werden ueber `solar_stale` behandelt.
+            logging.warning(
+                "Solax-Refresh nach %ds nicht fertig (Netz/DNS?) - "
+                "Daten altern, PV-Regeln pausieren bei Stale",
+                SOLAR_REFRESH_DEADLINE_SEC,
+            )
         except Exception:
             logging.exception("Solax-Hintergrund-Refresh fehlgeschlagen")
         await asyncio.sleep(SOLAR_REFRESH_INTERVAL_SEC)

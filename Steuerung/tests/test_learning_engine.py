@@ -125,6 +125,30 @@ class TestHeizzyklen:
         assert cfg.heating_rate_lern_min_minuten == 30.0
         assert cfg.heating_rate_max_c_h == 6.0
 
+    def test_altbestand_wird_beim_lesen_gekappt(self, engine):
+        """Regression Betriebslog 02.10.2026.
+
+        Die Kappung beim Lernen greift fuer bereits persistierte Werte erst
+        mit der EWMA-Zeitkonstante (alpha=0.10), also nach Wochen. Im Log
+        rechnete der Heizplan weiterhin mit 14.2 C/h ("noch 13.8K bei
+        14.2 C/h -> erreicht ca. 09:34"). Der Wert wird deshalb auch beim
+        Lesen begrenzt.
+        """
+        engine.data.heat_rates["transition"] = {"avg": 14.2, "count": 40}
+        assert engine.get_learned_heating_rate(10) == pytest.approx(6.0)
+
+    def test_werte_unter_der_grenze_bleiben_unveraendert(self, engine):
+        engine.data.heat_rates["transition"] = {"avg": 4.7, "count": 12}
+        assert engine.get_learned_heating_rate(10) == pytest.approx(4.7)
+
+    def test_grenze_laesst_sich_abschalten(self, tmp_path):
+        from learning_engine import LearningConfig, LearningEngine
+        cfg = LearningConfig(heating_rate_max_c_h=0.0)
+        engine = LearningEngine(data_path=str(tmp_path / "l.json"))
+        engine.data.config = cfg
+        engine.data.heat_rates["transition"] = {"avg": 14.2, "count": 40}
+        assert engine.get_learned_heating_rate(10) == pytest.approx(14.2)
+
     def test_saison_bestimmt_die_rate(self, engine):
         for monat, saison in [(1, "winter"), (4, "transition"), (7, "summer")]:
             e = LearningEngine(data_path=engine.data_path)

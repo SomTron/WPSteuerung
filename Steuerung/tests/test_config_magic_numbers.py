@@ -264,3 +264,21 @@ def test_deployment_komfort_abgeschaltet():
     # Die zeitbezogenen Regeln bleiben aktiv.
     assert cfg["mindest_temp"]["aktiv"] is True
     assert cfg["calculated_start"]["aktiv"] is True
+
+
+def test_solar_deckt_das_retry_budget_ab():
+    """Die Hintergrund-Deadline muss zum Retry-Budget passen.
+
+    Betriebslog 02.10.2026: mit 15 s schnitt die Deadline die Wiederholungen
+    nach Versuch 2 ab; der innere Fallback ("verwende Fallback-Daten") wurde
+    nie erreicht und es lief ein voller TimeoutError-Traceback auf.
+    """
+    import constants
+    budget = (
+        constants.SOLAX_MAX_RETRIES * constants.SOLAR_API_TIMEOUT_SEC
+        + (constants.SOLAX_MAX_RETRIES - 1) * constants.SOLAX_RETRY_DELAY_SEC
+    )
+    assert constants.SOLAR_REFRESH_DEADLINE_SEC >= budget, (
+        f"Deadline {constants.SOLAR_REFRESH_DEADLINE_SEC}s deckt das "
+        f"Retry-Budget von {budget}s nicht"
+    )

@@ -73,7 +73,12 @@ LEGIONELLEN_VERIFY_NUR_VERDAMPFER: bool = True
 SOLAR_DATA_STALE_THRESHOLD_MIN: int = 15
 SOLAR_API_TIMEOUT_SEC: int = 10
 # Hintergrund-Refresh bleibt hart begrenzt; niemals den 10-s-Hauptloop blockieren.
-SOLAR_REFRESH_DEADLINE_SEC: int = 15
+# Der Wert muss aber zum Retry-Budget passen, sonst bricht die Deadline die
+# Wiederholungen ab und der innere Fallback ("verwende Fallback-Daten") wird
+# nie erreicht: 3 x SOLAR_API_TIMEOUT_SEC (10 s) + 2 x SOLAX_RETRY_DELAY_SEC
+# (5 s) = 40 s, plus Reserve. Befund Betriebslog 02.10.2026: mit 15 s endete
+# der Lauf nach Versuch 2 mit TimeoutError statt sauberer Fallback.
+SOLAR_REFRESH_DEADLINE_SEC: int = 45
 SOLAR_REFRESH_INTERVAL_SEC: int = 60
 
 # --- Bademodus ---

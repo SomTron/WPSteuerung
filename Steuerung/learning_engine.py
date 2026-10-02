@@ -340,7 +340,17 @@ class LearningEngine:
         if hr["count"] < self.data.config.heating_rate_min_samples:
             return 3.0 if sensor == "unten" else 2.0
         factor = 1.0 if sensor == "unten" else 0.67
-        return round(hr["avg"] * factor, 2)
+        wert = hr["avg"] * factor
+        # Auch BEREITS PERSISTIERTE Werte begrenzen. Die Kappung beim Lernen
+        # greift fuer den Altbestand erst mit der EWMA-Zeitkonstante
+        # (alpha=0.10), also erst nach Wochen. Ohne diese Begrenzung blieb
+        # im Betriebslog vom 02.10.2026 die alte Rate stehen:
+        #   "noch 13.8K bei 14.2 C/h -> erreicht ca. 09:34 (in 58 min)"
+        rate_max = float(
+            getattr(self.data.config, "heating_rate_max_c_h", 0.0) or 0.0)
+        if rate_max > 0:
+            wert = min(wert, rate_max)
+        return round(wert, 2)
 
     def get_learned_target_hour(self) -> float:
         """Gelernte optimale ABEND-Zielzeit (Default 17:00 bei < config.target_hour_min_samples Samples)."""
