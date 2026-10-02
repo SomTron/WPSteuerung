@@ -9,6 +9,7 @@ Steuerungslogik. Kritische Eigenschaften:
 """
 
 from config_manager import ConfigManager
+from unittest.mock import MagicMock  # noqa: E402
 
 
 def schreibe_ini(pfad, inhalt, encoding="utf-8"):
@@ -145,6 +146,60 @@ class TestLegacyUndToleranz:
                             "[Urlaubsmodus]\nURLAUBSABsenkung = 4.0\n")
         cm = ConfigManager(config_path=pfad)
         assert cm.get().Urlaubsmodus.URLAUBSABSENKUNG == 4.0
+
+
+class TestConfigReloadMeldung:
+    """Der erste Hash-Check nach dem Start ist keine Aenderung.
+
+    `last_config_hash` startet als None, deshalb meldete jeder Start
+    faelschlich "Config file changed (hash mismatch)". Jetzt wird der
+    Erstladefall vom echten Aenderungsfall getrennt.
+    """
+
+    def _state(self, pfad):
+        import state as state_modul
+        cm = ConfigManager(config_path=pfad)
+        return state_modul.State.__new__(state_modul.State), cm
+
+    def test_erstladen_meldet_konfiguration_geladen(self, tmp_path, caplog):
+        import logging
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Heizungssteuerung]\nMIN_LAUFZEIT = 45\n")
+        st, cm = self._state(pfad)
+        st.config_manager = cm
+        st.last_config_hash = None
+        st.config = cm.get()
+        st.priority_config_manager = MagicMock()
+        st.priority_config_manager.reload_if_changed.return_value = False
+
+        with caplog.at_level(logging.INFO):
+            st.update_config()
+        msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("Konfiguration geladen" in m for m in msgs), msgs
+        assert not any("hash mismatch" in m for m in msgs), msgs
+
+    def test_echte_aenderung_meldet_geaendert(self, tmp_path, caplog):
+        import logging
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Heizungssteuerung]\nMIN_LAUFZEIT = 45\n")
+        st, cm = self._state(pfad)
+        st.config_manager = cm
+        st.config = cm.get()
+        st.last_config_hash = None
+        st.priority_config_manager = MagicMock()
+        st.priority_config_manager.reload_if_changed.return_value = False
+        # Erststand "einlesen"
+        with caplog.at_level(logging.INFO):
+            st.update_config()
+        caplog.clear()
+        # Jetzt wirklich aendern
+        schreibe_ini(tmp_path / "config.ini",
+                     "[Heizungssteuerung]\nMIN_LAUFZEIT = 50\n")
+        with caplog.at_level(logging.INFO):
+            st.update_config()
+        msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("Konfiguration geaendert" in m for m in msgs), msgs
+        assert st.config.Heizungssteuerung.MIN_LAUFZEIT == 50
 
 
 # ── Validierung ───────────────────────────────────────────────────────

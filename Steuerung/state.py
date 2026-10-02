@@ -286,7 +286,16 @@ class State:
                new_hash = hashlib.md5(f.read()).hexdigest()
 
            if new_hash != self.last_config_hash:
-               logging.info("Config file changed (hash mismatch), reloading...")
+               if self.last_config_hash is None:
+                   # Erster Check nach dem Start: das ist KEINE Aenderung,
+                   # denn last_config_hash ist dann noch None. Ohne diese
+                   # Unterscheidung meldete jeder Start faelschlich einen
+                   # 'hash mismatch' (Betriebslog 02.10.2026).
+                   logging.info("Konfiguration geladen: %s",
+                                self.config_manager.config_path)
+               else:
+                   logging.info("Konfiguration geaendert, lade neu: %s",
+                                self.config_manager.config_path)
                self.config_manager.load_config()
                self.config = self.config_manager.get()
                self.last_config_hash = new_hash
