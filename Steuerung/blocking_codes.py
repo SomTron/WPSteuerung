@@ -32,6 +32,7 @@ INFO_BLOCKING_CODES = frozenset({
     "mindestpause",
     "mindestlaufzeit",
     "start_antizipation",
+    "boiler_max_erreicht",
 })
 
 #: Passende Logmeldung JE Sperrfamilie. Vorher gab es einen einzigen Text
@@ -39,11 +40,23 @@ INFO_BLOCKING_CODES = frozenset({
 #: auch bei der Mindestpause erschien - bei 24 C Speichertemperatur also
 #: eine offensichtlich falsche Aussage (Beobachtung 28.09.2026, 18:43:
 #: "Boiler bereits heiss" bei Oben=24.4C, Sperre 'mindestpause').
+#: ``boiler_max_erreicht`` unterscheidet den planmaessigen Zyklusabschluss von
+#: der echten Sicherheitseingriffs-Sperre: die harte Boiler-Max-Abschaltung wird
+#: geprueft BEVOR der normale Ausschaltweg und feuert auch dann, wenn die
+#: Gewinner-Regel bereits selbst auf AUS stand (``unten >= Ausschaltpunkt``).
+#: Im Betriebslog 02.10.2026, 12:19 war das der Fall: drei Regeln meldeten AUS,
+#: der Lauf dauerte 143,7 min gegen 60 min Mindestlaufzeit - die Meldung
+#: "Mindestlaufzeit gebrochen" war falsch und der Telegram-Alarm ein Fehlalarm
+#: fuer regulaeres Ende eines Heizlaufs.
 INFO_BLOCKING_MELDUNGEN = {
     "boiler_bereits_warm": "Boiler bereits heiss, kein Start noetig",
     "mindestpause": "Start gesperrt: Mindestpause nach letztem Lauf",
     "mindestlaufzeit": "Start gesperrt: Mindestlaufzeit noch nicht erreicht",
     "start_antizipation": "Start gesperrt: Start-Antizipation",
+    "boiler_max_erreicht": (
+        "Boiler-Maximum erreicht, Zyklus planmaessig beendet "
+        "(Freigabe erst nach Abkuehlen)"
+    ),
 }
 #: Fallback, falls eine neue Info-Familie ohne eigene Meldung hinzukommt.
 INFO_BLOCKING_FALLBACK = "Start nicht noetig bzw. gesperrt"
@@ -52,6 +65,9 @@ INFO_BLOCKING_FALLBACK = "Start nicht noetig bzw. gesperrt"
 #: generischen Musterpruefung geprueft, damit eine praezisere Benennung
 #: nicht am generischen ``sonstige_sperre`` klebt.
 _SONDER_CODES = (
+    # Muss vor der generischen "boiler-max"-Pruefung stehen: der planmaessige
+    # Abschluss traegt ebenfalls "boiler-maximum" im Text.
+    ("boiler-maximum erreicht", "boiler_max_erreicht"),
     ("start-antizipation", "start_antizipation"),
     ("start blockiert", "start_antizipation"),
     ("start-vorhersage", "start_antizipation"),

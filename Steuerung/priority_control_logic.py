@@ -1786,20 +1786,68 @@ async def handle_compressor_off(
     # v.a. die obere Schicht unnoetig weiter hoch.
     t_max, limit, wiederein, fuehler = _boiler_max_info(state)
     if t_max is not None and t_max >= limit:
+        # Fakten VOR dem Abschalten sichern: danach ist
+        # last_compressor_on_time nicht mehr auswertbar.
+        lauf_regel = getattr(state.control, "_lauf_start_regel", None)
+        minz = _effektive_mindestlaufzeit(state, min_laufzeit, lauf_regel).total_seconds() / 60.0
+        laufzeit_min = 0.0
+        if getattr(state.stats, "last_compressor_on_time", None) is not None:
+            laufzeit_min = safe_timedelta(
+                _now_for_state(state),
+                state.stats.last_compressor_on_time,
+                state.local_tz,
+            ).total_seconds() / 60.0
+        laufzeit_gebrochen = laufzeit_min < minz
+
+        # Stand die Gewinner-Regel ohnehin schon auf AUS? Dann endet der
+        # Zyklus planmaessig und die Boiler-Max-Sperre bestaetigt nur
+        # dieselbe Entscheidung - kein Eingriff, kein Alarm.
+        # Betriebslog 02.10.2026, 12:19: drei Regeln meldeten AUS
+        # (unten 48.0 >= 48.0), Laufzeit 143,7 min bei 60 min
+        # Mindestlaufzeit. Die Meldung "Mindestlaufzeit gebrochen" war
+        # falsch und erzeugte einen Telegram-Fehlalarm.
+        regel_am_ausschaltpunkt = (
+            regelfuehler is not None
+            and ausschaltpunkt is not None
+            and regelfuehler >= ausschaltpunkt
+        )
+
         if await set_kompressor_status_func(
             state, False, force=True, t_boiler_oben=t_oben,
             end_grund="boiler_max",
         ):
             state.control.boiler_max_blockiert = wiederein
-            state.control.blocking_reason = (
-                f"Boiler-Maximum ({fuehler} {t_max:.1f}C >= {limit:.1f}C)"
-            )
-            logging.warning(
+            if regel_am_ausschaltpunkt:
+                state.control.blocking_reason = (
+                    f"Boiler-Maximum erreicht, Zyklus planmaessig beendet "
+                    f"({fuehler} {t_max:.1f}C)"
+                )
+            else:
+                state.control.blocking_reason = (
+                    f"Boiler-Maximum ({fuehler} {t_max:.1f}C >= {limit:.1f}C)"
+                )
+            if laufzeit_gebrochen:
+                laufzeit_text = (
+                    f"Mindestlaufzeit gebrochen ({laufzeit_min:.0f}min "
+                    f"< {minz:.0f}min)"
+                )
+            else:
+                laufzeit_text = (
+                    f"Laufzeit {laufzeit_min:.0f}min >= Mindestlaufzeit "
+                    f"{minz:.0f}min"
+                )
+            nachricht = (
                 f"BOILERMAX AUS (cycle={_zyklus_id(state)}) - "
                 f"{fuehler} {t_max:.1f}C >= {limit:.1f}C - "
-                f"Mindestlaufzeit gebrochen, Freigabe erst <= {wiederein:.1f}C "
+                f"{laufzeit_text}, Freigabe erst <= {wiederein:.1f}C "
                 f"reason=boiler_max [{_boiler_max_kontext(state)}]"
             )
+            # Nur der echte Eingriff gegen den Regelwillen ist ein
+            # Warnfall; der planmaessige Abschluss gehoert auf INFO.
+            if regel_am_ausschaltpunkt:
+                logging.info(nachricht)
+            else:
+                logging.warning(nachricht)
             return True
         await handle_critical_compressor_error(session, state, "bei Boiler-Maximum")
         return False

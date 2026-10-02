@@ -18,6 +18,7 @@ Siehe `test_userfall_oben_warm_unten_kalt_kein_einschalten`.
 """
 import os
 import sys
+import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -70,6 +71,66 @@ def _set_status_sammler(calls):
         calls.append((ein, kwargs))
         return True
     return set_status
+
+
+# ---------- Auszeichnung: planmaessiger Abschluss vs. echter Eingriff ----------
+#
+# Betriebslog 02.10.2026, 12:19: drei Regeln meldeten AUS (unten 48.0 >= 48.0),
+# der Lauf dauerte 143,7 min bei 60 min Mindestlaufzeit. Die Boiler-Max-Sperre
+# feuert VOR dem normalen Ausschaltweg und meldete daraufhin fest
+# "Mindestlaufzeit gebrochen" plus Telegram-Alarm - beides falsch.
+
+@pytest.mark.asyncio
+async def test_regelkonformer_abschluss_meldet_keine_gebrochene_laufzeit(caplog):
+    """Regel stand selbst auf AUS und Laufzeit war erfuellt: keine Fehlmeldung."""
+    state = baue_state(t_unten=48.0, t_oben=48.4)
+    # Laufzeit 143,7 min wie im Log, Mindestlaufzeit 60 min
+    state.stats.last_compressor_on_time = datetime.now(TZ) - timedelta(minutes=143.7)
+    calls = []
+    with caplog.at_level(logging.INFO):
+        erg = await pcl.handle_compressor_off(
+            state, None, regelfuehler=48.0, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=60), t_oben=state.sensors.t_oben,
+            set_kompressor_status_func=_set_status_sammler(calls),
+            regel_name="Einspeisung",
+        )
+    assert erg is True
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Mindestlaufzeit gebrochen" not in text, text
+    assert "Laufzeit 144min >= Mindestlaufzeit 60min" in text, text
+    # Planmaessiger Abschluss gehoert auf INFO, nicht WARNING
+    stufen = [r.levelno for r in caplog.records if "BOILERMAX" in r.getMessage()]
+    assert stufen and all(s == logging.INFO for s in stufen), stufen
+    # Und erzeugt keinen Telegram-Alarm
+    from blocking_codes import INFO_BLOCKING_CODES, blocking_code
+    code = blocking_code(state.control.blocking_reason)
+    assert code == "boiler_max_erreicht"
+    assert code in INFO_BLOCKING_CODES, "planmaessiger Abschluss darf nicht alarmieren"
+
+
+@pytest.mark.asyncio
+async def test_echter_eingriff_meldet_gebrochene_laufzeit_und_alarmiert(caplog):
+    """Regel wollte weiterheizen unter dem Limit: das IST ein Eingriff."""
+    state = baue_state(t_unten=48.3, t_oben=48.4)
+    state.control._soll_einschalten = True
+    state.stats.last_compressor_on_time = datetime.now(TZ) - timedelta(minutes=2)
+    calls = []
+    with caplog.at_level(logging.INFO):
+        erg = await pcl.handle_compressor_off(
+            state, None, regelfuehler=48.3, ausschaltpunkt=50.0,
+            min_laufzeit=timedelta(minutes=15), t_oben=state.sensors.t_oben,
+            set_kompressor_status_func=_set_status_sammler(calls),
+            regel_name="AdaptivePV",
+        )
+    assert erg is True
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Mindestlaufzeit gebrochen (2min < 15min)" in text, text
+    stufen = [r.levelno for r in caplog.records if "BOILERMAX" in r.getMessage()]
+    assert stufen and all(s == logging.WARNING for s in stufen), stufen
+    from blocking_codes import INFO_BLOCKING_CODES, blocking_code
+    code = blocking_code(state.control.blocking_reason)
+    assert code == "boiler_max"
+    assert code not in INFO_BLOCKING_CODES, "echter Eingriff MUSS alarmieren"
 
 
 # ---------- handle_compressor_off ----------
