@@ -97,6 +97,64 @@ def test_abfrage_hat_sicherheitsdeckel_und_eingabevalidierung():
     assert "wird auf %s begrenzt" in text
 
 
+# ------------------------------------------------------- ANSI-Escapes im Prompt
+
+
+def test_prompt_Interpretiert_ansi_escapes():
+    """Regression Betriebslog 02.10.2026.
+
+    Die Farbcodes sind im Skript als literales "\\033[0;36m" definiert.
+    printf wertet Escapes nur im FORMAT-String aus, NICHT in %s-Argumenten -
+    mit "%s" erschien deshalb "\\033[0;36m" als Text im Prompt statt der
+    gewuenschten cyanfarbenen Ausgabe.
+    """
+    text = _menu_text()
+    funktion = _extrahiere_funktion("frage_zahl")
+    assert 'printf "%b" "$_fq_label"' in funktion, (
+        "Das Prompt-Label muss per %b ausgegeben werden, damit die "
+        "ANSI-Escapes interpretiert werden"
+    )
+    assert 'printf "%s" "$_fq_label"' not in funktion
+
+
+def test_kein_anderes_prompt_gibt_farbcodes_mit_s_aus():
+    """Dieselbe Falle darf sich nicht anderswo wiederholen."""
+    text = _menu_text()
+    for zeile in text.splitlines():
+        if 'printf "%s"' in zeile and "$_fq_label" not in zeile:
+            # Andere %s-Aufrufe sind erlaubt, solange kein Farbcode beteiligt ist
+            assert "${CYAN}" not in zeile and "${RED}" not in zeile, (
+                f"Farbcodes per %s statt %b: {zeile.strip()}"
+            )
+
+
+@pytest.mark.skipif(POSIX_SH is None, reason="keine POSIX-Shell 'sh' verfuegbar")
+def test_prompt_ohne_literalen_escape_in_der_ausgabe(tmp_path):
+    """End-to-End: der Prompt darf die Escape-Sequenz nicht als Text zeigen."""
+    funktion = _extrahiere_funktion("frage_zahl")
+    # Ist_number wird fuer die Auswertung gebraucht.
+    quelle = _menu_text()
+    is_number = _extrahiere_funktion("is_number")
+    zeige_funktion = _extrahiere_funktion("zeige")
+    script = "\n".join([
+        'CYAN="\\033[0;36m"',
+        'NC="\\033[0m"',
+        'WPS_MANAGER_NO_SLEEP=1',
+        is_number,
+        zeige_funktion,
+        funktion,
+        'frage_zahl "${CYAN}Wie viele Logzeilen anzeigen? (Enter = 200):${NC} " 200 1 20000 "Anzahl" < /dev/null',
+    ])
+    result = subprocess.run(
+        [POSIX_SH, "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    assert "\\033[" not in result.stdout, (
+        f"Der Prompt zeigt die Escape-Sequenz als Text: {result.stdout!r}"
+    )
+    assert "Wie viele Logzeilen anzeigen?" in result.stdout
+
+
 def test_stundenabfrage_in_option_12_ist_mit_validiert():
     """Regression: Option 12 hatte das alte Zahlen-Parsing behalten."""
     text = _menu_text()

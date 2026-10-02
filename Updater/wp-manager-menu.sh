@@ -107,7 +107,11 @@ frage_zahl() {
     if [ "$_fq_min" -le 0 ]; then
         _fq_min=1
     fi
-    printf "%s" "$_fq_label"
+    # %b statt %s: das Label enthaelt die ANSI-Farbcodes als literales
+    # "\033[..." (siehe CYAN/NC oben). printf interpretiert Escapes nur im
+    # FORMAT-String, nicht in %s-Argumenten - mit %s erschien deshalb
+    # "\033[0;36m" als Text in der Ausgabe (Befund Betriebslog 02.10.2026).
+    printf "%b" "$_fq_label"
     if ! IFS= read -r _fq_wert; then
         _fq_wert=""
     fi
