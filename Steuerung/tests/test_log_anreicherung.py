@@ -105,7 +105,10 @@ def test_boiler_max_kontext_format():
     assert "Regel=Einspeisung" in txt
     assert "PV=7563W" in txt
     assert "SOC=90%" in txt
-    assert "Rate(letzter Lauf)=19.6C/h" in txt
+    # Die Lern-Engine verbucht erst nach dem Abschalten; zyklen[-1] ist beim
+# Melden also der VORHERIGE Lauf. Das Etikett sagt das seit dem 02.10.2026
+# auch so - vorher las es sich, als sei es der gerade beendete Lauf.
+    assert "Rate(vorheriger Lauf)=19.6C/h" in txt
 
 
 def test_boiler_max_kontext_robust_gegen_mocks():

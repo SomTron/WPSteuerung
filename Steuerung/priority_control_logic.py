@@ -1591,19 +1591,36 @@ def _fmt_float(wert, einheit="", nachkomma=0) -> str:
         return "n/a"
 
 
-def _boiler_max_kontext(state) -> str:
-    """Kontext fuer BOILERMAX-Warnungen (Empfehlung "WARNINGS anreichern").
+def _boiler_max_kontext(state, lauf_regel=None, gewinner_regel=None) -> str:
+    """Kontext fuer BOILERMAX-Meldungen (Empfehlung "WARNINGS anreichern").
 
-    Fuegt der Warnung die aktive Regel, die aktuelle PV-Einspeisung, den
-    Batterie-SOC sowie die zuletzt gemessene unten-Heizrate (aus der
-    Learning-Engine, letzter abgeschlossener Zyklus) hinzu, damit die
-    Abschaltung aus dem Log heraus vollstaendig nachvollziehbar ist.
+    Fuegt die aktive Regel, die aktuelle PV-Einspeisung, den Batterie-SOC
+    sowie die zuletzt gemessene unten-Heizrate (aus der Learning-Engine,
+    letzter abgeschlossener Zyklus) hinzu, damit die Abschaltung aus dem Log
+    heraus vollstaendig nachvollziehbar ist.
+
+    Regelangaben werden per Parameter uebergeben statt aus ``state`` gelesen:
+    ``set_kompressor_status`` loescht beim Abschalten ``_lauf_start_regel``,
+    ``effective_rule_name`` und ``active_rule_name``. Wurde der Kontext erst
+    NACH dem Abschalten gebildet, stand dort nichts mehr - im Betriebslog
+    02.10.2026, 12:19 daher "Regel=unbekannt", obwohl der Lauf minutes zuvor
+    sauber gestartet worden war.
+
+    ``gewinner_regel`` ist die Regel, die in diesem Moment den Ausschaltpunkt
+    bestimmt hat, ``lauf_regel`` die Regel, die den Lauf gestartet hat. Bei
+    einem Regelwechsel waehrend des Laufs werden beide genannt.
     """
     aktive_regel = (
-        getattr(state.control, "_lauf_start_regel", None)
+        lauf_regel
+        or gewinner_regel
+        or getattr(state.control, "_lauf_start_regel", None)
         or getattr(state.control, "active_rule_name", None)
         or "unbekannt"
     )
+    if lauf_regel and gewinner_regel and lauf_regel != gewinner_regel:
+        regel_text = f"Regel={aktive_regel} (Lauf), Gewinner={gewinner_regel}"
+    else:
+        regel_text = f"Regel={aktive_regel}"
     solar = getattr(state, "solar", None)
     feedin = getattr(solar, "feedinpower", None) if solar is not None else None
     soc = getattr(solar, "soc", None) if solar is not None else None
@@ -1614,11 +1631,16 @@ def _boiler_max_kontext(state) -> str:
         letzter = zyklen[-1]
         if isinstance(letzter, dict):
             rate = letzter.get("rate_unten_c_h")
+    # Achtung: die Lern-Engine verbucht einen Zyklus erst NACH dem Abschalten.
+    # Beim Melden einer Boiler-Max-Abschaltung ist zyklen[-1] daher der
+    # VORHERIGE Lauf, nicht der gerade beendete - deshalb lautet das Etikett
+    # "vorheriger Lauf". Im Betriebslog 02.10.2026, 12:19 standen so 19,9 C/h
+    # in der Meldung, waehrend der beendete Lauf mit 5,19 C/h gelernt wurde.
     return (
-        f"Regel={aktive_regel} | "
+        f"{regel_text} | "
         f"PV={_fmt_float(feedin, 'W')} | "
         f"SOC={_fmt_float(soc, '%')} | "
-        f"Rate(letzter Lauf)={_fmt_float(rate, 'C/h', 1)}"
+        f"Rate(vorheriger Lauf)={_fmt_float(rate, 'C/h', 1)}"
     )
 
 
@@ -1840,7 +1862,8 @@ async def handle_compressor_off(
                 f"BOILERMAX AUS (cycle={_zyklus_id(state)}) - "
                 f"{fuehler} {t_max:.1f}C >= {limit:.1f}C - "
                 f"{laufzeit_text}, Freigabe erst <= {wiederein:.1f}C "
-                f"reason=boiler_max [{_boiler_max_kontext(state)}]"
+                f"reason=boiler_max "
+                f"[{_boiler_max_kontext(state, lauf_regel=lauf_regel, gewinner_regel=regel_name)}]"
             )
             # Nur der echte Eingriff gegen den Regelwillen ist ein
             # Warnfall; der planmaessige Abschluss gehoert auf INFO.
@@ -1895,7 +1918,7 @@ async def handle_compressor_off(
                         f"reason=overshoot_vorhersage: {fuehler} {t_max:.1f}C steigt "
                         f"mit {rate_var:.0f}C/h auf ~{t_prognose:.1f}C "
                         f"(Limit {limit:.1f}C, Reserve {reserve_k:.1f}K) "
-                        f"[{_boiler_max_kontext(state)}]"
+                        f"[{_boiler_max_kontext(state, lauf_regel=lauf_regel, gewinner_regel=regel_name)}]"
                     )
                     return True
 

@@ -109,6 +109,42 @@ async def test_regelkonformer_abschluss_meldet_keine_gebrochene_laufzeit(caplog)
 
 
 @pytest.mark.asyncio
+async def test_regelangabe_ueberlebt_das_abschalten(caplog):
+    """Regression: "Regel=unbekannt" obwohl der Start belegt war.
+
+    `set_kompressor_status` loescht beim Abschalten `_lauf_start_regel`,
+    `effective_rule_name` und `active_rule_name`. Wurde der Kontext danach
+    aus dem State gelesen, blieb nichts uebrig - so im Betriebslog
+    02.10.2026, 12:19. Der Status-Stub hier loescht wie das Original.
+    """
+    state = baue_state(t_unten=48.0, t_oben=48.4)
+    state.control._lauf_start_regel = "MinTemp-Mittag-Mitte"
+    state.control.effective_rule_name = "MinTemp-Mittag-Mitte"
+    state.control.active_rule_name = "MinTemp-Mittag-Mitte"
+    state.stats.last_compressor_on_time = datetime.now(TZ) - timedelta(minutes=143.7)
+
+    async def set_status_und_loesche(st, ein, **kwargs):
+        # Nachbild des echten Verhaltens in main.set_kompressor_status.
+        st.control._lauf_start_regel = None
+        st.control.effective_rule_name = None
+        st.control.active_rule_name = None
+        return True
+
+    with caplog.at_level(logging.INFO):
+        await pcl.handle_compressor_off(
+            state, None, regelfuehler=48.0, ausschaltpunkt=48.0,
+            min_laufzeit=timedelta(minutes=60), t_oben=state.sensors.t_oben,
+            set_kompressor_status_func=set_status_und_loesche,
+            regel_name="Einspeisung",
+        )
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Regel=unbekannt" not in text, text
+    # Startregel UND momentan entscheidende Regel sind beide genannt
+    assert "Regel=MinTemp-Mittag-Mitte (Lauf)" in text, text
+    assert "Gewinner=Einspeisung" in text, text
+
+
+@pytest.mark.asyncio
 async def test_echter_eingriff_meldet_gebrochene_laufzeit_und_alarmiert(caplog):
     """Regel wollte weiterheizen unter dem Limit: das IST ein Eingriff."""
     state = baue_state(t_unten=48.3, t_oben=48.4)
