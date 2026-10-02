@@ -622,6 +622,14 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         state.solar.soc = state.solar.last_api_data.get("soc", 0)
         state.solar.battery_discharge_watt = batterie_entladung_watt(state.solar.batpower) or 0.0
         state.solar.battery_charge_watt = batterie_ladung_watt(state.solar.batpower) or 0.0
+        # consumeenergy ist KEINE Leistung, sondern ein fortlaufender
+        # Zaehlerstand (Median im Betriebslog ~1400, Wechselabstand ~232 min).
+        # Aus ihm laesst sich keine Momentan-Hauslast bilden, deshalb
+        # fliesst er NICHT in die Quellenpruefung der Regelung. Der Wert wird
+        # hier nur vollstaendig im State gehalten (Diagnose/CSV); die
+        # Aussage "laeuft die WP gerade auf Solar?" beantwortet
+        # `kein_netzkauf` in classify_energy_source.
+        state.solar.consumeenergy = state.solar.last_api_data.get("consumeenergy")
     else:
         state.solar.acpower = 0.0
         state.solar.feedinpower = 0.0

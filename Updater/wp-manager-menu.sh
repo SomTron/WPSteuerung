@@ -548,8 +548,12 @@ for e in eintraege:
     soll = "EIN" if e.get("soll_einschalten") else "AUS"
     f = e.get("feedin_w")
     f_txt = ("%.0fW" % f) if isinstance(f, (int, float)) else "-"
-    print("%s | %s | soll=%s | WP=%s | feedin=%s | SOC=%s | unten=%sC | %s" % (
-        e.get("ts", "?"), e.get("gewinner", "-"), soll, laeuft, f_txt,
+    # PV-Erzeugung getrennt von der Einspeisung: die Quellenpruefung der
+    # Regelung arbeitet mit der Erzeugung, nicht mit dem Export ins Netz.
+    p = e.get("pv_acpower_w")
+    p_txt = ("%.0fW" % p) if isinstance(p, (int, float)) else "-"
+    print("%s | %s | soll=%s | WP=%s | PV=%s | einsp=%s | SOC=%s | unten=%sC | %s" % (
+        e.get("ts", "?"), e.get("gewinner", "-"), soll, laeuft, p_txt, f_txt,
         e.get("soc"), e.get("t_unten"), str(e.get("grund", ""))[:60]))
 print("-" * 78)
 

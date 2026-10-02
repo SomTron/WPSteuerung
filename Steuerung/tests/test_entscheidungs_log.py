@@ -68,6 +68,79 @@ def test_schreibe_und_lese(tmp_path):
         assert eintrag["feedin_w"] == 500.0
 
 
+def test_pv_erzeugung_wird_getrennt_von_einspeisung_geloggt(tmp_path):
+    """Regression: die PV-ERZEUGUNG war im Entscheidungslog nicht enthalten.
+
+    Die Quellenpruefung der Schichtungsregel arbeitet mit ``acpower``, nicht
+    mit der Einspeisung. Ohne dieses Feld war aus dem Log nicht erkennbar, ob
+    eine Freigabe auf echter PV-Leistung beruhte - im Betriebslog vom
+    02.10.2026 standen 56 Minuten ``feedin=0`` bei steigender SOC, was wie
+    "kein Solar" las, obwohl die PV den Lauf trug.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        assert el.schreibe_eintrag(
+            gewinner_name="MinTemp-Mittag-Mitte",
+            gewinner_grund="Quelle ok",
+            soll_einschalten=True,
+            kompressor_laeuft=True,
+            feedin_watt=0.0,          # Einspeisung ins Netz: nichts
+            batpower_watt=750.0,      # Batterie laedt
+            pv_acpower_watt=1200.0,   # PV erzeugt 1200 W
+            soc=70.0,
+            t_unten=36.0,
+            t_oben=45.0,
+        ) is True
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+        assert eintrag["pv_acpower_w"] == 1200.0
+        # Getrennte Felder - nicht vermischt:
+        assert eintrag["feedin_w"] == 0.0
+        assert eintrag["batpower_w"] == 750.0
+
+
+def test_idle_grund_nennt_erzeugung_und_einspeisung_getrennt(tmp_path):
+    """Der Idle-Text darf Einspeisung nicht mehr als "PV" ausgeben."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name=None,
+            gewinner_grund="",
+            soll_einschalten=False,
+            kompressor_laeuft=False,
+            feedin_watt=0.0,
+            pv_acpower_watt=800.0,
+            soc=70.0,
+            t_unten=36.0,
+            t_oben=45.0,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            grund = json.loads(f.readlines()[-1])["grund"]
+    assert "PV-Erzeugung 800W" in grund, grund
+    assert "Einspeisung 0W" in grund, grund
+
+
+def test_ohne_pv_erzeugung_bleibt_feld_null(tmp_path):
+    """Altpfade ohne acpower liefern None, nicht 0.
+
+    Sonst wuerde eine fehlende Messung als "0 W erzeugt" behauptet und
+    spaetere Auswertungen koennten 0 W nicht von "nicht gemessen" trennen.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="AdaptivePV",
+            gewinner_grund="g",
+            soll_einschalten=True,
+            kompressor_laeuft=True,
+            feedin_watt=1500.0,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert eintrag["pv_acpower_w"] is None
+    assert eintrag["feedin_w"] == 1500.0
+
+
 def test_schreibe_feld_stale_s(tmp_path):
     """Empfehlung 3.5: stale_s wird als Feld mitgeschrieben (rueckwaertskomp.)."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)

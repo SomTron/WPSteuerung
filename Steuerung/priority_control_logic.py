@@ -848,6 +848,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 kompressor_laeuft=bool(state.control.kompressor_ein),
                 feedin_watt=pv_leistung,
                 batpower_watt=getattr(state.solar, "batpower", None),
+                pv_acpower_watt=getattr(state.solar, "acpower", None),
                 soc=getattr(state.solar, "soc", None),
                 t_unten=t_unten,
                 t_oben=getattr(state.sensors, "t_oben", None),

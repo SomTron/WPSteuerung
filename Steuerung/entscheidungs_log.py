@@ -210,6 +210,7 @@ def schreibe_eintrag(
     kompressor_laeuft: bool,
     feedin_watt: Optional[float] = None,
     batpower_watt: Optional[float] = None,
+    pv_acpower_watt: Optional[float] = None,
     soc: Optional[float] = None,
     t_unten: Optional[float] = None,
     t_oben: Optional[float] = None,
@@ -236,6 +237,12 @@ def schreibe_eintrag(
     genannt), ohne diesen Wert war sie aus dem Log nicht nachvollziehbar.
     Die Setpoints zeigen, welche Schwellen die Regel tatsaechlich angewandt
     hat - aus der 48-C-Pufferregel allein war das nicht ableitbar.
+
+    `pv_acpower_watt` ist die PV-ERZEUGUNG und wird bewusst getrennt von
+    `feedin_watt` (Einspeisung ins Netz) gefuehrt. Die Quellenpruefung der
+    Schichtungsregel arbeitet mit der Erzeugung, nicht mit der Einspeisung;
+    ohne dieses Feld war aus dem Log nicht erkennbar, ob eine Freigabe auf
+    tatsaechlicher PV-Leistung oder nur auf einem Exporterfolg beruhte.
     """
     # Leerer Gewinner/Grund waere im Log nicht interpretierbar ("Dienst laeuft,
     # aber keine Regel will" vs. "Regel hat entschieden: AUS"). Deshalb wird
@@ -247,7 +254,8 @@ def schreibe_eintrag(
         gewinner_grund = (
             "keine Regel fordert Heizbetrieb "
             f"(unten {_zahl(t_unten)}C, oben {_zahl(t_oben)}C, "
-            f"PV {_zahl(feedin_watt)}W, SOC {_zahl(soc)}%)"
+            f"PV-Erzeugung {_zahl(pv_acpower_watt)}W, "
+            f"Einspeisung {_zahl(feedin_watt)}W, SOC {_zahl(soc)}%)"
         )
     eintrag = {
         "ts": (ts or _log_now()).isoformat(timespec="seconds"),
@@ -257,6 +265,7 @@ def schreibe_eintrag(
         "kompressor_laeuft": bool(kompressor_laeuft),
         "feedin_w": round(float(feedin_watt), 1) if feedin_watt is not None else None,
         "batpower_w": round(float(batpower_watt), 1) if batpower_watt is not None else None,
+        "pv_acpower_w": round(float(pv_acpower_watt), 1) if pv_acpower_watt is not None else None,
         "soc": round(float(soc), 1) if soc is not None else None,
         "t_unten": round(float(t_unten), 2) if t_unten is not None else None,
         "t_oben": round(float(t_oben), 2) if t_oben is not None else None,

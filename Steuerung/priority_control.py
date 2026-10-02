@@ -80,6 +80,23 @@ def _debug_once(key: str, message: str, identity: Optional[str] = None) -> None:
     _debug_memo[key] = vergleich
     logging.debug(message)
 
+def _fmt_pv(value: object) -> str:
+    """Formatiert die PV-Erzeugung fuer Begruendungstexte.
+
+    ``acpower`` ist die Erzeugung, ``feedin`` die Einspeisung ins Netz - die
+    beiden wurden in Grundtexten verwechselt und als "PV" etikettiert. Fehlt
+    der Messwert (z. B. weil die PV-Regeln direkt mit ``pv_leistung``
+    aufgerufen werden), wird das offen ausgewiesen statt eine Zahl zu
+    erfinden.
+    """
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.0f}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
 def _parse_sensor(
     temp_dict: Dict[str, Optional[float]], sensor_name: str
 ) -> Optional[float]:
@@ -1029,7 +1046,8 @@ def evaluate_abweichung(
             result.grund = (
                 f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
                 f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
-                f"heute gute PV-Prognose ({eff:.0f} Wh/m2, PV {feedin_watt:.0f}W) "
+                f"heute gute PV-Prognose ({eff:.0f} Wh/m2, "
+                f"Erzeugung {_fmt_pv(pv_acpower)}W, Einspeisung {feedin_watt:.0f}W) "
                 f"-> warte auf PV (Netz ab {getattr(abw, 'pv_warten_bis_uhr', 12)}:00 "
                 f"oder Notfall unter {getattr(abw, 'pv_warten_unten_min_c', 20.0):.0f}C)"
             )
