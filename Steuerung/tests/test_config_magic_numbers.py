@@ -6,6 +6,7 @@
 """
 import os
 import sys
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,8 +16,9 @@ import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from json_config import WPSteuerungConfig, AdaptivePVConfig, WochenendeConfig  # noqa: E402
+from json_config import WPSteuerungConfig, AdaptivePVConfig, WochenendeConfig, KomfortConfig  # noqa: E402
 from priority_control import evaluate_adaptive_pv, evaluate_wochenende  # noqa: E402
+import priority_control as pc  # noqa: E402
 import priority_control_logic as pcl  # noqa: E402
 
 TZ = pytz.timezone("Europe/Berlin")
@@ -198,7 +200,12 @@ async def test_bademodus_erhoehung_aus_config():
 
 @pytest.mark.asyncio
 async def test_ohne_bademodus_keine_erhoehung():
-    """Ohne Bademodus gilt exakt das Basisziel 42C."""
+    """Ohne Bademodus gilt exakt das Basisziel 42C.
+
+    Der Test prueft das ZIEL, nicht die Regel: Komfort ist seit der
+    Log-Auswertung abgeschaltet (aktiv=false, siehe KomfortConfig), die
+    42-C-Abschaltung uebernimmt jetzt die Abweichungsregel.
+    """
     state = _baue_state(bademodus=False, erhoehung=5.0)
     state.sensors.t_unten = 42.0
 
@@ -207,6 +214,53 @@ async def test_ohne_bademodus_keine_erhoehung():
         result = await pcl.determine_mode_and_setpoints(state, t_unten=42.0, t_mittig=42.0)
 
     gewinner = result["gewinner_ergebnis"]
-    assert gewinner is not None and gewinner.name == "Komfort"
+    assert gewinner is not None
     assert gewinner.einschalten is False
     assert result["ausschaltpunkt"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_komfort_ist_abgeschaltet():
+    """Komfort startet nicht mehr allein wegen ein paar Watt PV.
+
+    Log-Beleg 18.09.-01.10.2026: die Regel leitete bei 81 W PV ein, bei
+    einem Bedarf von 600 W elektrisch (87 % Netzanteil). Sie war die
+    einzige Regel im Spalt zwischen 50 W und der AdaptivePV-Schwelle.
+    """
+    cfg = KomfortConfig()
+    assert cfg.aktiv is False
+    erg = pc.evaluate_komfort(
+        cfg, {"unten": 23.7, "mitte": 40.0, "oben": 57.8},
+        81.0, 19, 8, 9,
+    )
+    assert erg.aktiv is False
+    assert "abgeschaltet" in erg.grund
+
+
+def _deployment_cfg():
+    pfad = os.path.join(os.path.dirname(__file__), "..", "wp_steuerung_parameter.json")
+    with open(pfad, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_mittag_fenster_deckt_den_vormittag():
+    """Von 08:00 bis 11:00 gab es zeitlich keine Komfortregel.
+
+    Log 18.09.-01.10.2026: Komfort lieferte dort 2 EIN-Zeilen bei 81 W PV
+    (87 % Netzanteil bei 600 W Bedarf). CalcStart zielt auf die Zapfzeit
+    (16-17 Uhr), MinTemp-Mittag-Mitte startete erst um 11:00. Das Fenster
+    beginnt jetzt um 09:00 - zeitgesteuert statt temperatur+PV-gesteuert.
+    """
+    eintraege = _deployment_cfg()["mindest_temp"]["eintraege"]
+    mittag = next(e for e in eintraege if e["name"] == "Mittag-Mitte")
+    assert mittag["start_uhr"] == 9
+    assert mittag["ende_uhr"] == 16
+
+
+def test_deployment_komfort_abgeschaltet():
+    """Komfort ist aus - CalcStart und MinTemp uebernehmen die Aufgabe."""
+    cfg = _deployment_cfg()
+    assert cfg["komfort"]["aktiv"] is False
+    # Die zeitbezogenen Regeln bleiben aktiv.
+    assert cfg["mindest_temp"]["aktiv"] is True
+    assert cfg["calculated_start"]["aktiv"] is True

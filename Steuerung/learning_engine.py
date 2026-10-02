@@ -35,6 +35,19 @@ class LearningConfig:
     # ── Heizrate ──
     heating_rate_ewma_alpha: float = 0.10
     heating_rate_min_samples: int = 3
+    # Mindestdauer eines Zyklus, damit er in die Planungsrate eingeht.
+    # Befund aus dem Entscheidungslog 18.09.-01.10.2026: die ueber KURZYKLEN
+    # gelernte Rate lag bei 13,86 K/h, die nachhaltige Rate (Kaltstart
+    # 26.09., 92 % Laufzeit) aber nur bei 4,73 K/h. Faktor 2,9 - der
+    # Startvorlauf des CalcStart fiel damit rund zwei Drittel zu kurz aus.
+    # Kurze Zyklen messen die lokale Reaktion des unteren Knotens, nicht
+    # das Durchheizen des Speichers.
+    heating_rate_lern_min_minuten: float = 30.0
+    # Physikalische Obergrenze fuer die Planungsrate: 300-L-Speicher
+    # (1254 kJ/K) mit 600 W elektrisch und COP >= 3 ergibt ~5,2 K/h fuer
+    # den GANZEN Speicher. Laeuft der untere Knoten sichtbar schneller,
+    # ist das ein Lokaleffekt und kein Mass fuer die Startplanung.
+    heating_rate_max_c_h: float = 6.0
 
     # ── Zielzeit (Zapfverhalten) ──
     target_hour_ewma_alpha: float = 0.15
@@ -862,13 +875,38 @@ class LearningEngine:
         # Saisonale Heizrate: exponentiell geglaetteter Mittelwert (EWMA,
         # alpha=0.10) statt kumulativer Mittelwert - reagiert auf
         # Jahreszeit/Sensoraenderungen, statt fuer immer am alten Wert zu kleben.
+        #
+        # NUR aus repräsentativen Zyklen lernen: kurze Läufe messen die
+        # lokale Reaktion des unteren Knotens. Ueber sie gemittelt ergab sich
+        # im Log 18.09.-01.10.2026 eine Rate von 13,86 K/h gegenueber einer
+        # nachhaltigen Rate von 4,73 K/h - der Startvorlauf des CalcStart
+        # war dadurch rund zwei Drittel zu kurz (Belege: "brauche 1.1h" bei
+        # physikalisch noetigen 3,96 h am 28.09., sowie "ZU SPAET!" am 30.09.).
         hr = self.data.heat_rates.get(season, {"avg": 3.0, "count": 0})
-        count = hr["count"] + 1
-        if count <= 1:
-            new_avg = rate_unten
+        lern_min = float(getattr(self.data.config, "heating_rate_lern_min_minuten", 0.0))
+        rate_max = float(getattr(self.data.config, "heating_rate_max_c_h", 0.0))
+        zaehlwert = duration_min >= lern_min if lern_min > 0 else True
+        if not zaehlwert:
+            # Zyklus wird weiter protokolliert, zaehlt aber nicht zur Rate.
+            new_avg, count = hr.get("avg", 3.0), hr.get("count", 0)
         else:
-            alpha_hr = self.data.config.heating_rate_ewma_alpha
-            new_avg = hr["avg"] * (1.0 - alpha_hr) + rate_unten * alpha_hr
+            rate_fuer_lernen = rate_unten
+            gekappt = False
+            if rate_max > 0 and rate_fuer_lernen > rate_max:
+                rate_fuer_lernen = rate_max
+                gekappt = True
+            count = hr["count"] + 1
+            if count <= 1:
+                new_avg = rate_fuer_lernen
+            else:
+                alpha_hr = self.data.config.heating_rate_ewma_alpha
+                new_avg = hr["avg"] * (1.0 - alpha_hr) + rate_fuer_lernen * alpha_hr
+            if gekappt:
+                logging.info(
+                    "Heizrate auf %.1f C/h gekappt (Zyklus meldete %.1f C/h) - "
+                    "lokaler Knoten, nicht der ganze Speicher",
+                    rate_max, rate_unten,
+                )
         self.data.heat_rates[season] = {
             "avg": round(new_avg, 3),
             "count": count,
@@ -878,7 +916,8 @@ class LearningEngine:
         logging.info(
             f"Learning: Heizzyklus - {duration_min:.0f}min, "
             f"unten {start_unten:.1f}->{end_unten:.1f}C = {rate_unten:.2f}C/h "
-            f"({season}, MW={new_avg:.2f}, n={count})"
+            f"({season}, MW={new_avg:.2f}, n={count}"
+            + ("" if zaehlwert else ", zu kurz fuer die Rate") + ")"
         )
 
         self._cycle_start_time = None

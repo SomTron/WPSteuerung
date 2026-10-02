@@ -233,6 +233,20 @@ class KomfortConfig(BaseModel):
     Regel `Notfallschutz` (Prio 110) ausgkoppelt.
     """
     prioritaet: int = Field(default=60, description="Priorität")
+    aktiv: bool = Field(
+        default=False,
+        description=(
+            "False = Regel abgeschaltet. Grund (Befund aus dem "
+            "Entscheidungslog 18.09.-01.10.2026): die Regel startete bei "
+            "min_pv_fuer_komfort_watt=50 W, also auch bei 81 W - fuer eine "
+            "600-W-Waermepumpe sind das rund 87 % Netzanteil. Sie war die "
+            "EINZIGE Regel, die im Spalt zwischen 50 W und der AdaptivePV-"
+            "Schwelle (300 W) ueberhaupt einleitete: 2 EIN-Zeilen, 0 von 73 "
+            "Zyklen als Hauptgewinner, 0 min Laufzeit. Die zeitbezogene "
+            "Steuerung uebernehmen CalcStart und MinTemp (Mittag-Mitte ab "
+            "09:00, Abend-Mitte gelernt)."
+        ),
+    )
     komfort_einschalten_bei_c: float = Field(default=38.0, description="Komfort: Einschalten bei (°C)")
     ausschalten_bei_c: float = Field(default=42.0, description="Ausschalten bei (°C)")
     min_pv_fuer_komfort_watt: float = Field(default=50.0, description="Minimale PV für Komfort-Heizen (W)")
@@ -458,6 +472,20 @@ class AbweichungConfig(BaseModel):
     schichtung_netz_fallback_erlaubt: bool = Field(
         default=False,
         description="Warmstart bei warmer oberer Schicht nur mit Netz, wenn explizit erlaubt",
+    )
+    schichtung_netz_max_oben_c: float = Field(
+        default=45.0,
+        description=(
+            "Obergrenze fuer den Netz-Warmstart bei warmer oberer Schicht: "
+            "liegt `oben` darueber, ist der Speicher insgesamt zapfwarm und ein "
+            "Netz-Start nur zum Nachheizen des kalten Bodens wird NICHT mehr "
+            "zugelassen - die Regel wartet dann auf PV/Batterie. "
+            "0 = alte Logik (keine Beschraenkung). Befund aus dem "
+            "Entscheidungslog 18.09.-01.10.2026: am 30.09. lief ein "
+            "Netz-Vorheizlauf 06:00-08:37 bei unten 20,8 C, waehrend oben "
+            "46,7 C stand und um 10:09 die PV mit 2,5 kW genau diese Arbeit "
+            "gratis gemacht haette."
+        ),
     )
     netz_notfall_offset_k: float = Field(
         default=8.0,

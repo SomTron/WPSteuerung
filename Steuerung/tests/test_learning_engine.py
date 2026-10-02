@@ -69,6 +69,62 @@ class TestHeizzyklen:
         engine.update(start + timedelta(minutes=4), temps, compressor_is_on=False)
         assert engine.get_info()["total_cycles"] == 0
 
+    # ── Rate nur aus repräsentativen Zyklen (Log 18.09.-01.10.2026) ──
+
+    def test_kurzzyklus_zuehlt_nicht_zur_planungsrate(self, engine):
+        """Ein 15-min-Zyklus ist eine Lokalmessung, keine Planungsgroesse.
+
+        Log-Beleg: ueber die 68 Zyklen gemittelt ergab sich 13,86 K/h, die
+        nachhaltige Rate (Kaltstart, 92 % Laufzeit) aber 4,73 K/h. Mit der
+        zu schnellen Rate fiel der Startvorlauf des CalcStart um rund zwei
+        Drittel zu kurz aus (brauchte 1.1h statt physikalisch 3,96 h).
+        """
+        start = datetime(2026, 1, 15, 8, 0)
+        kalt = {"unten": 40.0, "mittig": 41.0, "oben": 45.0}
+        warm = {"unten": 43.75, "mittig": 44.75, "oben": 48.0}   # 15 K/h lokal
+        engine.update(start, kalt, compressor_is_on=True)
+        engine.update(start + timedelta(minutes=15), warm, compressor_is_on=False)
+
+        assert engine.data.heat_rates["winter"]["count"] == 0, (
+            "Kurzzyklus darf die Planungsrate nicht veraendern"
+        )
+        # Der Zyklus selbst wird weiterhin protokolliert.
+        assert engine.get_info()["total_cycles"] == 1
+        # Ohne verwertbare Samples bleibt der konservative Default.
+        assert engine.get_learned_heating_rate(1) == 3.0
+
+    def test_langer_zyklus_zuehlt_zur_planungsrate(self, engine):
+        start = datetime(2026, 1, 15, 8, 0)
+        kalt = {"unten": 23.7, "mittig": 30.0, "oben": 45.0}
+        warm = {"unten": 42.0, "mittig": 46.0, "oben": 57.0}    # ~4,7 K/h
+        engine.update(start, kalt, compressor_is_on=True)
+        engine.update(start + timedelta(minutes=240), warm, compressor_is_on=False)
+
+        assert engine.data.heat_rates["winter"]["count"] == 1
+        assert engine.data.heat_rates["winter"]["avg"] < 6.0
+
+    def test_lokale_rate_wird_auf_die_physikalische_grenze_gekappt(self, engine):
+        """Ein haengender Sensor darf die Startplanung nicht aufblaehen.
+
+        300-L-Speicher, 600 W elektrisch, COP >= 3: der GANZE Speicher
+        kann hoechstens ~5,2 K/h annehmen.
+        """
+        start = datetime(2026, 1, 15, 8, 0)
+        kalt = {"unten": 30.0, "mittig": 40.0, "oben": 45.0}
+        warm = {"unten": 48.0, "mittig": 52.0, "oben": 55.0}   # 36 K/h in 30 min
+        engine.update(start, kalt, compressor_is_on=True)
+        engine.update(start + timedelta(minutes=30), warm, compressor_is_on=False)
+
+        assert engine.data.heat_rates["winter"]["avg"] <= 6.0, (
+            "Rate wurde nicht auf die Speichergrenze begrenzt"
+        )
+
+    def test_rate_grenze_ist_konfigurierbar(self):
+        from learning_engine import LearningConfig
+        cfg = LearningConfig()
+        assert cfg.heating_rate_lern_min_minuten == 30.0
+        assert cfg.heating_rate_max_c_h == 6.0
+
     def test_saison_bestimmt_die_rate(self, engine):
         for monat, saison in [(1, "winter"), (4, "transition"), (7, "summer")]:
             e = LearningEngine(data_path=engine.data_path)

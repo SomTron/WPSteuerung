@@ -60,6 +60,7 @@
     }
   ],
   "komfort": {
+    "aktiv": false,
     "prioritaet": 60,
     "komfort_einschalten_bei_c": 38,
     "ausschalten_bei_c": 42,
@@ -83,6 +84,7 @@
     "ausschalten_bei_abweichung_k": 0.0,
     "schichtung_erlaube_start": true,
     "schichtung_max_steig_k": 1.0,
+    "schichtung_netz_max_oben_c": 45.0,
     "netz_notfall_offset_k": 12,
     "pv_warten_aktiv": true,
     "pv_warten_forecast_schwelle_wh_qm": 1200,
@@ -147,7 +149,7 @@
         "name": "Mittag-Mitte",
         "temperaturfuehler": "mitte",
         "min_temp_c": 42.0,
-        "start_uhr": 11,
+        "start_uhr": 9,
         "ende_uhr": 16,
         "hysterese_k": 0.0
       },

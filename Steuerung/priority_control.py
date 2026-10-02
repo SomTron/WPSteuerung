@@ -824,6 +824,11 @@ def evaluate_komfort(
 
     result = RegelErgebnis(name="Komfort", prioritaet=komfort.prioritaet, aktiv=True)
 
+    if not getattr(komfort, "aktiv", True):
+        result.aktiv = False
+        result.grund = "Komfort-Regel abgeschaltet (aktiv=false)"
+        return result
+
     if temp is None:
         result.aktiv = False
         result.grund = "Sensor 'unten' nicht verfuegbar"
@@ -945,7 +950,11 @@ def evaluate_abweichung(
       * true  -> Warmstart mit Deckel: oben darf max. `schichtung_max_steig_k`
                  (Default 1 K) steigen
     ACHTUNG: Dieser Zweig liegt VOR dem Quellen-Gate - bei `true` kann also
-    auch ohne PV/Batterie geheizt werden.
+    auch ohne PV/Batterie geheizt werden. Das ist aber nur zulaessig, wenn der
+    Speicher INSGESAMT zu kalt ist: `schichtung_netz_max_oben_c` (Default
+    45 C) begrenzt den Netz-Warmstart. Liegt `oben` darueber, ist das Wasser
+    am Hahn bereits zapfwarm und der kalte Boden soll mit PV nachgeheizt
+    werden, nicht mit Netzstrom (Befund Entscheidungslog 30.09.2026).
 
     Danach Quellen-Gate (nur wenn der Schichtungs-Zweig nicht gegriffen hat):
       * `quelle_warten` (Default true): EIN nur mit PV-Einspeisung oder voller
@@ -1060,6 +1069,33 @@ def evaluate_abweichung(
                             return result
                         # Tiefenschutz bleibt auch im Schichtungs-Warmstart
                         # fail-safe erhalten; nur unterhalb der Notfallgrenze.
+                        #
+                        # NEU (Befund Entscheidungslog 18.09.-01.10.2026):
+                        # Der Tiefenschutz allein war zu weit. Am 30.09. lief
+                        # ein Netz-Vorheizlauf 06:00-08:37 bei unten 20,8 C
+                        # (also 21 K unter Soll), waehrend OBEN 46,7 C stand -
+                        # der Speicher war also zapfwarm. Um 10:09 kam die PV
+                        # mit 2,5 kW und hatte diese Arbeit um 12:45 erledigt.
+                        # Deshalb: der Netz-Warmstart ist nur noch zulaessig,
+                        # wenn der Speicher insgesamt zu kalt ist
+                        # (oben < schichtung_netz_max_oben_c). Darueber wird
+                        # gewartet - genau das war die dokumentierte Absicht der
+                        # Regel ("morgens NICHT mit Netzstrom vorheizen"), die
+                        # im Log nie gegriffen hat.
+                        netz_max_oben = float(
+                            getattr(abw, "schichtung_netz_max_oben_c", 0.0) or 0.0
+                        )
+                        if netz_max_oben > 0.0 and temp_oben >= netz_max_oben:
+                            result.einschalten = None
+                            result.set_reason_code("waiting_source")
+                            result.grund = (
+                                f"Soll {abw.solltemperatur_c}C - "
+                                f"{abw.temperaturfuehler} {temp:.1f}C = "
+                                f"+{abweichung:.1f}K, aber oben {temp_oben:.1f}C "
+                                f">= {netz_max_oben:.1f}C: Speicher ist zapfwarm - "
+                                "warte auf PV/Batterie statt Netz-Vorheizung"
+                            )
+                            return result
                         result.einschalten = True
                         result.regel_dict = {
                             "schichtung_oben_max": temp_oben + steig,

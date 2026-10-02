@@ -17,6 +17,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from json_config import AbweichungConfig  # noqa: E402
 from priority_control import evaluate_abweichung  # noqa: E402
 
+import pytest  # noqa: E402
+
 
 def _cfg(**overrides):
     basis = dict(
@@ -123,4 +125,80 @@ def test_deployment_config_hat_die_gepruefte_einstellung():
     assert abw["pv_warten_forecast_schwelle_wh_qm"] == 1200
     # Basisziel ohne PV bleibt 42°C; PV-Regeln dürfen bis 48°C heizen.
     assert abw["solltemperatur_c"] == 42
+
+
+# ===========================================================
+# Netz-Vorheizung bei bereits zapfwarmem Speicher (Log 30.09.2026)
+# ===========================================================
+
+def _cfg_schichtung(**overrides):
+    """Deployment-nah: Warmstart freigegeben, Netz-Vorheizung wie ausgeliefert."""
+    return _cfg(
+        schichtung_erlaube_start=True,
+        schichtung_netz_fallback_erlaubt=False,
+        netz_notfall_offset_k=12.0,
+        **overrides,
+    )
+
+
+def test_regression_3009_kein_netzlauf_bei_zapfwarmem_speicher():
+    """Der reale Fall vom 30.09.2026, 06:00.
+
+    Log: 06:00-08:37 Netz-Vorheizlauf, unten 20,75 -> 41,38 C, PV 0 W,
+    SOC konstant 55 %. Oben stand 46,69 C - der Speicher war also zapfwarm.
+    Um 10:09 kam die PV mit 2512 W und hatte dieselbe Arbeit um 12:45
+    erledigt. Der Tiefenschutz allein (`netz_notfall_offset_k=12`) liess den
+    Lauf zu, weil unten 21 K unter Soll lag.
+    """
+    r = _eval(_cfg_schichtung(schichtung_netz_max_oben_c=45.0),
+              oben=46.69, unten=20.75)
+    assert r.einschalten is not True, (
+        f"Netz-Vorheizung trotz zapfwarmem Speicher: {r.grund}"
+    )
+    assert r.reason_code == "waiting_source"
+    assert "zapfwarm" in r.grund
+
+
+def test_speicher_insgesamt_kalt_darf_weiterhin_netzheizen():
+    """Gegenprobe: ist der GANZE Speicher kalt, bleibt der Tiefenschutz."""
+    r = _eval(_cfg_schichtung(schichtung_netz_max_oben_c=45.0),
+              oben=36.4, unten=21.0)
+    assert r.einschalten is True, (
+        f"Speicher insgesamt kalt (oben 36 C) - Netzheizung muss bleiben: {r.grund}"
+    )
+
+
+def test_grenze_genau_auf_oben_wartet_statt_zu_heizen():
+    """Knapp an der Grenze (oben 45.0 C) wird gewartet, nicht geheizt."""
+    r = _eval(_cfg_schichtung(schichtung_netz_max_oben_c=45.0),
+              oben=45.0, unten=21.0)
+    assert r.einschalten is not True, r.grund
+
+
+def test_mit_pv_bleibt_der_schichtungsstart_erlaubt():
+    """Die Grenze gilt nur fuer den Netzpfad - PV bleibt unangetastet."""
+    r = evaluate_abweichung(
+        _cfg_schichtung(schichtung_netz_max_oben_c=45.0),
+        {"unten": 21.0, "mitte": 45.5, "oben": 46.7},
+        False, 9, 19, 8, feedin_watt=2500.0, soc=66.0,
+    )
+    assert r.einschalten is True, f"PV-Schichtungsstart muss bleiben: {r.grund}"
+    assert r.regel_dict.get("schichtung_oben_max") == pytest.approx(47.7)
+
+
+def test_schichtung_netz_max_oben_null_erhaelt_alte_logik():
+    """0 deaktiviert die Grenze - Rueckweg fuer die alte Konfiguration."""
+    r = _eval(_cfg_schichtung(schichtung_netz_max_oben_c=0.0),
+              oben=46.69, unten=20.75)
+    assert r.einschalten is True, (
+        f"schichtung_netz_max_oben_c=0 muss alte Logik ermoeglichen: {r.grund}"
+    )
+
+
+def test_deployment_config_beschraenkt_den_netz_warmstart():
+    """Guard: die neue Grenze wird auch ausgeliefert."""
+    pfad = os.path.join(os.path.dirname(__file__), "..", "wp_steuerung_parameter.json")
+    with open(pfad, encoding="utf-8") as f:
+        abw = json.load(f)["abweichung"]
+    assert abw["schichtung_netz_max_oben_c"] == 45.0
     assert abw["temperaturfuehler"] == "unten"
