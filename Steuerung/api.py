@@ -149,6 +149,11 @@ def build_mode_payload(state, priority_info_override=None):
             else "alarm"
         ),
         "soll_einschalten": bool(getattr(control, '_soll_einschalten', False)),
+        # Not-Aus (siehe notaus.py): Die WebApp blendet bei gesperrtem Zustand
+        # den normalen Einschaltknopf aus und zeigt nur das Aufheben an.
+        "notaus_aktiv": bool(getattr(control, 'notaus_aktiv', False)),
+        "notaus_grund": (getattr(control, 'notaus_grund', None) or ""),
+        "notaus_ts": (getattr(control, 'notaus_ts', None) or ""),
         "sommer_modus_aktiv": bool(getattr(state, 'sommer_modus_aktiv', False)),
         "sommer_modus_offset_c": float(getattr(sommer_cfg, 'temperatur_offset_c', 0.0) or 0.0),
         "sommer_modus_tage_ueber": int(getattr(state, 'sommer_modus_zaehler', 0) or 0),

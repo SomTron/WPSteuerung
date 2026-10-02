@@ -57,6 +57,9 @@ async def send_help_message(session, chat_id, bot_token, state):
         "⏱️ *Laufzeiten*: Balkendiagramm der letzten 7 Tage.\n"
         "🌴 *Urlaub*: Aktiviert/Deaktiviert Urlaubsabsenkung.\n"
         "🛁 *Bademodus*: Erhöht WW-Sollwert temporär.\n"
+        "🛑 *Not-Aus*: Schaltet den Kompressor sofort aus und beendet die\n"
+        "Steuerung bis zu einem Neustart.\n"
+        "🟢 *Not-Aus aus*: Hebt die Sperre wieder auf.\n"
         "🆘 *Hilfe*: Zeigt diese Nachricht."
     )
     keyboard = get_keyboard(state)

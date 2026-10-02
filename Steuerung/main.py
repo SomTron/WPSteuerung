@@ -8,10 +8,12 @@ from queue import Empty, Full, Queue
 import uvicorn
 import aiofiles
 import os
+import sys
 from datetime import datetime, timedelta, date
 
 # Modules
 from config_manager import ConfigManager
+import notaus
 from state import State
 from sensors import SensorManager
 from hardware import HardwareManager
@@ -134,6 +136,104 @@ def handle_exit(signum, frame):
     # Wir setzen nur das Stop-Event; der Loop beendet sich kontrolliert selbst.
     logging.info(f"Signal {signum} empfangen. Beende Programm...")
     stop_event.set()
+
+async def notaus_ausloesen(state, grund="manuell", session=None):
+    """Not-Aus: Kompressor aus, Steuerung aus, bis von Hand zurueckgesetzt.
+
+    Reihenfolge ist bewusst gewaehlt:
+      1. State-Flag SOFORT setzen, damit die Kontrollphase in diesem
+         Durchlauf nichts mehr einschalten kann,
+      2. Kompressor abschalten und das Ergebnis pruefen,
+      3. Sperre auf die Platte schreiben,
+      4. Telegram informieren,
+      5. ``stop_event`` setzen -> der Main-Loop endet kontrolliert und der
+         ``finally``-Block schaltet den GPIO ein zweites Mal aus.
+
+    Schritt 1 vor 2 verhindert, dass zwischen Abschaltung und Sperre ein
+    weiterer Regel-Durchlauf den Kompressor wieder einschaltet.
+    """
+    state.control.notaus_aktiv = True
+    state.control.notaus_grund = str(grund)
+    state.control.notaus_ts = notaus._jetzt()
+    state.control.blocking_reason = f"NOT-AUS aktiv ({grund})"
+    state.control._soll_einschalten = False
+    state.control._soll_einschalten_bestaetigt = False
+    state.control.manual_force_on_pending = False
+    # Ein wartender Legionellen-Lifecycle darf nach einem Not-Aus nicht
+    # weiterlaufen und den naechsten Zyklus einplanen.
+    state.control.legionellen_started_at = None
+    state.control.legionellen_completion_pending = False
+    if getattr(state, "legionellen_aktiv", False):
+        state.legionellen_aktiv = False
+        state.legionellen_temp_override = None
+
+    logging.critical(f"NOT-AUS ausgeloest ({grund}): schalte Kompressor aus")
+
+    aus_ok = True
+    try:
+        aus_ok = await set_kompressor_status(
+            state, False, force=True, end_grund="notaus"
+        )
+    except Exception:
+        logging.exception("Not-Aus: Ausschalten threw eine Ausnahme")
+        aus_ok = False
+    if not aus_ok:
+        # Kein stilles Scheitern: der Benutzer MUSS wissen, dass der
+        # Kompressor moeglicherweise noch laeuft.
+        logging.critical(
+            "NOT-AUS: Kompressor-Ausschalten FEHLGESCHLAGEN - "
+            "bitte Hardware und Relais manuell pruefen"
+        )
+        state.control.blocking_reason = (
+            f"NOT-AUS aktiv, Ausschalten FEHLGESCHLAGEN ({grund})"
+        )
+    else:
+        logging.critical(
+            f"NOT-AUS: Kompressor aus (war_ein={state.control.kompressor_ein})"
+        )
+
+    # Sperre erst nach der Hardware-Abschaltung, damit sie nicht als
+    # Argument dafuer taugt; die Hardware-Abschaltung ist nicht verhandelbar.
+    if not notaus.notaus_setzen(grund):
+        logging.critical(
+            "NOT-AUS: Sperre nicht persistiert - nach einem Neustart heizt "
+            "die Anlage wieder. Bitte 'notaus.lock' pruefen."
+        )
+
+    if session is not None and getattr(state, "bot_token", None):
+        try:
+            await control_logic.send_telegram_message(
+                session,
+                state.config.Telegram.CHAT_ID,
+                "🛑 *NOT-AUS aktiv*\n"
+                f"Grund: {grund}\n"
+                f"Zeit: {state.control.notaus_ts}\n\n"
+                f"Kompressor: {'aus' if aus_ok else 'AUSSCHALTEN FEHLGESCHLAGEN'}\n"
+                "Die Steuerung heizt nicht mehr. Aufheben mit `notaus aus`.",
+                state.config.Telegram.BOT_TOKEN,
+            )
+        except Exception:
+            logging.exception("Not-Aus: Telegram-Bestaetigung fehlgeschlagen")
+
+    stop_event.set()
+    return aus_ok
+
+
+def _notaus_zustand_laden(state) -> bool:
+    """Spiegelt eine vorhandene Sperrdatei in den State. True = gesperrt."""
+    daten = notaus.notaus_daten()
+    if daten is None:
+        return False
+    state.control.notaus_aktiv = True
+    state.control.notaus_grund = daten.get("grund")
+    state.control.notaus_ts = daten.get("ts")
+    logging.critical(
+        f"NOT-AUS gesetzt - die Steuerung bleibt gesperrt. "
+        f"Grund: {state.control.notaus_grund}, Zeit: {state.control.notaus_ts}. "
+        "Aufheben mit 'notaus aus' oder durch Loeschen von notaus.lock."
+    )
+    return True
+
 
 def _record_hardware_change(state, now, status):
     """Zeichnet nur echte Hardware-Übergänge für den Taktschutz auf."""
@@ -417,6 +517,11 @@ async def setup_application():
     if not await _set_hardware_state(state, False):
         raise RuntimeError("Kompressor-GPIO konnte nicht fail-safe auf AUS gesetzt werden")
     logging.info("Kompressor-Hardware fail-safe initialisiert: AUS")
+    # Not-Aus-Sperre pruefen. Das Fail-safe oben hat das GPIO bereits auf AUS
+    # gesetzt; mit gesperrtem Zustand darf zusaetzlich keine Regel einschalten.
+    # Telegram und WebApp bleiben erreichbar, damit die Sperre aufgehoben
+    # werden kann - ein unsichtbarer Zustand waere sonst nicht mehr loeschbar.
+    _notaus_zustand_laden(state)
     await hardware_manager.init_lcd()
     
     sensor_manager = SensorManager()
@@ -1232,6 +1337,35 @@ async def run_logic_step(session, state, learning_engine=None):
         elif command == "force_on":
             manual_force_on = True
             state.control.manual_force_on_pending = True
+        elif command == "notaus":
+            # NOT-AUS hat Vorrang vor allem anderen im Batch, auch vor einem
+            # force_on. Der Rueckgabewert der Abschaltung wird bewusst nicht
+            # ausgewertet: notaus_ausloesen loggt selbst lauter, wenn das
+            # Ausschalten scheitert, und setzt stop_event in jedem Fall.
+            await notaus_ausloesen(
+                state, params.get("grund") or "ueber Telegram/WebApp", session
+            )
+            return
+        elif command == "notaus_aus":
+            if notaus.notaus_loeschen():
+                state.control.notaus_aktiv = False
+                state.control.notaus_grund = None
+                state.control.notaus_ts = None
+                state.control.blocking_reason = None
+                logging.warning(
+                    "NOT-AUS aufgehoben, die Steuerung heizt wieder"
+                )
+            # Bei gescheiterter Loeschung bleibt die Sperre stehen und der
+            # Zustand unveraendert - im Zweifel blockiert, nicht freigegeben.
+
+    # Not-Aus sperrt die gesamte Kontrollphase. Auch ein force_on im selben
+    # Batch darf danach nichts mehr einschalten.
+    # Strikt `is True`: ein Mock/Truthy-Wert darf die Steuerung nicht
+    # stilllegen, ein fehlendes Attribut erst recht nicht.
+    if getattr(state.control, "notaus_aktiv", False) is True:
+        if state.control.kompressor_ein:
+            await notaus_ausloesen(state, "Nachlaufabsicherung", session)
+        return
 
     # Nur ein reiner Off-Batch beendet diesen Durchlauf. Folgt danach ein
     # force_on im selben Batch, wird der On-Wunsch noch in diesem Zyklus
@@ -1932,3 +2066,19 @@ if __name__ == "__main__":
         asyncio.run(main_loop())
     except KeyboardInterrupt:
         pass
+    # Not-Aus beendet den Dienst mit einem eigenen Exitcode. In
+    # wpsteuerung.service steht dafuer RestartPreventExitStatus=42, damit
+    # systemd nach dem Not-Aus NICHT wieder anfaehrt. Die Sperrdatei
+    # notaus.lock haelt den Zustand auch dann, wenn die Unit auf dem
+    # Zielsystem noch nicht aktualisiert wurde.
+    try:
+        _code = notaus.EXIT_CODE_NOTAUS if notaus.notaus_gesetzt() else 0
+    except Exception:
+        _code = 0
+    if _code:
+        logging.critical(
+            f"NOT-AUS: Dienst beendet mit Exitcode {_code} - kein automatischer "
+            "Neustart. Aufheben: 'systemctl restart wpsteuerung' und dann "
+            "'notaus aus'."
+        )
+    sys.exit(_code)

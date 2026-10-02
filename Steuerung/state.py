@@ -95,6 +95,13 @@ class ControlState:
         # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).
         # Ersetzt den alten Hack, last_compressor_off_time in die Zukunft zu setzen.
         self.restart_lockout_until: Optional[datetime] = None
+        # --- Not-Aus (siehe notaus.py) ---
+        # Solange aktiv, darf KEINE Regel den Kompressor einschalten. Die
+        # belastbare Sperre liegt in notaus.lock; diese Felder spiegeln sie
+        # nur fuer Log, WebApp und Telegram.
+        self.notaus_aktiv: bool = False
+        self.notaus_grund: Optional[str] = None
+        self.notaus_ts: Optional[str] = None
 
 class StatsState:
     def __init__(self, now):

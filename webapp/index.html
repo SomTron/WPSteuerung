@@ -406,6 +406,22 @@
             box-shadow: 0 8px 24px rgba(255, 107, 107, 0.3);
         }
 
+        /* Not-Aus: eigener, unuebersehbarer Stil. Bewusst kräftiger als
+           .btn-danger, damit er nicht mit dem normalen Ausschalten
+           verwechselt wird. */
+        .btn-notaus {
+            background: linear-gradient(135deg, #7b0000, #d40000);
+            color: #fff;
+            border: 2px solid #ff4444;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+        }
+
+        .btn-notaus:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(212, 0, 0, 0.45);
+        }
+
         .btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
@@ -2051,6 +2067,40 @@
             btn.textContent = isRunning ? 'Ausschalten' : 'Einschalten';
             btn.onclick = function() { sendControl(isRunning ? 'force_off' : 'force_on'); };
 
+            // Not-Aus: Ausloesen OH Rueckfrage - im Ernstfall darf keine
+            // Bestaetigung den Kompressor weiterlaufen lassen. Das Aufheben
+            // verlangt dagegen eine Rueckfrage, weil es die Sperre entfernt.
+            const notausAktiv = !!(mode && mode.notaus_aktiv);
+            const nb = document.getElementById('notaus-btn');
+            const nr = document.getElementById('notaus-row');
+            const ng = document.getElementById('notaus-reset-group');
+            if (nb) {
+                nb.style.display = notausAktiv ? 'none' : '';
+                nb.onclick = function() { sendControl('notaus', { grund: 'WebApp' }); };
+            }
+            if (nr) {
+                nr.style.display = notausAktiv ? '' : 'none';
+                const ni = document.getElementById('notaus-info');
+                if (ni) {
+                    ni.textContent = (mode.notaus_grund ? mode.notaus_grund : '—')
+                        + (mode.notaus_ts ? ' (' + mode.notaus_ts + ')' : '');
+                }
+            }
+            if (ng) {
+                ng.style.display = notausAktiv ? '' : 'none';
+                const rb = document.getElementById('notaus-reset-btn');
+                if (rb) {
+                    rb.onclick = function() {
+                        if (confirm('Not-Aus aufheben? Die Steuerung heizt wieder.')) {
+                            sendControl('notaus_aus');
+                        }
+                    };
+                }
+            }
+            // Bei gesperrtem Zustand darf der normale Einschaltknopf nicht
+            // als sinnvolle Alternative erscheinen.
+            if (btn) btn.disabled = notausAktiv;
+
             // Temperaturen
             document.getElementById('temp-boiler').textContent = temperatures.boiler?.toFixed(1) || NO_DATA;
             document.getElementById('temp-oben').textContent = temperatures.oben?.toFixed(1) || NO_DATA;
@@ -2670,6 +2720,14 @@
                         ${isRunning ? '<div class="info-row" id="runtime-current-row"><span class="info-label">Aktuelle Laufzeit</span><span class="info-value" id="runtime-current">' + compressor.runtime_current + '</span></div>' : ''}
                         <div class="button-group">
                             <button class="btn ${isRunning ? 'btn-danger' : 'btn-primary'}" id="compressor-btn">${isRunning ? 'Ausschalten' : 'Einschalten'}</button>
+                            <button class="btn btn-notaus" id="notaus-btn">🛑 NOT-AUS</button>
+                        </div>
+                        <div class="info-row" id="notaus-row" style="display:none;">
+                            <span class="info-label">Not-Aus aktiv</span>
+                            <span class="info-value" id="notaus-info">—</span>
+                        </div>
+                        <div class="button-group" id="notaus-reset-group" style="display:none;">
+                            <button class="btn btn-primary" id="notaus-reset-btn">🟢 Not-Aus aufheben</button>
                         </div>
                     </div>
 

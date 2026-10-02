@@ -24,6 +24,53 @@ from telegram_charts import (
     get_runtime_bar_chart
 )
 
+#: Exakt diese Eingaben loesen den Not-Aus aus. Wichtig: "notaus" enthaelt
+#: selbst "aus" - eine blosse Substring-Pruefung wuerde den Ausloeser als
+#: Aufhebung missverstehen und im gesperrten Zustand das Falsche tun.
+_NOTAUS_AUSLOESER = frozenset({
+    "notaus", "not aus", "not-aus", "🛑", "stopp", "notaus!",
+})
+#: Woerter, die eine bestehende Sperre aufheben.
+_NOTAUS_AUFHEBEN_WOERTER = ("aus", "aufheben", "aufheb", "reset", "quittier")
+
+
+async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
+    """Not-Aus ueber Telegram. Der eigentliche Ausloeser laeuft im Main-Loop."""
+    logging.critical("NOT-AUS per Telegram angefordert")
+    # Der Befehl geht durch dieselbe Queue wie die API-Befehle, damit die
+    # Abschaltung im Main-Loop erfolgt und nicht neben ihm im Telegram-Task.
+    import main as _main
+    _main.enqueue_control_command("notaus", {"grund": "Telegram"})
+    return await send_telegram_message(
+        session, chat_id,
+        "🛑 *Not-Aus ausgelöst.*\n"
+        "Der Kompressor wird abgeschaltet und die Steuerung beendet.\n"
+        "Aufheben: `notaus aus` (oder Dienst neu starten).",
+        bot_token, parse_mode="Markdown",
+    )
+
+
+async def _notaus_aufheben(session, chat_id, bot_token, state):
+    """Not-Aus-Sperre aufheben."""
+    import notaus as _notaus
+    import main as _main
+    if _notaus.notaus_loeschen():
+        _main.enqueue_control_command("notaus_aus")
+        logging.warning("NOT-AUS per Telegram aufgehoben")
+        return await send_telegram_message(
+            session, chat_id,
+            "✅ *Not-Aus aufgehoben.* Die Steuerung heizt wieder.",
+            bot_token, parse_mode="Markdown",
+        )
+    return await send_telegram_message(
+        session, chat_id,
+        "❌ *Not-Aus konnte nicht aufgehoben werden.*\n"
+        "Die Sperrdatei `notaus.lock` ist nicht schreibbar.\n"
+        "Bitte auf dem Pi pruefen und loeschen.",
+        bot_token, parse_mode="Markdown",
+    )
+
+
 async def aktivere_bademodus(session, chat_id, bot_token, state):
     """Aktiviert den Bademodus."""
     state.bademodus_aktiv = True
@@ -295,6 +342,18 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                 await get_runtime_bar_chart(session, days=7, state=state)
             elif "hilfe" in text:
                 await send_help_message(session, chat_id, bot_token, state)
+            elif "notaus" in text or "not aus" in text or "not-aus" in text:
+                # "notaus" ENTHAELT selbst "aus" - eine blosse Pruefung auf
+                # "aus" wuerde den Ausloeser als Aufhebung missverstehen und
+                # im gesperrten Zustand genau das Falsche tun. Deshalb:
+                # exakt der Ausloeser loest aus, alles andere mit
+                # Aufhebungsbegriff hebt auf.
+                if text in _NOTAUS_AUSLOESER:
+                    await _notaus_ausloesen_cmd(session, chat_id, bot_token, state)
+                elif any(w in text for w in _NOTAUS_AUFHEBEN_WOERTER):
+                    await _notaus_aufheben(session, chat_id, bot_token, state)
+                else:
+                    await _notaus_ausloesen_cmd(session, chat_id, bot_token, state)
             else:
                 await send_unknown_command_message(session, chat_id, bot_token, state)
         except Exception as e:

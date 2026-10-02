@@ -22,6 +22,11 @@ Environment=PYTHONFAULTHANDLER=1
 EnvironmentFile=-/etc/wpssteuerung/api.env
 Restart=always
 RestartSec=10
+# NOT-AUS (siehe notaus.py): Der Dienst beendet sich dafuer mit Exitcode 42.
+# Ohne diese Zeile wuerde Restart=always ihn zehn Sekunden spaeter wieder
+# starten und der Not-Aus waere wirkungslos. Die Sperrdatei notaus.lock
+# haelt den Zustand zusaetzlich ueber jeden Neustart hinweg.
+RestartPreventExitStatus=42
 
 [Install]
 WantedBy=multi-user.target
