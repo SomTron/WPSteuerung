@@ -68,8 +68,14 @@ class TestParsing:
         with caplog.at_level(logging.INFO):
             cm = ConfigManager(config_path=pfad)
         assert cm.get().Heizungssteuerung.MIN_LAUFZEIT == 99   # uebernommen
+        # Die Schreibweise-Korrektur steht bewusst auf DEBUG: sie wiederholt
+        # sich bei jedem Start und war die Quelle von Log-Rauschen
+        # (Deploy 02.10.2026). Der Fehlerfall "unbekannter Schluessel"
+        # bleibt WARNING.
+        with caplog.at_level(logging.DEBUG):
+            cm = ConfigManager(config_path=pfad)
         assert any("min_laufzeit" in r.message and "uebernommen" in r.message
-                   for r in caplog.records)
+                   for r in caplog.records if r.levelno == logging.DEBUG)
 
     def test_unbekannte_sektionen_und_schluessel_werden_ignoriert(self, tmp_path):
         pfad = schreibe_ini(tmp_path / "config.ini",
@@ -86,17 +92,44 @@ class TestParsing:
 
 
 class TestLegacyUndToleranz:
-    def test_legacy_key_nur_info_kein_warning(self, tmp_path, caplog):
-        """Bekannte Altlasten (z.B. WP_POWER_EXPECTED) -> INFO mit Hinweis."""
+    def test_legacy_key_kein_warning_und_nur_gesammelt_info(self, tmp_path, caplog):
+        """Bekannte Altlasten -> kein WARNING, eine gesammelte INFO-Zeile.
+
+        Bis 02.10.2026 loggte jede Altlast eine eigene INFO-Zeile, dazu kam
+        die Schreibweise-Meldung: 14 Zeilen bei jedem Start. Die Einzeldetails
+        stehen jetzt im DEBUG-Log.
+        """
         import logging
         pfad = schreibe_ini(tmp_path / "config.ini",
-                            "[Heizungssteuerung]\nWP_POWER_EXPECTED = 600\n")
+                            "[Heizungssteuerung]\nWP_POWER_EXPECTED = 600\n"
+                            "MIN_AUSZEIT_S = 300\n")
         with caplog.at_level(logging.INFO):
             cm = ConfigManager(config_path=pfad)
         warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert not any("Unbekannte Schluessel" in w for w in warnings)
-        infos = [r.message for r in caplog.records]
-        assert any("WP_POWER_EXPECTED" in i and "ignoriert" in i for i in infos)
+        infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        legacy = [i for i in infos if "WP_POWER_EXPECTED" in i or "MIN_AUSZEIT_S" in i]
+        assert len(legacy) == 1, f"erwartet eine Sammelzeile, gefunden {len(legacy)}"
+        assert "veraltete Schluessel" in legacy[0]
+
+    def test_legacy_einzeldetails_stehen_im_debug(self, tmp_path, caplog):
+        import logging
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Heizungssteuerung]\nWP_POWER_EXPECTED = 600\n")
+        with caplog.at_level(logging.DEBUG):
+            cm = ConfigManager(config_path=pfad)
+        debugs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+        assert any("WP_POWER_EXPECTED" in d for d in debugs)
+
+    def test_schreibweise_meldung_ist_debug(self, tmp_path, caplog):
+        import logging
+        pfad = schreibe_ini(tmp_path / "config.ini",
+                            "[Urlaubsmodus]\nURLAUBSABsenkung = 4.0\n")
+        with caplog.at_level(logging.INFO):
+            cm = ConfigManager(config_path=pfad)
+        infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert not any("uebernommen" in i for i in infos)
+        assert cm.get().Urlaubsmodus.URLAUBSABSENKUNG == 4.0
 
     def test_echter_tippfehler_bleibt_warning(self, tmp_path, caplog):
         import logging

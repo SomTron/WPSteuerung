@@ -136,9 +136,15 @@ class ConfigManager:
         Behandlungspfad fuer jeden INI-Schluessel:
         1. Exakter Treffer im Modell          -> laden
         2. Nur Gross-/Kleinschreibung weicht ab
-           (z.B. 'URLAUBSABsenkung')          -> laden, INFO loggen
-        3. Bekannter Legacy-Schluessel        -> ignorieren, INFO mit Hinweis
+           (z.B. 'URLAUBSABsenkung')          -> laden
+        3. Bekannter Legacy-Schluessel        -> ignorieren
         4. Sonst                              -> WARNING (echter Tippfehler?)
+
+        Die Altlasten-Hinweise (2 und 3) stehen bewusst auf DEBUG: sie wiederholen
+        sich bei JEDEM Start und sind keine Betriebsinformation (Deploy 02.10.2026
+        produzierte 14 INFO-Zeilen). Der Fehlerfall (4) bleibt WARNING, damit ein
+        echter Tippfehler sofort auffaellt. Uebergangene Altlasten werden nur
+        noch zusammengefasst auf INFO gemeldet.
         """
         felder = modell_klasse.model_fields
         upper_map = {}
@@ -153,7 +159,7 @@ class ConfigManager:
                 continue
             treffer = upper_map.get(schluessel.upper())
             if treffer and len(treffer) == 1 and treffer[0] not in gueltig:
-                logging.info(
+                logging.debug(
                     f"[{name}] '{schluessel}' als '{treffer[0]}' uebernommen "
                     f"(Gross-/Kleinschreibung angepasst)"
                 )
@@ -164,15 +170,25 @@ class ConfigManager:
         if unbekannt:
             legacy = LEGACY_HINWEISE.get(name, {})
             echte_tippfehler = []
+            uebergangen = []
             for k in sorted(unbekannt):
                 if k in legacy:
-                    logging.info(f"[{name}] Legacy-Schluessel '{k}' ignoriert ({legacy[k]})")
+                    logging.debug(
+                        f"[{name}] Legacy-Schluessel '{k}' ignoriert"
+                    )
+                    uebergangen.append(k)
                 else:
                     echte_tippfehler.append(k)
             if echte_tippfehler:
                 logging.warning(
                     f"Unbekannte Schluessel in [{name}] (Tippfehler?): "
                     f"{', '.join(echte_tippfehler)}"
+                )
+            if uebergangen:
+                # Eine Zeile statt einer pro Altlast - sichtbar, aber ruhig.
+                logging.info(
+                    f"[{name}] {len(uebergangen)} veraltete Schluessel "
+                    f"ignoriert (Details im DEBUG-Log): {', '.join(uebergangen)}"
                 )
 
         try:
