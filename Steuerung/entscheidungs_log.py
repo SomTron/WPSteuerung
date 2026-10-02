@@ -26,13 +26,17 @@ Lebenszeichen im Stillstand: ohne Eintrag ist ein langer Stillstand von einem
 abgestuerzten Dienst nicht unterscheidbar - im Log 18.09.-01.10.2026 standen
 12,9 h ohne Zeile, deren Vorzeile noch "kompressor_laeuft: true" behauptete.
 
-Klassifikation der Stromquelle (dreistufig, Schwellen in constants.py):
-- "pv"        -> feedin >= PV_UEBERSCHUSS_MIN_W  (echter nutzbarer Ueberschuss)
+Klassifikation der Stromquelle (Schwellen in constants.py). `feedin` ist
+die Leistung INS NETZ; die Anlage ist wechselrichtergekoppelt, d. h. PV
+speist erst Haus und WP, der Rest laedt die Batterie:
+- "pv"        -> feedin >= PV_UEBERSCHUSS_MIN_W  (echter Export) ODER die
+                 Batterie laedt (batpower > BATTERIE_LADUNG_MIN_W: die
+                 Batterie kann nur aus PV-Ueberschuss speisen, also deckt
+                 die PV auch den WP-Lauf - auch bei feedin = 0)
 - "batterie"  -> kein Ueberschuss, aber batpower < 0 (Batterie speist)
 - "netz"      -> feedin < NETZKAUF_GRENZE_W      (Haus kauft Netzstrom)
-- "unklar"    -> weder PV noch Batterie nachweisbar (z. B. 0 W ohne
-                 Batterie-Entladung). Wird NICHT als PV verbucht, sondern
-                 separat ausgewiesen.
+- "unklar"    -> weder PV noch Batterie nachweisbar. Bleibt ehrlicherweise
+                 offen statt pauschal als PV verbucht zu werden.
 """
 import json
 import logging
@@ -43,6 +47,7 @@ from typing import Dict, List, Optional
 import pytz
 
 from constants import (
+    BATTERIE_LADUNG_MIN_W,
     DEFAULT_TIMEZONE,
     NETZKAUF_GRENZE_W,
     PV_UEBERSCHUSS_MIN_W,
@@ -127,12 +132,23 @@ def _letzte_logzeile() -> Optional[Dict]:
 def klassifiziere_quelle(feedin_w, batpower_w) -> str:
     """Ordnet einer laufenden WP die Stromquelle zu.
 
+    `feedin_w` ist die Leistung INS NETZ (nicht die PV-Erzeugung). Die Anlage
+    ist wechselrichtergekoppelt: PV speist erst Haus und WP, der Rest laedt die
+    Batterie, erst der Rest davon wird eingespeist. Deshalb bedeutet
+    feedin = 0 bei LADENDER Batterie einen solar gedeckten WP-Lauf - die
+    haeufigste und energieguenstigste Betriebsart des Tages.
+
+    Ohne diesen Zweig wurde genau dieser Fall als "unklar" ausgewiesen. Im Log
+    vom 02.10.2026 (08:28-09:24, 56 min, SOC 65 -> 72 %) fielen dadurch 79,6 %
+    der Tageslaufzeit aus dem Solarantial heraus, obwohl die PV den Lauf
+    getragen hat.
+
     Rueckwaertskompatibel zur Zweiteilung, aber ehrlicher: die alte Regel
-    ("feedin >= -50 -> pv_batterie") verbuchte auch 0 W ohne Batterie-Entladung
-    als Solarstrom und lieferte dadurch 100 % PV-Anteil an 13 von 14 Tagen.
-    Jetzt wird die vierte Stufe "unklar" ausgewiesen, statt sie als PV zu
-    verbuchen. Alt-Datensaetze ohne Batterie-Feld werden nachgerechnet:
-    batpower=None verhaelt sich wie 0 (kein Entladungsnachweis).
+    ("feedin >= -50 -> pv_batterie") verbuchte auch 0 W ohne jede Batterie-
+    Bewegung als Solarstrom und lieferte dadurch 100 % PV-Anteil an 13 von
+    14 Tagen. Jetzt wird die vierte Stufe "unklar" ausgewiesen, statt sie als
+    PV zu verbuchen. Alt-Datensaetze ohne Batterie-Feld werden nachgerechnet:
+    batpower=None verhaelt sich wie 0 (kein Batterie-Nachweis).
     """
     if feedin_w is None:
         return QUELLE_UNKLAR
@@ -140,10 +156,12 @@ def klassifiziere_quelle(feedin_w, batpower_w) -> str:
         return QUELLE_PV
     if feedin_w < NETZKAUF_GRENZE_W:
         return QUELLE_NETZ
-    # Zwischen Netzkaufgrenze und echtem Ueberschuss: nur die Batterie
-    # entscheidet, ob Solarstrom im Spiel war.
+    # Zwischen Netzkaufgrenze und echtem Ueberschuss: die Batterie entscheidet,
+    # ob Solarstrom im Spiel war.
     if batpower_w is not None and batpower_w < 0:
         return QUELLE_BATTERIE
+    if batpower_w is not None and batpower_w > BATTERIE_LADUNG_MIN_W:
+        return QUELLE_PV
     if feedin_w <= QUELLE_UNKLAR_MAX_W:
         return QUELLE_UNKLAR
     return QUELLE_BATTERIE

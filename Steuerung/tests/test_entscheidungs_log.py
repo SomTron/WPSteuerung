@@ -382,7 +382,7 @@ def _zeile(ts, gewinner="X", soll=True, laeuft=True, feedin=1000.0, batt=0.0):
 # --- 1) Stromquellen-Klassifikation -------------------------------
 
 def test_klassifiziere_quelle_unterscheidet_vier_stufen():
-    """Kernfall des Logs: 0 W ohne Batterie-Entladung ist KEIN Solarstrom."""
+    """Kernfall des Logs: 0 W ohne jede Batterie-Bewegung ist KEIN Solarstrom."""
     assert el.klassifiziere_quelle(4082.0, 0.0) == el.QUELLE_PV
     assert el.klassifiziere_quelle(150.0, -300.0) == el.QUELLE_PV
     assert el.klassifiziere_quelle(0.0, -800.0) == el.QUELLE_BATTERIE
@@ -392,6 +392,55 @@ def test_klassifiziere_quelle_unterscheidet_vier_stufen():
     assert el.klassifiziere_quelle(0.0, 0.0) == el.QUELLE_UNKLAR
     assert el.klassifiziere_quelle(0.0, None) == el.QUELLE_UNKLAR
     assert el.klassifiziere_quelle(None, None) == el.QUELLE_UNKLAR
+
+
+def test_ladende_batterie_zaehlt_als_pv():
+    """Regression 02.10.2026: 0 W EINSPEISUNG bei LADENDER Batterie ist Solar.
+
+    `feedin` ist die Einspeisung ins Netz, nicht die PV-Erzeugung. Die Anlage
+    ist wechselrichtergekoppelt: PV speist Haus und WP, der Rest laedt die
+    Batterie. Laedt die Batterie, erzeugt die PV also mehr als den Lokalbezug
+    - der WP-Lauf ist solar gedeckt, obwohl nichts eingespeist wird.
+
+    Im Log 02.10.2026, 08:28-09:24: feedin 0 W durchgehend bei SOC 65 -> 72 %.
+    Ohne diesen Zweig fielen 79,6 % der Tageslaufzeit als "unklar" heraus.
+    """
+    assert el.klassifiziere_quelle(0.0, 750.0) == el.QUELLE_PV
+    assert el.klassifiziere_quelle(50.0, 300.0) == el.QUELLE_PV
+    # Totbereich: Leerlauf-Rauschen um 0 W beweist keinen Ueberschuss.
+    assert el.klassifiziere_quelle(0.0, 20.0) == el.QUELLE_UNKLAR
+    # Alt-Datensaetze ohne Batterie-Feld bleiben unveraendert "unklar".
+    assert el.klassifiziere_quelle(0.0, None) == el.QUELLE_UNKLAR
+    # Echte Einspeisung und echter Netzzukauf bleiben unberuehrt.
+    assert el.klassifiziere_quelle(3000.0, 0.0) == el.QUELLE_PV
+    assert el.klassifiziere_quelle(-200.0, 500.0) == el.QUELLE_NETZ
+    # Entladung schlaegt Laden nicht: bei -400 W speist die Batterie.
+    assert el.klassifiziere_quelle(0.0, -400.0) == el.QUELLE_BATTERIE
+
+
+def test_kpi_zaehlt_ladende_batterie_zum_solarantial(tmp_path):
+    """KPI-Ebene: 56 min '0 W bei ladender Batterie' sind Solarstunden.
+
+    Regressionsdaten aus dem Betriebslog vom 02.10.2026, 08:28-09:24.
+    Erwartung: Solarantial 100 %, keine Phantomquote.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        now = datetime.now()
+        # 5 Zeilen -> 4 Intervalle a 60 s, alle feedin=0 mit ladender Batterie.
+        with open(log_datei, "w", encoding="utf-8") as f:
+            for i in range(5):
+                f.write(_zeile(now - timedelta(minutes=4 - i),
+                               feedin=0.0, batt=750.0) + "\n")
+        heute = el.kpis(wp_leistung_watt=600.0, strompreis_eur_kwh=0.35)["heute"]
+        assert heute["laufzeit_min"] == pytest.approx(4.0, abs=0.2)
+        assert heute["pv_kwh"] > 0
+        assert heute["unklar_laufzeit_min"] == pytest.approx(0.0, abs=0.2), \
+            f"PV-gedeckter Lauf faelschlich als 'unklar': {heute}"
+        assert heute["anteil_unklar_prozent"] == pytest.approx(0.0, abs=1.0)
+        assert heute["anteil_pv_batterie_prozent"] == pytest.approx(100.0, abs=1.0)
+        assert heute["netz_kwh"] == pytest.approx(0.0, abs=0.001), \
+            "Solarbetrieb darf nicht als Netzkosten erscheinen"
 
 
 def test_null_watt_wird_nicht_als_pv_verbucht(tmp_path):

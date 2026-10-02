@@ -101,17 +101,27 @@ TELEGRAM_RATE_LIMIT_SECONDS: float = 2.0
 # (dupliziert) in Analyse/analysis_core.py - bei Aenderung einer Schwelle
 # drifteten KPI-Anzeige und Offline-Analyse auseinander.
 #
-# Warum die alte Heuristik nicht mehr ausreichte: `feedin` ist die PV-Leistung,
-# nicht die Netzeinspeisung. Bei Einspeisegrenze/Regelbegrenzung liefert die
-# Anlage dauerhaft 0 W, was die alte Regel "feedin >= -50 -> pv_batterie" als
-# Solarstrom verbuchte. Folge im Log 18.09.-01.10.2026: 100 % PV-Anteil an
-# 13 von 14 Tagen, obwohl real nur ~79 % der Laufzeit PV-ueberschuss war.
+# SEMANTIK (am 02.10.2026 mit dem Betreiber geklaert): `feedin` ist die Leistung,
+# die INS NETZ gespeist wird - nicht die PV-Erzeugung. Die Anlage ist
+# wechselrichtergekoppelt: PV speist erst Haus und WP, der Rest laedt die
+# Batterie, erst der allrestliche Rest wird eingespeist.
+#   feedin > 0  -> echter Export
+#   feedin = 0  -> PV deckt den Lokalbezug, Ueberschuss laedt die Batterie
+#   feedin < 0  -> Haus kauft Netzstrom
+# Warum die alte Heuristik nicht ausreichte: sie kannte nur feedin, nicht die
+# Batterie, und verbuchte deshalb "feedin >= -50 -> pv_batterie" pauschal -
+# Folge im Log 18.09.-01.10.2026: 100 % PV-Anteil an 13 von 14 Tagen.
 NETZKAUF_GRENZE_W: float = -50.0
 # Ab hier ist es ein echter, nutzbarer PV-Ueberschuss (nicht nur "kein
 # Netzzukauf"). Darunter entscheidet das Batterie-Feld.
 PV_UEBERSCHUSS_MIN_W: float = 100.0
+# Lädt die Batterie, ist Solarstrom im Spiel: die Batterie kann nur aus dem
+# PV-Ueberschuss gespeist werden, also erzeugt die PV mehr als den Lokalbezug
+# (Haus + WP) - der WP-Lauf ist damit solar gedeckt, auch bei feedin = 0.
+# Der kleine Totbereich faengt Leerlauf-Rauschen um 0 W ab.
+BATTERIE_LADUNG_MIN_W: float = 50.0
 # Kennzeichnung fuer Luecken in der Messung: unterhalb dieser Leistung UND ohne
-# Batterie-Entladung laesst sich die Quelle nicht bestimmen (weder PV noch
+# Batterie-Bewegung laesst sich die Quelle nicht bestimmen (weder PV noch
 # Batterie). Wird als "unklar" ausgewiesen, statt faelschlich als PV.
 QUELLE_UNKLAR_MAX_W: float = 0.0
 
