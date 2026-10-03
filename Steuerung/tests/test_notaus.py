@@ -156,6 +156,33 @@ def test_telegram_benutzt_kein_blasses_import_main():
     assert '_laufendes_main()' in text
 
 
+def test_shellskripte_sind_ausfuehrbar():
+    """Nach einem Clone auf dem Pi sind sie sonst nicht startbar.
+
+    Alle *.sh lagen in Git als 100644. `core.fileMode=false` auf Windows
+    verdeckt das beim Entwickeln, auf dem Pi folgt es dem Index. Die
+    Doku nennt `./rpi-deploy.sh` und `./wp-manager.sh` - beides
+    scheitert dann mit "Permission denied". Wer es mit `sh skript.sh`
+    umgeht, merkt es nie.
+    """
+    import subprocess
+
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    ls = subprocess.run(['git', 'ls-files', '-s', '*.sh'],
+                        capture_output=True, text=True, cwd=repo, check=True)
+    zeilen = [z for z in ls.stdout.splitlines() if z.strip()]
+    assert zeilen, "keine Shell-Skripte im Index gefunden"
+    nicht_ausfuehrbar = []
+    for z in zeilen:
+        modus, rest = z.split(' ', 1)
+        pfad = rest.split('\t')[-1].strip()
+        if modus != '100755':
+            nicht_ausfuehrbar.append(f"{pfad} ({modus})")
+    assert not nicht_ausfuehrbar, (
+        "Shell-Skripte ohne Ausfuehrungsbit: " + ", ".join(nicht_ausfuehrbar)
+    )
+
+
 # ---------- Sperrdatei ----------
 
 def test_sperre_ueberlebt_neustart(tmp_path):
