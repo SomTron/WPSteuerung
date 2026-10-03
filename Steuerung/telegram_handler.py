@@ -48,13 +48,38 @@ def _ist_notaus_ausloeser(text: str) -> bool:
     return text in _NOTAUS_AUSLOESER
 
 
+def _laufendes_main():
+    """Das main-Modul, in dem der Main-Loop tatsaechlich laeuft.
+
+    main.py startet ueber `python main.py` und laeuft damit als
+    `__main__`. Ein blasses `import main` laedt die Datei ein zweites Mal
+    und liefert ein ZWEITES Modulobjekt - mit eigener
+    ``control_command_queue``. Befehle, die dort landen, holt niemand ab.
+
+    Genau das ist auf dem Pi passiert: `notaus` per Telegram hat die
+    Steuerung bestaetigt, aber nichts ausgefuehrt. Die Sperre wurde
+    nicht geschrieben, der Dienst lief weiter, und die Meldung
+    "Not-Aus ausgeloest" stand trotzdem im Log.
+
+    Der Fallback bleibt fuer Tests und fuer Aufrufe, bei denen main.py
+    tatsaechlich als regulaeres Modul importiert wurde.
+    """
+    import sys
+
+    laufend = sys.modules.get("__main__")
+    if laufend is not None and hasattr(laufend, "enqueue_control_command"):
+        return laufend
+    import main
+
+    return main
+
+
 async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
     """Not-Aus ueber Telegram. Der eigentliche Ausloeser laeuft im Main-Loop."""
     logging.critical("NOT-AUS per Telegram angefordert")
     # Der Befehl geht durch dieselbe Queue wie die API-Befehle, damit die
     # Abschaltung im Main-Loop erfolgt und nicht neben ihm im Telegram-Task.
-    import main as _main
-    _main.enqueue_control_command("notaus", {"grund": "Telegram"})
+    _laufendes_main().enqueue_control_command("notaus", {"grund": "Telegram"})
     return await send_telegram_message(
         session, chat_id,
         "🛑 *Not-Aus ausgelöst.*\n"
@@ -75,9 +100,8 @@ async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
 async def _notaus_aufheben(session, chat_id, bot_token, state):
     """Not-Aus-Sperre aufheben."""
     import notaus as _notaus
-    import main as _main
     if _notaus.notaus_loeschen():
-        _main.enqueue_control_command("notaus_aus")
+        _laufendes_main().enqueue_control_command("notaus_aus")
         logging.warning("NOT-AUS per Telegram aufgehoben")
         return await send_telegram_message(
             session, chat_id,

@@ -90,6 +90,72 @@ def test_webapp_erklaert_dass_der_dienst_stirbt():
     )
 
 
+# ---------- Der Not-Aus muss das laufende main erreichen ----------
+
+def test_laufendes_main_ist_nicht_das_zweite_modul(monkeypatch):
+    """Regression, im echten Betrieb auf dem Pi aufgetreten.
+
+    main.py startet ueber `python main.py` und laeuft damit als
+    `__main__`. Ein blasses `import main` laedt die Datei ein zweites Mal
+    und liefert ein zweites Modulobjekt - mit eigener
+    ``control_command_queue``. Der Not-Aus landet in dieser_queue und
+    wird von niemandem abgeholt.
+
+    Sichtbar wurde das so: Telegram meldete "Not-Aus ausgeloest",
+    `NOT-AUS ausgeloest` fehlte im Log, die Sperrdatei entstand nicht,
+    der blieb aktiv.
+    """
+    import sys
+    import types
+
+    import telegram_handler
+
+    empfaenger = []
+    laufend = types.ModuleType("__main__")
+    laufend.enqueue_control_command = lambda c, p=None: empfaenger.append(c)
+
+    doppelte = types.ModuleType("main")
+    doppelte.enqueue_control_command = lambda c, p=None: empfaenger.append("FALSCH")
+
+    monkeypatch.setitem(sys.modules, "__main__", laufend)
+    monkeypatch.setitem(sys.modules, "main", doppelte)
+
+    modul = telegram_handler._laufendes_main()
+    assert modul is laufend, (
+        "es wurde das zweite main-Modul gewaehlt - der Befehl landet in "
+        "einer Queue, die niemand abholt"
+    )
+    modul.enqueue_control_command("notaus", {"grund": "Telegram"})
+    assert empfaenger == ["notaus"], empfaenger
+
+
+def test_laufendes_main_faellt_zurueck_ohne_main_funktion(monkeypatch):
+    """Ohne __main__ mit der Funktion greift der regulaere Import."""
+    import sys
+    import types
+
+    import telegram_handler
+
+    laufend = types.ModuleType("__main__")  # ohne enqueue_control_command
+    modul = types.ModuleType("main")
+    modul.enqueue_control_command = lambda c, p=None: None
+
+    monkeypatch.setitem(sys.modules, "__main__", laufend)
+    monkeypatch.setitem(sys.modules, "main", modul)
+    assert telegram_handler._laufendes_main() is modul
+
+
+def test_telegram_benutzt_kein_blasses_import_main():
+    """Vertragstest: kein `import main as` mehr im Handler."""
+    pfad = os.path.join(os.path.dirname(__file__), '..', 'telegram_handler.py')
+    with open(pfad, encoding='utf-8') as fh:
+        text = fh.read()
+    assert 'import main as ' not in text, (
+        "Ein blasses 'import main' laedt ein zweites Modul mit eigener Queue"
+    )
+    assert '_laufendes_main()' in text
+
+
 # ---------- Sperrdatei ----------
 
 def test_sperre_ueberlebt_neustart(tmp_path):
