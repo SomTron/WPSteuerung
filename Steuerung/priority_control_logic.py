@@ -194,7 +194,51 @@ def _forecast_daten_veraltet(state) -> bool:
 
 
 def _invalidate_legionellen_plan(state, reason: str = "Forecast veraltet") -> None:
-    """Alten Legionellen-Tagesplan verwerfen, statt ihn weiter zu starten."""
+    """Alten Legionellen-Tagesplan verwerfen, statt ihn weiter zu starten.
+
+    Ein noch gültiger Plan bleibt dabei erhalten. Vorher wurde jeder Plan
+    verworfen, sobald die Tagesprognose einmal unvollständig war - und die
+    3-Tage-Prognose erreicht das Planungsfenster Freitag-Sonntag montags
+    und dienstags nicht. Ein einzelner fehlender day2-Wert kostete damit
+    zwei Tage ohne Termin.
+
+    Der Plan wird nur verworfen, wenn er inhaltlich nicht mehr trägt:
+      - sein Datum liegt in der Vergangenheit,
+      - er ist aelter als FORECAST_MAX_AGE_HOURS, oder
+      - es gab nie einen.
+
+    Erhalten bleibt er nur bis zum nächsten vollständigen Prognose-Update;
+    dann wird ohnehin neu bewertet, und der Start ist zusätzlich
+    quellen-gegated (PV/Batterie).
+    """
+    tag = getattr(state, "legionellen_planned_tag", None)
+    plan_datum = getattr(state, "legionellen_planned_date", None)
+    erstellt = getattr(state, "legionellen_plan_created_at", None)
+
+    # Typprüfung: Mock-/Partial-States liefern Attribute, gegen die weder
+    # verglichen noch gerechnet werden kann.
+    if (
+        isinstance(tag, int)
+        and isinstance(plan_datum, date)
+        and isinstance(erstellt, datetime)
+    ):
+        heute = _now_for_state(state).date()
+        if plan_datum >= heute:
+            try:
+                alter = (_now_for_state(state) - erstellt).total_seconds()
+            except (TypeError, ValueError):
+                alter = None
+            if alter is not None and alter <= FORECAST_MAX_AGE_HOURS * 3600:
+                logging.info(
+                    "Legionellenplan bleibt erhalten (%s): %s, aber Plan (%s) "
+                    "noch gueltig - Neubewertung beim naechsten Forecast",
+                    reason, plan_datum, tag,
+                )
+                return
+            logging.info(
+                "Legionellenplan veraltet (%.1f h > %.1f h) -> verworfen",
+                (alter or 0) / 3600.0, FORECAST_MAX_AGE_HOURS,
+            )
     clear_plan(state, reason, persist=True)
 
 

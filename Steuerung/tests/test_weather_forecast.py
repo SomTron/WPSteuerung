@@ -308,174 +308,264 @@ def test_solar_negative_zeitstempel_ist_stale():
     assert pcl._solar_daten_veraltet(state) is True
 
 
-    from logic_utils import normalize_forecast_wh_qm
 
-    assert normalize_forecast_wh_qm(3.1, value_unit="kwh_m2") == pytest.approx(3100.0)
-    assert normalize_forecast_wh_qm(3100.0, value_unit="wh_m2") == pytest.approx(3100.0)
-    assert normalize_forecast_wh_qm(0, value_unit="kwh_m2") == 0
-    assert normalize_forecast_wh_qm(float("nan"), value_unit="kwh_m2") is None
-    assert normalize_forecast_wh_qm(float("inf"), value_unit="kwh_m2") is None
-    assert normalize_forecast_wh_qm(-1, value_unit="kwh_m2") is None
-    with pytest.raises(ValueError):
-        normalize_forecast_wh_qm(1.0, value_unit="unbekannt")
+def test_normalize_forecast_wh_qm_hauptfaelle():
+        from logic_utils import normalize_forecast_wh_qm
+
+        assert normalize_forecast_wh_qm(3.1, value_unit="kwh_m2") == pytest.approx(3100.0)
+        assert normalize_forecast_wh_qm(3100.0, value_unit="wh_m2") == pytest.approx(3100.0)
+        assert normalize_forecast_wh_qm(0, value_unit="kwh_m2") == 0
+        assert normalize_forecast_wh_qm(float("nan"), value_unit="kwh_m2") is None
+        assert normalize_forecast_wh_qm(float("inf"), value_unit="kwh_m2") is None
+        assert normalize_forecast_wh_qm(-1, value_unit="kwh_m2") is None
+        with pytest.raises(ValueError):
+            normalize_forecast_wh_qm(1.0, value_unit="unbekannt")
 
 
-    """Test ob main.py check_periodic_tasks() mit 7 Werten umgehen kann."""
+class TestCheckPeriodicTasks:
+        """Test ob main.py check_periodic_tasks() mit 7 Werten umgehen kann."""
 
-    def _baue_state(self):
-        from types import SimpleNamespace
-        from json_config import SommerModusConfig, LegionellenConfig
-        state = SimpleNamespace()
-        state.local_tz = pytz.timezone("Europe/Berlin")
-        state.last_forecast_update = None
-        state.config = None
-        state.sommer_modus_aktiv = False
-        state.sommer_modus_zaehler = 0
-        state.legionellen_aktiv = False
-        state.legionellen_last_done = None
-        state.legionellen_started_at = None
-        state.legionellen_planned_day = None
-        state.legionellen_planned_time = None
-        state.legionellen_planned_reason = None
-        state.legionellen_telegram_start_sent = False
-        state.legionellen_telegram_done_sent = False
-        state.legionellen_temp_override = None
-        state.legionellen_target_reached_at = None
-        state.legionellen_wochennummer = None
-        state.solar = SimpleNamespace(forecast_today=None, forecast_tomorrow=None,
-                                      forecast_day2=None)
-        state.priority_config = SimpleNamespace(
-            sommer_modus=SommerModusConfig(
-                aktiv=True, mindest_prognose_wh=2000.0,
-                benoetigte_tage=3, temperatur_offset_c=-3.0,
-            ),
-            legionellen=LegionellenConfig(aktiv=False),
-        )
-        return state
+        def _baue_state(self):
+            from types import SimpleNamespace
+            from json_config import SommerModusConfig, LegionellenConfig
+            state = SimpleNamespace()
+            state.local_tz = pytz.timezone("Europe/Berlin")
+            state.last_forecast_update = None
+            state.config = None
+            state.sommer_modus_aktiv = False
+            state.sommer_modus_zaehler = 0
+            state.legionellen_aktiv = False
+            state.legionellen_last_done = None
+            state.legionellen_started_at = None
+            state.legionellen_planned_day = None
+            state.legionellen_planned_time = None
+            state.legionellen_planned_reason = None
+            state.legionellen_telegram_start_sent = False
+            state.legionellen_telegram_done_sent = False
+            state.legionellen_temp_override = None
+            state.legionellen_target_reached_at = None
+            state.legionellen_wochennummer = None
+            state.solar = SimpleNamespace(forecast_today=None, forecast_tomorrow=None,
+                                          forecast_day2=None)
+            state.priority_config = SimpleNamespace(
+                sommer_modus=SommerModusConfig(
+                    aktiv=True, mindest_prognose_wh=2000.0,
+                    benoetigte_tage=3, temperatur_offset_c=-3.0,
+                ),
+                legionellen=LegionellenConfig(aktiv=False),
+            )
+            return state
 
-    @pytest.mark.asyncio
-    async def test_check_periodic_tasks_handles_7_values(self):
-        from main import check_periodic_tasks
-        state = self._baue_state()
+        @pytest.mark.asyncio
+        async def test_check_periodic_tasks_handles_7_values(self):
+            from main import check_periodic_tasks
+            state = self._baue_state()
 
-        with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-            mock_forecast.return_value = (2.5, 3.0, 1.5, "06:15", "20:15", "06:16", "20:14", {})
-            with patch("main.check_vpn_status", new_callable=AsyncMock):
-                last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
-                result = await check_periodic_tasks(AsyncMock(), state, last_check)
-
-                assert result is not None
-                assert state.solar.forecast_today == 2.5
-                assert state.solar.forecast_tomorrow == 3.0
-                assert state.solar.forecast_day2 == 1.5
-                assert state.solar.sunrise_today == "06:15"
-                assert state.solar.sunset_today == "20:15"
-
-    @pytest.mark.asyncio
-    async def test_legionellen_erforderliche_prognose_wird_beachtet(self, monkeypatch):
-        from main import check_periodic_tasks
-
-        state = self._baue_state()
-        from json_config import LegionellenConfig
-
-        state.priority_config.legionellen = LegionellenConfig(
-            aktiv=True, bevorzugter_tag=4, letzter_tag=6,
-            mindest_prognose_wh_qm=800.0, erforderliche_wh_qm=2500.0,
-            pv_prognose_schwelle_gut=2000.0,
-        )
-        state.legionellen_last_done = None
-        state.legionellen_planned_tag = None
-        state.legionellen_planned_date = None
-        state.legionellen_planned_day = None
-        state.legionellen_planned_time = None
-        state.legionellen_planned_reason = None
-        state.legionellen_plan_revision = 0
-        state.legionellen_plan_created_at = None
-        state.legionellen_aktiv = False
-        monkeypatch.setattr("main.save_plan", lambda state: True)
-        monkeypatch.setattr("main.clear_plan", lambda state, reason, persist=True: None)
-        monkeypatch.setattr("main.check_vpn_status", new_callable=AsyncMock)
-        with patch(
-            "main._state_now",
-            return_value=pytz.timezone("Europe/Berlin").localize(
-                datetime(2026, 9, 24, 12, 0)
-            ),
-        ):
             with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-                # Donnerstag heute; Freitag 2.0 < erforderliche 2.5,
-                # Samstag 3.0 ist der nächste gute planbare Tag.
-                mock_forecast.return_value = (2.5, 2.0, 3.0, "06:15", "20:15", "06:16", "20:14", {})
-                await check_periodic_tasks(AsyncMock(), state, datetime.now() - timedelta(hours=2))
+                mock_forecast.return_value = (2.5, 3.0, 1.5, "06:15", "20:15", "06:16", "20:14", {})
+                with patch("main.check_vpn_status", new_callable=AsyncMock):
+                    last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
+                    result = await check_periodic_tasks(AsyncMock(), state, last_check)
 
-        assert state.legionellen_planned_tag == 5
-        assert state.legionellen_planned_forecast_wh == 3000.0
+                    assert result is not None
+                    assert state.solar.forecast_today == 2.5
+                    assert state.solar.forecast_tomorrow == 3.0
+                    assert state.solar.forecast_day2 == 1.5
+                    assert state.solar.sunrise_today == "06:15"
+                    assert state.solar.sunset_today == "20:15"
 
-    @pytest.mark.asyncio
-    async def test_check_periodic_tasks_reicht_sommer_modus_wh_werte(self):
-        from main import check_periodic_tasks
-        state = self._baue_state()
-        state.priority_config.sommer_modus.benoetigte_tage = 1
+        @pytest.mark.asyncio
+        async def test_gueltiger_plan_uebersteht_unvollstaendige_prognose(self, monkeypatch):
+            """Regression: eine Prognoseluecke kostete den Legionellentermin.
 
-        with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-            mock_forecast.return_value = (2.5, 3.0, 2.0, "06:15", "20:15", "06:16", "20:14", {})
-            with patch("main.check_vpn_status", new_callable=AsyncMock), patch(
-                "main.evaluate_sommer_modus",
-                return_value=(1, True, datetime.now().date(), "aktiviert"),
-            ) as mock_sommer:
+            Der Plan fuer Freitag wurde verworfen, sobald auch nur der
+            day2-Wert fehlte. Weil die 3-Tage-Prognose das Fenster
+            Freitag-Sonntag montags und dienstags nicht erreicht, konnte er
+            erst wieder mittwochs ersetzt werden - zwei Tage ohne Termin.
+            """
+            from main import check_periodic_tasks
+            from json_config import LegionellenConfig
+
+            state = self._baue_state()
+            jetzt = datetime.now(pytz.timezone("Europe/Berlin"))
+            state.priority_config.legionellen = LegionellenConfig(
+                aktiv=True, bevorzugter_tag=4, letzter_tag=6,
+                mindest_prognose_wh_qm=800.0, erforderliche_wh_qm=2000.0,
+                pv_prognose_schwelle_gut=2000.0,
+            )
+            state.legionellen_last_done = None
+            state.legionellen_aktiv = False
+            # Bestehender, noch gueltiger Plan (Freitag liegt in der Zukunft)
+            freitag = jetzt.date() + timedelta(days=(4 - jetzt.weekday()) % 7 or 7)
+            state.legionellen_planned_tag = 4
+            state.legionellen_planned_date = freitag
+            state.legionellen_planned_day = "Freitag"
+            state.legionellen_planned_time = "08:00"
+            state.legionellen_planned_forecast_wh = 3000.0
+            state.legionellen_planned_reason = "geplant"
+            state.legionellen_plan_revision = 3
+            state.legionellen_plan_created_at = jetzt - timedelta(hours=2)
+
+            monkeypatch.setattr("main.save_plan", lambda state: True)
+            monkeypatch.setattr("main.check_vpn_status", AsyncMock())
+            monkeypatch.setattr(
+                "main._state_now", lambda state=None, tz=None: jetzt
+            )
+            # Unvollstaendige Prognose: day2 fehlt
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mf:
+                mf.return_value = (3.0, 3.2, None, "06:15", "20:15", "06:16", "20:14", {})
                 await check_periodic_tasks(
-                    AsyncMock(), state, datetime.now() - timedelta(hours=2)
+                    AsyncMock(), state, jetzt - timedelta(hours=2)
                 )
 
-        kwargs = mock_sommer.call_args.kwargs
-        assert kwargs["rad_today"] == pytest.approx(2500.0)
-        assert kwargs["rad_tomorrow"] == pytest.approx(3000.0)
-        assert kwargs["rad_day2"] == pytest.approx(2000.0)
-        # Der State bleibt als kWh/m²-Versorgung erhalten.
-        assert state.solar.forecast_today == 2.5
-        assert state.solar.forecast_tomorrow == 3.0
+            assert state.legionellen_planned_tag == 4, "Plan verworfen!"
+            assert state.legionellen_planned_date == freitag
+            assert state.legionellen_planned_forecast_wh == 3000.0
 
-    @pytest.mark.asyncio
-    async def test_check_periodic_tasks_handles_none_values(self):
-        from main import check_periodic_tasks
-        state = self._baue_state()
+        @pytest.mark.asyncio
+        async def test_veralteter_plan_wird_bei_prognoseluecke_doch_verworfen(self, monkeypatch):
+            """Gegenprobe: ein Plan in der VERGANGENHEIT wird weiterhin verworfen."""
+            from main import check_periodic_tasks
+            from json_config import LegionellenConfig
 
-        with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-            mock_forecast.return_value = (None,) * 8
-            with patch("main.check_vpn_status", new_callable=AsyncMock):
-                last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
-                result = await check_periodic_tasks(AsyncMock(), state, last_check)
+            state = self._baue_state()
+            jetzt = datetime.now(pytz.timezone("Europe/Berlin"))
+            state.priority_config.legionellen = LegionellenConfig(
+                aktiv=True, bevorzugter_tag=4, letzter_tag=6,
+                mindest_prognose_wh_qm=800.0, erforderliche_wh_qm=2000.0,
+                pv_prognose_schwelle_gut=2000.0,
+            )
+            state.legionellen_last_done = None
+            state.legionellen_aktiv = False
+            state.legionellen_planned_tag = 4
+            state.legionellen_planned_date = jetzt.date() - timedelta(days=1)
+            state.legionellen_planned_day = "Freitag"
+            state.legionellen_planned_time = "08:00"
+            state.legionellen_planned_forecast_wh = 3000.0
+            state.legionellen_plan_revision = 3
+            state.legionellen_plan_created_at = jetzt - timedelta(hours=2)
 
-                assert result is not None
-                assert state.solar.forecast_today is None
-
-    @pytest.mark.asyncio
-    async def test_fehlversuch_wird_erst_nach_retry_intervall_wiederholt(self):
-        """Regression: Bei Netzausfall (Open-Meteo nicht erreichbar) wurde die
-        API im 10-s-Loop-Takt endlos angefragt -> API-/Log-Spam im Pi-Log.
-        Jetzt gilt ein Retry-Throttle (FORECAST_RETRY_INTERVAL_MIN)."""
-        from main import check_periodic_tasks
-        from constants import FORECAST_RETRY_INTERVAL_MIN
-        state = self._baue_state()
-
-        with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-            mock_forecast.return_value = (None,) * 8
-            with patch("main.check_vpn_status", new_callable=AsyncMock):
-                last_check = datetime.now() - timedelta(hours=2)
-
-                # 1) Erster Fehlversuch -> anfragen, aber NICHT als Erfolg verbuchen
-                await check_periodic_tasks(AsyncMock(), state, last_check)
-                assert mock_forecast.await_count == 1
-                assert state.last_forecast_update is None
-                assert state.last_forecast_attempt is not None
-
-                # 2) Direkt danach (naechster 10-s-Loop) -> kein zweiter Abruf
-                await check_periodic_tasks(AsyncMock(), state, last_check)
-                assert mock_forecast.await_count == 1
-
-                # 3) Nach Ablauf des Retry-Intervalls -> wieder erlaubt
-                state.last_forecast_attempt = (
-                    datetime.now(state.local_tz)
-                    - timedelta(minutes=FORECAST_RETRY_INTERVAL_MIN + 1)
+            # Geprueft wird der ZUSTAND, nicht ein Mock: verworfen wird
+            # ueber priority_control_logic.clear_plan, nicht ueber main.
+            monkeypatch.setattr("main.save_plan", lambda state: True)
+            monkeypatch.setattr("main.check_vpn_status", AsyncMock())
+            monkeypatch.setattr("main._state_now", lambda state=None, tz=None: jetzt)
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mf:
+                mf.return_value = (3.0, 3.2, None, "06:15", "20:15", "06:16", "20:14", {})
+                await check_periodic_tasks(
+                    AsyncMock(), state, jetzt - timedelta(hours=2)
                 )
-                await check_periodic_tasks(AsyncMock(), state, last_check)
-                assert mock_forecast.await_count == 2
+
+            assert state.legionellen_planned_tag is None, (
+                "veralteter Plan haette erhalten bleiben muessen"
+            )
+            assert state.legionellen_planned_date is None
+
+        @pytest.mark.asyncio
+        async def test_legionellen_erforderliche_prognose_wird_beachtet(self, monkeypatch):
+            from main import check_periodic_tasks
+
+            state = self._baue_state()
+            from json_config import LegionellenConfig
+
+            state.priority_config.legionellen = LegionellenConfig(
+                aktiv=True, bevorzugter_tag=4, letzter_tag=6,
+                mindest_prognose_wh_qm=800.0, erforderliche_wh_qm=2000.0,
+                pv_prognose_schwelle_gut=2000.0,
+            )
+            state.legionellen_last_done = None
+            state.legionellen_planned_tag = None
+            state.legionellen_planned_date = None
+            state.legionellen_planned_day = None
+            state.legionellen_planned_time = None
+            state.legionellen_planned_reason = None
+            state.legionellen_plan_revision = 0
+            state.legionellen_plan_created_at = None
+            state.legionellen_aktiv = False
+            monkeypatch.setattr("main.save_plan", lambda state: True)
+            monkeypatch.setattr("main.clear_plan", lambda state, reason, persist=True: None)
+            monkeypatch.setattr("main.check_vpn_status", AsyncMock())
+            with patch(
+                "main._state_now",
+                return_value=pytz.timezone("Europe/Berlin").localize(
+                    datetime(2026, 9, 24, 12, 0)
+                ),
+            ):
+                with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
+                    # Donnerstag heute; Freitag 2.0 < erforderliche 2.5,
+                    # Samstag 3.0 ist der nächste gute planbare Tag.
+                    mock_forecast.return_value = (2.5, 2.0, 3.0, "06:15", "20:15", "06:16", "20:14", {})
+                    await check_periodic_tasks(AsyncMock(), state, datetime.now() - timedelta(hours=2))
+
+            assert state.legionellen_planned_tag == 5
+            assert state.legionellen_planned_forecast_wh == 3000.0
+
+        @pytest.mark.asyncio
+        async def test_check_periodic_tasks_reicht_sommer_modus_wh_werte(self):
+            from main import check_periodic_tasks
+            state = self._baue_state()
+            state.priority_config.sommer_modus.benoetigte_tage = 1
+
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
+                mock_forecast.return_value = (2.5, 3.0, 2.0, "06:15", "20:15", "06:16", "20:14", {})
+                with patch("main.check_vpn_status", new_callable=AsyncMock), patch(
+                    "main.evaluate_sommer_modus",
+                    return_value=(1, True, datetime.now().date(), "aktiviert"),
+                ) as mock_sommer:
+                    await check_periodic_tasks(
+                        AsyncMock(), state, datetime.now() - timedelta(hours=2)
+                    )
+
+            kwargs = mock_sommer.call_args.kwargs
+            assert kwargs["rad_today"] == pytest.approx(2500.0)
+            assert kwargs["rad_tomorrow"] == pytest.approx(3000.0)
+            assert kwargs["rad_day2"] == pytest.approx(2000.0)
+            # Der State bleibt als kWh/m²-Versorgung erhalten.
+            assert state.solar.forecast_today == 2.5
+            assert state.solar.forecast_tomorrow == 3.0
+
+        @pytest.mark.asyncio
+        async def test_check_periodic_tasks_handles_none_values(self):
+            from main import check_periodic_tasks
+            state = self._baue_state()
+
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
+                mock_forecast.return_value = (None,) * 8
+                with patch("main.check_vpn_status", new_callable=AsyncMock):
+                    last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
+                    result = await check_periodic_tasks(AsyncMock(), state, last_check)
+
+                    assert result is not None
+                    assert state.solar.forecast_today is None
+
+        @pytest.mark.asyncio
+        async def test_fehlversuch_wird_erst_nach_retry_intervall_wiederholt(self):
+            """Regression: Bei Netzausfall (Open-Meteo nicht erreichbar) wurde die
+            API im 10-s-Loop-Takt endlos angefragt -> API-/Log-Spam im Pi-Log.
+            Jetzt gilt ein Retry-Throttle (FORECAST_RETRY_INTERVAL_MIN)."""
+            from main import check_periodic_tasks
+            from constants import FORECAST_RETRY_INTERVAL_MIN
+            state = self._baue_state()
+
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
+                mock_forecast.return_value = (None,) * 8
+                with patch("main.check_vpn_status", new_callable=AsyncMock):
+                    last_check = datetime.now() - timedelta(hours=2)
+
+                    # 1) Erster Fehlversuch -> anfragen, aber NICHT als Erfolg verbuchen
+                    await check_periodic_tasks(AsyncMock(), state, last_check)
+                    assert mock_forecast.await_count == 1
+                    assert state.last_forecast_update is None
+                    assert state.last_forecast_attempt is not None
+
+                    # 2) Direkt danach (naechster 10-s-Loop) -> kein zweiter Abruf
+                    await check_periodic_tasks(AsyncMock(), state, last_check)
+                    assert mock_forecast.await_count == 1
+
+                    # 3) Nach Ablauf des Retry-Intervalls -> wieder erlaubt
+                    state.last_forecast_attempt = (
+                        datetime.now(state.local_tz)
+                        - timedelta(minutes=FORECAST_RETRY_INTERVAL_MIN + 1)
+                    )
+                    await check_periodic_tasks(AsyncMock(), state, last_check)
+                    assert mock_forecast.await_count == 2

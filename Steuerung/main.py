@@ -1047,7 +1047,13 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                 if state.legionellen_last_done is not None:
                     letzte_kw = state.legionellen_last_done.isocalendar()[1]
 
-                # Nur planen, wenn nicht bereits in dieser KW erledigt
+                # Nur planen, wenn nicht bereits in dieser KW erledigt.
+                # Hinweis: Der Plan wird an dieser Stelle nicht verworfen -
+                # bei unvollstaendiger Prognose passiert das weiter oben in
+                # pcl._set_stale_forecast, noch BEVOR dieser Block erreicht
+                # wird. Die Pruefung hier ist damit unerreichbar und bleibt
+                # nur als Absicherung gegen eine kuenftige Umstellung des
+                # else-Zweigs stehen.
                 if any(prognose is None for prognose in (rad_today_wh, rad_tomorrow_wh, rad_day2_wh)):
                     clear_plan(state, "Unvollständige Tagesprognose", persist=True)
                 elif letzte_kw != aktuelle_kw or state.legionellen_last_done is None:
