@@ -24,6 +24,72 @@ import notaus  # noqa: E402
 TZ = pytz.timezone("Europe/Berlin")
 
 
+# ---------- Anleitung nach dem Ausloesen ----------
+
+NEUSTART_HINWEIS = "systemctl restart wpsteuerung"
+
+
+def _lade_quelle(dateiname):
+    pfad = os.path.join(os.path.dirname(__file__), '..', '..', dateiname)
+    with open(pfad, encoding='utf-8') as fh:
+        return fh.read()
+
+
+def test_telegram_meldung_erklaert_den_neustart():
+    """Nach dem Not-Aus sind Telegram und WebApp offline.
+
+    Der Bot laeuft im selben Prozess wie die WebApp; der Not-Aus
+    beendet diesen Prozess. Eine Meldung, die bloss `notaus aus`
+    verspricht, fuehrt in eine Sackgasse: der Befehl kann nicht
+    abgesetzt werden, weil der Bot gar nicht mehr laeuft.
+    """
+    quelle = _lade_quelle('Steuerung/telegram_handler.py')
+    idx = quelle.find('*Not-Aus ausgelöst.*')
+    assert idx != -1, "Bestaetigungstext des Not-Aus nicht gefunden"
+    abschnitt = quelle[idx:idx + 1200]
+    # Der Aufheben-Hinweis muss den Neustart vorwegnehmen.
+    assert NEUSTART_HINWEIS in abschnitt, (
+        "Not-Aus-Meldung nennt keinen Dienstneustart - nach dem Ausloesen "
+        "ist `notaus aus` aber gar nicht sendbar"
+    )
+    assert abschnitt.find(NEUSTART_HINWEIS) < abschnitt.find('danach'), (
+        "Der Neustart muss vor dem Aufheben-Befehl stehen"
+    )
+
+
+def test_notaus_beenden_meldung_erklaert_den_neustart():
+    """Gilt fuer die Meldung, die beim Beenden des Prozesses rausgeht."""
+    quelle = _lade_quelle('Steuerung/main.py')
+    idx = quelle.find('*NOT-AUS aktiv*')
+    assert idx != -1, "Not-Aus-Meldung in main.py nicht gefunden"
+    abschnitt = quelle[idx:idx + 1200]
+    assert NEUSTART_HINWEIS in abschnitt, (
+        "Beenden-Meldung nennt keinen Dienstneustart"
+    )
+
+
+def test_webapp_erklaert_dass_der_dienst_stirbt():
+    """Die WebApp wird vom selben Prozess geliefert wie der Dienst.
+
+    Nach `notaus` kann sie sich nicht mehr aktualisieren; der Knopf
+    muss das sagen, sonst wartet der Nutzer vergeblich auf eine
+    gruene Anzeige.
+    """
+    quelle = _lade_quelle('webapp/index.html')
+    idx = quelle.find('async function sendControl')
+    assert idx != -1
+    abschnitt = quelle[idx:idx + 2500]
+    assert 'notaus' in abschnitt
+    assert NEUSTART_HINWEIS in abschnitt, (
+        "WebApp meldet den Not-Aus ohne Hinweis auf den Dienstneustart"
+    )
+    # Und sie darf den Statusabruf nicht erzwingen, der ohnehin
+    # fehlschlagen wuerde und die Fehlermeldung ueberschreiben wuerde.
+    assert "if (command === 'notaus') return;" in abschnitt, (
+        "Nach dem Not-Aus darf kein fetchStatus mehr die Fehlermeldung ueberholen"
+    )
+
+
 # ---------- Sperrdatei ----------
 
 def test_sperre_ueberlebt_neustart(tmp_path):

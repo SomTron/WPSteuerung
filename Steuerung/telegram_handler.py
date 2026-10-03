@@ -62,7 +62,12 @@ async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
         "⚠️ *Es heizt nichts mehr* – auch die Legionellenprophylaxe\n"
         "und der Notfallschutz sind angehalten. Der Brauchwasser-\n"
         "Speicher kühlt aus.\n\n"
-        "Aufheben: `notaus aus`",
+        "⚠️ *Diese Nachricht ist die letzte.* Der Dienst beendet sich\n"
+        "gleich – Telegram und WebApp sind dann offline, ein\n"
+        "`notaus aus` ist also noch gar nicht möglich.\n"
+        "Zum Wiederannehmen zuerst:\n"
+        "  `systemctl restart wpsteuerung`\n"
+        "danach `notaus aus`",
         bot_token, parse_mode="Markdown",
     )
 

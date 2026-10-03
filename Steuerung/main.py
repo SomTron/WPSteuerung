@@ -210,7 +210,13 @@ async def notaus_ausloesen(state, grund="manuell", session=None):
                 f"Grund: {grund}\n"
                 f"Zeit: {state.control.notaus_ts}\n\n"
                 f"Kompressor: {'aus' if aus_ok else 'AUSSCHALTEN FEHLGESCHLAGEN'}\n"
-                "Die Steuerung heizt nicht mehr. Aufheben mit `notaus aus`.",
+                "Die Steuerung heizt nicht mehr – auch Legionelle und\n"
+                "Notfallschutz sind angehalten.\n\n"
+                "*Wichtig:* Der Dienst beendet sich gleich, Telegram und\n"
+                "WebApp sind dann offline. Diese Nachricht ist die letzte.\n"
+                "Zum Wiederannehmen:\n"
+                "  systemctl restart wpsteuerung\n"
+                "  danach `notaus aus`",
                 state.config.Telegram.BOT_TOKEN,
             )
         except Exception:
