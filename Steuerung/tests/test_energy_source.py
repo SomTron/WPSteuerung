@@ -35,7 +35,18 @@ def test_pv_ist_nur_mit_echter_pv_leistung_und_ohne_netzkauf_erlaubt():
     assert pv_mit_netzkauf.verfuegbar is False
 
 
-def test_feed_in_allein_ist_keine_pv_erzeugung():
+def test_feedin_beweist_solar_auch_ohne_erzeugungsanzeige():
+    """Einspeisung gilt als Solar-NACHWEIS, nicht als Erzeugungsmessung.
+
+    Frueher stand hier "Einspeisung allein ist keine PV-Erzeugung" -> Netz.
+    Physikalisch ist das falsch: ein Wechselrichter kann nur einspeisen,
+    wenn die PV mehr erzeugt als das Haus aufnimmt. Ein `acpower` von 0 bei
+    1500 W Export ist eine kaputte Anzeige, kein Beweis fuer "kein Solar".
+
+    Wichtig bleibt: die Einspeisung wird NICHT als Erzeugungswert verwendet
+    (die PV-Erzeugung ist `acpower`), sondern nur als Nachweis, dass
+    Solarstrom verfuegbar ist.
+    """
     ergebnis = classify_energy_source(
         pv_acpower=0.0,
         feedin_watt=1500.0,
@@ -44,8 +55,11 @@ def test_feed_in_allein_ist_keine_pv_erzeugung():
         pv_min_watt=50.0,
         max_netzkauf_watt=-50.0,
     )
-    assert ergebnis.quelle is Energiequelle.NETZ
-    assert ergebnis.verfuegbar is False
+    assert ergebnis.quelle is Energiequelle.PV
+    assert ergebnis.verfuegbar is True
+    # Die Erzeugungsanzeige bleibt "nicht verwertbar" - sie wird nicht
+    # stillschweigend durch die Einspeisung ersetzt.
+    assert "0W" in ergebnis.begruendung, ergebnis.begruendung
 
 
 def test_batterie_rohwert_wird_ueber_vorzeichen_normiert():
@@ -143,6 +157,76 @@ def test_pv_ueberschuss_entspricht_einspeisung_und_ladung():
     assert pv_ueberschuss_watt(300.0, -400.0, -500.0) == 0.0
 
 
+def test_ueberschuss_oeffnet_die_freigabe_auch_bei_kleiner_erzeugung():
+    """Regression 03.10.2026, 09:18-10:49: 1,5 h Solar ungenutzt.
+
+    Der Wechselrichter meldet nachts rund 200 W Eigenverbrauch. Bleibt die
+    Erzeugungsanzeige auf diesem Stand, verweigerte die Freigabe, obwohl
+    2354-5488 W Ueberschuss ausgewiesen waren und unten bei 39 C lag -
+    AdaptivePV blieb an der 300-W-Erzeugungsschwelle stehen.
+    """
+    pv = classify_energy_source(
+        pv_acpower=210.0,        # Nachtstandby / stehen gebliebene Anzeige
+        feedin_watt=0.0,
+        batpower_raw=2354.0,     # Batterie laedt -> 2354 W Ueberschuss
+        soc=41.0,
+        pv_min_watt=300.0,       # AdaptivePV-Schwelle aus dem Log
+        max_netzkauf_watt=-50.0,
+    )
+    assert pv.quelle is Energiequelle.PV
+    assert pv.verfuegbar is True
+    assert "2354W" in pv.begruendung, pv.begruendung
+    # Beide Werte muessen genannt werden - die Diskrepanz ist das Symptom.
+    assert "210W" in pv.begruendung, pv.begruendung
+
+
+def test_nachts_bleibt_ohne_ueberschuss_gesperrt():
+    """Gegenprobe: nachts darf die Freigabe NICHT aufgehen.
+
+    Betriebslog 03.10.2026, 05:18: PV=255W, SOC fallend (Batterie speist
+    das Haus). Ohne Ueberschuss bleibt es Netz.
+    """
+    nacht = classify_energy_source(
+        pv_acpower=255.0,
+        feedin_watt=0.0,
+        batpower_raw=-239.0,     # Batterie SPEIST das Haus
+        soc=89.0,
+        pv_min_watt=300.0,
+        battery_min_watt=50.0,
+        soc_min_prozent=90.0,
+        max_netzkauf_watt=-50.0,
+    )
+    assert nacht.quelle is not Energiequelle.PV
+    assert nacht.verfuegbar is False
+
+
+def test_einspeisung_allein_oeffnet_die_freigabe():
+    """Klassischer Solarfall: Export vorhanden."""
+    solar = classify_energy_source(
+        pv_acpower=310.0,
+        feedin_watt=2500.0,
+        batpower_raw=0.0,
+        soc=80.0,
+        pv_min_watt=300.0,
+    )
+    assert solar.quelle is Energiequelle.PV
+    assert solar.verfuegbar is True
+
+
+def test_netzkauf_blockiert_auch_bei_ueberschuss_signal():
+    """Der Netzzkauf-Vorbehalt bleibt zwingend."""
+    trotz_ueberschuss = classify_energy_source(
+        pv_acpower=210.0,
+        feedin_watt=-400.0,      # Haus kauft Netzstrom
+        batpower_raw=2354.0,
+        soc=41.0,
+        pv_min_watt=300.0,
+        max_netzkauf_watt=-50.0,
+    )
+    assert trotz_ueberschuss.quelle is not Energiequelle.PV
+    assert trotz_ueberschuss.verfuegbar is False
+
+
 def test_bilanz_ist_intern_konsistent():
     """Die ausnahmslos gueltige Identitaet: Ueberschuss == max(0, feedin + batPower).
 
@@ -214,8 +298,13 @@ def test_ladende_batterie_ist_keine_entladungsquelle():
         soc_min_prozent=90.0,
         max_netzkauf_watt=-50.0,
     )
+    # Sie ist KEINE Entladungsquelle - die kann gar nicht liefern.
     assert beim_laden.quelle is not Energiequelle.BATTERIE
-    assert beim_laden.verfuegbar is False
+    assert beim_laden.batterie_entladung_watt == 0.0
+    # Sonst aber sehr wohl eine Solar-Quelle: die Batterie nimmt gerade
+    # 3582 W auf, und ohne Netzbezug kommt das nur aus PV-Ueberschuss.
+    assert beim_laden.quelle is Energiequelle.PV
+    assert beim_laden.verfuegbar is True
 
 
 def test_stale_und_fehlende_daten_sind_fail_safe():

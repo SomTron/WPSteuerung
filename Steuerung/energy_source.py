@@ -194,16 +194,40 @@ def classify_energy_source(
 
     pv_signal = pv if pv is not None else feedin
     kein_netzkauf = feedin is not None and feedin >= grid_limit
+    ueberschuss = pv_ueberschuss_watt(pv, feedin, batpower_raw)
+
+    # Zwei Nachweise fuer Solarstrom:
+    #  1. die Erzeugung liegt ueber der Schwelle, ODER
+    #  2. es ist UEBERSCHUSS nachweisbar - die Batterie laedt oder es wird
+    #     eingespeist.
+    # Nur (1) zu pruefen war zu eng: der Wechselrichter meldet nachts rund
+    # 200 W Eigenverbrauch, und wenn die Erzeugungsanzeige einmal auf diesem
+    # Stand stehen bleibt, wurde die Freigabe verweigert, obwohl 2-5 kW
+    # Solar bereitstanden. Betriebslog 03.10.2026, 09:18-10:49: PV=210 W
+    # bei ausgewiesenem Ueberschuss von 2354-5488 W und unten 39 C - 1,5 h
+    # ungenutztes Solar, weil AdaptivePV an der 300-W-Erzeugungsschwelle stand.
     pv_ok = (
         pv_signal is not None
         and pv_signal >= pv_threshold
         and kein_netzkauf
     )
-    if pv_ok:
+    ueberschuss_ok = (
+        ueberschuss is not None
+        and ueberschuss >= pv_threshold
+        and kein_netzkauf
+    )
+    if pv_ok or ueberschuss_ok:
+        # Beide Werte nennen: sie koennen weit auseinanderliegen, und genau
+        # diese Diskrepanz ist das Symptom der stale Erzeugungsanzeige.
+        # Einer der beiden kann None sein - der Weg ueber pv_ok laeuft auch
+        # dann, wenn gar keine Erzeugung gemeldet wird.
+        erzeugung_txt = "n/a" if pv_signal is None else f"{pv_signal:.0f}W"
+        ueberschuss_txt = "n/a" if ueberschuss is None else f"{ueberschuss:.0f}W"
         return result(
             Energiequelle.PV,
             True,
-            f"PV-Erzeugung {pv_signal:.0f}W >= {pv_threshold:.0f}W, kein Netzkauf",
+            f"PV-Erzeugung {erzeugung_txt}, Ueberschuss {ueberschuss_txt}"
+            f" >= {pv_threshold:.0f}W, kein Netzkauf",
         )
 
     batterie_ok = (
