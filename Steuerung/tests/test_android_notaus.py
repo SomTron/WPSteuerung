@@ -233,6 +233,36 @@ def test_klammern_ausgeglichen():
     assert not kaputt, "Klammern unausgeglichen: " + ", ".join(kaputt)
 
 
+def test_key_quelle_stimmt_mit_api_ueberein():
+    """Die Beschriftung muss dorthin zeigen, wo der Schluessel wirklich ist.
+
+    api.py liest WPS_API_KEY aus der Umgebung; die Unit laedt sie aus
+    /etc/wpssteuerung/api.env. Ein Verweis auf die config.ini fuehrt
+    den Nutzer bei der Suche in die falsche Datei - die gibt es hier
+    nicht als Quelle des Schluessels.
+    """
+    api = _lese(os.path.join(ROOT, 'Steuerung', 'api.py'))
+    assert 'os.environ.get("WPS_API_KEY")' in api, (
+        "api.py laesst den Schluessel woanders her - die Beschreibung "
+        "in der App muesste angepasst werden"
+    )
+
+    unit = _lese(os.path.join(ROOT, 'Steuerung', 'wpsteuerung.service'))
+    assert '/etc/wpssteuerung/api.env' in unit, (
+        "Die Unit laedt keine api.env - woher kommt WPS_API_KEY?"
+    )
+
+    xml = _lese(os.path.join(ANDROID, 'res', 'values', 'strings.xml'))
+    warnung = re.search(
+        r'<string name="verbindung_warnung">(.*?)</string>', xml, re.S).group(1)
+    assert '/etc/wpssteuerung/api.env' in warnung, (
+        "Die Beschriftung nennt nicht die echte Quelle des Schluessels"
+    )
+    assert 'WPS_API_KEY' in warnung, (
+        "Die Beschriftung nennt die Variablennummer nicht"
+    )
+
+
 def test_manifest_sichert_das_geheimnis():
     """Seit die App den API-Schluessel ablegt, darf er nicht mitgesichert werden.
 

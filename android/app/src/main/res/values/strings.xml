@@ -21,7 +21,7 @@
 
     <!-- Verbindung -->
     <string name="verbindung_titel">Verbindung</string>
-    <string name="verbindung_warnung">Ohne API-Schlüssel kann diese App nur lesen. Jeder Befehl – auch der Not-Aus – wird vom Dienst mit HTTP 401 abgewiesen. Der Schlüssel steht in der WPS_API_KEY-Zeile der config.ini auf dem Pi.</string>
+    <string name="verbindung_warnung">Ohne API-Schlüssel kann diese App nur lesen. Jeder Befehl – auch der Not-Aus – wird vom Dienst mit HTTP 401 abgewiesen. Der Schlüssel steht in der Datei /etc/wpssteuerung/api.env auf dem Pi (Variable WPS_API_KEY), nicht in der config.ini.</string>
     <string name="verbindung_key_label">API-Schlüssel</string>
     <string name="verbindung_speichern">Schlüssel speichern</string>
     <string name="verbindung_gesetzt">Schlüssel hinterlegt.</string>
