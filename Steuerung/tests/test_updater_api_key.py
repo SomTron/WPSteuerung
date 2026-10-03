@@ -306,3 +306,66 @@ def test_option24_verweist_auf_option25():
         "Datei und ein 503 und laeuft in die Irre"
     )
     assert '25' in status, "Kein Verweis auf Option 25"
+
+
+# ---------- Rechte: der Menue-Benutzer muss die Datei lesen koennen ----------
+
+def test_gruppe_statt_rootroot():
+    """Das Menue laeuft als Benutzer, nicht als root.
+
+    Mit root:root 640 kann root (und damit systemd) die Datei lesen, der
+    Betreiber aber nicht - er kann den Schluessel dann nicht in der App
+    eintragen und sieht im Menue "Kein Schluessel gesetzt", obwohl einer
+    da ist. Genau das ist auf dem Pi passiert.
+    """
+    q = _quelle()
+    assert re.search(r'API_GRUPPE="\$\{WPS_API_GROUP:-', q), (
+        "Die Gruppe des aufrufenden Benutzers wird nicht ermittelt"
+    )
+    erzeugen = _funktion('api_key_erzeugen')
+    assert 'chown "root:$API_GRUPPE"' in erzeugen, (
+        "Die Datei gehoert weiterhin root:root - der Benutzer kann sie nicht lesen"
+    )
+    assert 'install -d -m 750 -o root -g "$API_GRUPPE"' in erzeugen, (
+        "Das Verzeichnis ist nicht traversierbar fuer die eigene Gruppe"
+    )
+
+
+def test_status_unterscheidet_fehlend_von_nicht_lesbar():
+    """"Kein Schluessel gesetzt" war bei vorhandener Datei schlicht falsch."""
+    status = _funktion('api_key_status')
+    # Achtung: das Shell-Schluesselwort heisst "elif", nicht "elsif".
+    assert re.search(r'elif\s+\[\s*-f\s+"?\$\{?API_ENV_FILE\}?"?\s*\]', status), (
+        "Der Fall 'Datei da, aber nicht lesbar' wird nicht behandelt"
+    )
+    assert 'chown root:%s' in status, (
+        "Keine konkrete Abhilfe fuer die Rechte"
+    )
+    assert 'id -gn' in status
+
+    anzeigen = _funktion('api_key_anzeigen')
+    assert 'chown root:%s' in anzeigen, (
+        "Option 3 meldet bei vorhandener, unlesbarer Datei 'nicht gesetzt'"
+    )
+
+
+def test_kein_sudo_als_leseweg():
+    """Die Statusanzeige darf nicht interaktiv werden.
+
+    Jedes 'sudo' im Lesepfad wuerde eine Passwortabfrage in einer
+    Menueschleife ausloesen, die auch von Skripten genutzt wird.
+
+    Gesucht wird nach einem ausgefuehrten sudo-Befehl, nicht nach dem
+    Wort: der Hilfetext nennt "sudo chown ..." als Anleitung, und genau
+    das soll er ja tun.
+    """
+    for name in ('api_key_read', 'api_key_status', 'api_key_anzeigen'):
+        f = _funktion(name)
+        befehle = re.findall(r'^\s*sudo\s', f, re.MULTILINE)
+        assert not befehle, (
+            f"{name}() fuehrt sudo aus ({len(befehle)}x) - die Anzeige wird "
+            "sonst interaktiv"
+        )
+        assert '$(sudo' not in f, (
+            f"{name}() ruft sudo in einer Befehlssubstitution auf"
+        )

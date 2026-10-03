@@ -653,6 +653,10 @@ show_analysis_quality() {
 API_ENV_FILE="${WPS_API_ENV_FILE:-/etc/wpssteuerung/api.env}"
 API_ENV_DIR="${API_ENV_FILE%/*}"
 API_API_BASE="${WPS_API_BASE:-http://127.0.0.1:8000}"
+# Gruppe des aufrufenden Benutzers. Die Datei gehoert root, aber sie muss
+# fuer den Betreiber lesbar sein - er soll den Schluessel ja in der App
+# eintragen koennen. Deshalb root:<eigene-gruppe> 640 und nicht root:root.
+API_GRUPPE="${WPS_API_GROUP:-$(id -gn 2>/dev/null || echo root)}"
 
 # Schluessel aus der Datei lesen (nur den Wert, ohne Prefix).
 api_key_read() {
@@ -711,14 +715,28 @@ api_key_status() {
     printf "API-Basis:    %s\n" "$API_API_BASE"
     echo ""
     key=$(api_key_read)
-    if [ -z "$key" ]; then
-        printf "${YELLOW}Status: NICHT gesetzt.${NC}\n"
+    if [ -n "$key" ]; then
+        printf "${GREEN}Status: gesetzt (%s Zeichen).${NC}\n" "${#key}"
+    elif [ -f "$API_ENV_FILE" ]; then
+        # Die Datei ist da, der Benutzer darf sie aber nicht lesen. Das ist
+        # kein "nicht gesetzt" - es ist die Rechtevergabe. Genau hier ist
+        # es auf dem Pi gescheitert: root:root 640 ist fuer root lesbar,
+        # aber nicht fuer den Benutzer, der den Schluessel eintragen soll.
+        printf "${RED}Status: Datei vorhanden, aber fuer dich nicht lesbar.${NC}\n"
+        printf "  Datei : %s\n" "$API_ENV_FILE"
+        printf "  Rechte: %s\n" "$(ls -l "$API_ENV_FILE" 2>/dev/null | cut -c1-10)"
+        printf "  Du   : %s (Gruppe %s)\n" "$(id -un)" "$(id -gn)"
+        printf "\n  Das Menue laeuft als normaler Benutzer, systemd liest die\n"
+        printf "  Datei als root. Damit beides geht, muss die Datei der eigenen\n"
+        printf "  Gruppe gehoeren:\n"
+        printf "    sudo chown root:%s %s\n" "$API_GRUPPE" "$API_ENV_FILE"
+        printf "    sudo chgrp %s %s\n" "$API_GRUPPE" "$API_ENV_DIR"
+    else
+        printf "${YELLOW}Status: NICHT gesetzt (keine Datei).${NC}\n"
         printf "  Folge: /control, /command, /config, /config/export,\n"
         printf "         /debug/csv und /history/regeln antworten mit 503.\n"
         printf "  Telegram funktioniert trotzdem - der Handler umgeht die API.\n"
         printf "  Abhilfe: hier 'Neuen Schluessel erzeugen'.\n"
-    else
-        printf "${GREEN}Status: gesetzt (%s Zeichen).${NC}\n" "${#key}"
     fi
     echo ""
     # Querverweis: eine vorhandene api.env hilft nur, wenn die Unit sie
@@ -762,7 +780,9 @@ api_key_erzeugen() {
     fi
 
     printf "Ziel: %s\n" "$API_ENV_FILE"
-    if ! sudo install -d -m 750 -o root -g root "$API_ENV_DIR"; then
+    # Verzeichnis: 750 root:<gruppe> - "x" ist noetig, sonst findet der
+    # Benutzer die Datei gar nicht erst.
+    if ! sudo install -d -m 750 -o root -g "$API_GRUPPE" "$API_ENV_DIR"; then
         printf "${RED}✗ Verzeichnis %s nicht anlegbar.${NC}\n" "$API_ENV_DIR"
         return 1
     fi
@@ -774,13 +794,13 @@ api_key_erzeugen() {
         printf "${RED}✗ Temporaere Datei nicht anlegbar.${NC}\n"; return 1; }
     printf 'WPS_API_KEY=%s\n' "$key" | sudo tee "$tmp" >/dev/null 2>&1
     sudo chmod 640 "$tmp" || true
-    sudo chown root:root "$tmp" 2>/dev/null || true
+    sudo chown "root:$API_GRUPPE" "$tmp" 2>/dev/null || true
     if ! sudo mv "$tmp" "$API_ENV_FILE"; then
         sudo rm -f "$tmp" 2>/dev/null || true
         printf "${RED}✗ Datei konnte nicht ersetzt werden.${NC}\n"
         return 1
     fi
-    printf "${GREEN}✓ %s geschrieben (Rechte 640, root:root).${NC}\n" "$API_ENV_FILE"
+    printf "${GREEN}✓ %s geschrieben (640, root:%s).${NC}\n" "$API_ENV_FILE" "$API_GRUPPE"
 
     printf "\nNeustart noetig - die Datei wird nur beim Dienststart gelesen.\n"
     printf "Jetzt neu starten? [j/N] "
@@ -796,7 +816,16 @@ api_key_erzeugen() {
 api_key_anzeigen() {
     key=$(api_key_read)
     if [ -z "$key" ]; then
-        printf "${YELLOW}Kein Schluessel gesetzt.${NC}\n"
+        if [ -f "$API_ENV_FILE" ]; then
+            printf "${RED}Die Datei %s existiert, ist aber nicht lesbar.${NC}\n" "$API_ENV_FILE"
+            printf "Rechte: %s\n" "$(ls -l "$API_ENV_FILE" 2>/dev/null | cut -c1-10)"
+            printf "Abhilfe:\n"
+            printf "  sudo chown root:%s %s\n" "$API_GRUPPE" "$API_ENV_FILE"
+            printf "  sudo chgrp %s %s\n" "$API_GRUPPE" "$API_ENV_DIR"
+            return 1
+        fi
+        printf "${YELLOW}Kein Schluessel gesetzt (keine Datei).${NC}\n"
+        printf "Erzeugen: Option 2 in diesem Menue.\n"
         return 1
     fi
     printf "Schluessel (fuer WebApp und Android-App):\n\n"
