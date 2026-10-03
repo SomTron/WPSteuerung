@@ -54,40 +54,88 @@ def _finite(value: object) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
+def pv_erzeugung_watt(
+    powerdc1: object,
+    powerdc2: object,
+    acpower: object,
+    batpower_raw: object,
+) -> Optional[float]:
+    """Tatsaechliche PV-Erzeugung in Watt.
+
+    ``ACPower`` ist NICHT die Erzeugung. Es ist der Wechselstromausgang
+    des Wechselrichter - das, was ins Haus und (anteilig) ins Netz
+    fliesst. Belegt an den Betriebsdaten des Pi:
+
+        Stunde   DC (W)   AC (W)
+        0-4          0    224-250     <- Nacht: keine Sonne, AC trotzdem > 0
+        9         2914      352     <- 2562 W wandern in den Speicher
+        12        6881     6749
+
+    Nachts liefert die Gleichstromseite 0 W. Damit ist die Erzeugung
+    eindeutig ``powerdc1 + powerdc2``.
+
+    Fehlen die DC-Werte (aeltere Firmware), wird genaehert mit
+    ``acpower + max(0, batpower)``: was der Wechselrichter abgibt, plus
+    das, was zusaetzlich in den Speicher fliesst. Nachts ist
+    ``batpower`` negativ oder 0, dann faellt das auf ``acpower``
+    zurueck und bleibt damit weiterhin nur eine Naeherung.
+    """
+    dc1 = _finite(powerdc1)
+    dc2 = _finite(powerdc2)
+    if dc1 is not None or dc2 is not None:
+        # 0 ist hier ein gueltiger Messwert (Nacht), kein "fehlt".
+        return max(0.0, (dc1 or 0.0) + (dc2 or 0.0))
+    ac = _finite(acpower)
+    if ac is None:
+        return None
+    bat = _finite(batpower_raw) or 0.0
+    return max(0.0, ac + max(0.0, bat))
+
+
 def hausverbrauch_watt(
     acpower: object,
     feedin: object,
-    batpower_raw: object,
+    batpower_raw: object = None,
 ) -> Optional[float]:
     """Leitet den Hausverbrauch aus der Wechselrichterbilanz ab.
 
-        PV-Erzeugung = Hausverbrauch + Einspeisung + Batterie
+    ``batpower_raw`` wird nicht mehr gebraucht und ist nur noch zur
+    Aufrufkompatibilitaet vorhanden. Er darf nicht in die Rechnung
+    eingehen - die Begruendung steht unten.
+
+        acpower = Hausverbrauch + Einspeisung
 
     also::
 
-        Hausverbrauch = acpower - feedin - batPower
+        Hausverbrauch = acpower - feedin
 
-    Das Vorzeichen von ``batPower`` faellt dabei von selbst richtig: bei
-    Ladung (``+``) wird sie abgezogen, bei Entladung (``-``) addiert - es
-    ist derselbe Term.
+    ``ACPower`` ist der Wechselstromausgang des Wechselrichter - das,
+    was ins Haus fliesst, plus was eingespeist wird. Die Batterie gehoert
+    hier NICHT hinein: sie steht zwischen der Gleichstromseite und der
+    Wechselstromseite und aendert am AC-Ausgang nichts.
 
-    Bewertet an 254.305 CSV-Messreihen: Median 353 W, Nacht 00-04 Uhr rund
-    270 W, Mittagsspitze 09-14 Uhr 1776-2550 W (darin die Waermepumpe) -
-    ein physikalisch plausibles Tagesprofil. Etwa 8 % der Werte fallen
-    leicht negativ, weil Erzeugung, Einspeisung und Batterie nicht exakt
-    gleichzeitig gemessen werden; das Ergebnis wird deshalb auf >= 0
-    begrenzt und nicht als exakte Momentanleistung ausgewiesen.
+    Bis September stand hier ``acpower - feedin - batPower``, was die
+    Annahme ``acpower = PV-Erzeugung`` voraussetzte. Die ist falsch -
+    nachts liefert die DC-Seite 0 W, die AC-Seite dagegen rund 250 W.
+    Folge der alten Formel: bei ladender Batterie war das Ergebnis
+    negativ und wurde auf 0 begrenzt (im Betriebslog des 03.10. durchgehend
+    ``haus=0``), bei entladender Batterie wurde die Entladung faelschlich
+    als Verbrauch addiert.
+
+    Etwa 8 % der Werte fallen leicht negativ, weil Ausgang und
+    Einspeisung nicht exakt gleichzeitig gemessen werden; das Ergebnis
+    wird deshalb auf >= 0 begrenzt und nicht als exakte
+    Momentanleistung ausgewiesen.
 
     Wichtig: Der Wert ENTHAEALT den Verbrauch der Waermepumpe, wenn sie
     laeuft. Als Zuschaltkriterium taugt deshalb nicht der Hausverbrauch,
-    sondern der daraus gebildete Ueberschuss ``acpower - hausverbrauch``.
+    sondern der eigens berechnete Ueberschuss.
     """
-    pv = _finite(acpower)
+    ac = _finite(acpower)
     grid = _finite(feedin)
-    bat = _finite(batpower_raw)
-    if pv is None or grid is None or bat is None:
+    if ac is None or grid is None:
         return None
-    return max(0.0, pv - grid - bat)
+    return max(0.0, ac - grid)
 
 
 def pv_ueberschuss_watt(
@@ -115,11 +163,14 @@ def pv_ueberschuss_watt(
     wird der Hausverbrauch auf 0 begrenzt, wodurch die zweite Variante
     zu viel auswiese (gemessen: 300 W statt der tatsaechlichen 410 W).
     """
-    haus = hausverbrauch_watt(acpower, feedin, batpower_raw)
-    if haus is None:
-        return None
+    # Haeufigster Aufrufweg: classify_energy_source() reicht den Rohwert
+    # weiter. Fehlt er, ist die Bilanz unvollstaendig und es wird None
+    # geliefert - nicht 0, denn "kein Ueberschuss" und "keine Messung"
+    # fuehren zu unterschiedlichen Entscheidungen.
     grid = _finite(feedin)
     bat = _finite(batpower_raw)
+    if grid is None or bat is None:
+        return None
     return max(0.0, grid + bat)
 
 
@@ -153,6 +204,7 @@ def classify_energy_source(
     battery_min_watt: float = 50.0,
     soc_min_prozent: float = 90.0,
     max_netzkauf_watt: float = -50.0,
+    pv_erzeugung_watt: object = None,
 ) -> EnergiequellenStatus:
     """Klassifiziert PV > Batterie > Netz anhand aktueller und valider Werte.
 
@@ -192,20 +244,29 @@ def classify_energy_source(
     if solar_stale:
         return result(Energiequelle.STALE, False, "Solardaten veraltet")
 
-    pv_signal = pv if pv is not None else feedin
     kein_netzkauf = feedin is not None and feedin >= grid_limit
     ueberschuss = pv_ueberschuss_watt(pv, feedin, batpower_raw)
 
     # Zwei Nachweise fuer Solarstrom:
-    #  1. die Erzeugung liegt ueber der Schwelle, ODER
+    #  1. die ERZEUGUNG liegt ueber der Schwelle, ODER
     #  2. es ist UEBERSCHUSS nachweisbar - die Batterie laedt oder es wird
     #     eingespeist.
-    # Nur (1) zu pruefen war zu eng: der Wechselrichter meldet nachts rund
-    # 200 W Eigenverbrauch, und wenn die Erzeugungsanzeige einmal auf diesem
-    # Stand stehen bleibt, wurde die Freigabe verweigert, obwohl 2-5 kW
-    # Solar bereitstanden. Betriebslog 03.10.2026, 09:18-10:49: PV=210 W
-    # bei ausgewiesenem Ueberschuss von 2354-5488 W und unten 39 C - 1,5 h
-    # ungenutztes Solar, weil AdaptivePV an der 300-W-Erzeugungsschwelle stand.
+    #
+    # Zu (1): bevorzugt wird `pv_erzeugung_watt` (powerdc1 + powerdc2). Ohne
+    # diesen Wert greift der Rueckfall auf `pv_signal`, also den
+    # Wechselstromausgang. Das ist KEIN Ersatz fuer die Erzeugung, sondern
+    # Haus plus Netz - und genau daraus entstand die urspruengliche
+    # Fehldiagnose "1,5 h ungenutztes Solar".
+    #
+    # Der damalige Befund lautete: PV=210 W bei ausgewiesenem Ueberschuss von
+    # 2354-5488 W, 09:18-10:49. Die Anzeige stand dabei nicht fest - sie war
+    # nie die Erzeugung. Nachts liefert die DC-Seite 0 W, die AC-Seite
+    # dagegen rund 250 W. Der zweite Nachweis bleibt als Sicherheitsnetz
+    # bestehen: er ist unabhaengig von der Erzeugungsmessung.
+    generation = _finite(pv_erzeugung_watt)
+    pv_signal = generation if generation is not None else (
+        pv if pv is not None else feedin
+    )
     pv_ok = (
         pv_signal is not None
         and pv_signal >= pv_threshold

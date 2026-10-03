@@ -55,6 +55,7 @@ from energy_source import (
     batterie_ladung_watt,
     classify_energy_source,
     hausverbrauch_watt,
+    pv_erzeugung_watt,
     pv_ueberschuss_watt,
 )
 from logic_utils import (
@@ -842,6 +843,17 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         state.solar.hausverbrauch = hausverbrauch_watt(
             state.solar.acpower,
             state.solar.feedinpower,
+            state.solar.batpower,
+        )
+        # Die echte PV-Erzeugung kommt von der Gleichstromseite. `acpower`
+        # ist der Wechselstromausgang (Haus + Netz) und taugt nicht als
+        # Ersatz: nachts betraegt er 224-250 W, obwohl die DC-Seite 0
+        # meldet. Betroffen waren Anzeige, Entscheidungslog und die
+        # Forecast-Kalibrierung.
+        state.solar.pv_erzeugung = pv_erzeugung_watt(
+            state.solar.last_api_data.get("powerdc1"),
+            state.solar.last_api_data.get("powerdc2"),
+            state.solar.acpower,
             state.solar.batpower,
         )
         state.solar.pv_ueberschuss = pv_ueberschuss_watt(
@@ -1739,7 +1751,7 @@ def write_last_state_snapshot(state):
             f"T_mittig={_fmt_temp(getattr(state.sensors, 't_mittig', None))} | "
             f"T_unten={_fmt_temp(getattr(state.sensors, 't_unten', None))} | "
             f"T_verd={_fmt_temp(getattr(state.sensors, 't_verd', None))} | "
-            f"PV={getattr(state.solar, 'acpower', None) or 0.0:.0f}W | "
+            f"PV={getattr(state.solar, 'pv_erzeugung', None) or 0.0:.0f}W | "
             f"SOC={getattr(state.solar, 'soc', None) or 0.0:.0f}%\n"
         )
         atomic_write_text(LAST_STATE_FILE, line)
@@ -1811,7 +1823,7 @@ async def log_system_state(state):
             f"Status: {komp_status} | "
             f"EP={state.control.aktueller_einschaltpunkt:.1f}°C | "
             f"AP={state.control.aktueller_ausschaltpunkt:.1f}°C | "
-            f"PV={_fmt_w(getattr(state.solar, 'acpower', None))} | "
+            f"PV={_fmt_w(getattr(state.solar, 'pv_erzeugung', None))} | "
             f"Einspeis={_fmt_w(getattr(state.solar, 'feedinpower', None))} | "
             f"SOC={_fmt_soc(getattr(state.solar, 'soc', None))} | "
             f"Alter={alter_txt}{stale_flag}"

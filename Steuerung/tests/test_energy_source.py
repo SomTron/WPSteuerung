@@ -7,6 +7,7 @@ from energy_source import (
     batterie_ladung_watt,
     classify_energy_source,
     hausverbrauch_watt,
+    pv_erzeugung_watt,
     pv_ueberschuss_watt,
 )
 
@@ -122,27 +123,125 @@ def test_vorzeichen_stimmt_mit_echten_messreihen_ueberein():
 
 
 def test_hausverbrauch_aus_der_wechselrichterbilanz():
-    """Hausverbrauch = acpower - feedinpower - batPower.
+    """Hausverbrauch = acpower - feedin. Die Batterie gehoert NICHT hinein.
 
-    Die Formel ist vom Betreiber vorgeschlagen und an 254.305 CSV-Messreihen
-    geprueft: Median 353 W, Nacht 00-04 Uhr ~270 W, Mittagsspitze 1776-2550 W
-    (darin die Waermepumpe) - ein plausibles Tagesprofil.
+    ``acpower`` ist der Wechselstromausgang des Wechselrichter. Was er abgibt,
+    fliesst ins Haus und zu einem Teil ins Netz; mehr kann er nicht abgeben.
+    Die Batterie steht davor und aendert daran nichts.
+
+    Bis September stand hier ``acpower - feedin - batPower``. Das setzt voraus,
+    ``acpower`` sei die PV-Erzeugung - ist es nicht. Nachts liefert die
+    DC-Seite 0 W, die AC-Seite rund 250 W.
     """
-    # Realer Fall aus dem Betriebslog 02.10.2026, 08:28 (MinTemp-Mittag):
-    # PV 1200 W, nichts eingespeist, Batterie laedt mit 750 W.
-    assert hausverbrauch_watt(1200.0, 0.0, 750.0) == pytest.approx(450.0)
-    # Nacht: keine PV, Netzbezug 320 W -> Hausverbrauch 320 W
+    # Betriebslog 03.10.2026, 10:49: Wechselrichter gibt 1823 W ab, davon
+    # 1621 W eingespeist, Batterie laedt zusaetzlich mit 4029 W.
+    # Das Haus hat also 1823 - 1621 = 202 W verbraucht. Die alte Formel
+    # lieferte max(0, 1823 - 1621 - 4029) = 0 und behauptete, das Haus
+    # verbrauche nichts - im Log steht ueber Stunden genau das.
+    assert hausverbrauch_watt(1823.0, 1621.0, 4029.0) == pytest.approx(202.0)
+    # Batterie laedt: der Ladestrom darf den Hausverbrauch nicht veraendern.
+    assert hausverbrauch_watt(1200.0, 0.0, 750.0) == pytest.approx(1200.0)
+    assert hausverbrauch_watt(1200.0, 0.0, 0.0) == pytest.approx(1200.0)
+    # Batterie speist: ebenso ohne Wirkung auf den AC-Ausgang.
+    assert hausverbrauch_watt(700.0, 0.0, -200.0) == pytest.approx(700.0)
+    # Nacht, Netzbezug 320 W, Wechselrichter still -> Haus laeuft am Netz.
     assert hausverbrauch_watt(0.0, -320.0, 0.0) == pytest.approx(320.0)
-    # Batterie SPEIST 200 W: das Haus nimmt PV + Batterie auf, also 900 W.
-    # Achtung: hier ist hausverbrauch > acpower - genau deshalb gilt die
-    # Identitaet "haus + ueber == acpower" bei Entladung nicht.
-    assert hausverbrauch_watt(700.0, 0.0, -200.0) == pytest.approx(900.0)
     # Messversatz kann leicht negative Werte ergeben -> auf 0 begrenzt
-    assert hausverbrauch_watt(300.0, 10.0, 400.0) == 0.0
+    assert hausverbrauch_watt(300.0, 400.0, 0.0) == 0.0
     # Fehlende Messung bleibt None, nicht 0
     assert hausverbrauch_watt(None, 0.0, 0.0) is None
     assert hausverbrauch_watt(500.0, None, 0.0) is None
-    assert hausverbrauch_watt(500.0, 0.0, None) is None
+
+
+def test_pv_erzeugung_ist_die_gleichstromseite():
+    """ACPower ist nicht die Erzeugung - nachts schon gar nicht.
+
+    Gemessen auf dem Pi, Stundenmittel aus den Betriebsdaten:
+
+        Stunde   DC (W)   AC (W)
+        0-4          0    224-250
+        9         2914      352
+        12        6881     6749
+    """
+    # Nachts: DC sagt 0, AC behauptet 250 W.
+    assert pv_erzeugung_watt(0.0, 0.0, 250.0, -200.0) == 0.0
+    # Morgens: 1305 W erzeugt, davon nur 517 W ueber den AC-Ausgang.
+    assert pv_erzeugung_watt(1305.0, None, 517.0, 788.0) == pytest.approx(1305.0)
+    # Zwei Strings werden addiert.
+    assert pv_erzeugung_watt(3000.0, 3900.0, 6700.0, 0.0) == pytest.approx(6900.0)
+    # Ohne DC-Werte (aeltere Firmware) wird genahert: AC plus Ladung.
+    assert pv_erzeugung_watt(None, None, 352.0, 2562.0) == pytest.approx(2914.0)
+    # Nachts ohne DC: Batterie speist, es darf nichts "erzeugt" werden.
+    assert pv_erzeugung_watt(None, None, 250.0, -200.0) == pytest.approx(250.0)
+    assert pv_erzeugung_watt(None, None, None, 0.0) is None
+
+
+def test_bilanz_ist_intern_konsistent():
+    """Der Ueberschuss ist die Erzeugung abzueglich des Hauses.
+
+    Aus der Bilanz folgt fuer die Naeherung ohne DC-Seite::
+
+        PV = haus + feedin + batPower
+           = haus + ueberschuss
+
+    Die frueher geprueft Identitaet ``haus + ueber == acpower`` galt nur,
+    weil beides aus derselben, falschen Annahme (``acpower`` = Erzeugung)
+    gerechnet wurde. Sie war eine Tautologie, kein physikalisches Gesetz.
+    """
+    faelle = [
+        (1200.0, 0.0, 750.0), (4000.0, 3000.0, 500.0), (800.0, 0.0, 0.0),
+        (700.0, 0.0, -200.0), (50.0, -600.0, -900.0), (300.0, 10.0, 400.0),
+    ]
+    for ac, fi, ba in faelle:
+        ueber = pv_ueberschuss_watt(ac, fi, ba)
+        assert ueber == pytest.approx(max(0.0, fi + ba)), (ac, fi, ba)
+
+    # Die Erzeugung traegt Haus und Ueberschuss - sofern die Klammer nicht
+    # greift. Der Batterieanteil ist in beiden enthalten.
+    for ac, fi, ba in faelle:
+        haus = hausverbrauch_watt(ac, fi, ba)
+        ueber = pv_ueberschuss_watt(ac, fi, ba)
+        erzeugung = pv_erzeugung_watt(None, None, ac, ba)
+        if haus is None or ueber is None or erzeugung is None:
+            continue
+        if fi + ba < 0 or ac - fi < 0:
+            # Netzbezug: die Bilanz traegt nicht.
+            continue
+        assert erzeugung == pytest.approx(haus + ueber), (ac, fi, ba)
+
+
+def test_erzeugungsschwelle_richtet_sich_nach_dc_seite():
+    """Der 03.10.2026, 09:18-10:49: AC 352 W, DC 2914 W.
+
+    Vorher stand an dieser Stelle der AC-Wert, der unter der
+    300-W-Schwelle lag. Der zweite Nachweis (Ueberschuss) hat die Freigabe
+    trotzdem erteilt - deshalb blieb der Fehler lange unbemerkt. Mit der
+    DC-Seite ist es der erste Nachweis, und der Wert ist auch in der
+    Begruendungsliefer.
+    """
+    mit_dc = classify_energy_source(
+        pv_acpower=210.0,
+        feedin_watt=0.0,
+        batpower_raw=2562.0,
+        soc=60.0,
+        pv_min_watt=300.0,
+        pv_erzeugung_watt=2914.0,
+    )
+    assert mit_dc.quelle is Energiequelle.PV
+    assert mit_dc.verfuegbar is True
+    assert "2914W" in mit_dc.begruendung, mit_dc.begruendung
+
+    # Ohne DC bleibt das alte Verhalten: 210 W liegen unter der Schwelle,
+    # und ohne Ladevorgang gibt es auch keinen Ueberschuss als zweiten
+    # Nachweis. Genau so stand es im Betriebslog.
+    ohne_dc = classify_energy_source(
+        pv_acpower=210.0,
+        feedin_watt=0.0,
+        batpower_raw=0.0,
+        soc=60.0,
+        pv_min_watt=300.0,
+    )
+    assert ohne_dc.quelle is not Energiequelle.PV
 
 
 def test_pv_ueberschuss_entspricht_einspeisung_und_ladung():
@@ -225,33 +324,6 @@ def test_netzkauf_blockiert_auch_bei_ueberschuss_signal():
     )
     assert trotz_ueberschuss.quelle is not Energiequelle.PV
     assert trotz_ueberschuss.verfuegbar is False
-
-
-def test_bilanz_ist_intern_konsistent():
-    """Die ausnahmslos gueltige Identitaet: Ueberschuss == max(0, feedin + batPower).
-
-    ``hausverbrauch + ueberschuss == acpower`` gilt NUR bei ladender oder
-    ruhender Batterie. Bei Entladung nimmt das Haus mehr auf als die PV
-    erzeugt, weil die Batterie zusaetzlich einspeist - das ist korrekt und
-    war die Ursache fuer einen zunächst falschen Testerwartungswert.
-    """
-    faelle = [
-        (1200.0, 0.0, 750.0), (4000.0, 3000.0, 500.0), (800.0, 0.0, 0.0),
-        (700.0, 0.0, -200.0), (50.0, -600.0, -900.0), (300.0, 10.0, 400.0),
-    ]
-    for ac, fi, ba in faelle:
-        ueber = pv_ueberschuss_watt(ac, fi, ba)
-        assert ueber == pytest.approx(max(0.0, fi + ba)), (ac, fi, ba)
-
-    # Nur bei ladender/rruhender Batterie gilt zusaetzlich die Bilanz.
-    for ac, fi, ba in faelle:
-        if ba < 0 or ac - fi - ba < 0:
-            # Entladung: Bilanz traegt nicht. Messversatz: Hausverbrauch
-            # wurde auf 0 begrenzt, dann gilt sie ebenfalls nicht.
-            continue
-        haus = hausverbrauch_watt(ac, fi, ba)
-        ueber = pv_ueberschuss_watt(ac, fi, ba)
-        assert haus + ueber == pytest.approx(ac), (ac, fi, ba)
 
 
 def test_rohwert_wird_nur_einmal_normalisiert():

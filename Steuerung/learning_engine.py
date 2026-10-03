@@ -603,6 +603,7 @@ class LearningEngine:
         compressor_is_on: bool,
         feedin_watt: Optional[float] = None,
         pv_acpower_watt: Optional[float] = None,
+        pv_erzeugung_watt: Optional[float] = None,
         soc: Optional[float] = None,
         forecast_today_wh_qm: Optional[float] = None,
         legionellen_end_time: Optional[datetime] = None,
@@ -654,8 +655,25 @@ class LearningEngine:
         # 1 - Hausanteil an der PV und lag dauerhaft unter 1 (beobachtet
         # x0,62): die Prognose wurde nicht kalibriert, sondern
         # systematisch zu pessimistisch bewertet.
-        if pv_acpower_watt is not None and dt_secs > 0:
-            self._day_pv_wh += max(pv_acpower_watt, 0.0) * dt_secs / 3600.0
+        #
+        # Ab hier kommt die Korrektur der naechsten Ebene: auch
+        # `pv_acpower_watt` ist NICHT die Erzeugung, sondern der
+        # Wechselstromausgang des Wechselrichter (Haus + Netz). Nachts
+        # liefert die Gleichstromseite 0 W, die AC-Seite dagegen rund
+        # 250 W. Ueber `pv_acpower_watt` wurde also weiterhin der
+        # Hausverbrauch gezaehlt - nur eben mit Einspeisung statt mit
+        # Erzeugung. Der Quotient blieb deshalb dauerhaft falsch und
+        # wurde durch Nachjustieren des Faktors kaschiert.
+        #
+        # `pv_erzeugung_watt` kommt aus powerdc1 + powerdc2 und ist die
+        # tatsaechliche Erzeugung. Ohne diesen Wert (aeltere Aufrufer)
+        # wird auf das alte Verhalten zurueckgefallen, damit sich das
+        # Verhalten nicht unbemerkt still aendert.
+        erzeugung_w = (
+            pv_erzeugung_watt if pv_erzeugung_watt is not None else pv_acpower_watt
+        )
+        if erzeugung_w is not None and dt_secs > 0:
+            self._day_pv_wh += max(erzeugung_w, 0.0) * dt_secs / 3600.0
         # Wichtig: Der Aufrufer liefert die HEUTE-Prognose bereits in Wh/m2
         # (priority_control_logic normalisiert dort mit kwh_m2). Deshalb hier
         # NUR die Gueltigkeit pruefen, nicht noch einmal umrechnen - eine

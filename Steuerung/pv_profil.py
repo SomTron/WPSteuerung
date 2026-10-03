@@ -111,16 +111,37 @@ def berechne_profil(
             ts = datetime.fromisoformat(row.get("Zeitstempel", ""))
         except (ValueError, TypeError):
             continue
-        # ACPower ist die PV-ERZEUGUNG. FeedinPower waere die Einspeisung ins
-        # Netz - und die ist bei wechselrichtergekoppeltem Betrieb ueber den
-        # grenzen Teil des Tages null, weil der Ueberschuss zuerst in die
-        # Batterie laeuft. Gemessen an 254.305 CSV-Zeilen lag das Profil auf
-        # FeedinPower um 22-75 % unter der tatsaechlichen Erzeugung
-        # (08:00 Uhr: 85 W statt 340 W; 12:00 Uhr: 1534 W statt 3027 W).
-        erzeugung = _parse_float(row.get("ACPower"))
+        # Die Erzeugung steht auf der Gleichstromseite: powerdc1 + powerdc2.
+        #
+        # Bis September stand hier ACPower mit der Begruendung, das sei die
+        # Erzeugung. Ist es nicht: ACPower ist der Wechselstromausgang des
+        # Wechselrichter, also Haus + Netz. Gemessen auf dem Pi, Stundenmittel
+        # ueber die Betriebsdaten:
+        #
+        #     Stunde   DC (W)   AC (W)
+        #     0-4          0    224-250     Nacht: keine Sonne, AC trotzdem
+        #     9         2914      352     2562 W wandern in den Speicher
+        #     12        6881     6749
+        #
+        # Nachts liefert nur die DC-Seite 0. Ein Profil aus ACPower enthielt
+        # darum rund 250-950 W phantomhafte Nachtproduktion - und mittags
+        # deutlich zu wenig, weil ein großer Teil in die Batterie lief.
+        # Genau daraus entstand die wiederholte Nachjustierung des
+        # Prognosefaktors.
+        #
+        # FeedinPower taugt als Ersatz nicht: das ist die Einspeisung, und die
+        # ist bei wechselrichtergekoppeltem Betrieb ueber den groessen Teil
+        # des Tages null, weil der Ueberschuss zuerst in die Batterie laeuft.
+        erzeugung = _parse_float(row.get("PowerDC1"))
+        dc2 = _parse_float(row.get("PowerDC2"))
+        if dc2 is not None:
+            erzeugung = (erzeugung or 0.0) + dc2
         if erzeugung is None:
-            # Aeltere CSV-Dateien ohne ACPower-Spalte: Feedin als Notnagel,
-            # damit das Profil nicht vollstaendig leer bleibt.
+            # Aeltere CSV-Dateien ohne DC-Spalten: ACPower als Notnagel. Das
+            # ist der Hausverbrauch und damit keine Erzeugung - aber besser
+            # als ein leeres Profil. Wird im Diagnosetext benannt.
+            erzeugung = _parse_float(row.get("ACPower"))
+        if erzeugung is None:
             erzeugung = _parse_float(row.get("FeedinPower"))
         if erzeugung is None or erzeugung < 0:
             continue

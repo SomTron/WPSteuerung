@@ -134,7 +134,7 @@ async def test_statuszeile_enthaelt_pv_einspeis_soc_alter(monkeypatch, caplog,
             blocking_reason=None, active_rule_name="Einspeisung",
             previous_modus="Einspeisung"),
         solar=SimpleNamespace(
-            acpower=5000.0, feedinpower=4000.0, soc=80.0,
+            acpower=5000.0, pv_erzeugung=5000.0, feedinpower=4000.0, soc=80.0,
             last_api_call=datetime.now(TZ) - timedelta(seconds=30)),
     )
     monkeypatch.setattr(main, "check_log_throttle", lambda *a, **k: True)

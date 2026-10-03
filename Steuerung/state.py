@@ -30,10 +30,19 @@ class SolarState:
         self.energy_source: str = "Netz"
         self.soc: Optional[float] = None
         self.consumeenergy: Optional[float] = None  # API-Zaehler, KEINE Leistung
+        # ACPower ist der Wechselstromausgang des Wechselrichter (Haus + Netz),
+        # NICHT die PV-Erzeugung. Nachts liefert die Gleichstromseite 0 W,
+        # die AC-Seite dagegen rund 250 W.
+        self.acpower: Optional[float] = None
+        # Tatsaechliche Erzeugung aus powerdc1 + powerdc2
+        # (energy_source.pv_erzeugung_watt), mit AC-Naeherung als Rueckfall.
+        self.pv_erzeugung: Optional[float] = None
         # Aus der Bilanz abgeleitet (energy_source.hausverbrauch_watt):
-        #   hausverbrauch = acpower - feedinpower - batPower
+        #   hausverbrauch = acpower - feedinpower
+        # Die Batterie gehoert nicht hinein: sie steht zwischen DC- und
+        # AC-Seite und aendert am Wechselrichterausgang nichts.
         self.hausverbrauch: Optional[float] = None
-        self.pv_ueberschuss: Optional[float] = None  # acpower - hausverbrauch
+        self.pv_ueberschuss: Optional[float] = None  # feedin + batPower
         self.last_api_call: Optional[datetime] = None
         self.last_api_data: Optional[dict] = None
         self.forecast_today: Optional[float] = None
