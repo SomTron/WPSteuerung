@@ -2,6 +2,13 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.15: Option 25 installiert Steuerung/wpsteuerung.service nach
+#       /etc/systemd/system. Bisher installierte KEIN Skript diese Unit,
+#       die Doku sagte "selbst anlegen" - auf dem Pi lief eine handgebaute
+#       aeltere Unit ohne EnvironmentFile (WPS_API_KEY wurde nie gelesen,
+#       alle Schreibrouten 503) und ohne RestartPreventExitStatus=42 (der
+#       Not-Aus waere per Restart=always nach 10 s aufgehoben worden).
+#       Option 24 verweist bei fehlender EnvironmentFile-Zeile auf 25.
 # v1.14: Option 24 (API-Schluessel) erzeugt, zeigt, rotiert und entfernt
 #       WPS_API_KEY atomar in /etc/wpssteuerung/api.env und prueft das
 #       Ergebnis gegen den laufenden Dienst. Bisher nur von Hand moeglich.
@@ -714,6 +721,14 @@ api_key_status() {
         printf "${GREEN}Status: gesetzt (%s Zeichen).${NC}\n" "${#key}"
     fi
     echo ""
+    # Querverweis: eine vorhandene api.env hilft nur, wenn die Unit sie
+    # auch liest. Genau daran ist es auf dem Pi gescheitert.
+    if ! unit_aktiv_hat 'EnvironmentFile'; then
+        printf "${RED}✗ Die installierte Unit hat KEINE EnvironmentFile-Zeile.${NC}\n"
+        printf "  Selbst ein gesetzter Schluessel wird dann nie gelesen.\n"
+        printf "  Abhilfe: Option 25 (Unit installieren / aktualisieren).\n"
+        echo ""
+    fi
     printf "Laufender Dienst:\n"
     api_key_probe "$key"
     echo ""
@@ -849,6 +864,109 @@ api_key_menu() {
         esac
         wait_for_key
     done
+}
+
+# --- Steuerungs-Unit ---------------------------------------------------------
+# Anlass: die Unit aus Steuerung/wpsteuerung.service wird von KEINEM Skript
+# installiert - die Doku sagt "selbst anlegen". Dadurch lief auf dem Pi eine
+# handgebaute, aeltere Unit. Der Effekt war doppelt:
+#   * ohne EnvironmentFile=-/etc/wpssteuerung/api.env wird WPS_API_KEY nie
+#     gelesen (alle Schreibrouten 503),
+#   * ohne RestartPreventExitStatus=42 startet systemd nach einem Not-Aus den
+#     Dienst nach 10 Sekunden wieder (Restart=always).
+# wp-analyse.service wird dagegen sehr wohl installiert (install_auto_analysis),
+# genau nach dem Muster unten.
+UNIT_QUELLE="$REPO_ROOT/Steuerung/wpsteuerung.service"
+UNIT_ZIEL="/etc/systemd/system/wpsteuerung.service"
+
+# Prueft die INSTALLIERTE Unit (nicht die im Repo) auf eine Zeile.
+unit_aktiv_hat() {
+    systemctl cat wpsteuerung 2>/dev/null | grep -qi "$1"
+}
+
+stuerung_unit_status() {
+    printf "${CYAN}=== Installierte Unit ===${NC}\n"
+    printf "Quelle im Repo: %s\n" "$UNIT_QUELLE"
+    printf "Installiert:    %s\n" "$UNIT_ZIEL"
+    echo ""
+    if [ ! -f "$UNIT_ZIEL" ]; then
+        printf "${RED}✗ Keine Unit installiert.${NC}\n"
+        printf "  Abhilfe: hier 'Unit installieren / aktualisieren'.\n"
+        return 1
+    fi
+    if unit_aktiv_hat 'EnvironmentFile'; then
+        printf "${GREEN}✓ EnvironmentFile vorhanden - WPS_API_KEY wird gelesen${NC}\n"
+    else
+        printf "${RED}✗ KEINE EnvironmentFile-Zeile - WPS_API_KEY wird ignoriert${NC}\n"
+        printf "  Folge: /control und alle anderen Schreibrouten antworten 503.\n"
+    fi
+    if unit_aktiv_hat 'RestartPreventExitStatus=42'; then
+        printf "${GREEN}✓ RestartPreventExitStatus=42 - der Not-Aus bleibt stehen${NC}\n"
+    else
+        printf "${RED}✗ KEIN RestartPreventExitStatus=42 - systemd startet den${NC}\n"
+        printf "  Dienst nach einem Not-Aus nach 10 s wieder. Die Sperrdatei${NC}\n"
+        printf "  verhindert weiter das Heizen, der Dienst laeuft aber trotzdem.\n"
+    fi
+    if unit_aktiv_hat 'StartLimitIntervalSec=0'; then
+        printf "${GREEN}✓ StartLimit deaktiviert - kein Ausfall nach Fehlstarts${NC}\n"
+    else
+        printf "${YELLOW}! StartLimit nicht deaktiviert - nach 5 Fehlstarts bleibt${NC}\n"
+        printf "  der Dienst aus. Das hat am 15.09. zu einer Luecke gefuehrt.\n"
+    fi
+    echo ""
+    if [ -f "$UNIT_QUELLE" ]; then
+        if cmp -s "$UNIT_QUELLE" "$UNIT_ZIEL"; then
+            printf "Stand: identisch mit dem Repo.\n"
+        else
+            printf "${YELLOW}Stand: WEICHT vom Repo ab.${NC}\n"
+        fi
+    fi
+    if [ -f "$UNIT_ZIEL.bak" ]; then
+        printf "Sicherung der vorherigen Unit: %s.bak\n" "$UNIT_ZIEL"
+    fi
+}
+
+stuerung_unit_installieren() {
+    if [ ! -f "$UNIT_QUELLE" ]; then
+        printf "${RED}✗ Quelldatei fehlt: %s${NC}\n" "$UNIT_QUELLE"
+        printf "  Bitte zuerst den aktuellen Code deployen (Option 4).\n"
+        return 1
+    fi
+    printf "${CYAN}Installiere Unit aus dem Repo ...${NC}\n"
+    printf "  %s\n  -> %s\n" "$UNIT_QUELLE" "$UNIT_ZIEL"
+
+    if [ -f "$UNIT_ZIEL" ] && ! cmp -s "$UNIT_QUELLE" "$UNIT_ZIEL"; then
+        echo ""
+        printf "${YELLOW}Die installierte Unit weicht ab.${NC}\n"
+        diff -u "$UNIT_ZIEL" "$UNIT_QUELLE" 2>/dev/null | head -n 30 || true
+        echo ""
+        printf "Bestehende Unit als .bak sichern und ersetzen? [j/N] "
+        read antwort
+        case "$antwort" in
+            j|J|y|Y) ;;
+            *) printf "Abgebrochen.\n"; return 0 ;;
+        esac
+        sudo cp -p "$UNIT_ZIEL" "$UNIT_ZIEL.bak" \
+            && printf "Gesichert: %s.bak\n" "$UNIT_ZIEL"
+    fi
+
+    sudo install -m 0644 "$UNIT_QUELLE" "$UNIT_ZIEL" || {
+        printf "${RED}✗ install fehlgeschlagen.${NC}\n"; return 1; }
+    sudo systemctl daemon-reload || {
+        printf "${RED}✗ daemon-reload fehlgeschlagen.${NC}\n"; return 1; }
+    printf "${GREEN}✓ Unit installiert, daemon-reload ausgefuehrt.${NC}\n"
+
+    printf "\nNeustart noetig, damit die neue Unit und api.env wirken.\n"
+    printf "Jetzt neu starten? [j/N] "
+    read antwort
+    case "$antwort" in
+        j|J|y|Y) verify_service_action restart wpsteuerung && header_verwerfen ;;
+        *) printf "Nicht neu gestartet - die Aenderung wirkt erst dann.\n"
+           printf "  systemctl restart wpsteuerung\n"; return 0 ;;
+    esac
+    echo ""
+    stuerung_unit_status
+    api_key_probe "$(api_key_read)"
 }
 
 # Neuesten Qualitaetsbericht suchen (Analyse-Ordner, dann Projektwurzel).
@@ -1221,6 +1339,7 @@ while true; do
         printf "22) 🩺  Steuerungs-Health (API /health)\n"
     printf "23) 📈  Analyse-Qualitaet (quality_report.json)\n"
     printf "24) 🔑  API-Schluessel (erzeugen / anzeigen / entfernen)\n"
+    printf "25) ⚙️   Steuerungs-Unit installieren / aktualisieren\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -1417,6 +1536,7 @@ while true; do
         22) show_control_health ;;
         23) show_analysis_quality ;;
         24) api_key_menu ;;
+        25) stuerung_unit_installieren ;;
         0) exit 0 ;;
         *)
             printf "${RED}Ungültige Auswahl: '%s'${NC}\n" "$choice"

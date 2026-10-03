@@ -174,6 +174,36 @@ Dashboard -> Karte *Verbindung*.
 Menue-Umgebung. Die ist nie gesetzt – die Anzeige meldete deshalb dauerhaft
 *nicht gesetzt*, auch wenn die Datei existierte. Jetzt wird die Datei gelesen.
 
+### Option 25: Steuerungs-Unit installieren
+
+| Option | Zweck |
+|---|---|
+| `25` | `Steuerung/wpsteuerung.service` nach `/etc/systemd/system/` installieren |
+
+**Warum das nötig ist:** Kein Skript hat diese Unit je installiert – die
+Deployment-Doku sagte „selbst anlegen". Auf dem Pi lief deshalb eine
+handgebaute, ältere Unit. Der Schaden war doppelt und in beiden Fällen
+still:
+
+| Fehlende Zeile | Wirkung |
+|---|---|
+| `EnvironmentFile=-/etc/wpssteuerung/api.env` | `WPS_API_KEY` wird nie gelesen, **jede** Schreibroute antwortet 503 |
+| `RestartPreventExitStatus=42` | `Restart=always` startet den Dienst **10 s nach einem Not-Aus** wieder |
+| `StartLimitIntervalSec=0` | nach 5 Fehlstarts bleibt der Dienst aus – die beobachtete Lücke am 15.09. |
+
+Bei der zweiten Zeile bleibt das Heizen zwar aus, weil `notaus.lock` den
+Zustand lädt – der Dienst läuft aber trotzdem wieder und meldet sich
+gesund. Genau das darf bei einem Not-Aus nicht passieren.
+
+Die Option zeigt zuerst den Ist-Stand der **installierten** Unit (nicht der
+im Repo), macht bei Abweichung ein `diff -u`, sichert nach `.bak`, kopiert
+mit `install -m 0644`, führt `daemon-reload` aus und startet verifiziert neu.
+Option 24 weist bei fehlender `EnvironmentFile`-Zeile aktiv auf Option 25
+hin – eine gesetzte `api.env` hilft nichts, wenn sie keiner liest.
+
+`wp-analyse.service` und `wp-analyse.timer` wurden schon länger nach
+`install_auto_analysis` (Option 20.3) auf dieselbe Weise installiert.
+
 Exit-Codes von `manager_health.py`:
 
 ```text

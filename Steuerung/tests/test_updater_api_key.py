@@ -211,3 +211,98 @@ def test_api_key_read_arbeitet(tmp_path):
 def test_menue_skript_ist_syntaxfehlerfrei():
     r = _run(_shell(), '-n', MENU)
     assert r.returncode == 0, f"Syntaxfehler im Menue-Skript:\n{r.stderr}"
+
+
+# ---------- Option 25: die Unit selbst ----------
+
+UNIT = os.path.join(ROOT, 'Steuerung', 'wpsteuerung.service')
+
+
+def test_menueintrag_und_dispatch_25():
+    q = _quelle()
+    assert '25) stuerung_unit_installieren ;;' in q, (
+        "Option 25 ist nicht im Dispatch"
+    )
+    assert re.search(r'printf "25\).*Unit installieren', q), (
+        "Option 25 erscheint nicht in der Menueliste"
+    )
+
+
+def test_alle_unit_funktionen_vorhanden():
+    for name in ('unit_aktiv_hat', 'stuerung_unit_status',
+                 'stuerung_unit_installieren'):
+        assert re.search(rf'^{name}\(\) \{{$', _quelle(), re.MULTILINE), (
+            f"{name}() fehlt"
+        )
+
+
+def test_install_macht_daemon_reload_und_sichert():
+    """Ohne daemon-reload bleibt die alte Unit aktiv."""
+    install = _funktion('stuerung_unit_installieren')
+    assert 'daemon-reload' in install
+    assert re.search(r'install\s+-m\s+0644\s+"\$UNIT_QUELLE"\s+"\$UNIT_ZIEL"', install), (
+        "Die Unit wird nicht aus dem Repo an die richtige Stelle kopiert"
+    )
+    assert '.bak' in install, "Keine Sicherung der bisherigen Unit"
+    assert re.search(r'\[j/N\]', install), (
+        "Keine Rueckfrage vor dem Ersetzen einer abweichenden Unit"
+    )
+    assert 'verify_service_action restart wpsteuerung' in install, (
+        "Neustart nicht verifiziert"
+    )
+
+
+def test_status_prueft_die_sicherheitsrelevanten_zeilen():
+    """Die drei Zeilen, deren Fehlen jeweils ein echtes Problem ist."""
+    status = _funktion('stuerung_unit_status')
+    assert 'EnvironmentFile' in status, (
+        "Status meldet nicht, ob die Unit die api.env liest - genau daran "
+        "scheiterte es auf dem Pi"
+    )
+    assert 'RestartPreventExitStatus=42' in status, (
+        "Status meldet nicht, ob der Not-Aus durch systemd aufgehoben wuerde"
+    )
+    assert 'StartLimitIntervalSec=0' in status, (
+        "Status meldet nicht das Startlimit, das am 15.09. zur Luecke fuehrte"
+    )
+
+
+def test_einbaupfad_prueft_die_echte_unit_nicht_nur_die_repo():
+    """unit_aktiv_hat liest systemctl cat, nicht die Datei im Repo."""
+    q = _quelle()
+    m = re.search(r'^unit_aktiv_hat\(\) \{$.*?^\}$', q,
+                  re.MULTILINE | re.DOTALL)
+    assert m, "unit_aktiv_hat nicht gefunden"
+    assert 'systemctl cat' in m.group(0), (
+        "Die Pruefung liest nicht die INSTALLIERTE Unit - auf dem Pi ist "
+        "die aelter als die im Repo"
+    )
+
+
+# ---------- Die Unit im Repo selbst ----------
+
+def test_repo_unit_traegt_die_noetigen_zeilen():
+    """Option 25 installiert diese Datei - sie muss das auch enthalten.
+
+    Andernfalls wuerde die Option eine Unit ausrollen, die den Schluessel
+    weiterhin nicht liest und den Not-Aus weiterhin aufhebt.
+    """
+    with open(UNIT, encoding='utf-8') as fh:
+        text = fh.read()
+    assert 'EnvironmentFile=-/etc/wpssteuerung/api.env' in text, (
+        "Die Unit im Repo laesst WPS_API_KEY weiterhin ungelesen"
+    )
+    assert 'RestartPreventExitStatus=42' in text, (
+        "Die Unit im Repo hebt den Not-Aus per Restart=always wieder auf"
+    )
+    assert 'StartLimitIntervalSec=0' in text
+
+
+def test_option24_verweist_auf_option25():
+    """Eine gesetzte api.env nuetzt nichts, wenn die Unit sie nicht liest."""
+    status = _funktion('api_key_status')
+    assert 'unit_aktiv_hat' in status, (
+        "Option 24 prueft die Unit nicht - der Nutzer sieht eine gesetzte "
+        "Datei und ein 503 und laeuft in die Irre"
+    )
+    assert '25' in status, "Kein Verweis auf Option 25"
