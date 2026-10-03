@@ -47,7 +47,13 @@ except ImportError:
     _is_nachtsperre_aktiv = None
 
 # Allowed commands and modes for validation
-ALLOWED_COMMANDS = {"force_on", "force_off", "set_mode"}
+# Erlaubte Schreibbefehle. `notaus` / `notaus_aus` gehoeren dazu, seit der
+# Not-Aus ueber WebApp und Telegram ausgeloest werden kann - ohne sie
+# lehnte `ControlCommand` den Aufruf mit HTTP 422 ab und der Knopf in der
+# WebApp waere wirkungslos gewesen (Telegram umgeht die API).
+ALLOWED_COMMANDS = {
+    "force_on", "force_off", "set_mode", "notaus", "notaus_aus",
+}
 ALLOWED_MODES = {"bademodus", "urlaubsmodus"}
 ALLOWED_SECTIONS = {
     "Heizungssteuerung", "Healthcheck", "SolaxCloud", "Telegram",

@@ -110,6 +110,44 @@ def test_ausloeser_braucht_absicht_nicht_nur_erwaehnung():
     # zur Aufhebung gemacht haette.
     assert any("aus" in w for w in _NOTAUS_AUFHEBEN_WOERTER)
     assert "notaus" in _NOTAUS_AUSLOESER
+def test_webapp_knoepfe_senden_erlaubte_befehle():
+    """Regression: der Not-Aus-Knopf in der WebApp tat nichts.
+
+    `ControlCommand.command_must_be_allowed` prueft gegen `ALLOWED_COMMANDS`.
+    `notaus` stand dort nicht drin, also lehnte die API den Aufruf mit HTTP
+    422 ab - der Knopf blieb ohne Wirkung, waehrend Telegram (das die API
+    umgeht) funktionierte. Der Test koppelt beide Seiten: was die WebApp
+    sendet, muss auch erlaubt sein.
+    """
+    import re
+
+    from api import ALLOWED_COMMANDS, ControlCommand
+
+    html = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "..", "webapp", "index.html",
+    )
+    text = open(html, encoding="utf-8").read()
+    gesendet = set(re.findall(r"sendControl\('([a-z_]+)'", text))
+
+    assert gesendet, "keine sendControl-Aufrufe in der WebApp gefunden"
+    for befehl in gesendet:
+        assert befehl in ALLOWED_COMMANDS, (
+            f"WebApp sendet '{befehl}', das erlaubt ist nicht: "
+            f"{sorted(ALLOWED_COMMANDS)}"
+        )
+        params = None
+        if befehl == "notaus":
+            params = {"grund": "WebApp"}
+        elif befehl == "set_mode":
+            params = {"mode": "bademodus", "active": True}
+        ControlCommand(command=befehl, params=params)
+
+    assert {"notaus", "notaus_aus"} <= gesendet, (
+        "WebApp bietet den Not-Aus nicht an"
+    )
+
+
 def test_api_payload_enthaelt_notaus_felder():
     """/status muss den Sperrzustand liefern, sonst blendet die WebApp falsch."""
     from api import build_mode_payload

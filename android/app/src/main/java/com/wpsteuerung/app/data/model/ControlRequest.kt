@@ -4,7 +4,9 @@ import com.google.gson.annotations.SerializedName
 
 // Control request matching backend API expectations
 data class ControlRequest(
-    val command: String,  // "set_mode", "force_on", "force_off"
+    // muss in ALLOWED_COMMANDS der API stehen, sonst HTTP 422:
+    // "set_mode", "force_on", "force_off", "notaus", "notaus_aus"
+    val command: String,
     val params: Map<String, Any>? = null
 )
 

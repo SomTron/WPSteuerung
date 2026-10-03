@@ -79,4 +79,33 @@ class WPRepository {
             Result.failure(e)
         }
     }
+
+    /**
+     * Not-Aus: schaltet den Kompressor aus und beendet die Steuerung bis zu
+     * einem Reset. Anders als forceOff ist das nicht nur ein Handbefehl -
+     * der Dienst stoppt und die Sperre ueberlebt den Neustart.
+     */
+    suspend fun triggerNotAus(): Result<ControlResponse> = withContext(Dispatchers.IO) {
+        try {
+            val request = ControlRequest(
+                command = "notaus",
+                params = mapOf("grund" to "Android-App")
+            )
+            val response = apiService.control(request)
+            Result.success(response)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Hebt eine bestehende Not-Aus-Sperre wieder auf. */
+    suspend fun clearNotAus(): Result<ControlResponse> = withContext(Dispatchers.IO) {
+        try {
+            val request = ControlRequest(command = "notaus_aus")
+            val response = apiService.control(request)
+            Result.success(response)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
