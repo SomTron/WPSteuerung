@@ -1516,6 +1516,13 @@ def _zyklus_id(state) -> str:
         return "?"
 
 
+#: Zeitfenster, in dem eine Live-Heizrate als aktuell gilt. Danach ist der
+#: Speicher abgekuehlt und die Rate beschreibt keinen laufenden Vorgang mehr.
+#: 30 min passen zum Main-Loop (10 s) und zum HEARTBEAT (75 s) mit Puffer,
+#: lassen aber genug Zeit fuer drei Messungen.
+RATE_MESSFENSTER_MIN: float = 30.0
+
+
 def _rate_fuer_entscheidung(state, t_unten):
     """Robuste Heizrate (Median der jüngsten Messfenster) + Confidence.
 
@@ -1550,7 +1557,24 @@ def _rate_fuer_entscheidung(state, t_unten):
         while len(samples) > 5:
             samples.popleft()
 
-    werte = [float(r) for _, r in samples if isinstance(r, (int, float)) and r > 0]
+    # Nur frische Proben verwenden. Eine Heizrate beschreibt einen LAUFENDEN
+    # Aufwaertsvorgang; nach dem Ausschalten kuehlt der Speicher und die
+    # Rate ist nicht mehr aussagekraeftig. Ohne diese Grenze blieb die Rate
+    # eines frueheren Zyklus stehen (gemessen: nach 3 h Pause weiterhin
+    # 24,0 K/h mit Confidence 1,00) und blockierte die Start-Antizipation
+    # einen Start, der real 60 statt der vorhergesagten 45 min brauchte.
+    # Achtung: das Verringern des Fensters erhoeht die Confidence gerade
+    # nicht - ohne frische Proben greift der gelernte Fallback (0.4).
+    frisch = []
+    for ts, wert in samples:
+        if not isinstance(wert, (int, float)) or wert <= 0:
+            continue
+        try:
+            if abs((jetzt - ts).total_seconds()) <= RATE_MESSFENSTER_MIN * 60.0:
+                frisch.append(float(wert))
+        except TypeError:
+            continue
+    werte = frisch
     if werte:
         # Die Reihenfolge ist zeitlich (deque). Den Median der jüngsten drei
         # Werte bilden, nicht die drei größten historischen Raten.
