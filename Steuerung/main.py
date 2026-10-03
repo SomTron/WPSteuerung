@@ -1411,7 +1411,44 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
             logging.warning(f"Legionellen-Telegram-Done fehlgeschlagen: {exc}")
 
 
-async def run_logic_step(session, state, learning_engine=None):
+async def _fuehre_sperrbefehle_aus(session, state, befehle):
+    """Fuehrt Not-Aus und Aufhebung sofort aus und gibt den Rest zurueck.
+
+    Bewusst getrennt von ``run_logic_step``: dort liegt die Abarbeitung
+    der manuellen Befehle, und ``_run_control_phase`` ruft dieses nur auf,
+    wenn der Sensor-Update erfolgreich war. Sonst kehrt sie frueh zurueck
+    (``data_update_ok``) - und die Befehlsschiene wird gar nicht geleert.
+    Ein Not-Aus, der genau bei kaputter Sensorlage liegen bleibt, ist der
+    schlimmste Fall: Die Anlage laeuft weiter, weil niemand den Befehl
+    abholt.
+
+    Nach einem Not-Aus wird der Rest verworfen: die Regelung endet gleich
+    ohnehin, und ein wartendes ``force_on`` darf danach nichts einschalten.
+    """
+    rest = []
+    for command, params in befehle:
+        if command == "notaus":
+            await notaus_ausloesen(
+                state, params.get("grund") or "ueber Telegram/WebApp", session
+            )
+            return []
+        if command == "notaus_aus":
+            if notaus.notaus_loeschen():
+                state.control.notaus_aktiv = False
+                state.control.notaus_grund = None
+                state.control.notaus_ts = None
+                state.control.blocking_reason = None
+                logging.warning(
+                    "NOT-AUS aufgehoben, die Steuerung heizt wieder"
+                )
+            # Bei gescheiterter Loeschung bleibt die Sperre stehen und der
+            # Zustand unveraendert - im Zweifel blockiert, nicht freigegeben.
+            continue
+        rest.append((command, params))
+    return rest
+
+
+async def run_logic_step(session, state, learning_engine=None, befehle=None):
     """Fuehrt einen Schritt der Steuerungslogik aus (Pareto-Prioritaeten)."""
     # Manuelle API-Befehle werden nur hier im Main-Loop verarbeitet.
     # Die Reihenfolge innerhalb eines Queue-Batches ist relevant: Ein späteres
@@ -1419,7 +1456,10 @@ async def run_logic_step(session, state, learning_engine=None):
     # werden.
     manual_force_on = getattr(state.control, "manual_force_on_pending", False) is True
     force_off_requested = False
-    for command, params in _pop_control_commands():
+    # `befehle` kommt vom Main-Loop, der die Sperrbefehle bereits vorab
+    # abgearbeitet hat. Ohne Argument wird die Queue hier direkt geleert -
+    # das deckt direkte Aufrufe aus den Tests ab.
+    for command, params in (befehle if befehle is not None else _pop_control_commands()):
         if command == "force_off":
             force_off_requested = True
             manual_force_on = False
@@ -1997,7 +2037,7 @@ async def _run_api_health_phase(session, state) -> None:
         logging.debug("API-Health-Zeitstempel konnte nicht gespeichert werden", exc_info=True)
 
 
-async def _run_control_phase(session, state, data_update_ok: bool) -> None:
+async def _run_control_phase(session, state, data_update_ok: bool, befehle=None) -> None:
     """Regelung ausführen und bei unerwarteten Regelfehlern fail-safe ausschalten."""
     if not data_update_ok:
         state.control.blocking_reason = "Sensor-Update fehlgeschlagen"
@@ -2010,7 +2050,8 @@ async def _run_control_phase(session, state, data_update_ok: bool) -> None:
                 logging.exception("Fail-safe-Ausschalten nach Sensor-Update-Fehler fehlgeschlagen")
         return
     try:
-        await run_logic_step(session, state, learning_engine=state.learning_engine)
+        await run_logic_step(session, state, learning_engine=state.learning_engine,
+                            befehle=befehle)
         state.control.consecutive_control_errors = 0
         state.last_control_success = _state_now(state)
     except Exception:
@@ -2074,6 +2115,15 @@ async def main_loop():
 
         while not stop_event.is_set():
             iteration_started = _state_monotonic(state)
+            # Manuelle Befehle VOR den Phasen abholen. Der Not-Aus darf
+            # nicht davon abhaengen, ob die Sensorlage auswertbar war -
+            # bei kaputten Sensoren braucht man ihn am ehesten. Vorher lag
+            # die Abarbeitung in run_logic_step, das _run_control_phase bei
+            # fehlgeschlagenem Sensor-Update gar nicht mehr aufrief: die
+            # Queue blieb liegen, ohne dass jemand etwas bemerkte.
+            befehle = await _fuehre_sperrbefehle_aus(
+                session, state, _pop_control_commands()
+            )
             try:
                 now = _state_now(state)
                 state.loop_heartbeat = now
@@ -2107,7 +2157,7 @@ async def main_loop():
             except Exception:
                 logging.exception("Fehler in der Speicher-Diagnosephase")
             await _run_api_health_phase(session, state)
-            await _run_control_phase(session, state, data_update_ok)
+            await _run_control_phase(session, state, data_update_ok, befehle)
             await _run_logging_phase(state)
             await _run_status_snapshot_phase(state)
 

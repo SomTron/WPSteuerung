@@ -156,6 +156,11 @@ def test_telegram_benutzt_kein_blasses_import_main():
     assert '_laufendes_main()' in text
 
 
+@pytest.mark.skipif(
+    os.name == 'nt',
+    reason="liest den Git-Index per subprocess; unter Windows scheitert "
+           "CreateProcess sporadisch mit WinError 50/6 (dokumentiert in "
+           "test_updater_api_key.py). Auf dem Pi laeuft der Test.")
 def test_shellskripte_sind_ausfuehrbar():
     """Nach einem Clone auf dem Pi sind sie sonst nicht startbar.
 
@@ -324,6 +329,62 @@ def test_api_payload_enthaelt_notaus_felder():
 
     state.control.notaus_aktiv = False
     assert build_mode_payload(state)["notaus_aktiv"] is False
+
+
+# ---------- Der Not-Aus darf nicht an der Sensorlage haengen ----------
+
+@pytest.mark.asyncio
+async def test_sperrbefehle_werden_vor_den_phasen_ausgefuehrt(monkeypatch, tmp_path):
+    """Der Not-Aus wird auch dann ausgefuehrt, wenn die Sensorlage muesste.
+
+    Die Befehlsschiene lag in run_logic_step, und das ruft
+    _run_control_phase nur auf, wenn der Sensor-Update erfolgreich war.
+    Sonst kehrt diese frueh zurueck - die Queue blieb liegen und der
+    Not-Aus wurde nie ausgefuehrt. Genau das ist auf dem Pi passiert:
+    Telegram bestaetigte, die Anlage lief weiter.
+
+    Bei kaputter Sensorlage ist ein Not-Aus am ehesten noetig - er darf
+    dort nicht ausfallen.
+    """
+    m, _calls, sperrdatei = _baue_main_mocks(monkeypatch, tmp_path)
+
+    rest = await m._fuehre_sperrbefehle_aus(
+        None, _baue_state(), [("notaus", {"grund": "Telegram"})]
+    )
+    assert os.path.exists(sperrdatei), "Sperre wurde nicht geschrieben"
+    # Nach einem Not-Aus darf nichts anderes mehr durchrutschen.
+    assert rest == [], f"nach dem Not-Aus wurde weitergegeben: {rest}"
+
+
+@pytest.mark.asyncio
+async def test_sperrbefehle_lassen_force_on_durch(monkeypatch, tmp_path):
+    """Ein force_on vor einem notaus_aus wird weitergegeben, nicht geschluckt."""
+    m, _calls, _sperrdatei = _baue_main_mocks(monkeypatch, tmp_path)
+    rest = await m._fuehre_sperrbefehle_aus(
+        None, _baue_state(),
+        [("force_on", {}), ("set_mode", {"mode": "bademodus", "active": True})],
+    )
+    assert [c for c, _p in rest] == ["force_on", "set_mode"], rest
+
+
+def test_der_loop_holt_die_queue_vor_der_kontrollphase():
+    """Strukturvertrag: das Leeren darf nicht in der Kontrollphase liegen.
+
+    Sonst haengt es wieder an data_update_ok. Geprueft wird die
+    Quelltextreihenfolge - ein Lauf des ganzen Loops waere hier zu
+    aufwaendig und der Ausnahmefall laesst sich dort kaum provozieren.
+    """
+    pfad = os.path.join(os.path.dirname(__file__), '..', 'main.py')
+    with open(pfad, encoding='utf-8') as fh:
+        text = fh.read()
+    schleife = text[text.find('while not stop_event.is_set():'):]
+    pop = schleife.find('_pop_control_commands()')
+    phase = schleife.find('_run_control_phase(')
+    assert pop != -1 and phase != -1, "Queue-Abholung nicht im Loop gefunden"
+    assert pop < phase, (
+        "Die Queue wird erst in der Kontrollphase geleert - bei "
+        "fehlgeschlagenem Sensor-Update bleibt ein Not-Aus liegen"
+    )
 
 
 # ---------- Verhalten im Main-Loop ----------
