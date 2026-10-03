@@ -42,6 +42,53 @@ backup_local_changes() {
     printf '%s\n' "$backup_dir"
 }
 
+# Unit aus dem Repo nach /etc/systemd/system uebertragen, wenn sie sich
+# geaendert hat.
+#
+# Warum das noetig ist: ein Deploy holt den neuen Code (immer nur
+# Fast-Forward, siehe unten) und startet den Dienst neu. Die Unit in
+# /etc/systemd/system bleibt dabei, wie sie ist. Auf dem Pi fehlten dadurch
+# zwei entscheidende Zeilen, und beide fallen still aus:
+#   * EnvironmentFile=-/etc/wpssteuerung/api.env  -> WPS_API_KEY wird nie
+#     gelesen, jede Schreibroute antwortet 503 (auch /control, also der
+#     Not-Aus),
+#   * RestartPreventExitStatus=42                 -> Restart=always startet
+#     den Dienst nach einem Not-Aus nach 10 Sekunden wieder.
+# Der Menuepunkt 25 im wp-manager holt das von Hand nach; hier passiert es
+# bei jedem Deploy, damit die Unit nicht erneut driftet.
+sync_service_unit() {
+    quelle="$REPO_DIR/Steuerung/wpsteuerung.service"
+    ziel="/etc/systemd/system/wpsteuerung.service"
+
+    if [ ! -f "$quelle" ]; then
+        color_print "$YELLOW" "  Hinweis: $quelle fehlt - Unit nicht synchronisiert."
+        return 0
+    fi
+    if [ -f "$ziel" ] && cmp -s "$quelle" "$ziel"; then
+        printf "  Unit: bereits aktuell\n"
+        return 0
+    fi
+
+    printf "${CYAN}  Unit weicht ab - uebertrage nach %s${NC}\n" "$ziel"
+    if [ -f "$ziel" ]; then
+        if sudo cp -p "$ziel" "$ziel.bak" 2>/dev/null; then
+            printf "  Vorherige Unit gesichert: %s.bak\n" "$ziel"
+        else
+            color_print "$YELLOW" "  Warnung: alte Unit nicht sicherbar"
+        fi
+    fi
+    if ! sudo install -m 0644 "$quelle" "$ziel"; then
+        color_print "$RED" "  FEHLER: Unit konnte nicht kopiert werden."
+        return 1
+    fi
+    if ! sudo systemctl daemon-reload; then
+        color_print "$RED" "  FEHLER: daemon-reload fehlgeschlagen."
+        return 1
+    fi
+    printf "${GREEN}  Unit aktualisiert, daemon-reload ausgefuehrt.${NC}\n"
+    return 0
+}
+
 verify_service_restart() {
     service_name="$1"
     old_pid=$(systemctl show "$service_name" -p MainPID --value 2>/dev/null || true)
@@ -294,6 +341,13 @@ case "$choice" in
                 exit 1
             fi
             if systemctl is-active --quiet "$SERVICE_NAME"; then
+                # Erst die Unit, dann der Neustart. Sonst laeuft der neue
+                # Code noch mit der alten Unit - auf dem Pi monatelang so.
+                if ! sync_service_unit; then
+                    color_print "$RED" "FEHLER: Unit-Synchronisierung fehlgeschlagen."
+                    color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
+                    exit 1
+                fi
                 printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
                 verify_service_restart "$SERVICE_NAME"
             else
@@ -430,6 +484,11 @@ case "$choice" in
                 exit 1
             fi
             if systemctl is-active --quiet "$SERVICE_NAME"; then
+                if ! sync_service_unit; then
+                    color_print "$RED" "FEHLER: Unit-Synchronisierung fehlgeschlagen."
+                    color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
+                    exit 1
+                fi
                 printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
                 verify_service_restart "$SERVICE_NAME"
             else

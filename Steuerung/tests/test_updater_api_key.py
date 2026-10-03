@@ -308,6 +308,78 @@ def test_option24_verweist_auf_option25():
     assert '25' in status, "Kein Verweis auf Option 25"
 
 
+# ---------- Das Deploy zieht die Unit mit ----------
+
+DEPLOY = os.path.join(ROOT, 'Updater', 'rpi-deploy.sh')
+
+
+def _deploy():
+    with open(DEPLOY, encoding='utf-8') as fh:
+        return fh.read()
+
+
+def test_deploy_installiert_die_unit():
+    """Ein Deploy zieht den Code, aber nicht die Unit.
+
+    Deshalb lief auf dem Pi eine aeltere Unit: EnvironmentFile fehlte
+    (Schluessel nie gelesen, 503) und RestartPreventExitStatus=42 fehlte
+    (Not-Aus nach 10 s wieder da). Ohne diese Funktion driftet das bei
+    jedem naechsten Deploy erneut.
+    """
+    d = _deploy()
+    assert re.search(r'^sync_service_unit\(\) \{$', d, re.MULTILINE), (
+        "sync_service_unit fehlt im Deploy-Skript"
+    )
+    m = re.search(r'^sync_service_unit\(\) \{$.*?^\}$', d,
+                  re.MULTILINE | re.DOTALL)
+    assert m
+    fn = m.group(0)
+    assert re.search(r'install\s+-m\s+0644\s+"\$quelle"\s+"\$ziel"', fn), (
+        "Die Unit wird nicht aus dem Repo nach /etc/systemd/system kopiert"
+    )
+    assert 'daemon-reload' in fn
+    assert '.bak' in fn, "Keine Sicherung der bisherigen Unit"
+    assert 'cmp -s' in fn, (
+        "Ohne Vergleich wird die Unit bei jedem Deploy unnoetig neu geladen"
+    )
+
+
+def test_deploy_ruft_die_synchronisierung_vor_dem_neustart():
+    """Andernfalls laeuft der neue Code noch mit der alten Unit."""
+    d = _deploy()
+    aufrufe = [m.start() for m in re.finditer(r'if ! sync_service_unit; then', d)]
+    assert len(aufrufe) >= 2, (
+        "Beide Deploy-Pfade (Update und Branch-Wechsel) muessen die Unit "
+        f"mitziehen, gefunden: {len(aufrufe)}"
+    )
+    for pos in aufrufe:
+        rest = d[pos:pos + 600]
+        assert 'verify_service_restart' in rest, (
+            "Der Neustart wird verifiziert, die Unit aber nicht vorher "
+            "synchronisiert"
+        )
+        # Der Aufruf muss VOR verify_service_restart stehen.
+        assert rest.index('sync_service_unit') < rest.index('verify_service_restart')
+
+
+def test_deploy_bricht_nicht_still_ab():
+    """Unter `set -e` wuerde ein Fehlschlag still beenden."""
+    d = _deploy()
+    for m in re.finditer(r'if ! sync_service_unit; then(.*?)fi', d,
+                         re.DOTALL):
+        block = m.group(1)
+        assert 'exit 1' in block, (
+            "Fehlgeschlagene Synchronisierung fuehrt nicht zu einem klaren Abbruch"
+        )
+        assert 'NICHT neu gestartet' in block
+
+
+@_eigene_shell
+def test_deploy_bleibt_syntaxfehlerfrei():
+    r = _run(_shell(), '-n', DEPLOY)
+    assert r.returncode == 0, f"Syntaxfehler im Deploy-Skript:\n{r.stderr}"
+
+
 # ---------- Rechte: der Menue-Benutzer muss die Datei lesen koennen ----------
 
 def test_gruppe_statt_rootroot():
