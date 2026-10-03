@@ -2257,9 +2257,21 @@ def bewerte_alle_regeln(
     legionellen_planned_tag=None,
     legionellen_planned_date=None,
     notfall_aktiv: bool = False,
+    pv_erzeugung_watt: Optional[float] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
+
+    ``pv_acpower`` ist der Wechselstromausgang des Wechselrichter
+    (Haus + Netz) und damit NICHT die PV-Erzeugung - nachts betraegt er
+    rund 250 W, obwohl die Gleichstromseite 0 meldet. Fuer die
+    Quellenpruefung zaehlt die Erzeugung; sie kommt als
+    ``pv_erzeugung_watt`` aus powerdc1 + powerdc2.
+
+    Beide Parameter bleiben erhalten, weil die uebrigen Regelfunktionen
+    ``pv_acpower`` weiterreichen. Aufgeloest wird hier EINMAL, an der
+    einzigen Stelle, an der beide Werte zusammenlaufen: bevorzugt die
+    Erzeugung, sonst der AC-Wert wie bisher.
 
     Returns:
         (gewinner, alle_ergebnisse): Die gewinnende Regel (oder None) und alle Ergebnisse.
@@ -2267,6 +2279,10 @@ def bewerte_alle_regeln(
     if now is None:
         now = datetime.now()
 
+    # Genau eine Aufloesung fuer alle Regeln - sonst muesste jedes
+    # Untersystem selbst entscheiden, und eine vergessene Stelle faellt
+    # nicht auf, sondern liefert still die falsche Quelle.
+    _pv_signal = pv_acpower if pv_erzeugung_watt is None else pv_erzeugung_watt
     now_hour = now.hour
     nachtsperre_start = config.sicherheit.nachtsperre_start
     nachtsperre_ende = config.sicherheit.nachtsperre_ende
@@ -2411,7 +2427,7 @@ def bewerte_alle_regeln(
         bademodus_aktiv=bademodus_aktiv,
         forecast_today_wh_qm=forecast_today_wh_qm,
         fc_ratio=fc_ratio,
-        pv_acpower=pv_acpower,
+        pv_acpower=_pv_signal,
         battery_power=battery_power,
         solar_stale=solar_stale,
     )
@@ -2427,7 +2443,7 @@ def bewerte_alle_regeln(
         nachtsperre_ende,
         feedin_watt=pv_leistung,
         soc=soc,
-        pv_acpower=pv_acpower,
+        pv_acpower=_pv_signal,
         battery_power=battery_power,
         solar_stale=solar_stale,
         kompressor_ein=kompressor_ein,
@@ -2446,7 +2462,7 @@ def bewerte_alle_regeln(
         nachtsperre_ende,
         fc_ratio=fc_ratio,
         forecast_today_wh_qm=forecast_today_wh_qm,
-        pv_acpower=pv_acpower,
+        pv_acpower=_pv_signal,
         battery_power=battery_power,
         soc=soc,
         solar_stale=solar_stale,
@@ -2470,7 +2486,7 @@ def bewerte_alle_regeln(
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profile,
         recent_usage_events=recent_usage_events,
-        pv_acpower=pv_acpower,
+        pv_acpower=_pv_signal,
         battery_power=battery_power,
         solar_stale=solar_stale,
     )
@@ -2490,7 +2506,7 @@ def bewerte_alle_regeln(
         legionellen_unvollstaendig=legionellen_unvollstaendig,
         kompressor_ein=kompressor_ein,
         legionellen_target_reached_at=legionellen_target_reached_at,
-        pv_acpower=pv_acpower,
+        pv_acpower=_pv_signal,
         wochenende_cfg=config.wochenende,
         legionellen_planned_tag=legionellen_planned_tag,
         legionellen_planned_date=legionellen_planned_date,

@@ -211,6 +211,7 @@ def schreibe_eintrag(
     feedin_watt: Optional[float] = None,
     batpower_watt: Optional[float] = None,
     pv_acpower_watt: Optional[float] = None,
+    pv_erzeugung_watt: Optional[float] = None,
     hausverbrauch_watt: Optional[float] = None,
     pv_ueberschuss_watt: Optional[float] = None,
     soc: Optional[float] = None,
@@ -275,6 +276,12 @@ def schreibe_eintrag(
         "feedin_w": round(float(feedin_watt), 1) if feedin_watt is not None else None,
         "batpower_w": round(float(batpower_watt), 1) if batpower_watt is not None else None,
         "pv_acpower_w": round(float(pv_acpower_watt), 1) if pv_acpower_watt is not None else None,
+        # Die tatsaechliche Erzeugung (powerdc1 + powerdc2). `pv_acpower_w`
+        # ist der Wechselstromausgang, also Haus plus Netz - nachts rund
+        # 250 W, obwohl die Sonne nichts liefert. Beide Spalten bleiben
+        # getrennt, sonst laesst sich der Unterschied spaeter nicht mehr
+        # rekonstruieren.
+        "pv_erzeugung_w": round(float(pv_erzeugung_watt), 1) if pv_erzeugung_watt is not None else None,
         "hausverbrauch_w": round(float(hausverbrauch_watt), 1) if hausverbrauch_watt is not None else None,
         "pv_ueberschuss_w": round(float(pv_ueberschuss_watt), 1) if pv_ueberschuss_watt is not None else None,
         "soc": round(float(soc), 1) if soc is not None else None,

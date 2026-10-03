@@ -585,6 +585,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         soc=getattr(state.solar, "soc", None),
         battery_power=getattr(state.solar, "batpower", None),
         pv_acpower=getattr(state.solar, "acpower", None),
+        # Die Quellenpruefung richtet sich nach der ERZEUGUNG (DC-Seite),
+        # nicht nach dem Wechselstromausgang. Nachts betraegt der 250 W,
+        # waehrend die Sonne 0 liefert.
+        pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
         learned_evening_window=gelerntes_abendfenster,
         learned_morning_window=_gelerntes_morgenfenster_mit_bonus(
             state, learning_engine

@@ -279,11 +279,29 @@ def test_limit_begrenzt_ausgabe(tmp_path):
         assert len(h) == 5
 
 
+def _basiszeit():
+    """Fester Zeitpunkt MITTAG des heutigen Tages.
+
+    Ohne das scheitern mehrere Tests in diesem Modul zwischen 00:00 und
+    00:05: sie schreiben Eintraege im 60-Sekunden-Abstand zurueck bis
+    "jetzt" und kpis() filtert auf `ts.startswith(heute)`. Faellt die
+    Zeitreihe ueber Mitternacht, zaehlen nur die Eintraege des neuen
+    Tages - aus 5 Intervallen wurde 1, und der Test meldete
+    laufzeit_min 1.0 statt 5.0.
+
+    Nachts um 00:02 gemessen: 3 Fehlschlaenge. Der Datumsteil bleibt
+    `date.today()`, damit die Auswertung "heute" weiterhin greift; nur
+    die Tageszeit ist fest.
+    """
+    heute = datetime.now().date()
+    return datetime(heute.year, heute.month, heute.day, 12, 0, 0)
+
+
 def test_kpis_aggregieren(tmp_path):
     """kpis() berechnet Laufzeit, Energie und Anteil korrekt."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
-        now = datetime.now()
+        now = _basiszeit()
         # Simuliere 6 Eintraege mit dt=60s, Kompressor laeuft immer
         # feedin >= -50 -> pv_batterie, feedin < -50 -> netz
         for i in range(6):
@@ -334,7 +352,7 @@ def test_korrupte_zeile_toleriert(tmp_path):
     """Eine abgebrochene JSON-Zeile stoert das Lesen nicht."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
-        now = datetime.now().isoformat(timespec="seconds")
+        now = _basiszeit().isoformat(timespec="seconds")
         with open(log_datei, "w", encoding="utf-8") as f:
             f.write(json.dumps({"ts": now, "gewinner": "OK"}) + "\n")
             f.write("{\"ts\": \"... abgebrochen")  # kaputt, kein Newline am Ende
@@ -405,7 +423,7 @@ def test_keine_phantom_minuten_beim_wp_start(tmp_path):
     """
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
-        now = datetime.now()
+        now = _basiszeit()
         alt_ts = (now - timedelta(hours=1)).isoformat(timespec="seconds")
         with open(log_datei, "w", encoding="utf-8") as f:
             f.write(json.dumps({
@@ -505,7 +523,7 @@ def test_kpi_zaehlt_ladende_batterie_zum_solarantial(tmp_path):
     """
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
-        now = datetime.now()
+        now = _basiszeit()
         # 5 Zeilen -> 4 Intervalle a 60 s, alle feedin=0 mit ladender Batterie.
         with open(log_datei, "w", encoding="utf-8") as f:
             for i in range(5):
@@ -530,7 +548,7 @@ def test_null_watt_wird_nicht_als_pv_verbucht(tmp_path):
     """
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
-        now = datetime.now()
+        now = _basiszeit()
         # 5 Zeilen -> 4 Intervalle a 60 s. Zugerechnet wird der Zustand der
         # Vorgaengerzeile: PV, Batterie, 0 W, 0 W.
         quellen = [(2000.0, 0.0), (0.0, -800.0), (0.0, 0.0), (0.0, 0.0), (2000.0, 0.0)]
@@ -557,7 +575,7 @@ def test_kpi_meldet_keine_phantomquote_bei_nur_unklar(tmp_path):
     """Nur 'unklar'-Laufzeit darf keinen PV-Anteil erfinden."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
-        now = datetime.now()
+        now = _basiszeit()
         with open(log_datei, "w", encoding="utf-8") as f:
             f.write(_zeile(now - timedelta(minutes=2), soll=False,
                            feedin=0.0, batt=0.0) + "\n")
