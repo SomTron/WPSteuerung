@@ -2,6 +2,11 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.14: Option 24 (API-Schluessel) erzeugt, zeigt, rotiert und entfernt
+#       WPS_API_KEY atomar in /etc/wpssteuerung/api.env und prueft das
+#       Ergebnis gegen den laufenden Dienst. Bisher nur von Hand moeglich.
+#       show_control_health las WPS_API_KEY aus der Menue-Umgebung statt
+#       aus der Datei und meldete deshalb IMMER "nicht gesetzt".
 # v1.13: Strg+C beendet nur noch die aktuelle Ansicht statt den Manager
 #       (Trap ohne exit); Header-Cache (TTL 20 s, nach Zustandsaenderungen
 #       verworfen); Remote-Zeile kennzeichnet den Vergleich als "laut lokalem
@@ -588,10 +593,11 @@ except Exception as exc:
 show_control_health() {
     printf "${CYAN}=== Steuerungs-Health (API) ===${NC}\n"
     printf "API-Basis: %s\n" "${WPS_API_BASE:-http://127.0.0.1:8000}"
-    if [ -n "${WPS_API_KEY:-}" ]; then
+    if [ -n "$(api_key_read)" ]; then
         printf "API-Key:    gesetzt\n"
     else
         printf "${YELLOW}API-Key:    nicht gesetzt (WPS_API_KEY) - Schreibzugriffe sind deaktiviert.${NC}\n"
+        printf "             Erzeugen: Option 24.\n"
     fi
     if python3 "$SCRIPT_DIR/manager_health.py" health; then
         :
@@ -627,6 +633,207 @@ show_analysis_quality() {
         printf "${RED}Qualitaetsbericht nicht lesbar.${NC}\n"
     fi
     wait_for_key
+}
+
+# --- API-Schluessel ------------------------------------------------------------
+# Warum ueberhaupt: api.py liest WPS_API_KEY EINMAL beim Import (Zeile 66).
+# Steht dort nichts, ist API_KEY leer, und _check_api_key beantwortet
+# jede Schreibroute mit 503 - auch /control, also auch den Not-Aus.
+# Diese Datei zu setzen war bisher nur von Hand moeglich.
+#
+# WICHTIG fuer jede Aenderung: der Dienst muss neu gestartet werden.
+# Eine geaenderte api.env wirkt erst nach dem Neustart.
+API_ENV_FILE="${WPS_API_ENV_FILE:-/etc/wpssteuerung/api.env}"
+API_ENV_DIR="${API_ENV_FILE%/*}"
+API_API_BASE="${WPS_API_BASE:-http://127.0.0.1:8000}"
+
+# Schluessel aus der Datei lesen (nur den Wert, ohne Prefix).
+api_key_read() {
+    [ -r "$API_ENV_FILE" ] || return 1
+    sed -n 's/^WPS_API_KEY=//p' "$API_ENV_FILE" 2>/dev/null | head -n 1
+}
+
+# Prueft gegen die LAUFENDE API, ob der Schluessel dort ankommt.
+# Bewusst eine harmlose, nur lesende Route mit Key-Pflicht
+# (/config/export, in api.py per _check_api_key geschuetzt):
+#   200 = angenommen    401 = passt nicht (Dienst nicht neu gestartet)
+#   503 = im Dienst gar kein Schluessel hinterlegt
+# Eine /control-Probe waere naheliegend, wuerde aber beim ersten
+# erfolgreichen Test einen Not-Aus ausloesen.
+api_key_probe() {
+    key="$1"
+    if [ -z "$key" ]; then
+        printf "${YELLOW}Kein Schluessel in %s.${NC}\n" "$API_ENV_FILE"
+        return 0
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+        printf "${YELLOW}curl fehlt - Probe nicht moeglich.${NC}\n"
+        return 0
+    fi
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+        -H "X-API-Key: $key" "$API_API_BASE/config/export" 2>/dev/null)
+    case "$code" in
+        200) printf "${GREEN}✓ Laufender Dienst akzeptiert den Schluessel.${NC}\n" ;;
+        401) printf "${RED}✗ Dienst lehnt den Schluessel ab (401).${NC}\n"
+             printf "  Meist fehlt der Neustart: api.py liest nur beim Start.\n" ;;
+        503) printf "${RED}✗ Dienst hat keinen Schluessel (503).${NC}\n"
+             printf "  Die Datei stimmt, wird aber nicht geladen.\n" ;;
+        000) printf "${YELLOW}✗ Keine Antwort von %s (Dienst laeuft?).${NC}\n" "$API_API_BASE" ;;
+        *)   printf "${YELLOW}✗ Unerwartete Antwort: HTTP %s${NC}\n" "$code" ;;
+    esac
+}
+
+api_key_status() {
+    printf "${CYAN}=== API-Schluessel ===${NC}\n"
+    printf "Datei:        %s\n" "$API_ENV_FILE"
+    printf "API-Basis:    %s\n" "$API_API_BASE"
+    echo ""
+    key=$(api_key_read)
+    if [ -z "$key" ]; then
+        printf "${YELLOW}Status: NICHT gesetzt.${NC}\n"
+        printf "  Folge: /control, /command, /config, /config/export,\n"
+        printf "         /debug/csv und /history/regeln antworten mit 503.\n"
+        printf "  Telegram funktioniert trotzdem - der Handler umgeht die API.\n"
+        printf "  Abhilfe: hier 'Neuen Schluessel erzeugen'.\n"
+    else
+        printf "${GREEN}Status: gesetzt (%s Zeichen).${NC}\n" "${#key}"
+    fi
+    echo ""
+    printf "Laufender Dienst:\n"
+    api_key_probe "$key"
+    echo ""
+    printf "In der App:     Dashboard -> Karte 'Verbindung'\n"
+    printf "In der WebApp:  localStorage.setItem('wp_api_key', '<key>')\n"
+}
+
+# Erzeugt einen neuen Schluessel. Einen bestehenden ersetzt das nur nach
+# Rueckfrage und legt den alten zurueck - ein versehentlich
+# ueberschriebener Schluessel waere sonst nicht wiederherstellbar.
+api_key_erzeugen() {
+    key=$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null)
+    if [ -z "$key" ]; then
+        printf "${RED}✗ Konnte keinen Schluessel erzeugen (python3/secrets).${NC}\n"
+        return 1
+    fi
+
+    alt=$(api_key_read)
+    if [ -n "$alt" ]; then
+        printf "${YELLOW}Es ist bereits ein Schluessel gesetzt.${NC}\n"
+        printf "Ein neuer Schluessel macht WebApp und Android-App sofort\n"
+        printf "unbrauchbar, bis dort der neue eingetragen ist.\n"
+        printf "Neuen Schluessel erzeugen? [j/N] "
+        read antwort
+        case "$antwort" in
+            j|J|y|Y) ;;
+            *) printf "Abgebrochen.\n"; return 0 ;;
+        esac
+        sudo cp -p "$API_ENV_FILE" "$API_ENV_FILE.bak" 2>/dev/null \
+            && printf "Alter Schluessel gesichert: %s.bak\n" "$API_ENV_FILE"
+    fi
+
+    printf "Ziel: %s\n" "$API_ENV_FILE"
+    if ! sudo install -d -m 750 -o root -g root "$API_ENV_DIR"; then
+        printf "${RED}✗ Verzeichnis %s nicht anlegbar.${NC}\n" "$API_ENV_DIR"
+        return 1
+    fi
+
+    # Atomar: erst in eine temporaere Datei im selben Verzeichnis, dann
+    # umbenennen. Ein abgebrochener Schreibvorgang hinterlaesst so weder
+    # eine leere noch eine halbe api.env.
+    tmp=$(sudo mktemp "$API_ENV_DIR/.api.env.XXXXXX") || {
+        printf "${RED}✗ Temporaere Datei nicht anlegbar.${NC}\n"; return 1; }
+    printf 'WPS_API_KEY=%s\n' "$key" | sudo tee "$tmp" >/dev/null 2>&1
+    sudo chmod 640 "$tmp" || true
+    sudo chown root:root "$tmp" 2>/dev/null || true
+    if ! sudo mv "$tmp" "$API_ENV_FILE"; then
+        sudo rm -f "$tmp" 2>/dev/null || true
+        printf "${RED}✗ Datei konnte nicht ersetzt werden.${NC}\n"
+        return 1
+    fi
+    printf "${GREEN}✓ %s geschrieben (Rechte 640, root:root).${NC}\n" "$API_ENV_FILE"
+
+    printf "\nNeustart noetig - die Datei wird nur beim Dienststart gelesen.\n"
+    printf "Jetzt neu starten? [j/N] "
+    read antwort
+    case "$antwort" in
+        j|J|y|Y) verify_service_action restart wpsteuerung && header_verwerfen ;;
+        *) printf "Dienst nicht neu gestartet. Der Schluessel wirkt erst\n"
+           printf "nach 'systemctl restart wpsteuerung'.\n" ;;
+    esac
+    api_key_probe "$key"
+}
+
+api_key_anzeigen() {
+    key=$(api_key_read)
+    if [ -z "$key" ]; then
+        printf "${YELLOW}Kein Schluessel gesetzt.${NC}\n"
+        return 1
+    fi
+    printf "Schluessel (fuer WebApp und Android-App):\n\n"
+    printf "  %s\n\n" "$key"
+    printf "Nur fuer die eigene Anmeldung - nicht weitergeben.\n"
+    if [ -f "$API_ENV_FILE.bak" ]; then
+        printf "Vorheriger Schluessel: %s.bak\n" "$API_ENV_FILE"
+    fi
+}
+
+# Entfernt den Schluessel wieder. Das ist der dokumentierte Rueckweg in
+# den gesperrten Zustand: danach antworten alle Schreibrouten mit 503,
+# die Heizung laeuft aber weiter.
+api_key_entfernen() {
+    if [ ! -f "$API_ENV_FILE" ]; then
+        printf "${YELLOW}Es existiert keine %s.${NC}\n" "$API_ENV_FILE"
+        return 0
+    fi
+    printf "Damit faellt der Schreibschutz wieder auf 503 zurueck.\n"
+    printf "WebApp und Android-App koennen danach nichts mehr schreiben,\n"
+    printf "Telegram weiterhin schon. Die Heizung laeuft normal.\n"
+    printf "Wirklich entfernen? [j/N] "
+    read antwort
+    case "$antwort" in
+        j|J|y|Y) ;;
+        *) printf "Abgebrochen.\n"; return 0 ;;
+    esac
+    if sudo rm -f "$API_ENV_FILE" "$API_ENV_FILE.bak"; then
+        printf "${GREEN}✓ Entfernt.${NC}\n"
+    else
+        printf "${RED}✗ Datei konnte nicht entfernt werden.${NC}\n"
+        return 1
+    fi
+    printf "Neustart noetig, damit der Dienst den Schluessel vergisst.\n"
+    printf "Jetzt neu starten? [j/N] "
+    read antwort
+    case "$antwort" in
+        j|J|y|Y) verify_service_action restart wpsteuerung && header_verwerfen ;;
+        *) printf "Dienst nicht neu gestartet.\n" ;;
+    esac
+}
+
+api_key_menu() {
+    while :; do
+        clear
+        printf "${BLUE}=========================================================${NC}\n"
+        printf "               API-Schluessel (Schreibschutz)\n"
+        printf "${BLUE}=========================================================${NC}\n"
+        api_key_status
+        printf "${BLUE}---------------------------------------------------------${NC}\n"
+        printf "1) Status und Pruefung gegen den laufenden Dienst\n"
+        printf "2) Neuen Schluessel erzeugen (bestaehenden ersetzen)\n"
+        printf "3) Schluessel anzeigen\n"
+        printf "4) Schluessel entfernen (Schreibzugriff wieder sperren)\n"
+        printf "0) Zurueck zum Hauptmenue\n"
+        printf "Choice: "
+        read api_choice
+        case "$api_choice" in
+            1) api_key_status ;;
+            2) api_key_erzeugen ;;
+            3) api_key_anzeigen ;;
+            4) api_key_entfernen ;;
+            0) return 0 ;;
+            *) printf "${RED}Ungueltige Auswahl: %s${NC}\n" "$api_choice" ;;
+        esac
+        wait_for_key
+    done
 }
 
 # Neuesten Qualitaetsbericht suchen (Analyse-Ordner, dann Projektwurzel).
@@ -998,6 +1205,7 @@ while true; do
     printf "21) 🧠  Upload learning_data.json to Catbox\n"
         printf "22) 🩺  Steuerungs-Health (API /health)\n"
     printf "23) 📈  Analyse-Qualitaet (quality_report.json)\n"
+    printf "24) 🔑  API-Schluessel (erzeugen / anzeigen / entfernen)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -1193,6 +1401,7 @@ while true; do
             ;;
         22) show_control_health ;;
         23) show_analysis_quality ;;
+        24) api_key_menu ;;
         0) exit 0 ;;
         *)
             printf "${RED}Ungültige Auswahl: '%s'${NC}\n" "$choice"

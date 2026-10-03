@@ -113,6 +113,11 @@ Danach `systemctl daemon-reload && systemctl restart wpsteuerung` ausführen. Oh
 localStorage.setItem('wp_api_key', 'DEIN_KEY');
 ```
 
+Statt die Datei von Hand anzulegen, erzeugt **Option 24** des Updater-Menüs
+den Schlüssel: erzeugen, anzeigen, rotieren und entfernen, jeweils mit
+Rückfrage und anschließender Prüfung gegen den laufenden Dienst. Details in
+`Updater/README.md`.
+
 ## 📦 System-Management (Updater)
 
 Für eine einfache Wartung und Updates nutzen Sie die Skripte im `Updater/` Verzeichnis:

@@ -135,6 +135,45 @@ Beide Ausgaben kommen aus `manager_health.py` (nur Standardbibliothek). Der Beri
 wird unter `WPS_QUALITY_REPORT` erwartet; fehlt die Variable, sucht der Manager
 den neuesten `quality_report.json` unter `logs/`.
 
+### Option 24: API-Schluessel
+
+| Option | Zweck |
+|---|---|
+| `24` | `WPS_API_KEY` erzeugen, anzeigen, rotieren oder entfernen |
+
+`api.py` liest den Schluessel **einmal beim Import**. Fehlt er, ist `API_KEY`
+leer und `_check_api_key` beantwortet jede Schreibroute mit **503** – auch
+`/control`, also auch den Not-Aus. Telegram funktioniert trotzdem, weil der
+Handler die API umgeht. Genau deshalb kann das so lange unbemerkt bleiben.
+
+Das Untermenue schreibt `WPS_API_KEY` nach `/etc/wpssteuerung/api.env`
+(Override via `WPS_API_ENV_FILE`):
+
+- **2 (erzeugen)** schreibt atomar: erst in eine temporaere Datei im selben
+  Verzeichnis, dann `mv`. Ein abgebrochener Vorgang hinterlaesst weder eine
+  leere noch eine halbe Datei. Ein vorhandener Schluessel wird nach Rueckfrage
+  nach `api.env.bak` gesichert. Rechte: Verzeichnis `750`, Datei `640`,
+  `root:root`. Generiert wird ueber `python3 -c "import secrets"` – das ist auf
+  dem Pi ohnehin vorhanden, `openssl` nicht garantiert.
+- **Jede Aenderung fragt den Neustart ab.** Ohne ihn laeuft der Dienst mit dem
+  alten Stand weiter; der Schluessel wirkt erst danach.
+- **Die Pruefung geht an den laufenden Dienst**, nicht nur an die Datei:
+  `GET /config/export` mit `X-API-Key` ist eine harmlose Route mit
+  Key-Pflicht. `200` = angenommen, `401` = Schluessel passt nicht (Neustart
+  fehlt), `503` = im Dienst gar kein Schluessel. Bewusst **keine** Probe auf
+  `/control` – die wuerde beim ersten erfolgreichen Test einen Not-Aus
+  ausloesen.
+- **4 (entfernen)** ist der dokumentierte Rueckweg in den gesperrten Zustand:
+  danach 503 auf allen Schreibrouten, die Heizung laeuft aber weiter.
+
+Der Schluessel gehoert in die WebApp ueber
+`localStorage.setItem('wp_api_key', '<key>')` und in die Android-App ueber
+Dashboard -> Karte *Verbindung*.
+
+**Korrektur in Option 22:** `show_control_health` las `WPS_API_KEY` aus der
+Menue-Umgebung. Die ist nie gesetzt – die Anzeige meldete deshalb dauerhaft
+*nicht gesetzt*, auch wenn die Datei existierte. Jetzt wird die Datei gelesen.
+
 Exit-Codes von `manager_health.py`:
 
 ```text

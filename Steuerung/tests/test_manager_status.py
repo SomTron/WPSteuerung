@@ -379,12 +379,23 @@ def test_menueintrraege_22_23_stehen_im_hauptmenue_nicht_im_untermenue():
         "Option 23 wird im Hauptmenue nicht angezeigt"
     )
 
-    # Im Analyse-Untermenue (endet mit "Zurueck zum Hauptmenue") darf 22/23
-    # nicht erscheinen.
+    # In keinem Untermenue (endet mit "Zurueck zum Hauptmenue") darf 22/23
+    # erscheinen.
+    #
+    # Angepasst ab Option 24: es gibt mit dem API-Schluessel-Untermenue
+    # eine zweite Rueckkehrzeile. Vorher stand hier "genau eine", was
+    # still voraussetzte, dass es nur ein Untermenue gibt - ein zweites
+    # liess den Test an einer Stelle scheitern, die nichts mit 22/23 zu
+    # tun hat. Geprueft wird jetzt jedes Untermenue einzeln.
     zurueck_idx = [
         i for i, z in enumerate(zeilen) if z.startswith('printf "0)') and "Zurueck" in z
     ]
-    assert len(zurueck_idx) == 1, zurueck_idx
-    untermenue = zeilen[zurueck_idx[0] - 8: zurueck_idx[0] + 1]
-    assert not any(z.startswith('printf "22)') for z in untermenue)
-    assert not any(z.startswith('printf "23)') for z in untermenue)
+    assert zurueck_idx, "keine Rueckkehrzeile im Untermenue gefunden"
+    for idx in zurueck_idx:
+        untermenue = zeilen[idx - 8: idx + 1]
+        assert not any(z.startswith('printf "22)') for z in untermenue), (
+            f"Option 22 erscheint im Untermenue vor Zeile {idx}"
+        )
+        assert not any(z.startswith('printf "23)') for z in untermenue), (
+            f"Option 23 erscheint im Untermenue vor Zeile {idx}"
+        )
