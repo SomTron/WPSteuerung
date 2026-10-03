@@ -7,9 +7,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.wpsteuerung.app.R
 import com.wpsteuerung.app.viewmodel.DashboardUiState
 import com.wpsteuerung.app.viewmodel.DashboardViewModel
 
@@ -22,7 +25,41 @@ fun DashboardScreen(
     val uiState by viewModel.uiState.collectAsState()
     val isBademodus by viewModel.isBademodus.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
-    
+    val befehlFeedback by viewModel.befehlFeedback.collectAsState()
+    val bestaetigungOffen by viewModel.bestaetigungOffen.collectAsState()
+    val apiKeyEingabe by viewModel.apiKeyEingabe.collectAsState()
+    val apiKeyFehlt by viewModel.apiKeyFehlt.collectAsState()
+
+    // Sicherheitsabfrage vor dem Not-Aus. Sie wird hier im Bildschirm
+    // gehostet, damit sie unabhaengig vom aktuellen uiState sichtbar
+    // bleibt - auch wenn die Statusabfrage gerade fehlschlaegt.
+    if (bestaetigungOffen) {
+        AlertDialog(
+            onDismissRequest = { viewModel.bestaetigungSchliessen() },
+            title = { Text(stringResource(R.string.notaus_dialog_titel)) },
+            text = { Text(stringResource(R.string.notaus_dialog_text)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.bestaetigungSchliessen()
+                        viewModel.triggerNotAus()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    Text(stringResource(R.string.notaus_dialog_bestaetigen))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.bestaetigungSchliessen() }) {
+                    Text(stringResource(R.string.notaus_dialog_abbrechen))
+                }
+            }
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -36,7 +73,76 @@ fun DashboardScreen(
         )
         
         Spacer(modifier = Modifier.height(16.dp))
+
+        // Rueckmeldung zu einem ausgefuehrten Befehl.
+        befehlFeedback?.let { text ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(text, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = { viewModel.feedbackQuittieren() }) {
+                        Text(stringResource(R.string.feedback_quittieren))
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
         
+        // Verbindungskarte. Steht ausserhalb von `when (uiState)`, damit sie
+        // auch dann bedienbar bleibt, wenn /status einmal nicht antwortet -
+        // genau dann braucht man sie am ehesten.
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.verbindung_titel),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                if (apiKeyFehlt) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.verbindung_warnung),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.verbindung_gesetzt),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = apiKeyEingabe,
+                    onValueChange = { viewModel.apiKeyEingabeAendern(it) },
+                    label = { Text(stringResource(R.string.verbindung_key_label)) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = { viewModel.apiKeySpeichern() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.verbindung_speichern))
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         when (uiState) {
             is DashboardUiState.Loading -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -45,6 +151,53 @@ fun DashboardScreen(
             }
             is DashboardUiState.Success -> {
                 val status = (uiState as DashboardUiState.Success).status
+
+                // Sperranzeige. Steht bewusst ueber allem, damit sie auch dann
+                // im Blickfeld bleibt, wenn die Kompressor-Karte weit unten steht.
+                if (status.notausAktiv) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = stringResource(R.string.notaus_banner_titel),
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onError
+                            )
+                            status.notausGrund?.takeIf { it.isNotBlank() }?.let {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.notaus_banner_grund, it),
+                                    color = MaterialTheme.colorScheme.onError
+                                )
+                            }
+                            status.notausTs?.takeIf { it.isNotBlank() }?.let {
+                                Text(
+                                    text = stringResource(R.string.notaus_banner_zeit, it),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onError
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = stringResource(R.string.notaus_banner_wirkung),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onError
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = stringResource(R.string.notaus_banner_neustart),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onError
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
                 
                 // Temperaturen Card
                 Card(
@@ -100,6 +253,39 @@ fun DashboardScreen(
                         Text("Heute: ${status.compressor.runtimeToday}")
                         if (status.compressor.status == "EIN") {
                             Text("Aktuelle Laufzeit: ${status.compressor.runtimeCurrent}")
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Not-Aus. Wirkt nicht nur auf den Kompressor, sondern
+                        // beendet den Dienst - deshalb eigener Knopf in roter
+                        // Farbe und zwingende Rueckfrage. Bewusst NICHT bei den
+                        // Handbefehlen: wer hier "Aus" tippt, erwartet eine
+                        // Aktion, die sich zuruecknehmen laesst.
+                        HorizontalDivider()
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (status.notausAktiv) {
+                            Button(
+                                onClick = { viewModel.clearNotAus() },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text(stringResource(R.string.notaus_aufheben_knopf))
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = { viewModel.bestaetigungOeffnen() },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Text(stringResource(R.string.notaus_knopf))
+                            }
                         }
                     }
                 }

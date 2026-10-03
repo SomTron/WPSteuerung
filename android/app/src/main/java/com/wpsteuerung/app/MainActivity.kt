@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.wpsteuerung.app.data.local.Einstellungen
 import com.wpsteuerung.app.ui.screens.DashboardScreen
 import com.wpsteuerung.app.ui.screens.HistoryScreen
 import com.wpsteuerung.app.ui.theme.WPSteuerungTheme
@@ -17,6 +18,9 @@ import com.wpsteuerung.app.viewmodel.HistoryViewModel
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Muss vor dem ersten API-Aufruf passieren - RetrofitClient liest den
+        // Schluessel beim Bauen der Requests.
+        Einstellungen.init(applicationContext)
         setContent {
             WPSteuerungTheme {
                 Surface(

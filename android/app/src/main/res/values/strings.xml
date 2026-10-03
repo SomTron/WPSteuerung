@@ -1,3 +1,28 @@
 <resources>
     <string name="app_name">WP Steuerung</string>
+
+    <!-- Not-Aus: sicherheitskritische Texte bewusst als Ressource, damit sie
+         uebersetzbar und zentral pruefbar sind. -->
+    <string name="notaus_banner_titel">NOT-AUS AKTIV</string>
+    <string name="notaus_banner_grund">Grund: %1$s</string>
+    <string name="notaus_banner_zeit">Ausgeloest: %1$s</string>
+    <string name="notaus_banner_wirkung">Die Anlage heizt nicht. Auch Legionellenprophylaxe und Notfallschutz sind angehalten, der Brauchwasserspeicher kuehlt aus.</string>
+    <string name="notaus_banner_neustart">Wieder annehmen: per SSH „systemctl restart wpsteuerung“, danach hier „Not-Aus aufheben“ tippen.</string>
+
+    <string name="notaus_knopf">🛑 NOT-AUS</string>
+    <string name="notaus_aufheben_knopf">🟢 Not-Aus aufheben</string>
+
+    <string name="notaus_dialog_titel">Wirklich Not-Aus ausloesen?</string>
+    <string name="notaus_dialog_text">Der Kompressor wird abgeschaltet und die Steuerung beendet sich. Auch die WebApp und der Telegram-Bot sind dann offline – sie sind derselbe Prozess.\n\nZum Wiederannehmen ist danach ein Neustart per SSH noetig. Das laesst sich aus der App nicht rueckgaengig machen.</string>
+    <string name="notaus_dialog_bestaetigen">Not-Aus ausloesen</string>
+    <string name="notaus_dialog_abbrechen">Abbrechen</string>
+
+    <string name="feedback_quittieren">Verstanden</string>
+
+    <!-- Verbindung -->
+    <string name="verbindung_titel">Verbindung</string>
+    <string name="verbindung_warnung">Ohne API-Schlüssel kann diese App nur lesen. Jeder Befehl – auch der Not-Aus – wird vom Dienst mit HTTP 401 abgewiesen. Der Schlüssel steht in der WPS_API_KEY-Zeile der config.ini auf dem Pi.</string>
+    <string name="verbindung_key_label">API-Schlüssel</string>
+    <string name="verbindung_speichern">Schlüssel speichern</string>
+    <string name="verbindung_gesetzt">Schlüssel hinterlegt.</string>
 </resources>

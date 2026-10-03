@@ -65,5 +65,20 @@ data class SystemStatus(
     val setpoints: Setpoints,
     val mode: ModeData,
     val energy: EnergyData,
-    val system: SystemInfo
+    val system: SystemInfo,
+    // Not-Aus-Sperre. Die Felder kommen FLACH aus /status (api.py), nicht aus
+    // einem Unterobjekt - deshalb stehen sie hier direkt am Wurzelobjekt.
+    //
+    // Wichtig: die Strings sind nullable. SystemStatus hat keinen No-Arg-
+    // Konstruktor, also erzeugt Gson die Instanz per Unsafe und setzt nur
+    // die tatsaechlich vorhandenen Felder. Ein Kotlin-Standardwert wie
+    // notausTs = "" gilt dann NICHT, das Feld bliebe null und waere als
+    // nicht-null String deklariert - ein Absturz beim Zugriff. Boolean ist
+    // unkritisch, dessen JVM-Standard ist bereits false.
+    @SerializedName("notaus_aktiv")
+    val notausAktiv: Boolean = false,
+    @SerializedName("notaus_grund")
+    val notausGrund: String? = null,
+    @SerializedName("notaus_ts")
+    val notausTs: String? = null
 )
