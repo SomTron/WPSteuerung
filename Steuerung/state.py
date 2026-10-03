@@ -137,6 +137,13 @@ class State:
         self.stats = StatsState(now)
         self._cycle_log: Optional[dict] = None
         self.energy_source = "Netz"
+
+        # Solax-Livedaten: Freshness-Status und Zaehler der Stale-Alarme.
+        # `solar_stale_meldungen` wird bei jedem Datenupdate inkrementiert und
+        # erst bei frischen Daten zurueckgesetzt - so entfaellt die Entwarnung
+        # und der Alarm wiederholt sich weiter (main._melde_solar_ausfall).
+        self.solar_stale: bool = False
+        self.solar_stale_meldungen: int = 0
         
         # Urlaubs/Bademodus (Legacy/Simple Group)
         self.urlaubsmodus_aktiv: bool = False

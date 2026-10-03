@@ -128,6 +128,12 @@ QUELLE_UNKLAR_MAX_W: float = 0.0
 # --- Safety ---
 SOLAR_ERROR_MIN_PAUSE_MIN: int = 30
 
+# Wiederholungsintervall des Telegram-Alarms bei fehlenden Solax-Livedaten.
+# Nicht "einmal": ein Ausfall, der nach 20 min endet, und einer ueber den
+# ganzen Tag muessen unterschiedlich auffallen. 90 min haelt den Kanal
+# sichtbar, ohne zu fluten.
+STALE_ALARM_MINUTEN: float = 90.0
+
 # --- GPIO / Hardware ---
 RELAY_ON_STATE: int = 1
 RELAY_OFF_STATE: int = 0

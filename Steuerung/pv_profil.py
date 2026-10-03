@@ -2,7 +2,13 @@
 """Stundenscharfes PV-Profil (Punkt E).
 
 Liest die letzten 14 Tage aus der CSV (heizungsdaten.csv) und berechnet
-ein durchschnittliches Tagesprofil der Einspeiseleistung pro Stunde.
+ein durchschnittliches Tagesprofil der PV-ERZEUGUNG pro Stunde.
+
+Wichtig: Grundlage ist ``ACPower`` (Erzeugung), NICHT ``FeedinPower``
+(Einspeisung ins Netz). Bei wechselrichtergekoppeltem Betrieb geht der
+Ueberschuss zuerst in die Batterie; die Einspeisung ist deshalb ueber weite
+Tagesabschnitte null und als Profilgrundlage systematisch zu niedrig
+(gemessen: 22-75 % unter der tatsaechlichen Erzeugung).
 
 Das Profil wird auf den maximalen Wert der letzten 7 Tage normalisiert
 und kann mit der heutigen Solax-Prognose skaliert werden.
@@ -73,7 +79,7 @@ def berechne_profil(
     force_refresh: bool = False,
     forecast_scaling: Optional[float] = None,
 ) -> Dict[int, float]:
-    """Berechnet das durchschnittliche PV-Profil (feedinpower) pro Stunde.
+    """Berechnet das durchschnittliche PV-Profil (ACPower) pro Stunde.
 
     Args:
         csv_path: Pfad zur CSV-Datei
@@ -83,7 +89,7 @@ def berechne_profil(
                          (z.B. 1.2 fuer 20% mehr PV als historisch, 0.8 fuer 20% weniger)
 
     Returns:
-        Dict[stunde=0..23, durchschnittliche_einspeisung_in_watt]
+        Dict[stunde=0..23, durchschnittliche_pv_erzeugung_in_watt]
         Leeres/Null-Dict wenn keine Daten.
     """
     global _cache
@@ -105,11 +111,21 @@ def berechne_profil(
             ts = datetime.fromisoformat(row.get("Zeitstempel", ""))
         except (ValueError, TypeError):
             continue
-        feedin = _parse_float(row.get("FeedinPower"))
-        if feedin is None or feedin < 0:
+        # ACPower ist die PV-ERZEUGUNG. FeedinPower waere die Einspeisung ins
+        # Netz - und die ist bei wechselrichtergekoppeltem Betrieb ueber den
+        # grenzen Teil des Tages null, weil der Ueberschuss zuerst in die
+        # Batterie laeuft. Gemessen an 254.305 CSV-Zeilen lag das Profil auf
+        # FeedinPower um 22-75 % unter der tatsaechlichen Erzeugung
+        # (08:00 Uhr: 85 W statt 340 W; 12:00 Uhr: 1534 W statt 3027 W).
+        erzeugung = _parse_float(row.get("ACPower"))
+        if erzeugung is None:
+            # Aeltere CSV-Dateien ohne ACPower-Spalte: Feedin als Notnagel,
+            # damit das Profil nicht vollstaendig leer bleibt.
+            erzeugung = _parse_float(row.get("FeedinPower"))
+        if erzeugung is None or erzeugung < 0:
             continue
         h = ts.hour
-        summen[h] += feedin
+        summen[h] += erzeugung
         counts[h] += 1
 
     # Durchschnitt pro Stunde
@@ -127,27 +143,6 @@ def berechne_profil(
 
     _cache[cache_key] = (jetzt, profil)
     return profil
-
-
-def get_erwartete_pv_watt(
-    stunde: int,
-    profil: Optional[Dict[int, float]] = None,
-    tage: int = 14,
-    csv_path: str = HEIZUNGSDATEN_CSV,
-) -> float:
-    """Gibt die erwartete PV-Einspeisung fuer eine bestimmte Stunde zurueck.
-
-    Args:
-        stunde: 0-23
-        profil: Berechnetes Profil (wenn None, wird es aus CSV geladen).
-        tage: Tage zurueck fuer das Profil.
-
-    Returns:
-        Erwartete Watt (0 wenn keine Daten).
-    """
-    if profil is None:
-        profil = berechne_profil(csv_path=csv_path, tage=tage)
-    return profil.get(stunde, 0.0)
 
 
 def get_peak_leistung(profil: Dict[int, float]) -> float:

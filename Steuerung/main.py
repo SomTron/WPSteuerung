@@ -73,6 +73,7 @@ from constants import (
     SOLAR_REFRESH_DEADLINE_SEC,
     SOLAR_REFRESH_INTERVAL_SEC,
     MEMORY_LOG_INTERVAL_SEC,
+    STALE_ALARM_MINUTEN,
 )
 
 # Global objects
@@ -233,6 +234,87 @@ def _notaus_zustand_laden(state) -> bool:
         "Aufheben mit 'notaus aus' oder durch Loeschen von notaus.lock."
     )
     return True
+
+
+async def _melde_solar_ausfall(session, state, alter_min):
+    """Alarmiert ueber den Ausfall der Solax-Live-Daten.
+
+    Bewusst EIGENER Alarmweg statt ``blocking_reason``: dort konkurriert der
+    Grund mit Dutzenden anderen Sperrgruenden (Mindestpause,
+    Start-Antizipation, ...), was zu Alarm-Wechseln und Spam fuehrt. Hier
+    wird stattdessen ueber den bestehenden Drosselmechanismus gesteuert.
+
+    Drosselung: alle ``_INTERVALLE_MIN`` eine Meldung - nicht nur einmal.
+    Ein Ausfall, der nach 20 Minuten von allein endet, und einer, der den
+    ganzen Tag laeuft, muessen unterschiedlich behandelt werden. Die erste
+    Meldung kommt sofort; die Wiederholung erst spaeter, damit ein langer
+    Ausfall sichtbar bleibt, ohne Telegram zu fluten.
+    """
+    # Zaehler defensiv: ein MagicMock (Tests) oder ein Fremdtyp darf den
+    # Datenpfad nicht mit einem TypeError zerstoeren.
+    try:
+        vorher = int(getattr(state, "solar_stale_meldungen", 0) or 0)
+    except (TypeError, ValueError):
+        vorher = 0
+    state.solar_stale_meldungen = vorher + 1
+    # Erste Meldung sofort, danach im Intervall.
+    if state.solar_stale_meldungen > 1 and not check_log_throttle(
+        state, "_alarm_solar_stale", interval_minutes=STALE_ALARM_MINUTEN
+    ):
+        return
+    if not getattr(state, "bot_token", None):
+        return
+    alter_txt = (
+        f"seit {alter_min:.0f} min" if alter_min is not None else "seit unbekannt"
+    )
+    try:
+        await control_logic.send_telegram_message(
+            session,
+            state.config.Telegram.CHAT_ID,
+            "☁️ *Solax-Daten nicht erreichbar*\n"
+            f"Alter: {alter_txt} (Grenze {SOLAR_DATA_STALE_THRESHOLD_MIN} min)\n\n"
+            "Die PV-, Batterie-, Einspeisungs- und CalcStart-Regeln sind\n"
+            "*pausiert*. Es heizen nur noch Abweichung, Mindesttemperatur,\n"
+            "Notfallschutz und Legionellen – *ohne Quellenprüfung, also aus\n"
+            "dem Netz*.\n\n"
+            "Sobald die API wieder antwortet, melde ich mich.",
+            state.config.Telegram.BOT_TOKEN,
+            parse_mode="Markdown",
+        )
+    except Exception:
+        logging.exception("Solar-Ausfall: Telegram-Alarm fehlgeschlagen")
+    logging.error(
+        f"Solar-Ausfall gemeldet (Meldung {state.solar_stale_meldungen}, "
+        f"PV-Regeln pausiert, verbleibende Heizung aus dem Netz)"
+    )
+
+
+async def _solar_ausfall_zurueck_melden(session, state):
+    """Einmalige Entwarnung nach dem Ende eines Solar-Ausfalls."""
+    if getattr(state, "solar_stale", False) is not False:
+        return
+    if not getattr(state, "solar_stale_meldungen", 0):
+        return
+    anzahl = state.solar_stale_meldungen
+    state.solar_stale_meldungen = 0
+    meldungen = "1 Alarm" if anzahl == 1 else f"{anzahl} Alarme"
+    logging.info(
+        f"Solax-Daten wieder frisch nach {meldungen} - PV-Regeln laufen wieder"
+    )
+    if not getattr(state, "bot_token", None):
+        return
+    try:
+        await control_logic.send_telegram_message(
+            session,
+            state.config.Telegram.CHAT_ID,
+            "☀️ *Solax-Daten wieder da.*\n"
+            "Die PV-, Batterie- und Einspeisungsregeln laufen wieder "
+            f"({meldungen} während des Ausfalls).",
+            state.config.Telegram.BOT_TOKEN,
+            parse_mode="Markdown",
+        )
+    except Exception:
+        logging.exception("Solar-Erholung: Telegram-Meldung fehlgeschlagen")
 
 
 def _record_hardware_change(state, now, status):
@@ -707,6 +789,7 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         alter_min = None
 
     frisch = alter_min is not None and 0 <= alter_min <= SOLAR_DATA_STALE_THRESHOLD_MIN
+    state.solar_stale = not frisch
     if not frisch:
         if check_log_throttle(state, "_log_solar_stale", interval_minutes=5):
             if alter_min is not None and alter_min > SOLAR_DATA_STALE_THRESHOLD_MIN:
@@ -716,6 +799,14 @@ async def update_system_data(session, state, refresh_solar: bool = True):
                 )
             else:
                 logging.warning("Solar-Datenzeitstempel fehlt/ungültig - PV-Werte auf 0 gesetzt")
+        # Der Verlust der Solardaten ist keine Kleinigkeit: Einspeisung,
+        # CalcStart, AdaptivePV, Batterie, Zeitfenster und Forecast werden
+        # pausiert (priority_control.bewerte_alle_regeln). Es bleiben nur
+        # Abweichung, MinTemp, Notfallschutz und Legionellen - und die
+        # heizen ohne Quellenpruefung, also aus dem Netz. Bisher stand dazu
+        # NUR eine Logzeile im Journal; der Betreiber bekam keinen Hinweis
+        # und konnte stundenlang im Netzbetrieb heizen, ohne es zu merken.
+        await _melde_solar_ausfall(session, state, alter_min)
         state.solar.acpower = 0.0
         state.solar.feedinpower = 0.0
         state.solar.batpower = 0.0
@@ -752,6 +843,10 @@ async def update_system_data(session, state, refresh_solar: bool = True):
             state.solar.feedinpower,
             state.solar.batpower,
         )
+        # Entwarnung, falls zuvor ein Solar-Ausfall gemeldet wurde. Steht
+        # bewusst hier: dieser Zweig laeuft genau dann, wenn wieder frische
+        # Daten vorliegen.
+        await _solar_ausfall_zurueck_melden(session, state)
     else:
         state.solar.acpower = 0.0
         state.solar.feedinpower = 0.0

@@ -1114,6 +1114,16 @@ def get_status():
         "pv_profil": pv_profil_info,
         "status_indikatoren": {
             "solar_stale": solar_stale,
+            # Neu: macht die FOLGE des Stale-Zustands sichtbar. Ohne diese
+            # Information wirkt "Solar-Daten veraltet" wie eine Nebensache -
+            # tatsaechlich pausieren dann alle Quellenregeln und die
+            # verbleibende Heizung laeuft ueber das Netz.
+            "solar_stale_alarme": int(getattr(shared_state, "solar_stale_meldungen", 0) or 0),
+            "solar_stale_hinweis": (
+                "PV-/Batterie-/Einspeisungsregeln pausiert - "
+                "verbleibende Heizung laeuft aus dem Netz"
+                if solar_stale else ""
+            ),
             "forecast_stale": bool(getattr(shared_state, "forecast_stale", False)),
             "forecast_age_s": getattr(shared_state, "forecast_age_s", None),
             "verdampfer_shutdowns_stunde": getattr(shared_state.control, 'verdampfer_shutdowns', []),

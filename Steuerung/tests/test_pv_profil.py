@@ -10,17 +10,31 @@ from pv_profil import (  # noqa: E402
     _parse_float,
     berechne_profil,
     get_peak_leistung,
-    get_erwartete_pv_watt,
 )
 
 
-def schreibe_test_csv(pfad, eintraege):
-    """eintraege: Liste von (datetime, feedin_watt)."""
+def schreibe_test_csv(pfad, eintraege, spalte="FeedinPower"):
+    """eintraege: Liste von (datetime, watt).
+
+    `spalte` erlaubt CSV-Dateien mit oder ohne ACPower-Spalte - die
+    produktive heizungsdaten.csv hat beide Spalten.
+    """
+    kopf = ["Zeitstempel"]
+    if spalte == "ACPower":
+        kopf.append("ACPower")
+        kopf.append("FeedinPower")
+    else:
+        kopf.append(spalte)
     with open(pfad, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["Zeitstempel", "FeedinPower"])
+        w.writerow(kopf)
         for ts, watt in eintraege:
-            w.writerow([ts.isoformat(), watt])
+            if spalte == "ACPower":
+                # Absichtlich unterschiedliche Werte: es muss sich zeigen,
+                # dass ACPower verwendet wird und nicht FeedinPower.
+                w.writerow([ts.isoformat(), watt, watt / 4.0])
+            else:
+                w.writerow([ts.isoformat(), watt])
 
 
 class TestBerechneProfil:
@@ -84,6 +98,32 @@ class TestBerechneProfil:
         assert profil[jetzt.hour] == 0.0
         assert profil[(jetzt + timedelta(hours=1)).hour] == 300.0
 
+    def test_acpower_hat_vorrang_vor_feedinpower(self, tmp_path):
+        """Regression: das Profil wird aus der ERZEUGUNG gebildet.
+
+        Vorher wurde FeedinPower (Einspeisung ins Netz) als Grundlage
+        verwendet. Bei wechselrichtergekoppeltem Betrieb geht der
+        Ueberschuss zuerst in die Batterie, die Einspeisung ist also ueber
+        weite Tagesabschnitte null. Gemessen an 254.305 CSV-Zeilen lag das
+        Profil dadurch 22-75 % unter der tatsaechlichen Erzeugung.
+        """
+        basis = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+        pfad = str(tmp_path / "beide.csv")
+        # Der Helper schreibt ACPower = watt und FeedinPower = watt/4.
+        schreibe_test_csv(pfad, [(basis + timedelta(hours=12), 2000.0)],
+                          spalte="ACPower")
+        profil = berechne_profil(csv_path=pfad)
+        assert profil[12] == 2000.0, "Profil nutzt nicht ACPower"
+
+    def test_fehlt_acpower_wird_durch_feedin_ersetzt(self, tmp_path):
+        """Aeltere CSV ohne ACPower-Spalte darf das Profil nicht leeren."""
+        basis = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+        pfad = str(tmp_path / "alt.csv")
+        schreibe_test_csv(pfad, [(basis + timedelta(hours=12), 800.0)],
+                          spalte="FeedinPower")
+        profil = berechne_profil(csv_path=pfad)
+        assert profil[12] == 800.0
+
 
 class TestFloatValidierung:
     def test_deutsche_und_englische_notation(self):
@@ -109,10 +149,7 @@ class TestPeakUndErwartung:
         assert get_peak_leistung(profil) == 2500.0
         assert get_peak_leistung({}) == 0.0
 
-    def test_get_erwartete_pv_watt(self, tmp_path):
-        basis = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
-        pfad = str(tmp_path / "e.csv")
-        schreibe_test_csv(pfad, [(basis + timedelta(hours=12), 1800.0)])
-        profil = berechne_profil(csv_path=pfad)
-        assert get_erwartete_pv_watt(12, profil=profil) == 1800.0
-        assert get_erwartete_pv_watt(23, profil=profil) == 0.0
+    def test_kein_toter_code_mehr(self):
+        """`get_erwartete_pv_watt` war nirgends aufgerufen und ist entfernt."""
+        import pv_profil
+        assert not hasattr(pv_profil, "get_erwartete_pv_watt")
