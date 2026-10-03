@@ -165,7 +165,18 @@ _eigene_shell = pytest.mark.skipif(
     _shell() is None or not _NICHT_WINDOWS,
     reason="Shell-Ausfuehrung nur ausserhalb von Windows (CreateProcess-Flake)")
 
-_run = subprocess.run
+
+def _run(*args):
+    """Startet die Shell mit einer Argumentliste.
+
+    Bewusst KEIN ``_run = subprocess.run``: dann waere das zweite Argument
+    kein Kommando, sondern ``bufsize``. ``_run(shell, '-n', DATEI)`` scheitert
+    dann mit "TypeError: bufsize must be an integer". Auf Windows war das
+    nie aufgefallen, weil hier eine Wrapper-Funktion stand; die CI auf Linux
+    hat es beim ersten Lauf auf einem anderen System gefangen.
+    """
+    return subprocess.run(list(args), capture_output=True, text=True,
+                          timeout=30)
 
 
 @_eigene_shell
