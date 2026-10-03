@@ -672,13 +672,28 @@ api_key_probe() {
     fi
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
         -H "X-API-Key: $key" "$API_API_BASE/config/export" 2>/dev/null)
+    # 000 heisst "keine Verbindung". Nach einem Neustart ist das oft nur
+    # noch der Moment bis uvicorn den Port bindet - verify_service_action
+    # sieht dagegen schon "active", weil der Prozess laeuft. Deshalb hier
+    # nachfassen, statt dem Nutzer einen Fehler zu zeigen, der in ein paar
+    # Sekunden von selbst verschwaende.
+    versuch=0
+    while [ "$code" = "000" ] && [ "$versuch" -lt 10 ]; do
+        sleep 2
+        versuch=$((versuch + 1))
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+            -H "X-API-Key: $key" "$API_API_BASE/config/export" 2>/dev/null)
+    done
     case "$code" in
         200) printf "${GREEN}✓ Laufender Dienst akzeptiert den Schluessel.${NC}\n" ;;
         401) printf "${RED}✗ Dienst lehnt den Schluessel ab (401).${NC}\n"
              printf "  Meist fehlt der Neustart: api.py liest nur beim Start.\n" ;;
         503) printf "${RED}✗ Dienst hat keinen Schluessel (503).${NC}\n"
              printf "  Die Datei stimmt, wird aber nicht geladen.\n" ;;
-        000) printf "${YELLOW}✗ Keine Antwort von %s (Dienst laeuft?).${NC}\n" "$API_API_BASE" ;;
+        000) printf "${YELLOW}✗ Keine Antwort von %s nach 20 s.${NC}\n" "$API_API_BASE"
+             printf "  Laeuft der Dienst?      systemctl is-active wpsteuerung\n"
+             printf "  Laeuft der API-Port?    ss -tlnp | grep 8000\n"
+             printf "  Journal:                journalctl -u wpsteuerung -n 30 --no-pager\n" ;;
         *)   printf "${YELLOW}✗ Unerwartete Antwort: HTTP %s${NC}\n" "$code" ;;
     esac
 }
