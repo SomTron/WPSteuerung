@@ -457,6 +457,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             temp_dict=temp_dict,
             compressor_is_on=state.control.kompressor_ein,
             feedin_watt=pv_leistung,
+            # Die Kalibrierung braucht die ERZEUGTE Energie, nicht den Export.
+            pv_acpower_watt=getattr(state.solar, "acpower", None),
             soc=getattr(state.solar, "soc", None),
             forecast_today_wh_qm=forecast_today_wh,
             forecast_hourly_wh=hourly_forecast_watt,

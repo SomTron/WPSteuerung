@@ -30,11 +30,16 @@ def engine(tmp_path):
     return LearningEngine(data_path=str(tmp_path / "lern.json"))
 
 
-def _schritt(e, now, kompressor, feedin=None, soc=None, pv_array_size_qm=None):
+def _schritt(e, now, kompressor, feedin=None, soc=None, pv_array_size_qm=None,
+             acpower=None):
+    # `acpower` ist die PV-ERZEUGUNG und der Zaehler der Forecast-
+    # Kalibrierung. Ohne sie wird nicht kalibriert - genau wie in der
+    # Produktion, wo `update()` sie von priority_control_logic bekommt.
     e.update(
         now,
         {"oben": 45.0, "mittig": 43.0, "unten": 40.0},
         kompressor, feedin_watt=feedin, soc=soc,
+        pv_acpower_watt=acpower,
         pv_array_size_qm=pv_array_size_qm,
     )
 
@@ -100,16 +105,36 @@ class TestZuFruehErkennung:
 
 
 class TestForecastKalibrierung:
-    def _tag(self, e, datum, surplus_wh, stunden=10):
-        """Integriert surplus_wh ueber den Vormittag (stuendliche Schritte,
-        damit der Anti-Zeitprung-Cap von 1h im update() nicht greift)."""
-        watt = surplus_wh / float(stunden)
+    def _tag(self, e, datum, erzeugt_wh, stunden=10):
+        """Integriert erzeugt_wh ueber den Vormittag (stuendliche Schritte,
+        damit der Anti-Zeitprung-Cap von 1h im update() nicht greift).
+
+        `acpower` ist die PV-ERZEUGUNG und damit der Zaehler der
+        Kalibrierung. Frueher stand hier die Einspeisung - das ergab
+        fachlich ``1 - Hausanteil an der PV`` statt eines Prognosefehlers.
+        """
+        watt = erzeugt_wh / float(stunden)
         t0 = datetime(datum.year, datum.month, datum.day, 8, 0)
         for h in range(stunden + 1):
-            _schritt(e, t0 + timedelta(hours=h), False, feedin=watt)
+            _schritt(e, t0 + timedelta(hours=h), False, acpower=watt)
+
+    def test_zaehler_ist_die_erzeugung_nicht_der_export(self, engine):
+        """Kernfall: Hausverbrauch darf den Kalibrierfaktor nicht druecken.
+
+        Erzeugt werden 50000 Wh, davon gehen 30000 Wh ins Haus und die
+        Batterie bleibt voll - exportiert wird also 0 W. Mit dem Export als
+        Zaehler ergaebe sich Faktor 0,0 und die Prognose wuerde dauerhaft
+        als Totalausfall gewertet. Beobachtet waren x0,62.
+        """
+        self._tag(engine, datetime(2026, 8, 24), 50000.0)
+        _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)
+        assert engine.data.forecast_ratio_samples == 1
+        assert engine.data.forecast_ratio == pytest.approx(1.0), (
+            "Export als Zaehler wuerde den Hausverbrauch einrechnen"
+        )
 
     def test_ratio_lernt_ab_drei_tagen(self, engine):
-        # Faktor = Einspeisung (Wh) / (Prognose Wh/m2 x Arrayflaeche m2).
+        # Faktor = Erzeugung (Wh) / (Prognose Wh/m2 x Arrayflaeche m2).
         # Bei 10 m2 und 5000 Wh/m2 sind das 50000 Wh erwartet.
         self._tag(engine, datetime(2026, 8, 24), 20000.0)   # ratio 0.40
         _kalibriere_am_abend(engine, datetime(2026, 8, 24), 5000.0)

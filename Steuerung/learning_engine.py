@@ -233,6 +233,7 @@ class LearningEngine:
         self._cycle_secs: float = 0.0
         self._pending_zu_frueh: List[Dict] = []   # nur im RAM: {"ende": iso, "verpasste_wh": Wh}
         self._day_surplus_wh: float = 0.0
+        self._day_pv_wh: float = 0.0
         self._surplus_tag: str = ""
         self._kalibriert_datum: str = ""
         self._last_update_time: Optional[datetime] = None
@@ -601,6 +602,7 @@ class LearningEngine:
         temp_dict: Dict[str, Optional[float]],
         compressor_is_on: bool,
         feedin_watt: Optional[float] = None,
+        pv_acpower_watt: Optional[float] = None,
         soc: Optional[float] = None,
         forecast_today_wh_qm: Optional[float] = None,
         legionellen_end_time: Optional[datetime] = None,
@@ -637,14 +639,23 @@ class LearningEngine:
                 dt_secs = 0.0
         self._last_update_time = now
 
-        # Tages-Surplus integrieren (positive Netzeinspeisung = echter
-        # Ueberschuss) und abends gegen die Prognose kalibrieren (B).
+        # Tages-Energie integrieren und abends gegen die Prognose kalibrieren (B).
         heute = now.strftime("%Y-%m-%d")
         if self._surplus_tag != heute:
             self._surplus_tag = heute
             self._day_surplus_wh = 0.0
+            self._day_pv_wh = 0.0
         if feedin_watt is not None and dt_secs > 0:
             self._day_surplus_wh += max(feedin_watt, 0.0) * dt_secs / 3600.0
+        # Die Kalibrierung braucht die ERZEUGTE Energie, nicht die
+        # exportierte. Vorher stand hier nur `_day_surplus_wh`, also reine
+        # Netzeinspeisung; alles was das Haus verbrauchte und alles was die
+        # Batterie aufnahm, fehlte im Zaehler. Der Quotient war damit
+        # 1 - Hausanteil an der PV und lag dauerhaft unter 1 (beobachtet
+        # x0,62): die Prognose wurde nicht kalibriert, sondern
+        # systematisch zu pessimistisch bewertet.
+        if pv_acpower_watt is not None and dt_secs > 0:
+            self._day_pv_wh += max(pv_acpower_watt, 0.0) * dt_secs / 3600.0
         # Wichtig: Der Aufrufer liefert die HEUTE-Prognose bereits in Wh/m2
         # (priority_control_logic normalisiert dort mit kwh_m2). Deshalb hier
         # NUR die Gueltigkeit pruefen, nicht noch einmal umrechnen - eine
@@ -754,11 +765,17 @@ class LearningEngine:
                              forecast_today_wh_qm: Optional[float]):
         """Taegliche Kalibrierung (ab config.forecast_kalibrierung_ab_stunde, einmal pro Tag).
 
-        Verhaeltnis tatsaechlicher Netzeinschuss (Wh, integriert) zur
-        Tagesprognose (Wh/m2) als EWMA (alpha=config.forecast_ewma_alpha),
-        geklemmt auf config.forecast_ratio_min..forecast_ratio_max.
-        Lernt den HAUSspezifischen Langfehler des Forecast-Dienstes inkl.
-        typischem Eigenverbrauchsniveau.
+        Verhaeltnis der TATSACHLICH ERZEUGTEN Energie (Wh, aus `acpower`
+        integriert) zur Tagesprognose (Wh/m2 mal Arrayflaeche) als EWMA
+        (alpha=config.forecast_ewma_alpha), geklemmt auf
+        config.forecast_ratio_min..config_ratio_max.
+
+        Wichtig: als Zaehler dient die Erzeugung, NICHT die Netzeinspeisung.
+        Mit dem Export im Zaehler war der Quotient fachlich
+        ``1 - Hausanteil an der PV`` und lag dadurch dauerhaft unter 1
+        (beobachtet x0,62). Die Prognose wurde also nicht am
+        Hausverbrauch kalibriert, sondern systematisch zu pessimistisch
+        bewertet - CalcStart wartete daraufhin zu lange.
         """
         cfg = self.data.config
         if self._kalibriert_datum == heute or now.hour < cfg.forecast_kalibrierung_ab_stunde:
@@ -779,11 +796,11 @@ class LearningEngine:
             logging.info("Learning: Kalibrierung uebersprungen "
                          "(keine brauchbare Tagesprognose)")
             return
-        if self._day_surplus_wh <= 50:
+        if self._day_pv_wh <= 50:
             logging.info("Learning: Kalibrierung uebersprungen "
-                         "(zu wenig Surplus-Daten heute)")
+                         "(zu wenig PV-Erzeugungsdaten heute)")
             return
-        # Einheiten: _day_surplus_wh ist Wh (Netzeinspeisung),
+        # Einheiten: _day_pv_wh ist Wh (ERZEUGTE Energie aus acpower),
         # forecast_today_wh_qm ist Wh/m2. Fuer einen Quotienten wird die
         # Prognose mit der Arrayflaeche in Wh umgerechnet. Ohne das war
         # der Quotient um die Flaeche (~10x) zu gross und klemmte im
@@ -795,7 +812,7 @@ class LearningEngine:
                          "(keine PV-Arrayflaeche konfiguriert)")
             return
         ratio = max(cfg.forecast_ratio_min, min(
-            cfg.forecast_ratio_max, self._day_surplus_wh / prognose_wh))
+            cfg.forecast_ratio_max, self._day_pv_wh / prognose_wh))
         alpha = cfg.forecast_ewma_alpha
         n = self.data.forecast_ratio_samples + 1
         self.data.forecast_ratio = (
@@ -804,9 +821,9 @@ class LearningEngine:
         self.data.forecast_ratio_samples = n
         self._save()
         logging.info(
-            f"Learning: Forecast-Kalibrierung {heute}: Einspeisung "
-            f"{self._day_surplus_wh:.0f}Wh / Prognose "
-            f"{prognose_wh:.0f}Wh ({forecast_today_wh_qm:.0f}Wh/m2 x "
+            f"Learning: Forecast-Kalibrierung {heute}: Erzeugung "
+            f"{self._day_pv_wh:.0f}Wh (Einspeisung {self._day_surplus_wh:.0f}Wh) "
+            f"/ Prognose {prognose_wh:.0f}Wh ({forecast_today_wh_qm:.0f}Wh/m2 x "
             f"{flaeche_qm:.0f}m2) -> Faktor "
             f"{self.data.forecast_ratio:.2f} (n={n})")
 
