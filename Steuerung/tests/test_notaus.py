@@ -44,16 +44,42 @@ def test_telegram_meldung_erklaert_den_neustart():
     abgesetzt werden, weil der Bot gar nicht mehr laeuft.
     """
     quelle = _lade_quelle('Steuerung/telegram_handler.py')
-    idx = quelle.find('*Not-Aus ausgelöst.*')
-    assert idx != -1, "Bestaetigungstext des Not-Aus nicht gefunden"
+    idx = quelle.find('*Not-Aus angefordert.*')
+    assert idx != -1, "Anforderungstext des Not-Aus nicht gefunden"
     abschnitt = quelle[idx:idx + 1200]
     # Der Aufheben-Hinweis muss den Neustart vorwegnehmen.
     assert NEUSTART_HINWEIS in abschnitt, (
         "Not-Aus-Meldung nennt keinen Dienstneustart - nach dem Ausloesen "
         "ist `notaus aus` aber gar nicht sendbar"
     )
-    assert abschnitt.find(NEUSTART_HINWEIS) < abschnitt.find('danach'), (
+    # Anker ist die konkrete Anweisung, nicht das Wort "danach" - im Text
+    # steht es noch an weiteren Stellen.
+    aufheben = 'danach `notaus aus`'
+    assert aufheben in abschnitt, "Aufheb-Anweisung fehlt in der Meldung"
+    assert abschnitt.find(NEUSTART_HINWEIS) < abschnitt.find(aufheben), (
         "Der Neustart muss vor dem Aufheben-Befehl stehen"
+    )
+
+
+def test_telegram_behauptet_nicht_vorzeitig_die_ausfuehrung():
+    """Die erste Nachricht ist eine Anforderung, kein Ergebnis.
+
+    Gemessen auf dem Pi: angefordert um 23:09:14, ausgefuehrt um
+    23:09:23 - rund 9 Sekunden spaeter. Die Meldung behauptete
+    "ausgeloest", bevor irgendetwas passiert war, und daraus sind zwei
+    Fehlalarme geworden.
+    """
+    quelle = _lade_quelle('Steuerung/telegram_handler.py')
+    idx = quelle.find('*Not-Aus angefordert.*')
+    abschnitt = quelle[idx:idx + 900]
+    assert 'nicht als Bestätigung' in abschnitt, (
+        "Die Meldung weist nicht darauf hin, dass sie keine Bestaetigung ist"
+    )
+    assert '*NOT-AUS aktiv*' in abschnitt, (
+        "Es wird nicht gesagt, welche Meldung die verbindliche ist"
+    )
+    assert 'ausgelöst.*' not in quelle, (
+        "Der Bot behauptet weiterhin eine sofortige Ausfuehrung"
     )
 
 

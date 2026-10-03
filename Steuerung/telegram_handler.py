@@ -82,7 +82,12 @@ async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
     _laufendes_main().enqueue_control_command("notaus", {"grund": "Telegram"})
     return await send_telegram_message(
         session, chat_id,
-        "🛑 *Not-Aus ausgelöst.*\n"
+        "🛑 *Not-Aus angefordert.*\n"
+        "Die Ausführung erfolgt im nächsten Steuerungslauf, das dauert\n"
+        "bis zu 10 Sekunden. Erst danach ist der Kompressor wirklich aus\n"
+        "und die Steuerung beendet - dann folgt die Meldung\n"
+        "*NOT-AUS aktiv*.\n\n"
+        "Bitte diese erste Nachricht nicht als Bestätigung lesen.\n\n"
         "Der Kompressor wird abgeschaltet und die Steuerung beendet.\n\n"
         "⚠️ *Es heizt nichts mehr* – auch die Legionellenprophylaxe\n"
         "und der Notfallschutz sind angehalten. Der Brauchwasser-\n"
