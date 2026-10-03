@@ -81,19 +81,35 @@ def test_exitcode_und_systemd_einheit_stimmen_ueberein():
 
 # ---------- Telegram-Befehlserkennung ----------
 
-def test_telegram_ausloeser_wird_nicht_als_aufhebung_gelesen():
-    """"notaus" enthaelt "aus" - der reine Ausloeser muss ausloesen."""
-    from telegram_handler import _NOTAUS_AUSLOESER, _NOTAUS_AUFHEBEN_WOERTER
-    assert "notaus" in _NOTAUS_AUSLOESER
-    # Genau die Falle, die den Ausloeser zur Aufhebung gemacht haette:
+def test_ausloeser_braucht_absicht_nicht_nur_erwaehnung():
+    """Regression: eine Frage nach dem Befehl darf ihn nicht ausloesen.
+
+    Der Not-Aus haelt die Sperre bis zu einem von Hand gesetzten Reset und
+    haelt dabei auch Legionelle und Notfallschutz an. Ein zufaellig
+    ausgeloester Not-Aus wuerde die Heizung stilllegen, ohne dass der
+    Betreiber es bemerkt. Ein absichtlich gesendeter Befehl muss dagegen
+    unkompliziert durchgehen.
+    """
+    from telegram_handler import (
+        _NOTAUS_AUFHEBEN_WOERTER,
+        _NOTAUS_AUSLOESER,
+        _ist_notaus_ausloeser,
+    )
+
+    for befehl in ("notaus", "not aus", "not-aus", "🛑", "stopp"):
+        assert _ist_notaus_ausloeser(befehl) is True, befehl
+
+    for text in ("was bedeutet notaus",
+                 "ok danke, nicht notaus",
+                 "ich habe den notaus benutzt",
+                 "notaus funktioniert nicht",
+                 "notaus bitte"):
+        assert _ist_notaus_ausloeser(text) is False, text
+
+    # "notaus" enthaelt selbst "aus" - genau die Falle, die den Ausloeser
+    # zur Aufhebung gemacht haette.
     assert any("aus" in w for w in _NOTAUS_AUFHEBEN_WOERTER)
-    assert "notaus" not in _NOTAUS_AUFHEBEN_WOERTER
-    for ausloeser in ("notaus", "not aus", "not-aus"):
-        assert ausloeser in _NOTAUS_AUSLOESER
-        assert not any(w in ausloeser for w in _NOTAUS_AUFHEBEN_WOERTER) or \
-            ausloeser in _NOTAUS_AUSLOESER
-
-
+    assert "notaus" in _NOTAUS_AUSLOESER
 def test_api_payload_enthaelt_notaus_felder():
     """/status muss den Sperrzustand liefern, sonst blendet die WebApp falsch."""
     from api import build_mode_payload

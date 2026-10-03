@@ -28,10 +28,24 @@ from telegram_charts import (
 #: selbst "aus" - eine blosse Substring-Pruefung wuerde den Ausloeser als
 #: Aufhebung missverstehen und im gesperrten Zustand das Falsche tun.
 _NOTAUS_AUSLOESER = frozenset({
-    "notaus", "not aus", "not-aus", "🛑", "stopp", "notaus!",
+    "notaus", "not aus", "not-aus", "🛑", "stopp",
 })
 #: Woerter, die eine bestehende Sperre aufheben.
 _NOTAUS_AUFHEBEN_WOERTER = ("aus", "aufheben", "aufheb", "reset", "quittier")
+
+
+def _ist_notaus_ausloeser(text: str) -> bool:
+    """True nur bei exakter Uebereinstimmung - nie bei einer Erwaehnung.
+
+    Bewusst KEINE Praefix-Erkennung: "notaus funktioniert nicht" beginnt
+    ebenfalls mit "notaus". Der Not-Aus haelt die Sperre bis zu einem von
+    Hand gesetzten Reset und haelt dabei auch Legionellenprophylaxe und
+    Notfallschutz an. Eine falsch ausgeloeste Sperre legt die Heizung still,
+    bis jemand sie bemerkt und aufhebt; eine nicht erkannte Eingabe kostet
+    dagegen nur Sekunden ("unbekannter Befehl", dann `notaus` tippen).
+    Das Ungleichgewicht ist eindeutig.
+    """
+    return text in _NOTAUS_AUSLOESER
 
 
 async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
@@ -44,8 +58,11 @@ async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
     return await send_telegram_message(
         session, chat_id,
         "🛑 *Not-Aus ausgelöst.*\n"
-        "Der Kompressor wird abgeschaltet und die Steuerung beendet.\n"
-        "Aufheben: `notaus aus` (oder Dienst neu starten).",
+        "Der Kompressor wird abgeschaltet und die Steuerung beendet.\n\n"
+        "⚠️ *Es heizt nichts mehr* – auch die Legionellenprophylaxe\n"
+        "und der Notfallschutz sind angehalten. Der Brauchwasser-\n"
+        "Speicher kühlt aus.\n\n"
+        "Aufheben: `notaus aus`",
         bot_token, parse_mode="Markdown",
     )
 
@@ -343,17 +360,22 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
             elif "hilfe" in text:
                 await send_help_message(session, chat_id, bot_token, state)
             elif "notaus" in text or "not aus" in text or "not-aus" in text:
+                # Reihenfolge und Absicht sind hier entscheidend:
                 # "notaus" ENTHAELT selbst "aus" - eine blosse Pruefung auf
-                # "aus" wuerde den Ausloeser als Aufhebung missverstehen und
-                # im gesperrten Zustand genau das Falsche tun. Deshalb:
-                # exakt der Ausloeser loest aus, alles andere mit
-                # Aufhebungsbegriff hebt auf.
-                if text in _NOTAUS_AUSLOESER:
+                # "aus" wuerde den Ausloeser als Aufhebung missverstehen.
+                # Umgekehrt darf eine ERWAEHNUNG nicht ausloesen: vorher
+                # loeste jeder else-Zweig aus, sodass "was bedeutet notaus"
+                # die Heizung abschaltete - inklusive Legionelle - bis zu
+                # einem von Hand gesetzten Reset.
+                if _ist_notaus_ausloeser(text):
                     await _notaus_ausloesen_cmd(session, chat_id, bot_token, state)
                 elif any(w in text for w in _NOTAUS_AUFHEBEN_WOERTER):
                     await _notaus_aufheben(session, chat_id, bot_token, state)
                 else:
-                    await _notaus_ausloesen_cmd(session, chat_id, bot_token, state)
+                    # Wort erwaehnt, aber keine Absicht -> nichts tun.
+                    await send_unknown_command_message(
+                        session, chat_id, bot_token, state
+                    )
             else:
                 await send_unknown_command_message(session, chat_id, bot_token, state)
         except Exception as e:
