@@ -70,11 +70,45 @@ def main() -> int:
             vg[(d.get("grund") or "?")[:70]] += 1
         for k, v in vg.most_common(8):
             print(f"{v:5d}  {k}")
-        print("\nBeispiele:")
-        for d in verschenkt[:6]:
-            print(f"  {spitzen_uhr(d)}  ueb={d.get('pv_ueberschuss_w')}W"
-                  f"  pv={d.get('pv_acpower_w')}W  soc={d.get('soc')}%"
-                  f"  t_oben={d.get('t_oben')}  -> {(d.get('grund') or '')[:50]}")
+        print("\nBeispiele mit allen Rohwerten:")
+        for d in verschenkt[:8]:
+            print(f"  {spitzen_uhr(d)}")
+            print(f"      pv_ac={_w(d,'pv_acpower_w')}  einspeis={_w(d,'feedin_w')}"
+                  f"  batt={_w(d,'batpower_w')}  haus={_w(d,'hausverbrauch_w')}"
+                  f"  ueb={_w(d,'pv_ueberschuss_w')}  soc={d.get('soc')}")
+            print(f"      t_oben={d.get('t_oben')}  t_unten={d.get('t_unten')}"
+                  f"  -> {(d.get('grund') or '')[:60]}")
+
+        # Plausibilitaet: Ueberschuss kann nicht groesser sein als das, was
+        # PV undSpeicher wirklich liefern. Ein Ueberschuss deutlich ueber der
+        # PV-Leistung bei gleichzeitig steigendem SOC deutet darauf hin, dass
+        # das Ladeverhalten des Speichers als Ueberschuss gewertet wird.
+        print("\n--- Plausibilitaet Ueberschuss")
+        print(f"{'Zeit':<9}{'ueb':>8}{'pv':>8}{'einsp':>8}{'batt':>8}{'soc':>7}  auffaellig")
+        auffaellig = 0
+        for d in zeilen:
+            ueb = d.get("pv_ueberschuss_w") or 0
+            pv = d.get("pv_acpower_w") or 0
+            bat = d.get("batpower_w")
+            soc = d.get("soc")
+            if ueb <= 0:
+                continue
+            # Lädt der Speicher (bat > 0), darf sein Ladestrom nicht als
+            # Ueberschuss gelten - er fliesst ins Speicher, nicht in die WP.
+            problem = (bat is not None and bat > 200
+                       and ueb > pv + 200)
+            if problem:
+                auffaellig += 1
+            if problem and auffaellig <= 10:
+                print(f"{spitzen_uhr(d):<9}{ueb:>8.0f}{pv:>8.0f}"
+                      f"{(d.get('feedin_w') or 0):>8.0f}{bat:>8.0f}"
+                      f"{soc:>7.0f}  ja")
+        gesamt = sum(1 for d in zeilen
+                     if (d.get("pv_ueberschuss_w") or 0) > 0)
+        print(f"\nauffaellig: {auffaellig} von {gesamt} Zyklen mit Ueberschuss")
+        if auffaellig:
+            print("Hinweis: Speicher laedt, sein Strom wird aber als "
+                  "Ueberschuss gezaehlt.")
 
     print("\n--- Temperaturverlauf oben (Stichproben)")
     probe = zeilen[::max(1, len(zeilen) // 12)]
@@ -84,6 +118,12 @@ def main() -> int:
               f"  komp={'AN' if d.get('kompressor_laeuft') else 'aus'}")
 
     return 0
+
+
+def _w(d, feld) -> str:
+    """Wert formatieren, fehlende Werte kenntlich machen."""
+    v = d.get(feld)
+    return "-" if v is None else f"{v:.0f}"
 
 
 def spitzen_uhr(d) -> str:
