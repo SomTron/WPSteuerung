@@ -308,9 +308,16 @@ def health_status():
     errors = int(raw_errors) if isinstance(raw_errors, (int, float)) else 0
     data_ok = getattr(state, "last_data_update_ok", None)
     snapshot_ok = getattr(state, "last_state_write_ok", None)
+    # Der Not-Aus ist kein Fehler, sondern ein Sperrzustand - bisher pruefte
+    # ihn nichts. Am 03./04.10.2026 stand die Anlage 12,5 Stunden gesperrt,
+    # waehrend /health "ok" meldete: keine Fehler, Heartbeat frisch. Eine
+    # Sperre heisst aber, dass das Regelwerk gar nicht laeuft.
+    control = getattr(state, "control", None)
+    notaus_aktiv = getattr(control, "notaus_aktiv", False) is True
     healthy = (
         age_s is not None and age_s <= 30 and errors == 0
         and data_ok is not False and snapshot_ok is not False
+        and not notaus_aktiv
     )
     return {
         "status": "ok" if healthy else "degraded",
@@ -320,6 +327,9 @@ def health_status():
         "last_status_snapshot_at": getattr(state, "last_status_snapshot_at", None),
         "consecutive_control_errors": errors,
         "data_update_ok": data_ok,
+        "notaus_aktiv": notaus_aktiv,
+        "notaus_grund": getattr(control, "notaus_grund", None),
+        "notaus_ts": getattr(control, "notaus_ts", None),
         "last_state_write_ok": snapshot_ok,
         "last_state_write_error": getattr(state, "last_state_write_error", None),
     }

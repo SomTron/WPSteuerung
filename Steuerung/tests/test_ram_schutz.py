@@ -73,6 +73,7 @@ def test_telegram_charts_laedt_matplotlib_erst_bei_bedarf():
     ergebnis = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True, text=True, timeout=120, cwd=STEUERUNG,
+        stdin=subprocess.DEVNULL,
     )
     assert ergebnis.returncode == 0, ergebnis.stderr
     assert "NICHT_GELADEN" in ergebnis.stdout, (
@@ -85,6 +86,10 @@ def _in_frischem_prozess(code: str) -> str:
     ergebnis = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True, text=True, timeout=180, cwd=STEUERUNG,
+        # Ohne DEVNULL erbt der Kindprozess das von pytest ersetzte stdin.
+        # Unter Windows scheitert dann DuplicateHandle mit "WinError 6: Das
+        # Handle ist ungueltig" - je nachdem, welcher Test vorher lief.
+        stdin=subprocess.DEVNULL,
     )
     assert ergebnis.returncode == 0, ergebnis.stderr
     return ergebnis.stdout

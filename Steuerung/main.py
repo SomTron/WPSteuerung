@@ -1869,6 +1869,11 @@ async def log_system_state(state):
                 log_line += f" | Info: {state.control.blocking_reason}"
             else:
                 log_line += f" | Blocking: {state.control.blocking_reason}"
+        if getattr(state.control, "notaus_aktiv", False) is True:
+            # Die Sperre setzt keinen blocking_reason und blieb deshalb im
+            # Journal unsichtbar - die Statuszeile sah waehrend 12,5 Stunden
+            # gesperrter Steuerung vollstaendig normal aus (03./04.10.2026).
+            log_line += f" | NOT-AUS: {state.control.notaus_grund or 'aktiv'}"
         if state.control.active_rule_name:
             log_line += f" | Regel: {state.control.active_rule_name}"
         if state.control.previous_modus:
