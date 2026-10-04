@@ -86,10 +86,32 @@ def main() -> int:
     hoch = [d for d in zeilen
             if (d.get("pv_ueberschuss_w") or 0) > 0]
     genutzt = [d for d in hoch if d.get("kompressor_laeuft")]
-    verschenkt = [d for d in hoch if not d.get("kompressor_laeuft")]
+    # BEFUND 04.10.2026: "verschenkt" war als `nicht kompressor_laeuft`
+    # definiert. Das ist falsch: determine_mode_and_setpoints schreibt den
+    # Logeintrag, BEVOR der Hardware-Start bestaetigt ist. Ein erfolgreicher
+    # Start erscheint deshalb zuerst als `soll_einschalten=true` bei
+    # `kompressor_laeuft=false`. Solche Zyklen wurden als "verschenkt"
+    # gezaehlt, obwohl die Regel genau richtig gehandelt hat.
+    #
+    # Beispiel vom 04.10.: alle 4 "verschenkten" Zyklen trugen den Grund
+    # "Legionellenprophylaxe faellig: Starte mit PV auf 60C" - die Regel
+    # FORDERTE also das Einschalten. Der Zaehler hat die Regel fuer das
+    # Gegenteil gehalten.
+    #
+    # Korrekt ist: verschenkt sind Zyklen mit Ueberschuss, bei denen die
+    # Regel keinen Start verlangt hat UND der Kompressor aus blieb.
+    verschenkt = [d for d in hoch
+                  if not d.get("kompressor_laeuft")
+                  and not d.get("soll_einschalten")]
+    # Getrennt ausweisen: Start verlangt, Hardware aber noch nicht bestaetigt.
+    start_verlangt = [d for d in hoch
+                      if not d.get("kompressor_laeuft")
+                      and d.get("soll_einschalten")]
     print(f"Ueberschuss>0 : {len(hoch)} Zyklen")
     print(f"  davon genutzt: {len(genutzt)}")
-    print(f"  verschenkt  : {len(verschenkt)}")
+    print(f"  Start verlangt, HW-Bestaetigung folgt im naechsten Eintrag:"
+          f" {len(start_verlangt)}")
+    print(f"  wirklich verschenkt: {len(verschenkt)}")
     if hoch:
         spitze = max(hoch, key=lambda d: d.get("pv_ueberschuss_w") or 0)
         print(f"  max. Ueberschuss: {spitzen_uhr(spitze)}"
