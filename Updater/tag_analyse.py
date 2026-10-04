@@ -9,7 +9,9 @@ er lief. Beantwortet die Frage "warum keine Solarzeit?" belegt statt
 vermutet.
 """
 import collections
+import glob
 import json
+import os
 import sys
 from datetime import datetime
 
@@ -17,26 +19,56 @@ TAG = sys.argv[1] if len(sys.argv) > 1 else "2026-10-03"
 PFAD = "/home/patrik/WPSteuerung/Steuerung/entscheidungs_log.jsonl"
 
 
-def main() -> int:
-    zeilen = []
-    with open(PFAD, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            if str(d.get("ts", "")).startswith(TAG):
-                zeilen.append(d)
+def _liefere_zeilen() -> tuple[list[dict], str]:
+    """Liest den Log EINCHL fuer den gewaehlten Tag.
 
+    `entscheidungs_log` rotiert bei 2 MB nach `.old.1` ... `.old.7`. Die
+    Datei faellt also mit der Zeit aus dem Blick. Beim Auswerten eines
+    Tages, der in einer rotierten Generation liegt, lieferte die alte
+    Variante `Keine Eintraege` - und liess damit genau das Falsche
+    schliessen, was man wissen wollte ("es wurde nicht geheizt").
+
+    Deshalb: Hauptdatei und alle Generationen gemeinsam lesen und nach
+    `ts` filtern. Sortiert wird anhand des Zeitstempels, nicht der
+    Dateireihenfolge.
+    """
+    muster = PFAD + "*"
+    pfade = [p for p in glob.glob(muster)
+             if not p.endswith(".tmp") and os.path.isfile(p)]
+    if PFAD not in pfade:
+        pfade.append(PFAD)  # Fehlermeldung der Regex-Suche ist brauchbarer
+    zeilen = []
+    for p in pfade:
+        try:
+            with open(p, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    if str(d.get("ts", "")).startswith(TAG):
+                        zeilen.append(d)
+        except OSError as exc:
+            print(f"Warnung: {p} nicht lesbar ({exc})")
+    zeilen.sort(key=lambda d: str(d.get("ts", "")))
+    quelle = PFAD if len(pfade) == 1 else f"{len(pfade)} Datei(en)"
+    return zeilen, quelle
+
+
+def main() -> int:
+    zeilen, quelle = _liefere_zeilen()
     if not zeilen:
-        print(f"Keine Eintraege fuer {TAG} in {PFAD}")
+        print(f"Keine Eintraege fuer {TAG} in {quelle}")
+        print("Hinweis: Tagformat YYYY-MM-DD. Bei_rotationierten Bestand "
+              "werden alle Generationen gelesen.")
         return 1
 
     print(f"=== {TAG}: {len(zeilen)} Eintraege ===")
     print(f"Zeitraum: {zeilen[0]['ts']}  bis  {zeilen[-1]['ts']}")
+    print(f"Quelle:   {quelle}")
 
     lauf = sum(1 for d in zeilen if d.get("kompressor_laeuft"))
     print(f"Kompressor an: {lauf}/{len(zeilen)} Zyklen "
