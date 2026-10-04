@@ -39,11 +39,20 @@ def _fuettere(anzahl, api_name="open-meteo", fehlertyp="keine_daten"):
 
 
 def _haenge_senden(monkeypatch, uhr):
-    """Kleiner Telegram-Fake; gibt die gesendeten Texte zurueck."""
+    """Kleiner Telegram-Fake; gibt die gesendeten Texte zurueck.
+
+    `*args` ist noetig: telegram_handler ruft telegram_api.send_telegram_message
+    mit acht Positionsargumenten auf, check_api_health mit vier. Der Fake
+    muss beides annehmen koennen.
+    """
     gesendet = []
 
-    async def fake_send(session, chat_id, text, token, **kw):
-        gesendet.append((chat_id, text))
+    async def fake_send(*args, **kw):
+        # (session, chat_id, text, token, ...) - Text steht an Position 2.
+        if len(args) >= 3:
+            gesendet.append((args[1], args[2]))
+        else:
+            gesendet.append((None, kw.get("message", "")))
         return True
 
     monkeypatch.setattr("telegram_api.send_telegram_message", fake_send)
@@ -283,3 +292,68 @@ def test_wired_apis_stehen_auch_in_der_schwelle():
         f"({API_FEHLER_SCHWELLE_DEFAULT}) und koennte unerreichbar sein: "
         f"{sorted(fehlend)}"
     )
+
+
+# ---------- Der Testbefehl im Telegram-Bot ----------
+
+def _telegram_quelle():
+    import os
+    pfad = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "telegram_handler.py")
+    with open(pfad, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_alarmtest_laeuft_ueber_das_laufende_main():
+    """`import main` liefert eine zweite Modulkopie.
+
+    main.py laeuft als __main__. Ein blasser Import wuerde ein zweites
+    Modul mit eigener Queue laden - der gleiche Fehler, der den
+    Not-Aus aus Telegram wochenlang wirkungslos gemacht hat.
+    """
+    quelle = _telegram_quelle()
+    assert "import main as" not in quelle, (
+        "der Handler importiert main als Modul statt das laufende zu nutzen"
+    )
+    assert "_laufendes_main()" in quelle
+
+
+def test_alarmtest_steht_vor_dem_notaus_zweig():
+    """Sicherheitsrelevant, nicht nur bequem.
+
+    Der Not-Aus-Zweig prueft anschliessend auf die Substrings "aus",
+    "aufheben", "reset" - jeder spaeter eingefuegte Zweig, der eines
+    davon enthaelt, wuerde beim Absenden der Sperre mitgenommen. Der
+    Testbefehl muss davor stehen.
+    """
+    quelle = _telegram_quelle()
+    test_pos = quelle.find('elif "api test" in text:')
+    notaus_pos = quelle.find('elif "notaus" in text')
+    assert test_pos != -1, "Testbefehl nicht im Router"
+    assert notaus_pos != -1, "Not-Aus-Zweig nicht im Router"
+    assert test_pos < notaus_pos, (
+        "der Testbefehl steht hinter dem Not-Aus-Zweig - bei spaeteren "
+        "Aenderungen an der Reihenfolge koennte er die Sperre aufheben"
+    )
+
+
+@pytest.mark.asyncio
+async def test_alarmtest_loest_den_alarm_aus(monkeypatch):
+    """End-to-End: Befehl -> Sammlung -> Schwelle -> Telegram."""
+    import telegram_handler as th
+
+    uhr = {"jetzt": datetime(2026, 10, 4, 12, 30)}
+    gesendet = _haenge_senden(monkeypatch, uhr)
+    state = _state()
+
+    await th._api_alarm_testen(None, state.chat_id, state.bot_token, state)
+
+    # Testeintraege muessen drin sein...
+    fehlerarten = {t for _, t in state.api_errors["solax"]["errors"]}
+    assert fehlerarten == {"test"}, fehlerarten
+    # ... und der Alarm muss dadurch ausgeloest haben.
+    warnungen = [t for _, t in gesendet if "API-Warnung" in t]
+    assert warnungen, f"keine Warnung ausgeloest, gesendet: {gesendet}"
+    assert "test: 25x" in warnungen[0], warnungen[0]
+    # Der Fehlerart-Name "test" macht synthetische Eintraege erkennbar.
+    assert "test" in warnungen[0]

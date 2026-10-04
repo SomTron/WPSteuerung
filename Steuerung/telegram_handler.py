@@ -74,6 +74,60 @@ def _laufendes_main():
     return main
 
 
+async def _api_alarm_testen(session, chat_id, bot_token, state):
+    """Loest den API-Fehlerdichte-Alarm bewusst aus - ohne Netzausfall.
+
+    Der Alarm liest `state.api_errors`, und bis eben wurde diese Sammlung
+    von niemandem gefuellt. Ohne diesen Befehl laesst sich die Kette
+    Sammlung -> Schwelle -> Telegram nur mit einem echten Verbindungsausfall
+    nachweisen - und der dauert je nach API 25 bzw. 30 Minuten.
+
+    Die Testeintraege bekommen die Fehlerart "test". Sie sind damit am
+    Text der Warnung erkennbar und fallen nach 30 Minuten aus dem Fenster,
+    ohne Spuren in der Statistik zu hinterlassen. Das Befuellen geht
+    bewusst ueber denselben Aufrufer wie der echte Betrieb - sonst
+    wuerde genau die Kopplung geprueft, die man eigentlich sehen will.
+    """
+    # Kein "import main": main.py laeuft als __main__, ein blasser Import
+    # liefert eine zweite Modulkopie. Es gibt dafuer _laufendes_main().
+    _main = _laufendes_main()
+    from constants import API_FEHLER_SCHWELLE, API_FEHLER_SCHWELLE_DEFAULT
+
+    schwelle = API_FEHLER_SCHWELLE.get("solax", API_FEHLER_SCHWELLE_DEFAULT)
+    for _ in range(schwelle):
+        _main.track_api_error(state, "solax", "test")
+
+    # last_alert leeren, sonst greift die 60-Minuten-Drosselung eines
+    # vorherigen echten Alarms und es kommt nichts an.
+    sammler = getattr(state, "api_errors", None) or {}
+    eintrag = sammler.get("solax")
+    if eintrag is not None:
+        eintrag["last_alert"] = None
+
+    try:
+        await _main.check_api_health(session, state)
+    except Exception as exc:
+        logging.error("API-Alarmtest fehlgeschlagen", exc_info=True)
+        return await send_telegram_message(
+            session, chat_id,
+            f"❌ *API-Alarmtest fehlgeschlagen:* {exc}",
+            bot_token,
+        )
+
+    aktuelle = len((sammler.get("solax") or {}).get("errors", []))
+    return await send_telegram_message(
+        session, chat_id,
+        f"🧪 *API-Alarmtest ausgeführt.*\n"
+        f"{schwelle} Testeinträge für `solax` erzeugt "
+        f"(Schwelle: {schwelle}).\n"
+        f"Gesammelt: {aktuelle}\n\n"
+        "Liegt darüber eine ⚠️-Warnung, funktioniert die Kette. "
+        "Die Einträge verschwinden nach 30 Minuten von selbst.",
+        bot_token,
+        parse_mode="Markdown",
+    )
+
+
 async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
     """Not-Aus ueber Telegram. Der eigentliche Ausloeser laeuft im Main-Loop."""
     logging.critical("NOT-AUS per Telegram angefordert")
@@ -393,6 +447,11 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                 await get_runtime_bar_chart(session, days=7, state=state)
             elif "hilfe" in text:
                 await send_help_message(session, chat_id, bot_token, state)
+            elif "api test" in text:
+                # Muss VOR dem Not-Aus-Zweig stehen: der Aufheb-Zweig
+                # prueft auf Substrings wie "aus". Die Reihenfolge ist hier
+                # sicherheitsrelevant, nicht nur bequem.
+                await _api_alarm_testen(session, chat_id, bot_token, state)
             elif "notaus" in text or "not aus" in text or "not-aus" in text:
                 # Reihenfolge und Absicht sind hier entscheidend:
                 # "notaus" ENTHAELT selbst "aus" - eine blosse Pruefung auf
