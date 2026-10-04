@@ -634,6 +634,28 @@ class AdaptivePVConfig(BaseModel):
                      "Verhindert Starts, bei denen die WP mehr aus dem Netz "
                      "zieht als die PV deckt. 0 = keine Untergrenze."),
     )
+    # Obergrenze der dynamischen PV-Schwelle. `min_start_watt` begrenzt nur
+    # nach unten - nach oben blieb die Schwelle unbegrenzt. Bei
+    # t_normal_kalt (x0.7) und guter Prognose (x1.5) ergibt sich
+    # 300 x 0.7 x 1.5 = 315 W: bei 7 kW PV eine Ausloeseschwelle, die jede
+    # Wolke ausloest. Die Regel ist damit an beiden Enden unkalibriert.
+    max_start_watt: float = Field(
+        default=1500.0,
+        description=("Obere Grenze der dynamischen PV-Schwelle (W). Bei sehr "
+                     "guter Prognose wird bewusst konservativ geschwaellt, aber "
+                     "nicht bis unter den tatsaechlichen Solarueberschuss. "
+                     "0 = keine Obergrenze."),
+    )
+    # Die Temperatur- und die Prognosestufe werden nicht gestapelt, sondern
+    # begrenzt kombiniert: das STAERKERE Signal gewinnt. Stapeln ergab bis zu
+    # x0.175 (Beispiel: leicht kalt und bewoelkt), wodurch auch die
+    # Untergrenze griff und die eigentliche Temperaturinformation verloren ging.
+    max_kombinationsfaktor: float = Field(
+        default=0.5,
+        description=("Begrenzt die gemeinsame Wirkung von Temperatur- und "
+                     "Prognosestufe (Wert 0.5 = hoechstens die halbe Basis). "
+                     "1 = volles Stapeln wie zuvor."),
+    )
 
     @model_validator(mode="after")
     def _plausibel(self):
@@ -649,6 +671,16 @@ class AdaptivePVConfig(BaseModel):
             raise ValueError("adaptive_pv.sparen_hysterese_k ausserhalb 0-10 K")
         if not (0.0 <= self.min_start_watt <= 10000.0):
             raise ValueError("adaptive_pv.min_start_watt ausserhalb 0-10000 W")
+        if not (0.0 <= self.max_start_watt <= 10000.0):
+            raise ValueError("adaptive_pv.max_start_watt ausserhalb 0-10000 W")
+        if (
+            self.min_start_watt > 0.0
+            and self.max_start_watt > 0.0
+            and self.min_start_watt > self.max_start_watt
+        ):
+            raise ValueError("adaptive_pv: min_start_watt darf nicht groesser als max_start_watt sein")
+        if not (0.0 < self.max_kombinationsfaktor <= 1.0):
+            raise ValueError("adaptive_pv.max_kombinationsfaktor ausserhalb (0, 1]")
         return self
 
 

@@ -322,6 +322,13 @@ def _adaptive_cfg(**over):
         fc_schwelle_schlecht_wh=1000.0, tmax_c=48.0,
         t_aggressiv_kalt_c=30.0, t_normal_kalt_c=35.0,
         einschalten_bis_c=45.0,
+        # Die PV-Klemmen. Vor der Ergaenzung fehlten sie in diesem
+        # SimpleNamespace - und `getattr(..., 0.0)` lieferte damit 0, also
+        # "keine Klammer". Die Produktivkonfiguration dagegen hat
+        # min_start_watt=300. Der Test muss den Produktivfall abbilden,
+        # sonst prueft er eine Konfiguration, die es nicht gibt.
+        min_start_watt=300.0, max_start_watt=1500.0,
+        max_kombinationsfaktor=0.5,
     )
     for k, v in over.items():
         setattr(cfg, k, v)
@@ -330,13 +337,36 @@ def _adaptive_cfg(**over):
 
 class TestAdaptiveKalibrierung:
     def test_schlechte_kalibrierung_senkt_schwelle(self):
-        # 2500 Wh/qm ist neutral; x0.4 -> 1000 <= schlecht-Schwelle -> x0.5
+        # 2500 Wh/qm mal fc_ratio 0.4 = 1000 <= fc_schwelle_schlecht_wh
+        # -> Prognosefaktor x0.5. Mit unten 41.0 C (> t_normal_kalt 38) ist
+        # der Temperaturfaktor 1.0, also senkt allein die Prognose:
+        # 300 x 0.5 = 150 W, danach begrenzt min_start_watt auf 300 W.
+        #
+        # WICHTIG: Die Senkung ist seit der Kalibrierungs-Korrektur durch
+        # `max_kombinationsfaktor` (0.5) gedeckelt. Bei stapelnden Faktoren
+        # ergaebe 300 x 0.5 x 0.5 = 75 W; `min_start_watt` wuerde das
+        # auffangen, aber die Aussage "die schlechte Kalibrierung senkt die
+        # Schwelle" waere dann nicht mehr von der reinen Prognose zu trennen.
+        cfg = _adaptive_cfg()
+        # unten 41.0 C liegt ueber t_normal_kalt (35), also greift nur die
+        # Prognose: 300 x 0.5 = 150 W, von min_start_watt auf 300 W
+        # angehoben. Ohne die Klammer waere die Startgrenze 150 W und der
+        # Start kaeme zu rund drei Vierteln aus dem Netz - genau der
+        # Befund, den min_start_watt urspruenglich behoben hat.
         erg = evaluate_adaptive_pv(
-            _adaptive_cfg(), TEMPS, 200.0, 2500.0, False, 12,
+            cfg, TEMPS, 320.0, 2500.0, False, 12,
             fc_ratio=0.4,
         )
-        assert erg.einschalten is True
-        assert ">= 150W" in erg.grund
+        assert erg.einschalten is True, erg.grund
+        assert "Mindestwert 300W" in erg.grund
+        assert "Prognose x0.5" in erg.grund
+
+        # Gegenprobe: unterhalb der geklemmten Grenze startet die Regel nicht
+        erg2 = evaluate_adaptive_pv(
+            cfg, TEMPS, 200.0, 2500.0, False, 12,
+            fc_ratio=0.4,
+        )
+        assert erg2.einschalten is None, erg2.grund
 
     def test_neutral_ohne_ratio(self):
         erg = evaluate_adaptive_pv(

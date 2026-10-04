@@ -744,6 +744,32 @@ def evaluate_notfallschutz(
                     f"({sensor} {temp:.1f}C) -> AUS"
                 )
                 return result
+            # AB HIER: kein laufender eigener Notfall, aber der Start ist
+            # noch offen. Der Cutoff ist ein LAUFZEIT-Wunsch (Nutzerwunsch
+            # 28.09.: "der Notfall laeuft spaetestens bis 22:00"), KEIN
+            # Startverbot fuer Untertemperatur.
+            #
+            # Befund aus der Regelanalyse 04.10.2026: hier stand vorher
+            # bedingungslos `einschalten = None`. Damit fiel der Schutzleiter
+            # aus `aktive_regeln` heraus (`if e.aktiv and e.einschalten is
+            # None` wird gefiltert) und Wochenende (Prio 100, einschalten=
+            # False) gewann die Wahl. Nachgerechnet: Sonntag 07:00, Speicher
+            # 18 C, bis_uhr=22 -> "Start gesperrt -> AUS" bei 18 Grad. Der
+            # Prio-Wert 110 nuetzte nichts, weil die Regel nicht zur Wahl
+            # stand.
+            #
+            # Untertemperatur ist ein Sicherheitsfall, kein Komfortwunsch:
+            # deshalb startet der Notfallschutz auch nach dem Cutoff. Der
+            # laufende Notfall endet weiterhin puenktlich am Cutoff.
+            if temp <= nf_cfg.einschalten_bei_c:
+                result.einschalten = True
+                result.grund = (
+                    f"NOTFALLSCHUTZ: {sensor} {temp:.1f}C <= "
+                    f"{nf_cfg.einschalten_bei_c:.1f}C -> EIN "
+                    f"(nach Tages-Cutoff {int(cutoff):02d}:00, aber "
+                    "Untertemperatur hat Vorrang)"
+                )
+                return result
             result.einschalten = None
             result.grund = (
                 f"Notfallschutz: nur bis {int(cutoff):02d}:00 aktiv "
@@ -1562,46 +1588,73 @@ def evaluate_adaptive_pv(
         result.grund = f"AdaptivePV wartet auf PV: {quelle_text}"
         return result
 
-    # Temperatur-Anpassung
+    # Temperatur- UND Prognose-Anpassung.
+    #
+    # VORHER stapelten sich zwei unabhaengige if/elif-Paare (bis zu x0.175):
+    #   * nach unten ueberlagerte sich die Senkung - die eigentliche
+    #     Temperaturinformation ("der Boiler ist kalt") ging verloren,
+    #   * nach oben war die Schwelle unbegrenzt: x0.7 (leicht kalt) mal
+    #     x1.5 (guter Tag) ergab 315 W, bei 7 kW PV also eine Ausloesung
+    #     durch jede Wolke.
+    #
+    # JETZT: beide Faktoren getrennt bestimmen, Senkung begrenzt
+    # kombinieren (`max_kombinationsfaktor`), Hoeherschwelle auf
+    # `max_start_watt` deckeln. Der Staerkere Einfluss gewinnt, statt dass
+    # sich zwei Sichtweisen gegenseitig aufheben.
+    temperatur_faktor = 1.0
     if temp < adaptive_cfg.t_aggressiv_kalt_c:
-        schwelle *= 0.5  # Sehr kalt: aggressiver heizen
+        temperatur_faktor = 0.5  # Sehr kalt: aggressiver heizen
     elif temp < adaptive_cfg.t_normal_kalt_c:
-        schwelle *= 0.7  # Kalt: etwas niedrigere Schwelle
+        temperatur_faktor = 0.7  # Kalt: etwas niedrigere Schwelle
 
-    # Prognose-Anpassung (fc_ratio = gelernte Haus-Kalibrierung)
+    # Prognose (fc_ratio = gelernte Haus-Kalibrierung)
     prognose_eff = (
         forecast_wh_qm * fc_ratio
         if forecast_wh_qm is not None and fc_ratio != 1.0
         else forecast_wh_qm
     )
+    prognose_faktor = 1.0
     if prognose_eff is not None:
         if prognose_eff >= adaptive_cfg.fc_schwelle_gut_wh:
-            schwelle *= 1.5  # Sehr sonnig: höhere Schwelle = konservativer
+            prognose_faktor = 1.5  # Sehr sonnig: hoehere Schwelle = konservativer
         elif prognose_eff <= adaptive_cfg.fc_schwelle_schlecht_wh:
-            schwelle *= 0.5  # Bewölkt: niedrige Schwelle = PV jetzt nutzen
+            prognose_faktor = 0.5  # Bewoelkt: niedrige Schwelle = PV jetzt nutzen
 
-    # Untergrenze: die gestapelten Multiplikatoren (x0.5 Temperatur und x0.5
-    # Prognose) ergaben im Log bis 75 W. Bei so wenig Ueberschuss zieht die
-    # WP (~600 W) den groessten Teil aus dem Netz - der Start war dann kein
-    # PV-Start mehr. `min_start_watt` begrenzt das nach unten.
+    # Senkende Faktoren begrenzt kombinieren.
+    senkend = min(temperatur_faktor, prognose_faktor)
+    grenze_senkung = float(getattr(adaptive_cfg, "max_kombinationsfaktor", 1.0) or 1.0)
+    if senkend < grenze_senkung:
+        senkend = grenze_senkung
+    schwelle *= senkend
+    if prognose_faktor > 1.0:
+        schwelle *= prognose_faktor
+
+    # Grenzen erst NACH der Kombination anwenden. min_start_watt war schon
+    # vorhanden; max_start_watt schliesst die offene Luecke nach oben.
     min_start = float(getattr(adaptive_cfg, "min_start_watt", 0.0) or 0.0)
+    max_start = float(getattr(adaptive_cfg, "max_start_watt", 0.0) or 0.0)
+    geklammert = ""
     if min_start > 0 and schwelle < min_start:
         schwelle = min_start
+        geklammert = f", auf Mindestwert {min_start:.0f}W angehoben"
+    elif max_start > 0 and schwelle > max_start:
+        schwelle = max_start
+        geklammert = f", auf Hoechstwert {max_start:.0f}W begrenzt"
 
     if pv_leistung >= schwelle:
         result.einschalten = True
-        ergebnis_hinweis = ""
-        if min_start > 0 and schwelle == min_start:
-            ergebnis_hinweis = f", auf Mindestwert {min_start:.0f}W angehoben"
         result.grund = (
             f"AdaptivePV: PV {pv_leistung:.0f}W >= {schwelle:.0f}W "
             f"(Basis {adaptive_cfg.base_threshold_watt:.0f}W, "
-            f"{sensor_name}={temp:.1f}C{ergebnis_hinweis}) -> EIN"
+            f"Temp x{temperatur_faktor:g}, Prognose x{prognose_faktor:g}, "
+            f"{sensor_name}={temp:.1f}C{geklammert}) -> EIN"
         )
         return result
 
     result.set_reason_code("pv_unterbrechung")
-    result.grund = f"AdaptivePV: PV {pv_leistung:.0f}W < {schwelle:.0f}W"
+    result.grund = (
+        f"AdaptivePV: PV {pv_leistung:.0f}W < {schwelle:.0f}W{geklammert}"
+    )
     return result
 
 

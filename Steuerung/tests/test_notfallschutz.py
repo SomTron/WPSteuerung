@@ -200,13 +200,45 @@ class TestTagesCutoff:
         assert "NOTFALLSCHUTZ" in erg.grund
 
     def test_nach_cutoff_kein_notfallstart(self):
+        """Nach 22:00 mit WARMEM Speicher: kein Start.
+
+        Der Cutoff ist ein LAUFZEIT-Wunsch ("der Notfall laeuft spaetestens
+        bis 22:00"). Er gilt weiterhin uneingeschraenkt fuer das BEENDEN
+        eines laufenden Notfalls (siehe Nachbartests) und dafuer sorgen,
+        dass die Hysterese nachts keinen Endlauf erhaelt. Bei bereits
+        ausreichend warmem Speicher wird kein neuer Notfalllauf eroeffnet.
+        """
         erg = pc.evaluate_notfallschutz(
             NotfallschutzConfig(bis_uhr=22),
-            {"oben": 30.0, "mittig": 30.0, "unten": 30.0},
+            {"oben": 37.5, "mittig": 37.5, "unten": 37.5},
             now_hour=22,
         )
         assert erg.einschalten is None, "nach 22:00 darf nicht gestartet werden"
         assert "22:00" in erg.grund
+
+    def test_nach_cutoff_untertemperatur_startet_trotzdem(self):
+        """KRITISCH (Befund Regelanalyse 04.10.2026): der Cutoff darf kein
+        Startverbot fuer Untertemperatur sein.
+
+        Vorher lieferte die Regel nach dem Cutoff bedingungslos
+        `einschalten = None`. Damit fiel sie aus `aktive_regeln` heraus
+        (`if e.aktiv and e.einschalten is not None`) und Wochenende (Prio
+        100, einschalten=False) gewann die Wahl. Nachgerechnet: Sonntag
+        07:00 bei 18 C Speichertemperatur -> "Start gesperrt -> AUS".
+        Der Prio-Wert 110 nuetzte nichts, weil die Regel gar nicht zur Wahl
+        stand.
+        """
+        for stunde in (22, 23, 0, 3, 7):
+            erg = pc.evaluate_notfallschutz(
+                NotfallschutzConfig(bis_uhr=22),
+                {"oben": 18.0, "mittig": 19.0, "unten": 17.0},
+                now_hour=stunde,
+            )
+            assert erg.einschalten is True, (
+                f"{stunde:02d}:00 bei 18 C muss den Notfall starten, "
+                f"sonst blockiert die Wochenende-Sperre"
+            )
+            assert "Untertemperatur hat Vorrang" in erg.grund
 
     def test_der_eigene_notfalllauf_wird_beim_cutoff_beendet(self):
         erg = pc.evaluate_notfallschutz(
@@ -219,13 +251,18 @@ class TestTagesCutoff:
 
     def test_fremder_lauf_wird_nicht_abgebrochen(self):
         """Nach 22:00 darf der Notfallschutz (Prio 110) nicht auch PV- oder
-        Boiler-Laeufe abwuergen, die gar nicht von ihm stammen."""
+        Boiler-Laeufe abwuergen, die gar nicht von ihm stammen.
+
+        Der Speicher ist hier warm (34 C > 36 C Schwelle nicht unterschritten,
+        aber auch kein Notfallfall) - entscheidend ist `notfall_aktiv=False`:
+        der Schutzleiter hat nichts zu beenden und bleibt stumm.
+        """
         erg = pc.evaluate_notfallschutz(
             NotfallschutzConfig(bis_uhr=22),
             {"oben": 34.0, "mittig": 34.0, "unten": 34.0},
             kompressor_ein=True, notfall_aktiv=False, now_hour=23,
         )
-        assert erg.einschalten is None, "fremder Lauf wurde abgebrochen"
+        assert erg.einschalten is not False, "fremder Lauf wurde abgebrochen"
 
     def test_legionellenfahrt_ist_vom_cutoff_ausgenommen(self):
         """KRITISCH: Die Prophylaxe zielt auf 60 C und dauert bis zu
@@ -240,15 +277,19 @@ class TestTagesCutoff:
         assert "Cutoff" not in erg.grund
 
     def test_nacht_ist_gesperrt(self):
-        """'Spaetestens 22:00' heisst: 22:00-07:59 gesperrt.
+        """'Spaetestens 22:00' heisst: 22:00-07:59 gesperrt - fuer das
+        ERHALTEN eines laufenden Notfalls und fuer Starts bei warmem
+        Speicher.
 
         Regression: Ein naiver Vergleich `hour >= 22` liess 03:00 wieder
-        zu - die Nacht liegt naechtlich UEBER Mitternacht.
+        zu - die Nacht liegt naechtlich UEBER Mitternacht. Geprueft wird
+        daher mit 37,5 C: ueber der Einschaltschwelle, aber kein
+        Untertemperaturfall.
         """
         for stunde in (22, 23, 0, 3, 7):
             erg = pc.evaluate_notfallschutz(
                 NotfallschutzConfig(bis_uhr=22),
-                {"oben": 30.0, "mittig": 30.0, "unten": 30.0},
+                {"oben": 37.5, "mittig": 37.5, "unten": 37.5},
                 now_hour=stunde,
             )
             assert erg.einschalten is None, (

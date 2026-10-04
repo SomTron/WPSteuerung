@@ -104,6 +104,72 @@ def test_adaptive_pv_schwellen_default():
     assert "< 300W" in _adaptive_grund(1001)
 
 
+# --- AdaptivePV: begrenzte Klammern (Punkte 2 der Regelanalyse) -----------
+def test_adaptive_pv_senkt_nicht_unter_die_kombinationsgrenze():
+    """Kalt (x0.5) UND bewoelkt (x0.5) ergab gestapelt x0.175 = 52 W.
+
+    Jetzt begrenzt `max_kombinationsfaktor` (0.5) die gemeinsame Senkung:
+    300 x 0.5 = 150 W, danach greift min_start_watt (300 W). Die
+    Temperaturinformation geht nicht mehr in der Senkung verloren.
+    """
+    ergebnis = evaluate_adaptive_pv(
+        AdaptivePVConfig(), {"unten": 30.0}, 200.0, 900.0,
+        False, now_hour=12, forecast_today_wh_qm=900.0,
+    )
+    assert ergebnis.einschalten is None
+    assert "Mindestwert 300W" in ergebnis.grund
+
+
+def test_adaptive_pv_schwelle_wird_nach_oben_begrenzt():
+    """x0.7 (leicht kalt) mal x1.5 (guter Tag) ergab 315 W.
+
+    Bei 7 kB PV ist 315 W eine Ausloesung durch jede Wolke. Die neue
+    `max_start_watt`-Obergrenze behebt die vorher offene Seite des Bandes.
+    """
+    cfg = AdaptivePVConfig(base_threshold_watt=2000.0)
+    ergebnis = evaluate_adaptive_pv(
+        cfg, {"unten": 37.0}, 400.0, 5000.0,
+        False, now_hour=12, forecast_today_wh_qm=5000.0,
+    )
+    # 2000 x 0.7 x 1.5 = 2100 -> auf 1500 W begrenzt
+    assert "Hoechstwert 1500W" in ergebnis.grund
+    assert ergebnis.einschalten is None, "400 W darf unter 1500 W nicht starten"
+
+
+def test_adaptive_pv_obergrenze_laest_echten_ueberschuss_durch():
+    """Gegenprobe: mit 2500 W PV muss die Regel trotz guter Prognose starten."""
+    ergebnis = evaluate_adaptive_pv(
+        AdaptivePVConfig(), {"unten": 37.0}, 2500.0, 5000.0,
+        False, now_hour=12, forecast_today_wh_qm=5000.0,
+    )
+    assert ergebnis.einschalten is True, ergebnis.grund
+
+
+def test_adaptive_pv_grund_nennt_beide_faktoren():
+    """Die Begruendung muss die Faktoren ausweisen - sonst ist die
+    Schwelle im Log nicht nachvollziehbar. Geprueft wird der EIN-Fall,
+    weil nur dort beide Faktoren ohne Klammerung sichtbar sind."""
+    ergebnis = evaluate_adaptive_pv(
+        AdaptivePVConfig(),
+        temp_dict={"unten": 37.0, "mitte": 39.0, "oben": 44.0},
+        pv_leistung=2000.0,
+        pv_acpower=2000.0,
+        forecast_wh_qm=5000.0,
+        kompressor_ein=False,
+        now_hour=12,
+        forecast_today_wh_qm=5000.0,
+    )
+    assert ergebnis.einschalten is True, ergebnis.grund
+    assert "Temp x0.7" in ergebnis.grund
+    assert "Prognose x1.5" in ergebnis.grund
+
+
+def test_adaptive_pv_klammern_konsistent():
+    """min darf nicht groesser als max sein - sonst waere die Regel leer."""
+    with pytest.raises(ValueError, match="min_start_watt darf nicht groesser"):
+        AdaptivePVConfig(min_start_watt=2000.0, max_start_watt=1500.0)
+
+
 def test_adaptive_pv_schlechte_prognose_wird_auf_mindestwert_angehoben():
     """Die x0.5-Stufe (150 W) wird durch min_start_watt (300 W) geboden.
 
