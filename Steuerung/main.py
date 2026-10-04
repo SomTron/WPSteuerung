@@ -479,6 +479,25 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
             )
             state.control.effective_rule_name = state.control._lauf_start_regel
             state.control.active_rule_name = state.control._lauf_start_regel
+        else:
+            # BEFUND 04.10.2026: Ohne `pending_rule` blieb `active_rule_name`
+            # auf dem WERT DES VORHERIGEN LAUFS stehen - der Zyklus-Log
+            # (begin_cycle, eine Zeile weiter) liest genau dieses Feld fuer
+            # `start_regel`. Im Zyklus-CSV stand dadurch die Regel des
+            # vorherigen Laufs, waehrend die Regelbewertung eine andere
+            # gefordert hatte. Da `_pending_start_rule` seit dem Fix in
+            # `handle_compressor_on` zuverlaessig geleert wird, ist der
+            # leere Fall der Regelfall und nicht die Ausnahme.
+            #
+            # Rueckfall: `requested_rule_name` ist die Forderung der
+            # aktuellen Bewertung, danach der zuletzt bestaetigte Modus.
+            start_regel = (
+                getattr(state.control, "requested_rule_name", None)
+                or getattr(state.control, "previous_modus", None)
+            )
+            state.control._lauf_start_regel = start_regel
+            state.control.effective_rule_name = start_regel
+            state.control.active_rule_name = start_regel
         _record_hardware_change(state, now, True)
         
         # Statistiken aktualisieren + Zyklus-ID je Kompressor-Lauf inkrementieren
