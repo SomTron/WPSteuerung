@@ -1196,6 +1196,26 @@
         const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
         const valueOrDash = (value) => value === null || value === undefined || value === '' ? NO_DATA : value;
 
+        // Setzt den Text eines Elements, ohne bei fehlendem Element zu werfen.
+        // `document.getElementById(id).textContent` ist ein TypeError, sobald
+        // das Element fehlt - und ein TypeError mitten in updateValues bricht
+        // den Rest der Aktualisierung ab. Genau daran ist die Anzeige
+        // stehen geblieben: Verbindung gemeldet, aber keine Werte mehr.
+        // Rueckgabe: true, wenn geschrieben wurde (fuer die Selbstpruefung).
+        function setText(id, wert) {
+            const el = document.getElementById(id);
+            if (!el) {
+                if (!setText.gemeldet) {
+                    setText.gemeldet = true;
+                    console.warn('setText: Element fehlt:', id);
+                }
+                return false;
+            }
+            el.textContent = wert;
+            return true;
+        }
+        setText.gemeldet = false;
+
         function apiHeaders(extra = {}) {
             // Der Key wird grundsaetzlich an JEDEN API-Aufruf mitgeschickt.
             // Serverseitig ist er nur fuer Schreib-/Exportrouten Pflicht
@@ -2593,15 +2613,19 @@
                 const number = Number(value);
                 return Number.isFinite(number) ? number.toFixed(2) + ' kWh/m²' : NO_DATA;
             };
-            document.getElementById('energy-soc').textContent = energy.soc ?? 0;
-            document.getElementById('energy-battery').textContent = energy.battery_power ?? 0;
-            document.getElementById('energy-feedin').textContent = energy.feed_in ?? 0;
-            document.getElementById('energy-ac').textContent = energy.ac_power ?? NO_DATA;
+            // setText statt getElementById(...).textContent: fehlt ein Element
+            // (alter Cache, umbenannte id, nicht gerendertes Card), waere der
+            // direkte Zugriff ein TypeError auf null - und der wuerde den Rest
+            // von updateValues abbrechen.
+            setText('energy-soc', energy.soc ?? 0);
+            setText('energy-battery', energy.battery_power ?? 0);
+            setText('energy-feedin', energy.feed_in ?? 0);
+            setText('energy-ac', energy.ac_power ?? NO_DATA);
             // PV-Erzeugung und Hausverbrauch kommen aus der Gleichstromseite
             // bzw. aus der Bilanz. Ohne diese Zeilen bleiben die Felder nach
             // dem ersten Rendern stehen.
-            document.getElementById('energy-pv').textContent = energy.pv_generation_w ?? NO_DATA;
-            document.getElementById('energy-haus').textContent = energy.hausverbrauch_w ?? NO_DATA;
+            setText('energy-pv', energy.pv_generation_w ?? NO_DATA);
+            setText('energy-haus', energy.hausverbrauch_w ?? NO_DATA);
             document.getElementById('energy-forecast-today').textContent = fmtForecast(energy.forecast_today);
             document.getElementById('energy-forecast-tomorrow').textContent = fmtForecast(energy.forecast_tomorrow);
             document.getElementById('energy-forecast-day2').textContent = fmtForecast(energy.forecast_day2);
@@ -3091,9 +3115,21 @@
                 showOfflineState(navigator.onLine);
                 return;
             }
+            // try/finally ist hier Pflicht, nicht Kosmetik. Ein Fehler in
+            // fetchStatus - etwa ein fehlendes DOM-Element, an dem dessen
+            // eigener catch-Block dann ebenfalls scheitert - wuerde sonst
+            // startStatusPolling nie erreichen. Die Schleife stirbt, die
+            // Anzeige bleibt bei ihrem letzten guten Stand stehen und
+            // meldet weiter "verbunden". Beobachtet: WebApp zeigte
+            // Verbindung, aber keine weiteren Werte mehr.
             statusPollTimer = window.setTimeout(async () => {
-                await fetchStatus();
-                startStatusPolling();
+                try {
+                    await fetchStatus();
+                } catch (err) {
+                    console.error('Statusabruf abgebrochen, Schleife laeuft weiter:', err);
+                } finally {
+                    startStatusPolling();
+                }
             }, delay);
         }
 

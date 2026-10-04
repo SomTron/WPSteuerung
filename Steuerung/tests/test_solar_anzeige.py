@@ -63,13 +63,16 @@ def test_webapp_hat_feld_fuer_die_erzeugung():
 def test_webapp_aktualisiert_die_erzeugung_bei_jedem_poll():
     """Ein nur einmal gerendertes Feld zeigt dauerhaft den ersten Wert.
 
-    Genau das Muster steht in updateValues(): die Felder werden per
-    getElementById().textContent gesetzt. Fehlt eine Zeile, bleibt der
-    Wert aus dem initialen Rendern stehen.
+    updateValues() setzt die Felder bei jedem Poll. Fehlt eine Zeile,
+    bleibt der Wert aus dem initialen Rendern stehen - ohne Fehlermeldung.
     """
     text = _webapp()
     for feld in ('energy-pv', 'energy-haus', 'energy-ac'):
-        assert f"getElementById('{feld}')" in text, (
+        # setText() oder der direkte Zugriff - beides aktualisiert.
+        # Nur setText() faengt fehlende Elemente ab.
+        geschrieben = (f"setText('{feld}'" in text
+                       or f"getElementById('{feld}')" in text)
+        assert geschrieben, (
             f"{feld} wird beim Rendern befuellt, aber bei keinem Poll "
             "aktualisiert - es zeigte dauerhaft den ersten Wert"
         )
@@ -98,3 +101,58 @@ def test_kein_feld_beschriftet_den_ac_wert_als_pv():
         if 'title=' in zeile or "getElementById('energy-ac')" in zeile:
             continue
         assert '>PV<' not in zeile and '>PV ' not in zeile, zeile.strip()[:90]
+
+
+# ---------- Die Anzeige darf nie einfrieren ----------
+
+def test_pollschleife_terminiert_auch_bei_fehler():
+    """Beobachtet: WebApp meldete "verbunden", zeigte aber keine Werte mehr.
+
+    `startStatusPolling` rief `await fetchStatus(); startStatusPolling();`
+    ohne Schutz. Wirft fetchStatus - etwa weil dessen eigener catch-Block
+    an einem fehlenden DOM-Element scheitert -, wird startStatusPolling
+    nie erreicht. Die Schleife ist dann beendet, der letzte gute Stand
+    bleibt stehen, und die Verbindungsanzeige meldet weiter Verbindung.
+
+    Der try/finally ist die eigentliche Heilung: danach kann kein Fehler
+    in der Aktualisierung die Schleife beenden.
+    """
+    text = _webapp()
+    start = text.find("function startStatusPolling(")
+    assert start != -1, "startStatusPolling nicht gefunden"
+    rumpf = text[start:text.find("\n        function ", start + 10)]
+    if not rumpf:
+        rumpf = text[start:start + 1400]
+
+    assert "await fetchStatus();" in rumpf
+    # Ohne finally kann startStatusPolling() unerreicht bleiben.
+    assert "finally" in rumpf, (
+        "die Pollschleife terminiert nicht zuverlaessig - ein Fehler in "
+        "fetchStatus wuerde sie dauerhaft beenden"
+    )
+    # Und sie muss auch im Fehlerfall neu terminiert werden.
+    finally_idx = rumpf.find("finally")
+    nachher = rumpf[finally_idx:]
+    assert "startStatusPolling()" in nachher, (
+        "im finally wird die naechste Runde nicht geplant"
+    )
+
+
+def test_settext_vertraegt_fehlende_elemente():
+    """Ein fehlendes Element darf nicht den Rest der Aktualisierung abbrechen."""
+    text = _webapp()
+    assert "function setText(id, wert)" in text, "setText fehlt"
+    assert "if (!el)" in text, "setText faellt nicht bei fehlendem Element ab"
+    assert "console.warn" in text, (
+        "ein fehlendes Element wird nicht gemeldet - genau daran ist die "
+        "Anzeige still stehen geblieben"
+    )
+    # Der Energieblock nutzt setText statt direktem .textContent auf null.
+    start = text.find("// Energie")
+    end = text.find("// System", start)
+    block = text[start:end if end != -1 else start + 3000]
+    assert "document.getElementById('energy-pv').textContent" not in block, (
+        "der Energieblock greift weiterhin direkt auf moeglicherweise "
+        "fehlende Elemente zu"
+    )
+    assert "setText('energy-pv'" in block
