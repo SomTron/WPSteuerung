@@ -1662,6 +1662,18 @@ def evaluate_adaptive_pv(
     return result
 
 
+def _uhr_text(stunde: float) -> str:
+    """Formatiert eine Zielzeit lesbar.
+
+    Die gelernte Zielzeit ist ein EWMA und damit praktisch nie ganzzahlig
+    (z.B. 18.5). `f"{18.5:.0f}"` liefert "18" - daraus las sich im Log
+    "bis 18:00", obwohl 18:30 gemeint war. Deshalb: volle Stunden ohne
+    Nachkommastellen, halbe als "18:30".
+    """
+    gesamt = int(round(float(stunde) * 60.0))
+    return f"{gesamt // 60}:{gesamt % 60:02d}"
+
+
 def evaluate_calculated_start(
     calc_cfg: CalculatedStartConfig,
     temp_dict: Dict[str, Optional[float]],
@@ -1735,10 +1747,38 @@ def evaluate_calculated_start(
     # Aktuelle Zeit
     current_time = now_hour + now_minute / 60.0
 
+    # BEFUND 04.10.2026: Die Zielzeit wird ZWEIMAL bestimmt, und die beiden
+    # Stellen unterschieden sich:
+    #   * hier (Nachtsperre-Hinweis) und in allen folgenden Rechnungen
+    #     `ziel_uhr` - die GELERNTE Zielzeit (Default 17:00),
+    #   * in der Abbruchbedingung "Nach Zielzeit" dagegen die KONFIGURIERTE
+    #     `calc_cfg.target_uhr`.
+    # Nachgerechnet mit gelernter Abend-Zielzeit 18:30 und konfiguriert
+    # 17:00: ab 17:00 meldete die Regel "Nach Zielzeit" und war damit tot -
+    # genau waehrend der Zeit, fuer die die Zapfgarantie stehen soll. Die
+    # Regel selbst hatte vorher (16:45) noch "Puffer reicht -> warte"
+    # entschieden, weil sie auf die 18:30-Zielzeit rechnete.
+    #
+    # Umgekehrt erzwingt eine zu FRUEH gelernte Zielzeit (14:00) von 11:00
+    # bis 17:00 durchgehend "ZU SPAET! -> EIN (Notfall)".
+    #
+    # Die Zielzeit wird deshalb genau einmal bestimmt und fuer alles
+    # verwendet - Abbruch, Restzeit und Meldungen.
+    ziel_uhr = (
+        learned_target_hour
+        if learned_target_hour is not None
+        else float(calc_cfg.target_uhr)
+    )
+
     # Noch vor Zielzeit?
-    if current_time >= calc_cfg.target_uhr:
+    if current_time >= ziel_uhr:
         # Nach Zielzeit: nichts tun
-        result.grund = f"CalcStart: Nach Zielzeit ({now_hour}:{now_minute:02d} > {calc_cfg.target_uhr}:00)"
+        result.grund = (
+            f"CalcStart: Nach Zielzeit ({now_hour}:{now_minute:02d} > "
+            f"{_uhr_text(ziel_uhr)} gelernt"
+            + (f", konfiguriert {calc_cfg.target_uhr}:00" if learned_target_hour is not None else "")
+            + ")"
+        )
         return result
 
     # Temperaturdifferenz berechnen
@@ -1764,11 +1804,9 @@ def evaluate_calculated_start(
         if learned_heating_rate_gesamt is not None
         else calc_cfg.heizrate_gesamt_c_h
     )
-    ziel_uhr = (
-        learned_target_hour
-        if learned_target_hour is not None
-        else float(calc_cfg.target_uhr)
-    )
+    # `ziel_uhr` wird weiter oben einmalig bestimmt (siehe dort) und hier
+    # bewusst NICHT erneut zugewiesen - zwei getrennte Bestimmungen waren
+    # die Ursache des Befunds vom 04.10.2026.
 
     # Benoetigte Heizzeit
     hours_needed = diff_unten / max(heizrate_unten, 0.1)
@@ -1920,7 +1958,7 @@ def evaluate_calculated_start(
                 f"CalcStart: Netz-Start ohne PV auf reduziertem Soll "
                 f"{netz_soll:.0f}C statt {calc_cfg.solltemperatur_c:.0f}C "
                 f"(unten {temp_unten:.1f}C = {std_n:.1f}K, {stunden_n:.1f}h <= "
-                f"{time_left:.1f}h Restzeit bis {ziel_uhr:.0f}:00) -> EIN "
+                f"{time_left:.1f}h Restzeit bis {_uhr_text(ziel_uhr)}) -> EIN "
                 f"({quelle_grund})"
             )
             return result
@@ -1928,7 +1966,7 @@ def evaluate_calculated_start(
         result.grund = (
             f"CalcStart: Netz-Start auf reduziertem Soll {netz_soll:.0f}C noch "
             f"zu frueh (brauche {stunden_n:.1f}h, habe {time_left:.1f}h bis "
-            f"{ziel_uhr:.0f}:00); warte auf PV/Batterie ({quelle_grund})"
+            f"{_uhr_text(ziel_uhr)}); warte auf PV/Batterie ({quelle_grund})"
         )
         return result
 
@@ -1952,8 +1990,8 @@ def evaluate_calculated_start(
             return result
         result.einschalten = True
         result.grund = (
-            f"CalcStart: ZU SPAET! Zeitablauf ({time_left:.1f}h < {hours_needed:.1f}h) "
-            f"-> EIN (Notfall)"
+            f"CalcStart: ZU SPAET! Zeitablauf ({time_left:.1f}h bis "
+            f"{_uhr_text(ziel_uhr)} < {hours_needed:.1f}h) -> EIN (Notfall)"
         )
         return result
 
@@ -1962,7 +2000,7 @@ def evaluate_calculated_start(
         result.einschalten = True
         result.grund = (
             f"CalcStart: Nur {effektiver_puffer:.1f}h Puffer (PV={pv_label}, "
-            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00) -> EIN "
+            f"brauche {hours_needed:.1f}h bis {_uhr_text(ziel_uhr)}) -> EIN "
             f"[{quelle_grund}]"
         )
         return result
@@ -1986,7 +2024,7 @@ def evaluate_calculated_start(
         dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
         result.grund = (
             f"CalcStart: SPAETEST-START ({buffer_hours:.1f}h Restpuffer, "
-            f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00{dip_txt}) -> EIN "
+            f"brauche {hours_needed:.1f}h bis {_uhr_text(ziel_uhr)}{dip_txt}) -> EIN "
             f"(Zapf-Garantie; Quelle: {quelle_grund})"
         )
         return result
@@ -1998,14 +2036,14 @@ def evaluate_calculated_start(
         result.grund = (
             f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht, warte auf "
             f"PV/Batterie ({quelle_grund}; brauche {hours_needed:.1f}h bis "
-            f"{ziel_uhr:.0f}:00{dip_txt})"
+            f"{_uhr_text(ziel_uhr)}{dip_txt})"
         )
         return result
     result.einschalten = None
     dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
     result.grund = (
         f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht (PV={pv_label}, "
-        f"brauche {hours_needed:.1f}h bis {ziel_uhr:.0f}:00{dip_txt}) -> warte auf PV"
+        f"brauche {hours_needed:.1f}h bis {_uhr_text(ziel_uhr)}{dip_txt}) -> warte auf PV"
     )
     return result
 
