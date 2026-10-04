@@ -18,10 +18,16 @@ jobs:
       PYTHONFAULTHANDLER: 1
     steps:
       - name: Repository auschecken
-        uses: actions/checkout@v4
+        # v5 war die reine Node-24-Migration, v7 zieht nur das Modul auf ESM
+        # und blockiert fuerks-PRs bei pull_request_target/workflow_run -
+        # dieser Workflow nutzt push und pull_request, ist also nicht betroffen.
+        uses: actions/checkout@v7
 
       - name: Python einrichten
-        uses: actions/setup-python@v5
+        # v7 entfernt das pip-install-Input und EOL-Python-Versionen. Hier
+        # wird `cache: pip` genutzt (nicht pip-install) und Python 3.12 ist
+        # nicht EOL.
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
