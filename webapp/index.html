@@ -1216,6 +1216,36 @@
         }
         setText.gemeldet = false;
 
+        // Geschwister zu setText, gleiche Begruendung: ein null-Element
+        // waere sonst ein TypeError mitten in einer Aktualisierung.
+        function setClass(id, wert) {
+            const el = document.getElementById(id);
+            if (!el) return false;
+            el.className = wert;
+            return true;
+        }
+
+        // Fuegt einen Knoten hinter einem vorhandenen Element ein.
+        function insertAfter(id, knoten) {
+            const el = document.getElementById(id);
+            if (!el) return false;
+            el.after(knoten);
+            return true;
+        }
+
+        // setzt den Grundaufbau der App. Bricht renderApp() hier ab, wird
+        // ueberhaupt nichts gerendert - deshalb der Hinweis statt eines
+        // stillen Abbruchs.
+        function setAppHtml(html) {
+            const el = document.getElementById('app');
+            if (!el) {
+                console.error('renderApp: Container #app nicht gefunden');
+                return false;
+            }
+            el.innerHTML = html;
+            return true;
+        }
+
         function apiHeaders(extra = {}) {
             // Der Key wird grundsaetzlich an JEDEN API-Aufruf mitgeschickt.
             // Serverseitig ist er nur fuer Schreib-/Exportrouten Pflicht
@@ -2077,7 +2107,7 @@
             const cs = document.getElementById('compressor-status');
             cs.className = 'badge ' + (isRunning ? 'badge-success' : 'badge-danger');
             cs.textContent = isRunning ? 'AKTIV' : 'AUS';
-            document.getElementById('runtime-today').textContent = compressor.runtime_today;
+            setText('runtime-today', compressor.runtime_today);
             const rcr = document.getElementById('runtime-current-row');
             if (isRunning) {
                 if (!rcr) {
@@ -2091,9 +2121,9 @@
                     wert.className = 'info-value'; wert.id = 'runtime-current';
                     wert.textContent = compressor.runtime_current;
                     row.append(label, wert);
-                    document.getElementById('runtime-today-row').after(row);
+                    insertAfter('runtime-today-row', row);
                 } else {
-                    document.getElementById('runtime-current').textContent = compressor.runtime_current;
+                    setText('runtime-current', compressor.runtime_current);
                 }
             } else if (rcr) { rcr.remove(); }
             const btn = document.getElementById('compressor-btn');
@@ -2136,25 +2166,25 @@
             if (btn) btn.disabled = notausAktiv;
 
             // Temperaturen
-            document.getElementById('temp-boiler').textContent = temperatures.boiler?.toFixed(1) || NO_DATA;
-            document.getElementById('temp-oben').textContent = temperatures.oben?.toFixed(1) || NO_DATA;
-            document.getElementById('temp-mittig').textContent = temperatures.mittig?.toFixed(1) || NO_DATA;
-            document.getElementById('temp-unten').textContent = temperatures.unten?.toFixed(1) || NO_DATA;
-            document.getElementById('temp-verdampfer').textContent = temperatures.verdampfer?.toFixed(1) || NO_DATA;
+            setText('temp-boiler', temperatures.boiler?.toFixed(1) || NO_DATA);
+            setText('temp-oben', temperatures.oben?.toFixed(1) || NO_DATA);
+            setText('temp-mittig', temperatures.mittig?.toFixed(1) || NO_DATA);
+            setText('temp-unten', temperatures.unten?.toFixed(1) || NO_DATA);
+            setText('temp-verdampfer', temperatures.verdampfer?.toFixed(1) || NO_DATA);
 
             // Sollwerte
-            document.getElementById('setpoint-ein').textContent = setpoints?.einschaltpunkt ?? NO_DATA;
-            document.getElementById('setpoint-aus').textContent = setpoints?.ausschaltpunkt ?? NO_DATA;
-            document.getElementById('setpoint-sicherheit').textContent = setpoints?.sicherheits_temp ?? NO_DATA;
-            document.getElementById('setpoint-verdampfer').textContent = setpoints?.verdampfertemperatur ?? NO_DATA;
+            setText('setpoint-ein', setpoints?.einschaltpunkt ?? NO_DATA);
+            setText('setpoint-aus', setpoints?.ausschaltpunkt ?? NO_DATA);
+            setText('setpoint-sicherheit', setpoints?.sicherheits_temp ?? NO_DATA);
+            setText('setpoint-verdampfer', setpoints?.verdampfertemperatur ?? NO_DATA);
 
             // Aktive Regel
             const ruleName = mode.active_rule || 'Keine';
-            document.getElementById('rule-name').textContent = ruleName;
-            document.getElementById('rule-requested').textContent = mode.requested_rule || '—';
-            document.getElementById('rule-source').textContent = mode.source_at_start || mode.effective_source || '—';
-            document.getElementById('rule-source-current').textContent = mode.source_current || mode.effective_source || '—';
-            document.getElementById('rule-sensor').textContent = mode.active_rule_sensor ? 'Fuehler: ' + mode.active_rule_sensor : '';
+            setText('rule-name', ruleName);
+            setText('rule-requested', mode.requested_rule || '—');
+            setText('rule-source', mode.source_at_start || mode.effective_source || '—');
+            setText('rule-source-current', mode.source_current || mode.effective_source || '—');
+            setText('rule-sensor', mode.active_rule_sensor ? 'Fuehler: ' + mode.active_rule_sensor : '');
             const rd = document.getElementById('rule-decision');
             // "boiler_bereits_warm" ist ein Normalzustand (Boiler ist heiss,
             // Start waere unnoetig) und keine Stoerung - deshalb Info statt
@@ -2261,12 +2291,10 @@
                     : 'noch nicht gelernt (<4 Zapfungen)';
                 [['winter', 'learn-rate-winter'], ['transition', 'learn-rate-transition'], ['summer', 'learn-rate-summer']].forEach(function(p) {
                     const hr = (lrn.heat_rates || {})[p[0]] || {};
-                    document.getElementById(p[1]).textContent =
-                        (hr.avg != null ? Number(hr.avg).toFixed(2) + ' °C/h' : NO_DATA) +
-                        ' (n=' + (hr.count ?? 0) + ')';
+                    setText(p[1], (hr.avg != null ? Number(hr.avg).toFixed(2) + ' °C/h' : NO_DATA) +
+                        ' (n=' + (hr.count ?? 0) + ')');
                 });
-                                document.getElementById('learn-counts').textContent =
-                    (lrn.total_cycles ?? 0) + ' Heizzyklen / ' + (lrn.total_usage_events ?? 0) + ' Zapfungen';
+                                setText('learn-counts', (lrn.total_cycles ?? 0) + ' Heizzyklen / ' + (lrn.total_usage_events ?? 0) + ' Zapfungen');
             }
 
             // Morgen-Zielzeit
@@ -2579,13 +2607,13 @@
             }
 
             // Modi
-            document.getElementById('mode-current').textContent = mode.current || 'Normal';
-            document.getElementById('switch-bath').className = 'switch' + (mode.bath_active ? ' active' : '');
-            document.getElementById('switch-holiday').className = 'switch' + (mode.holiday_active ? ' active' : '');
-            document.getElementById('switch-solar').className = 'switch' + (mode.solar_active ? ' active' : '');
-            document.getElementById('switch-night').className = 'switch' + (mode.nightsperre_active ? ' active' : '');
-            document.getElementById('switch-sommer').className = 'switch' + (mode.sommer_modus_aktiv ? ' active' : '');
-            document.getElementById('sommer-info').textContent = mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv';
+            setText('mode-current', mode.current || 'Normal');
+            setClass('switch-bath', 'switch' + (mode.bath_active ? ' active' : ''));
+            setClass('switch-holiday', 'switch' + (mode.holiday_active ? ' active' : ''));
+            setClass('switch-solar', 'switch' + (mode.solar_active ? ' active' : ''));
+            setClass('switch-night', 'switch' + (mode.nightsperre_active ? ' active' : ''));
+            setClass('switch-sommer', 'switch' + (mode.sommer_modus_aktiv ? ' active' : ''));
+            setText('sommer-info', mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv');
 
             // Legionellenprophylaxe (Planung / Status)
             const lgInfo = document.getElementById('legionellen-info');
@@ -2626,17 +2654,17 @@
             // dem ersten Rendern stehen.
             setText('energy-pv', energy.pv_generation_w ?? NO_DATA);
             setText('energy-haus', energy.hausverbrauch_w ?? NO_DATA);
-            document.getElementById('energy-forecast-today').textContent = fmtForecast(energy.forecast_today);
-            document.getElementById('energy-forecast-tomorrow').textContent = fmtForecast(energy.forecast_tomorrow);
-            document.getElementById('energy-forecast-day2').textContent = fmtForecast(energy.forecast_day2);
+            setText('energy-forecast-today', fmtForecast(energy.forecast_today));
+            setText('energy-forecast-tomorrow', fmtForecast(energy.forecast_tomorrow));
+            setText('energy-forecast-day2', fmtForecast(energy.forecast_day2));
 
             // System
-            document.getElementById('system-update').textContent = system.last_update || NO_DATA;
-            document.getElementById('system-sunrise').textContent = energy.sunrise || NO_DATA;
-            document.getElementById('system-sunset').textContent = energy.sunset || NO_DATA;
+            setText('system-update', system.last_update || NO_DATA);
+            setText('system-sunrise', energy.sunrise || NO_DATA);
+            setText('system-sunset', energy.sunset || NO_DATA);
             if (priority) {
-                document.getElementById('system-wp-leistung').textContent = (priority.wp_leistung || 0) + ' W';
-                document.getElementById('system-nachtsperre').textContent = priority.nachtsperre_aktiv ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : 'Inaktiv';
+                setText('system-wp-leistung', (priority.wp_leistung || 0) + ' W');
+                setText('system-nachtsperre', priority.nachtsperre_aktiv ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : 'Inaktiv');
             }
             const errEl = document.getElementById('exclusion-reason-row');
             if (system.exclusion_reason) {
@@ -2652,9 +2680,9 @@
                     val.id = 'exclusion-reason';
                     val.textContent = system.exclusion_reason;
                     row.append(lbl, val);
-                    document.getElementById('system-update-row').after(row);
+                    insertAfter('system-update-row', row);
                 } else {
-                    document.getElementById('exclusion-reason').textContent = system.exclusion_reason;
+                    setText('exclusion-reason', system.exclusion_reason);
                 }
             } else if (errEl) { errEl.remove(); }
         }
@@ -2708,7 +2736,7 @@
 
             const nachtsperreTxt = priority ? (priority.nachtsperre_start || '') + ' - ' + (priority.nachtsperre_ende || '') : '—';
 
-                        document.getElementById('app').innerHTML = `
+                        setAppHtml(`
                 <div class="grid grid-wide">
                     <div class="card">
                         <div class="chart-header-row">
@@ -3041,7 +3069,7 @@
                         <div class="info-row"><span class="info-label">Nachtsperre</span><span class="info-value" id="system-nachtsperre">${nachtsperreTxt}</span></div>
                     </div>
                 </div>
-            `;
+            `);
             // Chart wird jetzt in loadHistory() erstellt, sobald CSV-Daten da sind
             setTimeout(() => { if (!chart) createChart(); }, 5000);
         }
@@ -3099,13 +3127,21 @@
 
         function startAnalysisPolling(delay = ANALYSIS_INTERVAL_MS) {
             window.clearTimeout(analysisPollTimer);
+            // Gleiches Muster wie startStatusPolling: ohne finally kann ein
+            // Fehler in fetchAnalysis die Schleife beenden - die Analysekarte
+            // bliebe dann bei ihrem letzten Stand stehen.
             analysisPollTimer = window.setTimeout(async () => {
                 if (document.hidden || !navigator.onLine) {
                     startAnalysisPolling();
                     return;
                 }
-                await fetchAnalysis(true);
-                startAnalysisPolling();
+                try {
+                    await fetchAnalysis(true);
+                } catch (err) {
+                    console.error('Analyseabruf abgebrochen, Schleife laeuft weiter:', err);
+                } finally {
+                    startAnalysisPolling();
+                }
             }, delay);
         }
 

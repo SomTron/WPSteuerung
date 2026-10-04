@@ -138,6 +138,65 @@ def test_pollschleife_terminiert_auch_bei_fehler():
     )
 
 
+def _script_block():
+    """Der JavaScript-Teil zwischen den script-Tags."""
+    text = _webapp()
+    return text[text.find("<script>") + 8:text.rfind("</script>")]
+
+
+def test_script_block_ist_balanciert():
+    """Fängt fehlerhafte Ersetzungen, bevor sie auf den Pi gehen.
+
+    Beim Umstellen von `document.getElementById(...).innerHTML = ` auf
+    `setAppHtml(` wurde der Abschluss nicht mitgezogen: ein oeffnender
+    Klammer, aber weiterhin ein schliessendes Backtick-Semikolon. Die
+    Syntaxpruefung des Browsers faellt das erst zur Laufzeit, und auf dem
+    Pi heisst das: nichts wird gerendert.
+
+    Deshalb die Bilanz hier - sie hat den Fehler beim selben Durchlauf
+    gefangen, in dem er entstanden ist.
+
+    Reihenfolge ist wichtig: erst Kommentare, dann Template-Literale,
+    dann normale Strings, zuletzt Zeilenkommentare. Sonst frisst die
+    `//`-Regel bei "http://" den Rest der Zeile und ein dann
+    unterminierter String verschluckt Zeilen mit Klammern.
+    """
+    b = re.sub(r"/\*.*?\*/", "", _script_block(), flags=re.S)
+    b = re.sub(r"`(?:\\.|[^`\\])*`", "``", b)
+    b = re.sub(r"'(?:\\.|[^'\\])*'", "''", b)
+    b = re.sub(r'"(?:\\.|[^"\\])*"', '""', b)
+    b = re.sub(r"//[^\n]*", "", b)
+    for oeffn, zu in (("(", ")"), ("{", "}"), ("[", "]")):
+        differenz = b.count(oeffn) - b.count(zu)
+        assert differenz == 0, (
+            f"{oeffn}{zu} unausgeglichen ({differenz:+d}) - die Syntax ist "
+            "gebrochen und die Seite rendert nicht"
+        )
+
+
+def test_alle_direkten_textcontent_zugriffe_sind_ersetzt():
+    """Kein `getElementById(x).textContent` mehr ausserhalb der Helfer.
+
+    Jeder solche Zugriff ist ein TypeError, sobald das Element fehlt -
+    und ein TypeError mitten in updateValues bricht den Rest ab.
+    """
+    text = _webapp()
+    start = text.find("function setText(")
+    ende = text.find("\n        function ", start + 10)
+    ausserhalb = text[:start] + text[ende if ende != -1 else len(text):]
+    # Kommentare erst entfernen: die Erklaerung von setText erwaehnt das
+    # Muster im Klartext und wuerde sonst als Treffer gewertet.
+    ausserhalb = re.sub(r"//[^\n]*", "", ausserhalb)
+    ausserhalb = re.sub(r"/\*.*?\*/", "", ausserhalb, flags=re.S)
+    treffer = re.findall(
+        r"getElementById\([^()]*\)\s*\.\s*(?:textContent|className|after|innerHTML)",
+        ausserhalb,
+    )
+    assert not treffer, (
+        f"{len(treffer)} ungeschuetzte Zugriffe: {treffer[:5]}"
+    )
+
+
 def test_settext_vertraegt_fehlende_elemente():
     """Ein fehlendes Element darf nicht den Rest der Aktualisierung abbrechen."""
     text = _webapp()
