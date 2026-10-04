@@ -1557,12 +1557,31 @@ async def run_logic_step(session, state, learning_engine=None, befehle=None):
     if getattr(state.control, "notaus_aktiv", False) is True:
         if state.control.kompressor_ein:
             await notaus_ausloesen(state, "Nachlaufabsicherung", session)
+        elif check_log_throttle(state, "log_notaus_return", interval_minutes=10):
+            # Der Kompressor ist bereits aus, deshalb feuert im Normalfall
+            # nichts. Genau deshalb war dieser Pfad 12,5 Stunden lang
+            # unsichtbar: kein Log, kein blocking_reason, keine Regel.
+            logging.warning(
+                "Kontrollphase durch NOT-AUS uebersprungen - Grund: %s, "
+                "seit %s. Regelbewertung und Entscheidungslog entfallen.",
+                state.control.notaus_grund or "unbekannt",
+                state.control.notaus_ts or "unbekannt",
+            )
         return
 
     # Nur ein reiner Off-Batch beendet diesen Durchlauf. Folgt danach ein
     # force_on im selben Batch, wird der On-Wunsch noch in diesem Zyklus
     # nach den Sicherheitsprüfungen ausgeführt.
     if force_off_requested and not manual_force_on:
+        # Auch dieser Return war bisher völlig stumm: kein blocking_reason,
+        # keine Regelbewertung, kein Logeintrag. Da beide frühen Returns in
+        # derselben Konstellation auftreten (Sperre bei ausgeschaltetem
+        # Kompressor), ist die Unterscheidung ohne diese Zeile unmöglich.
+        if check_log_throttle(state, "log_force_off_return", interval_minutes=10):
+            logging.warning(
+                "Kontrollphase nur wegen eines Off-Befehls uebersprungen - "
+                "Regelbewertung und Entscheidungslog entfallen fuer diesen Zyklus."
+            )
         return
 
     # 1. Druckschalter & Config

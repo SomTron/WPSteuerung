@@ -135,5 +135,56 @@ async def test_statuszeile_ohne_sperre_unveraendert(monkeypatch, caplog, tmp_pat
     assert "NOT-AUS" not in zeile
 
 
+def _state_fuer_logic(notaus=True, kompressor_ein=False):
+    """Minimaler State fuer run_logic_step bis zum Sperr-Return."""
+    return SimpleNamespace(
+        local_tz=TZ,
+        learning_engine=None,
+        sensors=SimpleNamespace(t_oben=48.0, t_mittig=43.0, t_unten=46.0,
+                                t_verd=12.0),
+        control=SimpleNamespace(
+            kompressor_ein=kompressor_ein,
+            notaus_aktiv=notaus,
+            notaus_grund="Telegram" if notaus else None,
+            notaus_ts="2026-10-03T23:09:23" if notaus else None,
+            manual_force_on_pending=False,
+            blocking_reason=None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_notaus_return_wird_geloggt(caplog):
+    """Kern-Regression fuer den stillen Return: er MUSS eine Spur hinterlassen.
+
+    Der Kompressor ist aus, also feuert im Normalfall nichts - genau darum war
+    dieser Pfad am 03./04.10.2026 ueber 12 Stunden unsichtbar.
+    """
+    import main
+
+    state = _state_fuer_logic(notaus=True, kompressor_ein=False)
+    with caplog.at_level(logging.WARNING):
+        await main.run_logic_step(None, state)
+
+    treffer = [r.message for r in caplog.records if "NOT-AUS uebersprungen" in r.message]
+    assert treffer, "Der Not-Aus-Return muss geloggt werden"
+    assert "Telegram" in treffer[0]
+    assert "2026-10-03T23:09:23" in treffer[0]
+
+
+@pytest.mark.asyncio
+async def test_notaus_return_wird_gedrosselt(caplog):
+    """Alle 10 Sekunden eine Warnung waere eine Journal-Flut."""
+    import main
+
+    state = _state_fuer_logic(notaus=True, kompressor_ein=False)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(20):
+            await main.run_logic_step(None, state)
+
+    treffer = [r for r in caplog.records if "NOT-AUS uebersprungen" in r.message]
+    assert len(treffer) == 1, f"{len(treffer)} Warnungen statt gedrosselt"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

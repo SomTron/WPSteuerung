@@ -949,7 +949,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 },
             )
         except Exception as e:  # pragma: no cover
-            logging.debug(f"Entscheidungslog-Fehler: {e}")
+            # `logging.debug` verschwand bei Journal-Level INFO vollstaendig:
+            # ein Fehler beim Aufbau des Entscheidungslogs war damit genauso
+            # unsichtbar wie der Schreibfehler in entscheidungs_log.py.
+            # Das Log ist das einzige Diagnosewerkzeug fuer die
+            # Regelentscheidungen - hier darf der Fehler nicht untergehen.
+            logging.warning(f"Entscheidungslog-Fehler: {e}")
 
     return res
 
