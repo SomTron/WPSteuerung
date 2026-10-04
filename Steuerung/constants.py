@@ -81,6 +81,34 @@ SOLAR_API_TIMEOUT_SEC: int = 10
 SOLAR_REFRESH_DEADLINE_SEC: int = 45
 SOLAR_REFRESH_INTERVAL_SEC: int = 60
 
+# --- API-Fehlerdichte (Telegram-Alarm) ---
+# Wie viele Fehler einer API in 30 Minuten sichern den Alarm.
+#
+# Je API eine eigene Zahl, weil der Abruftakt um eine Groessenordnung
+# auseinanderliegt:
+#   solax      - Abruf jede Minute, hoechstens 30 Versuche / 30 min
+#   open-meteo - Abruf hoechstens alle FORECAST_RETRY_INTERVAL_MIN (15 min),
+#                also hoechstens 2 Versuche / 30 min
+# Eine gemeinsame Zahl koennte open-meteo gar nicht erreichen und
+# wuerde bei solax zu frueh ausloesen.
+#
+# solax = 25: bei einer Minute Takt sind das 25 Minuten. Der
+# Stale-Alarm fuer Solax greift bereits nach 15 Minuten
+# (SOLAR_DATA_STALE_THRESHOLD_MIN); der Dichte-Alarm kommt bewusst
+# DANACH und ergaenzt ihn um die Fehlerarten-Aufteilung. Umgekehrt
+# waere es Spam ueber dieselbe Stoerung - genau das vermeidet
+# _melde_solar_ausfall laut seinem Docstring ausdruecklich.
+#
+# open-meteo = 2: zwei aufeinanderfolgende Fehlversuche im Abstand
+# von 15 Minuten. Ein einzelner Fehlversuch ist normal (Netzblaupause,
+# Rate-Limit); zwei hintereinander sind ein Muster.
+API_FEHLER_SCHWELLE: dict = {
+    "solax": 25,
+    "open-meteo": 2,
+}
+#: Fallback fuer eine API ohne eigenen Eintrag.
+API_FEHLER_SCHWELLE_DEFAULT: int = 10
+
 # --- Bademodus ---
 BADEMODUS_HYSTERESIS: float = 4.0
 

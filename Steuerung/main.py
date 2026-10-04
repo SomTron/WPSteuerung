@@ -73,6 +73,8 @@ from constants import (
     SOLAR_DATA_STALE_THRESHOLD_MIN,
     SOLAR_REFRESH_DEADLINE_SEC,
     SOLAR_REFRESH_INTERVAL_SEC,
+    API_FEHLER_SCHWELLE,
+    API_FEHLER_SCHWELLE_DEFAULT,
     MEMORY_LOG_INTERVAL_SEC,
     STALE_ALARM_MINUTEN,
 )
@@ -751,8 +753,10 @@ async def solar_refresh_loop(session, state) -> None:
                 "Daten altern, PV-Regeln pausieren bei Stale",
                 SOLAR_REFRESH_DEADLINE_SEC,
             )
+            track_api_error(state, "solax", "timeout")
         except Exception:
             logging.exception("Solax-Hintergrund-Refresh fehlgeschlagen")
+            track_api_error(state, "solax", "exception")
         await asyncio.sleep(SOLAR_REFRESH_INTERVAL_SEC)
 
 
@@ -892,31 +896,54 @@ async def update_system_data(session, state, refresh_solar: bool = True):
 
 
 def track_api_error(state, api_name: str, error_type: str):
-    """Zeichnet einen API-Fehler im State auf fuer das Health-Monitoring."""
+    """Zeichnet einen API-Fehler im State auf fuer das Health-Monitoring.
+
+    Bewusst defensiv: ein Fehleraufzeichner darf den Aufrufer nie
+    scheitern lassen. Fehlt `api_errors` - Test-States, aeltere
+    Snapshots - wird die Sammlung hier angelegt, statt eine Ausnahme in
+    den Solax-Refresh oder die Prognose zu schieben.
+    """
     now = _state_now(state)
-    if api_name not in state.api_errors:
-        state.api_errors[api_name] = {"errors": [], "last_alert": None}
-    state.api_errors[api_name]["errors"].append((now, error_type))
+    sammler = getattr(state, "api_errors", None)
+    if sammler is None:
+        sammler = {}
+        state.api_errors = sammler
+    if api_name not in sammler:
+        sammler[api_name] = {"errors": [], "last_alert": None}
+    sammler[api_name]["errors"].append((now, error_type))
     # Nur die letzten 100 Fehler behalten (Speicherschutz)
-    if len(state.api_errors[api_name]["errors"]) > 100:
-        state.api_errors[api_name]["errors"] = state.api_errors[api_name]["errors"][-100:]
+    if len(sammler[api_name]["errors"]) > 100:
+        sammler[api_name]["errors"] = sammler[api_name]["errors"][-100:]
 
 
 async def check_api_health(session, state):
     """
     Ueberprueft die API-Fehlerdichte der letzten 30 Minuten.
-    Bei mehr als 10 Fehlern pro API wird eine Warnung via Telegram gesendet
-    (maximal alle 60 Minuten).
+
+    Abhaengig von API_FEHLER_SCHWELLE, weil der Abruftakt sehr
+    unterschiedlich ist: Solax fragt jede Minute ab, open-meteo
+    hoechstens alle 15 Minuten. Eine gemeinsame Zahl wuerde bei
+    open-meteo nie erreicht.
+
+    Der Alarm ist fuer FLACKERNDE Verbindungen gedacht, nicht fuer den
+    kompletten Ausfall: Solax faellt bei einem Ausfall bereits nach
+    15 Minuten ueber _melde_solar_ausfall auf (Stale-Schwelle), und
+    die Solax-Dichteschwelle liegt mit 25 Fehlern bewusst dahinter.
+
+    Pro API maximal eine Warnung je 60 Minuten.
     """
     from datetime import timedelta
     now = _state_now(state)
     threshold_30min = now - timedelta(minutes=30)
 
-    for api_name, data in state.api_errors.items():
+    for api_name, data in getattr(state, "api_errors", {}).items():
+        schwelle = API_FEHLER_SCHWELLE.get(
+            api_name, API_FEHLER_SCHWELLE_DEFAULT
+        )
         # Fehler der letzten 30 Minuten zaehlen
         recent = [e for e in data["errors"] if e[0] > threshold_30min]
-        if len(recent) < 10:
-            continue  # Weniger als 10 Fehler in 30 Min -> kein Alarm
+        if len(recent) < schwelle:
+            continue  # Unter der Schwelle -> kein Alarm
 
         # Pruefen ob bereits eine Warnung in den letzten 60 Min gesendet wurde
         last_alert = data.get("last_alert")
@@ -1007,6 +1034,12 @@ async def check_periodic_tasks(session, state, last_vpn_check):
         if any(value is None for value in (rad_today, rad_tomorrow, rad_day2)):
             state.last_forecast_update = None
             pcl._set_stale_forecast(state)
+            # open-meteo hatte bis hierher keinen eigenen Fehlerpfad: der
+            # Aufrufer sah nur "keine Daten" und konnte einen
+            # Verbindungsausfall nicht von einem echten Wetterstand
+            # unterscheiden. Die Fehlersammlung fuer den Telegram-Alarm
+            # blieb dadurch dauerhaft leer.
+            track_api_error(state, "open-meteo", "keine_daten")
         else:
             state.solar.forecast_today = rad_today
             state.solar.forecast_hourly_wm2 = hourly_today_wm2
