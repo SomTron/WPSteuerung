@@ -1646,7 +1646,11 @@ async def run_logic_step(session, state, learning_engine=None, befehle=None):
                 state, session, regelfuehler, einschaltpunkt, ausschaltpunkt,
                 state.min_laufzeit, state.min_pause, state.sensors.t_oben,
                 state.sensors.t_mittig,
-                set_kompressor_status
+                set_kompressor_status,
+                # Der Gewinner wird fuer die Start-Antizipation gebraucht:
+                # `active_rule_name` ist im Aus-Zustand per Definition None,
+                # die PV-Mindestlaufzeit (10 min) wuerde dadurch nie greifen.
+                regel_name=gewinner_name,
             )
         
         # 6. Sofort-Alarme pruefen

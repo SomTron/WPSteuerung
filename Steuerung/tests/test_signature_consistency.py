@@ -4,26 +4,38 @@ from pathlib import Path
 
 
 def test_handle_compressor_on_signature():
-    """Verify handle_compressor_on has the correct parameter count."""
+    """Verify handle_compressor_on has the correct parameter count.
+
+    `regel_name` kam am 04.10.2026 hinzu (Befund Regelanalyse): die
+    Start-Antizipation brauchte die gewinnende Regel, um
+    `pv_min_laufzeit_minuten` anzuwenden - `active_rule_name` ist im
+    Aus-Zustand immer None, also war die PV-Mindestlaufzeit dort nie
+    wirksam. Der Test muss die Erweiterung mitnehmen, sonst wuerde eine
+    kuenftige Aenderung stillschweigend durchfallen.
+    """
     from priority_control_logic import handle_compressor_on
-    
+
     sig = inspect.signature(handle_compressor_on)
     params = list(sig.parameters.keys())
-    
-    # Should have exactly 10 parameters including t_mittig
+
+    # Should have exactly 11 parameters including t_mittig and regel_name
     expected_params = [
         'state', 'session', 'regelfuehler', 'einschaltpunkt', 'ausschaltpunkt',
-        'min_laufzeit', 'min_pause', 't_oben', 't_mittig', 'set_kompressor_status_func'
+        'min_laufzeit', 'min_pause', 't_oben', 't_mittig',
+        'set_kompressor_status_func', 'regel_name'
     ]
-    
-    assert len(params) == 10, (
-        f"handle_compressor_on should have 10 parameters, has {len(params)}: {params}"
+
+    assert len(params) == 11, (
+        f"handle_compressor_on should have 11 parameters, has {len(params)}: {params}"
     )
     assert params == expected_params, (
         f"handle_compressor_on parameters mismatch.\n"
         f"Expected: {expected_params}\n"
         f"Got: {params}"
     )
+    # regel_name MUSS optional sein: Tests und Aufrufer ohne Regelangabe
+    # sollen weiterhin funktionieren.
+    assert sig.parameters['regel_name'].default is None
 
 
 def test_main_passes_correct_args_to_handle_compressor_on():

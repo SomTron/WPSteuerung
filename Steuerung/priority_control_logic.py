@@ -11,7 +11,7 @@ import logging
 import re
 import datetime as _datetime_module
 from datetime import date, datetime, timedelta
-from typing import Callable
+from typing import Callable, Optional
 
 from utils import safe_timedelta, to_naive
 from clock import now_for
@@ -1742,9 +1742,11 @@ def _effektive_mindestlaufzeit(state, min_laufzeit, regel_name=None) -> timedelt
     Mindestlaufzeit.
     """
     basis = min_laufzeit if isinstance(min_laufzeit, timedelta) else timedelta()
-    # Ohne benannte aktive Regel (z.B. in alten/vereinfachten Test-States)
-    # bleibt der uebergebene Basiswert erhalten. Im Produktivbetrieb wird
-    # active_rule_name vor handle_compressor_on gesetzt.
+    # Ohne benannte Regel bleibt der uebergebene Basiswert erhalten.
+    # ACHTUNG: `handle_compressor_on` kann `active_rule_name` NICHT nutzen -
+    # determine_mode_and_setpoints loescht das Feld im Aus-Zustand, und
+    # genau dort laeuft der Start. Der Aufrufer muss daher `regel_name`
+    # uebergeben (der Gewinner der Regelbewertung).
     if regel_name is None:
         return basis
     if _ist_pv_gesteuerter_lauf(regel_name):
@@ -2161,6 +2163,7 @@ async def handle_compressor_on(
     t_oben,
     t_mittig,
     set_kompressor_status_func: Callable,
+    regel_name: Optional[str] = None,
 ):
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = _now_for_state(state)
@@ -2276,7 +2279,18 @@ async def handle_compressor_on(
                 extra_puffer = 0.0
             effective_puffer_min = puffer_min + extra_puffer
             minz = _effektive_mindestlaufzeit(
-                state, min_laufzeit, getattr(state.control, "active_rule_name", None)
+                state, min_laufzeit,
+                # BEFUND 04.10.2026: hier stand `active_rule_name`. Das ist
+                # genau dann None, wenn handle_compressor_on laeuft -
+                # determine_mode_and_setpoints loescht das Feld im
+                # Aus-Zustand (Zeile "else: active_rule_name = None").
+                # Folge: JEDER PV-Lauf wurde gegen die volle
+                # Mindestlaufzeit (60 min) geprueft statt gegen
+                # `pv_min_laufzeit_minuten` (10). Die Start-Antizipation
+                # blockierte dadurch PV-Starts, die laut Konfiguration
+                # erlaubt sind: bei unten 46,8 C, Ausschaltpunkt 48 und
+                # 2 C/h sind es 37 min - das passt zu 10 min, nicht zu 60.
+                regel_name or getattr(state.control, "active_rule_name", None)
             )
             minz_min = float(minz.total_seconds() / 60.0)
             rate_confidence = float(getattr(state.control, "_rate_confidence", 0.1))
