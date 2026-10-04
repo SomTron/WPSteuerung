@@ -82,11 +82,16 @@ def isolate_entscheidungslog(tmp_path, monkeypatch):
     # Test zurueckgesetzt werden, sonst wandert er in den naechsten Test.
     monkeypatch.setattr(entscheidungs_log, "_pending_pfad", None)
     monkeypatch.setattr(entscheidungs_log, "_pending_regelwechsel", [])
+    # Der Herzschlag misst ab dem letzten echten Schreibvorgang. Bleibt der
+    # Zeitstempel aus einem vorherigen Test stehen, startet die Frist im
+    # naechsten Test verspaetet und dessen Heartbeat-Tests werden wacklig.
+    monkeypatch.setattr(entscheidungs_log, "_letzte_schreib_ts", None)
     yield
     entscheidungs_log._cache_pfad = None
     entscheidungs_log._cache_zeile = None
     entscheidungs_log._pending_pfad = None
     entscheidungs_log._pending_regelwechsel = []
+    entscheidungs_log._letzte_schreib_ts = None
 
 
 @pytest.fixture

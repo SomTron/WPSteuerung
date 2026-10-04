@@ -362,14 +362,23 @@ def test_korrupte_zeile_toleriert(tmp_path):
 
 
 def test_schreibe_ohne_os_error(tmp_path, caplog):
-    """Wenn LOG_DATEI nicht schreibbar ist, kein Crash."""
+    """Wenn LOG_DATEI nicht schreibbar ist: kein Crash, aber eine sichtbare Meldung.
+
+    Bis 03./04.10.2026 stand hier `assert ... levelname == "DEBUG"`. Genau das
+    war der Befund: Bei Journal-Level INFO verschwand die Meldung vollstaendig
+    und der Ausfall des Entscheidungslogs blieb 19 Stunden lang ohne Spur. Der
+    Regelbetrieb darf nicht gestoert werden - lautlos darf er nicht ausfallen.
+    """
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
-    with patcher:
+    with patcher, caplog.at_level("WARNING"):
         # Pfad in ein nicht-existierendes Verzeichnis
         with patch.object(el, "LOG_DATEI", str(tmp_path / "nix" / "log.jsonl")):
-            el.schreibe_eintrag("Test", "Grund", True, False)
-            # Kein Fehler, nur debug-Log
-            assert len(caplog.records) == 0 or caplog.records[0].levelname == "DEBUG"
+            assert el.schreibe_eintrag("Test", "Grund", True, False) is False
+
+    assert any(
+        r.levelname == "WARNING" and "nicht schreibbar" in r.message
+        for r in caplog.records
+    ), f"Schreibfehler nicht gemeldet: {[r.message for r in caplog.records]}"
 
 def test_identische_zyklen_werden_nur_einmal_geschrieben(tmp_path):
     """Dedupe: identische Entscheidung -> kein zweiter Eintrag."""

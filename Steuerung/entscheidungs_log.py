@@ -105,6 +105,12 @@ _cache_zeile: Optional[Dict] = None
 _pending_pfad: Optional[str] = None
 _pending_regelwechsel: List[Dict] = []
 MAX_PENDING_REGELWECHSEL = 20  # verhindert unbegrenztes Wachstum im Stillstand
+_schreibfehlerzaehler = 0  # Schreibfehler zaehlen, aber das Journal nicht fluten
+# Zeitstempel des letzten TATSACHLICH geschriebenen Eintrags. Massgeblich fuer
+# den Herzschlag - bewusst NICHT der Cache: unterdrueckte Takte duerfen die
+# Frist nicht verlaengern, sonst schiebt sich der Heartbeat endlos hinaus
+# (im Test: nach 1800 s immer noch nicht faellig).
+_letzte_schreib_ts = None
 
 
 def _letzte_logzeile() -> Optional[Dict]:
@@ -181,12 +187,31 @@ def _soll_schreiben(vorher: Optional[Dict], eintrag: Dict) -> bool:
         vorher.get("soll_einschalten") == eintrag.get("soll_einschalten")
         and vorher.get("kompressor_laeuft") == eintrag.get("kompressor_laeuft")
     )
-    gewinner_unveraendert = vorher.get("gewinner") == eintrag.get("gewinner")
     if not handlung_unveraendert:
         return True
-    if not gewinner_unveraendert:
+    # Der Herzschlag wird VOR dem Vergleich der Gewinner-Regel geprueft.
+    # Andernfalls verriegelt sich das Log selbst: Heisst die aktuelle Regel
+    # anders als die letzte Dateizeile, gilt jeder Eintrag als "nur
+    # Regelwechsel" und wird unterdrueckt. Ohne Schreibvorgang bleibt der
+    # Cache leer, `_letzte_logzeile()` liest erneut aus der Datei, der
+    # Vergleich bleibt falsch - und der faellige Herzschlag wird nie
+    # erreicht. Beobachtet am 03./04.10.2026: 19 Stunden Betrieb ohne eine
+    # einzige Logzeile bei unveraenderter Gewinner-Regel.
+    if _herzschlag_due(vorher, eintrag):
+        return True
+    if vorher.get("gewinner") != eintrag.get("gewinner"):
         return False  # nur Regel-Wechsel -> an naechste Zeile haengen
-    # Zustand stabil: nur nach Herzschlag-Intervall erneut schreiben.
+    # Zustand stabil und Herzschlag noch nicht faellig.
+    return False
+
+
+def _herzschlag_due(vorher: Dict, eintrag: Dict) -> bool:
+    """True, wenn das Herzschlag-Intervall seit dem LETZTEN SCHREIBVORGANG abgelaufen ist.
+
+    Referenz ist bewusst der letzte geschriebene Eintrag und nicht der zuletzt
+    bewertete: unterdrueckte Takte (nur ein Regelwechsel bei gleicher Handlung)
+    duerfen die Frist nicht verlaengern, sonst wird sie nie faellig.
+    """
     grenze = (
         HEARTBEAT_SEKUNDEN
         if eintrag.get("kompressor_laeuft")
@@ -194,11 +219,15 @@ def _soll_schreiben(vorher: Optional[Dict], eintrag: Dict) -> bool:
     )
     try:
         aktuell = _parse_log_datetime(eintrag.get("ts"))
-        vorher_ts = _parse_log_datetime(vorher.get("ts"))
-        if aktuell is None or vorher_ts is None:
+        if aktuell is None:
             return True
-        dt = (aktuell - vorher_ts).total_seconds()
-        return dt >= grenze
+        referenz = _letzte_schreib_ts
+        if referenz is None:
+            # Kein bekannter Schreibvorgang: auf die letzte Dateizeile ausweichen.
+            referenz = _parse_log_datetime(vorher.get("ts"))
+            if referenz is None:
+                return True
+        return (aktuell - referenz).total_seconds() >= grenze
     except (TypeError, ValueError):
         return True  # im Zweifel lieber schreiben als Zustand verlieren
 
@@ -297,10 +326,15 @@ def schreibe_eintrag(
     }
     try:
         global _cache_pfad, _cache_zeile, _pending_pfad, _pending_regelwechsel
+        global _letzte_schreib_ts
         if _pending_pfad != LOG_DATEI:
             _pending_pfad = LOG_DATEI
             _pending_regelwechsel = []
         vorher = _letzte_logzeile()
+        # Erste Bewertung dieses Prozesses: die Herzschlagsfrist laeuft ab dem
+        # letzten Eintrag der DATEI. Ab dann nur noch ab echten Schreibvorgaengen.
+        if _letzte_schreib_ts is None and vorher is not None:
+            _letzte_schreib_ts = _parse_log_datetime(vorher.get("ts"))
         # Ist die Liste voller Regelwechsel ohne Handlungsaenderung, wird der
         # aktuelle Zustand erzwungen geschrieben. Sonst koennte das Log bei
         # dauerhaft alternierenden Regeln (z. B. PV-Schaping gegen Komfort)
@@ -317,10 +351,13 @@ def schreibe_eintrag(
                     "nach": eintrag["gewinner"],
                 })
                 del _pending_regelwechsel[:-MAX_PENDING_REGELWECHSEL]
-                # Der Cache muss den neuen Gewinner fuehren, sonst wiederholt
-                # sich derselbe Wechsel bei jedem Takt.
-                if _cache_pfad == LOG_DATEI and _cache_zeile is not None:
-                    _cache_zeile = dict(_cache_zeile, gewinner=eintrag["gewinner"])
+            # Der Cache MUSS den gerade bewerteten Zustand fuehren - auch dann,
+            # wenn im Prozess noch nie geschrieben wurde. Vorher stand hier
+            # `if _cache_pfad == LOG_DATEI and _cache_zeile is not None`:
+            # Nach einem Neustart sind beide leer, der Guard griff nie, und
+            # derselbe Regelwechsel wiederholte sich in jedem Takt.
+            _cache_zeile = dict(eintrag)
+            _cache_pfad = LOG_DATEI
             return False
         # Gesammelte Regelwechsel an diese Zeile haengen.
         if _pending_regelwechsel:
@@ -333,10 +370,22 @@ def schreibe_eintrag(
             f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
         _cache_pfad = LOG_DATEI
         _cache_zeile = eintrag
+        _letzte_schreib_ts = _parse_log_datetime(eintrag.get("ts"))
         return True
     except OSError as e:
-        # Logging darf den Regelbetrieb niemals stoeren
-        logging.debug(f"Entscheidungslog nicht schreibbar: {e}")
+        # Logging darf den Regelbetrieb niemals stoeren. Ein Schreibfehler
+        # darf aber nicht lautlos bleiben: dieses Log ist das einzige
+        # Diagnosewerkzeug fuer die Regelentscheidungen. Mit `logging.debug`
+        # verschwand die Meldung bei Journal-Level INFO vollstaendig - am
+        # 03./04.10.2026 blieben 19 Stunden Ausfall ohne jede Spur.
+        global _schreibfehlerzaehler
+        _schreibfehlerzaehler += 1
+        if _schreibfehlerzaehler == 1 or _schreibfehlerzaehler % 50 == 0:
+            logging.warning(
+                "Entscheidungslog nicht schreibbar (%d. Fehler): %s",
+                _schreibfehlerzaehler,
+                e,
+            )
         return False
 
 
