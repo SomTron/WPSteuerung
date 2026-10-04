@@ -1,6 +1,6 @@
 """Gemeinsame API-/Status-Verträge und Versionierung."""
 
-from typing import Any, Iterable
+from typing import Any
 
 
 API_CONTRACT_VERSION = "1.0.0"
@@ -37,8 +37,3 @@ def validate_status_shape(payload: dict[str, Any]) -> None:
         raise ValueError("Statusantwort enthält keinen _contract-Marker")
     if contract.get("status_schema_version") != STATUS_SCHEMA_VERSION:
         raise ValueError("Status-Schemaversion passt nicht zum API-Vertrag")
-
-
-def stable_keys(values: Iterable[str]) -> tuple[str, ...]:
-    """Für reproduzierbare Diagnosemeldungen."""
-    return tuple(sorted(set(values)))

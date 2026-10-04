@@ -2531,26 +2531,6 @@ async def check_safety_limits(
 
 
 
-def get_priority_control_status(state) -> dict:
-    """Gibt einen Status-Report der Prioritaeten-Steuerung zurueck."""
-    cfg = state.priority_config
-
-    pv_leistung = state.solar.feedinpower if state.solar.feedinpower else 0.0
-
-    return {
-        "wp_leistung_watt": cfg.wp.leistung_watt,
-        "wp_typ": cfg.wp.typ,
-        "pv_leistung_watt": pv_leistung,
-        "aktive_regel": getattr(state.control, "active_rule_name", None),
-        "sensoren": state.control.active_rule_sensor,
-        "nachtsperre_aktiv": _is_nachtsperre_aktiv(cfg, _now_for_state(state)),
-        "komfort_aktiv": getattr(state.control, "komfort_aktiv", False),
-        "anzahl_regeln": len(cfg.pv_regeln)
-        + 4
-        + 3,  # +Wochenende+PV+Komfort+Zeitfenster+Abweichung+Forecast+AdaptivePV+CalcStart
-    }
-
-
 def _is_nachtsperre_aktiv(cfg: WPSteuerungConfig, now: datetime) -> bool:
     """Prueft ob die Nachtsperre aktiv ist."""
     start = cfg.sicherheit.nachtsperre_start

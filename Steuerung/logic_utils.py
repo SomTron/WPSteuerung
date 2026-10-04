@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, date, tzinfo
 from clock import now_for
 from typing import Optional
 from utils import safe_timedelta
-from constants import TEMP_MIN_VALID, TEMP_MAX_VALID, REDUCTION_MIN, REDUCTION_MAX, SOLAR_WINDOW_HOURS
+from constants import TEMP_MIN_VALID, TEMP_MAX_VALID, SOLAR_WINDOW_HOURS
 
 def is_valid_temperature(temp: Optional[float], min_temp: float = TEMP_MIN_VALID, max_temp: float = TEMP_MAX_VALID) -> bool:
     """Prüft, ob ein Temperaturwert gültig ist."""
@@ -105,22 +105,6 @@ def ist_uebergangsmodus_aktiv(state):
     except Exception as e:
         logging.error(f"Fehler bei ist_uebergangsmodus_aktiv: {e}")
         return False
-
-def get_validated_reduction(config, section: str, key: str, default: float = 0.0) -> float:
-    """Validiert und gibt Temperaturreduktionswerte zurück."""
-    try:
-        section_obj = getattr(config, section, None)
-        if section_obj:
-            value = getattr(section_obj, key, default)
-        else:
-            return default
-        reduction = float(value)
-        if reduction < REDUCTION_MIN or reduction > REDUCTION_MAX:
-            return default
-        return reduction
-    except Exception:
-        return default
-
 
 # --- Sommer-Modus ---
 # Ereignis-Konstanten der Bewertung (fuer das Logging im Aufrufer)
