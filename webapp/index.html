@@ -2597,6 +2597,11 @@
             document.getElementById('energy-battery').textContent = energy.battery_power ?? 0;
             document.getElementById('energy-feedin').textContent = energy.feed_in ?? 0;
             document.getElementById('energy-ac').textContent = energy.ac_power ?? NO_DATA;
+            // PV-Erzeugung und Hausverbrauch kommen aus der Gleichstromseite
+            // bzw. aus der Bilanz. Ohne diese Zeilen bleiben die Felder nach
+            // dem ersten Rendern stehen.
+            document.getElementById('energy-pv').textContent = energy.pv_generation_w ?? NO_DATA;
+            document.getElementById('energy-haus').textContent = energy.hausverbrauch_w ?? NO_DATA;
             document.getElementById('energy-forecast-today').textContent = fmtForecast(energy.forecast_today);
             document.getElementById('energy-forecast-tomorrow').textContent = fmtForecast(energy.forecast_tomorrow);
             document.getElementById('energy-forecast-day2').textContent = fmtForecast(energy.forecast_day2);
@@ -2839,7 +2844,9 @@
                         <div class="temp-label">Batterie</div>
                         <div class="info-row"><span class="info-label">Batterie-Leistung</span><span class="info-value"><span id="energy-battery">${energy.battery_power ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label">Einspeisung</span><span class="info-value"><span id="energy-feedin">${energy.feed_in ?? 0}</span> W</span></div>
-                        <div class="info-row"><span class="info-label">AC-Leistung</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? NO_DATA}</span> W</span></div>
+                        <div class="info-row"><span class="info-label" title="Tatsächliche Erzeugung der Strings (Gleichstromseite)">PV-Erzeugung</span><span class="info-value"><span id="energy-pv">${energy.pv_generation_w ?? NO_DATA}</span> W</span></div>
+                        <div class="info-row"><span class="info-label" title="Was das Haus aktuell aufnimmt">Hausverbrauch</span><span class="info-value"><span id="energy-haus">${energy.hausverbrauch_w ?? NO_DATA}</span> W</span></div>
+                        <div class="info-row"><span class="info-label" title="Wechselrichter-Ausgang = Haus + Netz. Nachts rund 250 W, obwohl die Sonne nichts liefert - nicht mit der PV-Erzeugung verwechseln.">Wechselrichter-Ausgang (AC)</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? NO_DATA}</span> W</span></div>
                         <div class="info-row" id="energy-stale-row" style="display:none;color:#ff6b6b"><span class="info-label">⚠ Solar-Daten</span><span class="info-value">veraltet -> PV-Regeln pausiert</span></div>
                         <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : NO_DATA}</span></div>
                         <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : NO_DATA}</span></div>

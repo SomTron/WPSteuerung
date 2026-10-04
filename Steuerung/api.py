@@ -1082,6 +1082,13 @@ def get_status():
             "soc": shared_state.solar.soc,
             "feed_in": shared_state.solar.feedinpower,
             "ac_power": getattr(shared_state.solar, 'acpower', None),
+            # Die tatsaechliche PV-Erzeugung (powerdc1 + powerdc2). Nicht zu
+            # verwechseln mit `ac_power`: das ist der Wechselstromausgang des
+            # Wechselrichter, also Haus plus Netz. Nachts betraegt er rund
+            # 250 W, waehrend die Gleichstromseite 0 meldet.
+            "pv_generation_w": getattr(shared_state.solar, 'pv_erzeugung', None),
+            "hausverbrauch_w": getattr(shared_state.solar, 'hausverbrauch', None),
+            "pv_ueberschuss_w": getattr(shared_state.solar, 'pv_ueberschuss', None),
             "forecast_today": getattr(shared_state.solar, 'forecast_today', None),
             "forecast_tomorrow": getattr(shared_state.solar, 'forecast_tomorrow', None),
             "solar_stale": solar_stale,
