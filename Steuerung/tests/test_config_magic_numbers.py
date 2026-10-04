@@ -16,7 +16,13 @@ import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from json_config import WPSteuerungConfig, AdaptivePVConfig, WochenendeConfig, KomfortConfig  # noqa: E402
+from json_config import (  # noqa: E402
+    WPSteuerungConfig,
+    AdaptivePVConfig,
+    WochenendeConfig,
+    KomfortConfig,
+    CalculatedStartConfig,
+)
 from priority_control import evaluate_adaptive_pv, evaluate_wochenende  # noqa: E402
 import priority_control as pc  # noqa: E402
 import priority_control_logic as pcl  # noqa: E402
@@ -168,6 +174,55 @@ def test_adaptive_pv_klammern_konsistent():
     """min darf nicht groesser als max sein - sonst waere die Regel leer."""
     with pytest.raises(ValueError, match="min_start_watt darf nicht groesser"):
         AdaptivePVConfig(min_start_watt=2000.0, max_start_watt=1500.0)
+
+
+# --- Prognose-Schwellen duerfen nicht im Code liegen (Befund 04.10.2026) ---
+def test_calcstart_prognoseschwellen_kommen_aus_der_config():
+    """BEFORE (Befund Regelanalyse 04.10.2026): evaluate_calculated_start
+    pruefte fest gegen 3000/1500/500 Wh/qm. Drei Regel-Familien benutzten
+    drei verschiedene Saetze: Forecast 3000/800, AdaptivePV 4000/1000,
+    CalcStart 3000/1500/500. Nachgerechnet: `forecast.fc_schwelle_hoch_wh`
+    auf 9999 gesetzt - das CalcStart-Ergebnis blieb IDENTISCH.
+
+    Wer die Prognoseschwelle tunen will, tat bisher so, als aendere sich
+    etwas, obwohl es nicht passierte.
+    """
+    from priority_control import evaluate_calculated_start
+
+    temps = {"unten": 40.0, "mittig": 40.0, "oben": 46.0}
+    basis = CalculatedStartConfig()
+
+    a = evaluate_calculated_start(
+        basis, temps, 10, 0, forecast_wh_qm=2500.0,
+        feedin_watt=2000.0, pv_acpower=3000.0,
+    )
+    # Schwellwert so verschieben, dass 2500 jetzt als "sehr sonnig" gilt
+    verschoben = CalculatedStartConfig(fc_schwelle_sehr_sonnig_wh=2000.0)
+    b = evaluate_calculated_start(
+        verschoben, temps, 10, 0, forecast_wh_qm=2500.0,
+        feedin_watt=2000.0, pv_acpower=3000.0,
+    )
+
+    assert a.grund != b.grund, (
+        "Die Config-Aenderung muss die CalcStart-Bewertung wirklich "
+        "veraendern - sonst liegt die Schwelle immer noch im Code"
+    )
+    assert "sonnig" in a.grund and "sehr sonnig" in b.grund
+
+
+def test_calcstart_defaults_entsprechen_den_bisherigen_codewerten():
+    """Die Defaults muessen exakt den Werten entsprechen, die vorher
+    fest im Code standen - sonst aendert die Herausnahme das Verhalten."""
+    cfg = CalculatedStartConfig()
+    assert cfg.fc_schwelle_sehr_sonnig_wh == 3000.0
+    assert cfg.fc_schwelle_sonnig_wh == 1500.0
+    assert cfg.fc_schwelle_bewoelkt_wh == 500.0
+
+
+def test_batterie_entlastungsschwelle_kommt_aus_der_config():
+    """Auch evaluate_batterie hatte mit 2000.0 eine feste Zahl im Code."""
+    from json_config import BatterieConfig
+    assert BatterieConfig().entlastung_ab_wh == 2000.0
 
 
 def test_adaptive_pv_schlechte_prognose_wird_auf_mindestwert_angehoben():

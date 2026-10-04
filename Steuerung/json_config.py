@@ -345,6 +345,13 @@ class BatterieConfig(BaseModel):
 
     # Dynamische Reserve (Punkt C): Bei gutem Morgen-Forecast darf die
     # Batterie tiefer entladen werden als min_soc_prozent.
+    entlastung_ab_wh: float = Field(
+        default=2000.0,
+        description=(
+            "Ab dieser Tagesprognose (Wh/qm) greift die dynamische SOC-Entlastung. "
+            "Vorher stand hier fest 2000.0 in evaluate_batterie; 0 = nie."
+        ),
+    )
     entlastung_max_prozent: float = Field(
         default=15.0,
         description="Maximale Absenkung der SOC-Reserve bei Top-Forecast (%-Punkte)",
@@ -750,6 +757,28 @@ class CalculatedStartConfig(BaseModel):
             "ueberhaupt sinnvoll ist. Verhindert, dass die WP fuer 0.5 K "
             " Netzstrom verbrennt."
         ),
+    )
+    # Prognose-Stufen fuer den Puffer-Faktor. Vorher standen 3000/1500/500
+    # fest im Code von evaluate_calculated_start - eine Aenderung an
+    # `forecast.fc_schwelle_hoch_wh` wirkte daher auf CalcStart NICHT
+    # (nachgerechnet: Schwellwert auf 9999 gesetzt, CalcStart-Ergebnis
+    # unveraendert). Drei Regel-Familien benutzten drei verschiedene
+    # Schwellensaetze: Forecast 3000/800, AdaptivePV 4000/1000,
+    # CalcStart 3000/1500/500.
+    fc_schwelle_sehr_sonnig_wh: float = Field(
+        default=3000.0,
+        description=("Ab dieser Tagesprognose (Wh/qm) zaehlt CalcStart vollen "
+                      "Puffer (Faktor 2.0) - an einem sehr sonnigen Tag ist "
+                      "kein Grund zu hetzen."),
+    )
+    fc_schwelle_sonnig_wh: float = Field(
+        default=1500.0,
+        description=("Ab dieser Tagesprognose halber Puffer-Faktor (1.5)."),
+    )
+    fc_schwelle_bewoelkt_wh: float = Field(
+        default=500.0,
+        description=("Unter dieser Tagesprognose halbiert sich der Puffer "
+                      "(0.5) - lieber frueher mit dem vorhandenen Solar."),
     )
 
 

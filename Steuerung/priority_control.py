@@ -452,9 +452,13 @@ def evaluate_batterie(
             f"{batt_cfg.ausschalten_bei_c}C -> AUS"
         )
         return result
-    # Dynamische Batteriereserve (Punkt C)
+    # Dynamische Batteriereserve (Punkt C). Ab dieser Prognose darf sich die
+    # WP staerker entlasten, weil mit ausreichend Solar zu rechnen ist.
+    # Vorher stand hier fest 2000.0 im Code - die Schwellen der uebrigen
+    # Regeln liegen dagegen in der Config.
+    entlastung_ab_wh = float(getattr(batt_cfg, "entlastung_ab_wh", 2000.0) or 0.0)
     eff_min_soc = batt_cfg.min_soc_prozent
-    if forecast_wh_qm is not None and forecast_wh_qm >= 2000.0:
+    if forecast_wh_qm is not None and entlastung_ab_wh > 0 and forecast_wh_qm >= entlastung_ab_wh:
         entlastung = min(
             getattr(batt_cfg, "entlastung_max_prozent", 15.0),
             eff_min_soc - getattr(batt_cfg, "min_soc_absolut", 10.0),
@@ -1823,13 +1827,16 @@ def evaluate_calculated_start(
         kalibrier_label = f", Kalibrierung x{fc_ratio:.2f}"
     pv_faktor = 1.0
     if prognose_eff is not None:
-        if prognose_eff >= 3000:  # Sehr sonnig
+        # Schwellen aus der Config (CalculatedStartConfig). Vorher standen
+        # hier fest 3000/1500/500 im Code - eine Aenderung an
+        # `forecast.fc_schwelle_hoch_wh` wirkte auf CalcStart dadurch nicht.
+        if prognose_eff >= float(getattr(calc_cfg, "fc_schwelle_sehr_sonnig_wh", 3000.0)):
             pv_faktor = 2.0
             pv_label = f"sehr sonnig{kalibrier_label}"
-        elif prognose_eff >= 1500:  # Sonnig
+        elif prognose_eff >= float(getattr(calc_cfg, "fc_schwelle_sonnig_wh", 1500.0)):
             pv_faktor = 1.5
             pv_label = f"sonnig{kalibrier_label}"
-        elif prognose_eff <= 500:  # Bewoelkt
+        elif prognose_eff <= float(getattr(calc_cfg, "fc_schwelle_bewoelkt_wh", 500.0)):
             pv_faktor = 0.5
             pv_label = f"bewoelkt{kalibrier_label}"
         else:
