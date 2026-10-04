@@ -2168,6 +2168,26 @@ async def handle_compressor_on(
     """Prueft Einschaltbedingungen und schaltet ein."""
     now = _now_for_state(state)
 
+    # BEFUND 04.10.2026: Der Pending-Eintrag wird nur gesetzt, wenn
+    # `should_on and pause_ok and nacht_ok` gilt, aber in mehreren
+    # Rueckgabepfaden NICHT wieder geleert:
+    #   * Boiler-Max-Naehe, Ein-Sperre, Start-Antizipation, Minute-Pause,
+    #     Taktschutz, Neustartsperre: alle returnen, bevor der Pending-Wert
+    #     dieses Zyklus gesetzt oder verworfen wuerde - der Wert eines
+    #     VORHERIGEN Zyklus bleibt stehen,
+    #   * `nacht_ok == False` und der generische Rueckgabepfad am Ende.
+    # Konsument ist `set_kompressor_status` (main.py): es uebernimmt
+    # `_pending_start_rule` als `_lauf_start_regel` fuer den Hardware-Start.
+    # Eine Altlast wird damit als `effective_rule_name`/`active_rule_name`
+    # gefuehrt - die Regel, die den Kompressor wirklich gestartet hat,
+    # stimmt dann nicht mit Entscheidungslog und Statuszeile ueberein.
+    #
+    # Der Pending-Eintrag gehoert zum aktuellen Zyklus. Deshalb wird er
+    # HIER am Funktionsanfang geleert - das gilt fuer jeden Rueckgabepfad.
+    # Neu gefuellt wird er weiter unten, unmittelbar vor dem Startversuch.
+    state.control._pending_start_rule = None
+    state.control._pending_start_source = None
+
     # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gültige
     # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
     # eine evtl. alte Grenze aus einem vorherigen Lauf entfernen - sie darf
@@ -2392,6 +2412,25 @@ async def handle_compressor_on(
     if not state.control.kompressor_ein:
         # Pruefe ob die Regel einschalten will (ueber state oder Aufruf-Parameter)
         should_on = getattr(state.control, "_soll_einschalten", False)
+
+        # BEFUND 04.10.2026: Der Pending-Eintrag wird nur gesetzt, wenn
+        # `should_on and pause_ok and nacht_ok` gilt, aber in mehreren
+        # Rueckgabepfaden NICHT wieder geleert:
+        #   * nacht_ok == False -> return, Pending bleibt stehen,
+        #   * Minute-Pause / Taktschutz / Neustartsperre / Boiler-Max:
+        #     der ganze Block wird uebersprungen, der Pending-Wert eines
+        #     VORHERIGEN Zyklus bleibt stehen,
+        #   * der generische Rueckgabepfad am Ende.
+        # Konsument ist `set_kompressor_status` (main.py): es uebernimmt
+        # `_pending_start_rule` als `_lauf_start_regel` fuer den
+        # Hardware-Start. Ein alter Regelname wird damit als effektive
+        # Hardware-Regel gefuehrt - die Quelle der Luege im Entscheidungslog
+        # und in der Statuszeile ("Regel: ...").
+        #
+        # Der Pending-Eintrag gehoert zum aktuellen Zyklus: zu Beginn des
+        # Aus-Zweigs setzen, bei JEDER Abkehr wieder leeren.
+        state.control._pending_start_rule = None
+        state.control._pending_start_source = None
 
         if should_on and pause_ok and nacht_ok:
             state.control._pending_start_rule = getattr(
