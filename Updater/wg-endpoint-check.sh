@@ -221,8 +221,75 @@ else
     say "    2. Vergleich mit der oeffentlichen IPv4 (dieses Skript: unbekannt)"
 fi
 
+# --- 7b. IPv6 im Zielnetz (Befund 05.10.2026, Mobilfunk) -----------------
+# Ein IPv6-Endpoint funktioniert nur, wenn das Netz, aus dem der Client
+# verbindet, selbst IPv6 mitbringt. Im deutschen Mobilfunk ist das nicht
+# die Regel (Befund: Mobilfunk ohne IPv6 -> kein Handshake). Waehrend im
+# Heimnetz dasselbe Kabel problemlos laeuft, weil beide Geraete im selben
+# Praefix liegen und der Traffic nicht ueber das Internet laeuft.
+# Deshalb ist ein Test aus dem Heimnetz kein Nachweis fuer den Mobilfunk.
+printf '\n%s-- 7b. IPv6-Voraussetzung im Client-Netz --%s\n' "$CYAN" "$NC"
+say "  Ein IPv6-Endpoint braucht IPv6 im Netz des Clients."
+say "  Ohne IPv6 dort ist kein Handshake moeglich - unabhaengig von"
+say "  Portfreigabe, Schluessel und korrekter Adresse."
+say ""
+say "  ${YELLOW}Handy im Mobilfunk pruefen:${NC} test-ipv6.com oder ipv6-test.com"
+say "  ${YELLOW}PC an einen Handyhotspot:${NC}   ping -6 2001:4860:4860::8888"
+say "  Keine Antwort = das Netz hat kein IPv6."
+
+# Stabilitaet der globalen IPv6 pruefen. Eine Interface-ID aus zufaelligen
+# Hexwerten wechselt, sobald der Anschluss neu verbindet - dann zeigt ein
+# fest eingetragener Endpoint ins Leere, ohne dass ein Fehler sichtbar wird.
+PI6_GUA=$(ip -6 -o addr show dev wlan0 2>/dev/null \
+          | awk '{for(i=1;i<=NF;i++) if($i=="inet6" && $i+1 !~ /^fd/) print $(i+1)}' | head -1 \
+          | cut -d'/' -f1)
+if [ -n "$PI6_GUA" ]; then
+    # EUI-64 aus der MAC: in der Interface-ID steht die Gruppe "fffe" - das
+    # ist das ueber die Gruppengrenze hinweg zusammengezogene ff:fe.
+    # 2c:cf:67:a7:11:3e  ->  02ec:f67a:fffe:a713:003e
+    # Zufaellig vergebene IDs (wie 5846:ec2b:d68f:a41f) enthalten das nicht.
+    PI6_IF=$(printf '%s' "$PI6_GUA" | awk -F: '{print $5":"$6":"$7":"$8":"$9}')
+    case "$PI6_IF" in
+        *fffe*)
+            ok "Pi-GUA: $PI6_GUA"
+            ok "Interface-ID ist EUI-64 aus der MAC - stabile Adresse"
+            ;;
+        *)
+            warn "Pi-GUA: $PI6_GUA"
+            warn "Interface-ID '$PI6_IF' ist zufaellig (kein EUI-64 aus der MAC)."
+            warn "Sie wechselt beim Neuverbinden - ein fest eingetragener Endpoint"
+            warn "zeigt dann ins Leere, ohne dass ein Fehler sichtbar wird."
+            warn "Stabilisieren: in der Fritz!Box beim Geraet die IPv6-Interface-ID"
+            warn "fest eintragen. Aus der MAC 2c:cf:67:a7:11:3e ergaebe sich:"
+            warn "  -> 02ec:f67a:fffe:a713:003e"
+            ;;
+    esac
+else
+    warn "keine globale IPv6 auf wlan0 gefunden"
+fi
+
 # --- 8. Naechste Schritte -------------------------------------------------
 printf '\n%s-- 8. Naechste Schritte --%s\n' "$CYAN" "$NC"
+say "  ${CYAN}IPv6 (dein aktuelles Setup) - gut fuer:${NC}"
+say "     Zugriff im Heimnetz und in Netzen mit IPv6. Kein offener Port noetig."
+say ""
+say "  ${YELLOW}IPv6 ist im Mobilfunk nicht verfuegbar (Befund 05.10.2026).${NC}"
+say "  Fuer das Handy im Mobilfunk brauchst du einen zweiten Weg:"
+say ""
+say "     Option 1 - IPv4 + DynDNS (bevorzugt, wenn kein CGNAT):"
+say "       1. In der Fritz!Box: Heimnetz > Netzwerk > Geraet 'IPv4-Adresse"
+say "          dauerhaft zuweisen' aktivieren (Pi haelt 192.168.178.29)"
+say "       2. Portfreigabe: UDP 51820 extern -> 192.168.178.29, IPv4"
+say "       3. DynDNS beim Router-Anbieter einrichten"
+say "       4. In beiden Clients: Endpoint = <DynDNS-Name>:51820"
+if [ -n "$PUBLIC_V4" ]; then
+    say "          aktuell oeffentliche IPv4: $PUBLIC_V4"
+fi
+say ""
+say "     Option 2 - Cloudflare Tunnel (funktioniert auch hinter CGNAT):"
+say "       Das Projekt bringt Steuerung/setup_cloudflare.sh mit."
+say "       Einmalig auf dem Pi ausfuehren, danach ist die Steuerung"
+say "       ohne offene Ports und ohne IPv6 erreichbar."
 say "  1. Im Router eine Portweiterleitung einrichten:"
 if [ -n "$WG4" ]; then
     say "     UDP $PORT von aussen auf ${WG4} ($WG_IF)"
