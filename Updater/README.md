@@ -17,6 +17,8 @@ Dieses Repository enthält Hilfsskripte zur komfortablen Wartung und Aktualisier
     - verwirft oder stasht lokale Änderungen **nicht**; bei Änderungen wird ein Snapshot erstellt und abgebrochen
     - verifiziert Service-Neustarts anhand Endzustand, `MainPID` und `NRestarts`
 - **`manager_status.py`**: Standardbibliothek-Helfer für das Dashboard. Liest Statusfelder aus CSV-Header und Dateiende; die Zyklusanzahl wird blockweise gezählt, ohne große Dateien in den Speicher zu laden.
+- **`wg-endpoint-check.sh`**: Read-only-Diagnose der WireGuard-Erreichbarkeit (Dienst, `wg0.conf`, Interface, `ip_forward`, ufw, öffentliche IPv4/IPv6, CGNAT-Hinweis, EUI-64-Prüfung der IPv6-Adresse). Gibt am Ende eine fertige `Endpoint`-Zeile aus.
+- **`setup_cloudflare_tunnel.sh`**: Fernzugriff über Cloudflare Tunnel einrichten – der Weg, wenn der Anschluss hinter CGNAT steht und WireGuard von unterwegs nicht nutzbar ist. Ohne `--install` nur Diagnose.
 
 ### Automatische Datenanalyse
 

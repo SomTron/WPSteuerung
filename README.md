@@ -118,6 +118,33 @@ den Schlüssel: erzeugen, anzeigen, rotieren und entfernen, jeweils mit
 Rückfrage und anschließender Prüfung gegen den laufenden Dienst. Details in
 `Updater/README.md`.
 
+## 📱 Fernzugriff von unterwegs
+
+Steht der Internetanschluss hinter **CGNAT** (in der Fritz!Box unter
+*Internet → Online-Monitor* erkennbar an einer IPv4-Adresse in
+`100.64.0.0/10`), erreicht eine Portweiterleitung das Heimnetz nie. Dann ist
+auch WireGuard von unterwegs nicht nutzbar – unabhängig von Schlüssel und
+Portfreigabe. Hinzu kommt, dass der Mobilfunk-Zugang oft gar kein IPv6
+mitbringt, ein IPv6-Endpoint dort also ebenfalls nicht erreichbar ist.
+
+Ein **Cloudflare Tunnel** umgeht beides: Der Pi baut eine ausgehende
+Verbindung auf, es wird kein Port geöffnet und kein IPv6 benötigt.
+
+```bash
+cd ~/WPSteuerung
+./Updater/setup_cloudflare_tunnel.sh              # nur Diagnose
+./Updater/setup_cloudflare_tunnel.sh --install    # einrichten
+```
+
+Danach im Cloudflare-Dashboard den *Public Hostname* auf
+`http://localhost:8000` setzen und – wichtig – eine **Access-Policy** für
+die Domain anlegen, damit die Steuerung ohne Anmeldung nicht erreichbar ist.
+Vorher über **Option 24** den `WPS_API_KEY` erzeugen, sonst sind alle
+Schreibbefehle und der Not-Aus-Knopf wirkungslos.
+
+Für die reine WireGuard-Diagnose (Dienst, Konfiguration, CGNAT, Stabilität
+der IPv6-Adresse) gibt es `Updater/wg-endpoint-check.sh`.
+
 ## 📦 System-Management (Updater)
 
 Für eine einfache Wartung und Updates nutzen Sie die Skripte im `Updater/` Verzeichnis:
