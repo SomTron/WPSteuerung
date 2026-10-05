@@ -114,25 +114,37 @@ def _node_pruefung(js):
     node = shutil.which("node")
     if not node:
         return False, None, ""
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".js", encoding="utf-8", delete=False
-    ) as tmp:
-        tmp.write(js)
-        pfad = tmp.name
+    # Ohne stdin=DEVNULL erbt der Kindprozess das von pytest ersetzte
+    # stdin. Unter Windows scheitert dann DuplicateHandle mit
+    # "WinError 6: Das Handle ist ungueltig" - derselbe Fehler wie in
+    # test_ram_schutz.py. Die Pruefung waere dann nicht "kaputt",
+    # sondern "nicht ausfuehrbar" - das sieht wie ein Fehlschlag aus.
     try:
-        r = subprocess.run(
-            [node, "--check", pfad], capture_output=True, text=True, timeout=60
-        )
-        if r.returncode == 0:
-            return True, True, ""
-        # Nur die relevanten Zeilen: Position und Meldung
-        zeilen = [
-            z for z in r.stderr.splitlines()
-            if ".js:" in z or "SyntaxError" in z or "Error:" in z
-        ]
-        return True, False, "\n".join(zeilen[:6])
-    finally:
-        os.unlink(pfad)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".js", encoding="utf-8", delete=False
+        ) as tmp:
+            tmp.write(js)
+            pfad = tmp.name
+        try:
+            r = subprocess.run(
+                [node, "--check", pfad],
+                capture_output=True, text=True, timeout=60,
+                stdin=subprocess.DEVNULL,
+            )
+        finally:
+            os.unlink(pfad)
+    except OSError as e:
+        # Node laesst sich nicht starten - nicht als Syntaxfehler werten.
+        return True, None, f"node nicht ausfuehrbar: {e}"
+
+    if r.returncode == 0:
+        return True, True, ""
+    # Nur die relevanten Zeilen: Position und Meldung
+    zeilen = [
+        z for z in r.stderr.splitlines()
+        if ".js:" in z or "SyntaxError" in z or "Error:" in z
+    ]
+    return True, False, "\n".join(zeilen[:6])
 
 
 def _klammerbilanz(js):
@@ -174,16 +186,21 @@ def test_webapp_inline_script_ist_syntaktisch_gueltig():
     skripte = _webapp_inline_scripts()
     assert skripte, "Kein Inline-Skript in webapp/index.html gefunden"
 
-    node_da, _, _ = _node_pruefung("")
-    assert node_da, (
-        "node nicht gefunden. Die Klammerbilanz erkennt nur die "
+    node_da, bestanden, _ = _node_pruefung("")
+    assert node_da and bestanden is not None, (
+        "node nicht ausfuehrbar. Die Klammerbilanz erkennt nur die "
         "haeufigsten Bruchstellen, nicht die volle Syntax - bitte Node "
         "installieren oder den Test lokal laufen lassen."
     )
 
     fehler = []
+    ungeprueft = []
     for i, js in enumerate(skripte, start=1):
         _, bestanden, meldung = _node_pruefung(js)
+        if bestanden is None:
+            # Node laesst sich in dieser Umgebung nicht starten
+            ungeprueft.append(f"Inline-Skript {i}: {meldung}")
+            continue
         if not bestanden:
             zeilen_meldung = "\n".join(
                 "      " + z for z in meldung.splitlines()
@@ -195,6 +212,8 @@ def test_webapp_inline_script_ist_syntaktisch_gueltig():
         "ausgeliefert und die WebApp zeigt 'Verbunden', ohne je Werte "
         "anzuzeigen.\n\n" + "\n\n".join(fehler)
     )
+    if ungeprueft:
+        print("Hinweis: Node nicht ausfuehrbar - " + "; ".join(ungeprueft))
 
 
 def test_webapp_klammerbilanz_ist_ausgeglichen():
@@ -226,6 +245,52 @@ def test_webapp_kein_abgebrochener_script_block():
         f"{extern} externe + {inline} Inline-<script> gegen {schliessend} "
         "</script>. Vermutlich steht ein </script> in einem String."
     )
+
+
+SERVICE_WORKER = os.path.join(REPO_ROOT, "webapp", "service-worker.js")
+
+
+def test_service_worker_cachet_die_webapp():
+    """Regression: Ein Cache-Name muss sich mit dem Inhalt bewegen.
+
+    Der Service Worker cacht `./index.html`. Wird index.html repariert,
+    ohne den Cache-Namen zu erhoehen, liefert der Browser weiterhin die
+    kaputte Fassung aus dem Cache - und ein harter Reload (Strg+F5) hilft
+    NICHT, weil er den Service-Worker-Cache nicht umgeht.
+
+    Genau das ist am 05.10.2026 passiert: der SyntaxError war behoben, die
+    Datei wurde korrekt ausgeliefert (md5 identisch), die WebApp blieb
+    weiss bei leerer Konsole.
+
+    Wer `index.html` inhaltlich aendert, muss den Cache-Namen mitziehen.
+    """
+    if not os.path.isfile(SERVICE_WORKER):
+        return   # kein Service Worker vorhanden - nichts zu pruefen
+
+    with open(SERVICE_WORKER, encoding="utf-8") as f:
+        inhalt = f.read()
+
+    treffer = re.search(r"CACHE_NAME\s*=\s*['\"]([^'\"]+)['\"]", inhalt)
+    assert treffer, "CACHE_NAME nicht gefunden im Service Worker"
+
+    name = treffer.group(1)
+    assert re.search(r"v\d+", name), (
+        f"CACHE_NAME {name!r} traegt keine Version. Ohne Versionsziffer "
+        "liefert der Browser nach einer Aenderung an index.html die alte "
+        "Fassung aus dem Cache aus."
+    )
+
+
+def test_service_worker_ist_syntaktisch_gueltig():
+    """Der Service Worker selbst darf nicht der naechste Syntaxfehler sein."""
+    if not os.path.isfile(SERVICE_WORKER):
+        return
+    with open(SERVICE_WORKER, encoding="utf-8") as f:
+        inhalt = f.read()
+    node_da, bestanden, meldung = _node_pruefung(inhalt)
+    if not node_da:
+        return   # ohne Node nicht pruefbar - kein Fehlschlag erzwingen
+    assert bestanden, f"service-worker.js ist syntaktisch kaputt:\n{meldung}"
 
 
 def test_webapp_keine_mojibake_zeichen():

@@ -1,5 +1,6 @@
 """Statische Verträge für WebApp-Einheiten, Fehleranzeige und PWA."""
 from pathlib import Path
+import re
 
 
 WEBAPP = Path(__file__).resolve().parents[2] / "webapp"
@@ -81,7 +82,19 @@ def test_live_api_und_service_worker_cache_vertraege():
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")
     worker = (WEBAPP / "service-worker.js").read_text(encoding="utf-8")
     assert "cache: 'no-store'" in html
-    assert "const CACHE_NAME = 'wp-webapp-shell-v3'" in worker
+    # Frueher stand hier fest: "const CACHE_NAME = 'wp-webapp-shell-v3'".
+    # Genau das verhinderte die Fehlererkennung: Der Name aendert sich
+    # bewusst, sobald index.html sich aendert. Wer den konkreten Wert
+    # festschreibt, muss bei jeder WebApp-Aenderung mitziehen - und tut
+    # es nicht. Ein vergessenes Update fuehrt dazu, dass der Browser die
+    # alte, kaputte Fassung ausliefert und ein harter Reload nicht
+    # hilft (05.10.2026).
+    #
+    # Geprueft wird deshalb das VERSCHRAENKUNGSMUSTER, nicht die Zahl.
+    assert re.search(r"const CACHE_NAME = 'wp-webapp-shell-v\d+'", worker), (
+        "CACHE_NAME muss eine Versionsziffer tragen, damit eine geaenderte "
+        "WebApp den Cache invalidiert"
+    )
     assert "fetch(event.request, { cache: 'no-store' })" in worker
     assert "caches.match(event.request)" in worker
     assert "url.pathname === '/status'" in worker

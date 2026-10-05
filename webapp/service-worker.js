@@ -3,7 +3,7 @@
  * - cachel nur die statische App-Hülle
  * - /status, /history und Steuernachrichten bleiben immer live im Netz
  */
-const CACHE_NAME = 'wp-webapp-shell-v3';
+const CACHE_NAME = 'wp-webapp-shell-v4';
 const APP_SHELL = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', event => {
