@@ -2067,25 +2067,21 @@
                 if (!response.ok) {
                     throw new Error(result?.detail || result?.message || ('API-Fehler ' + response.status));
                 }
-                // Der Not-Aus beendet den Dienst - dieser Prozess liefert auch
-                // die WebApp. Ein späterer Statusabruf erreicht ihn dann nicht
-                // mehr; der Neustart muss manuell erfolgen.
                 const beendetDienst = (command === 'notaus' || command === 'notaus_aus');
                 if (beendetDienst) {
-                    showControlFeedback(
-                        command === 'notaus'
-                            ? '🛑 Not-Aus ausgeführt. Der Dienst beendet sich – WebApp und Telegram werden offline. Wieder annehmen: systemctl restart wpsteuerung, danach „Not-Aus aufheben".'
-                            : '🟢 Not-Aus aufgehoben – die Steuerung heizt wieder.',
-                        command === 'notaus_aus' ? false : true
-                    );
+                    const hinweis = command === 'notaus'
+                        ? 'Not-Aus ausgefuehrt. Der Dienst beendet sich, WebApp und Telegram gehen offline. '
+                          + 'Wieder annehmen: systemctl restart wpsteuerung, danach die Sperre loesen.'
+                        : 'Not-Aus geloest, die Steuerung heizt wieder.';
+                    showControlFeedback(hinweis, command !== 'notaus_aus');
                     if (command === 'notaus') return;
                 } else {
                     showControlFeedback(result?.status === 'queued'
-                        ? 'Befehl eingereiht – Main-Loop verarbeitet ihn.'
+                        ? 'Befehl eingereiht, der Main-Loop verarbeitet ihn.'
                         : 'Befehl angenommen.');
                 }
                 await fetchStatus();
-            } catch (error) {</new_string>
+            } catch (error) {
                 console.error('Fehler beim Senden des Befehls:', error);
                 showControlFeedback(error.message || 'Unbekannter API-Fehler', true);
                 const errorPanel = document.getElementById('error-panel');
