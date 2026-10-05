@@ -30,7 +30,6 @@ Bewertung) und danach `previous_modus` (zuletzt bestaetigter Modus).
 """
 import os
 import sys
-from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
