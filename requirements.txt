@@ -13,6 +13,7 @@ fastapi
 pydantic>=2.0        # api.py nutzt field_validator/model_validator (Pydantic v2)
 pytz
 uvicorn
+slowapi              # Rate-Limiting für schreibende API-Endpoints
 
 # --- Analyse/Diagnose ---
 matplotlib           # telegram_charts.py (Chart-Versand)

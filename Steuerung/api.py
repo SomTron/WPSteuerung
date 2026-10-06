@@ -20,7 +20,7 @@ try:
     import entscheidungs_log
 except ImportError:
     entscheidungs_log = None
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +29,11 @@ from typing import Optional, Dict, Any
 import os
 from datetime import datetime, timedelta
 import re
+
+# Rate-Limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from utils import HEIZUNGSDATEN_CSV, to_naive
 from clock import now_for
@@ -218,6 +223,27 @@ app = FastAPI(
     description="API for Heat Pump Control Android App",
     version=API_CONTRACT_VERSION,
 )
+
+# Rate-Limiting: Key function bevorzugt API-Key, dann X-Forwarded-For, dann Remote-IP.
+# So wird pro API-Key (echter Nutzer) limitiert, nicht pro Tunnel-IP.
+def _rate_limit_key(request: Request) -> str:
+    # 1. API-Key aus Header (bester Identifier für echte Nutzer)
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        return f"apikey:{api_key[:16]}"  # Prefix + gekürzt für Logs
+
+    # 2. X-Forwarded-For (Tailscale Funnel setzt das)
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return f"forwarded:{forwarded.split(',')[0].strip()}"
+
+    # 3. Fallback: Remote-Adresse
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Live-Daten niemals durch Browser, FastAPI-Proxy oder Service Worker cachen.
 _LIVE_NO_STORE_PATHS = {
@@ -1195,7 +1221,7 @@ def get_history_regeln(
     }
 
 
-@app.post("/config")
+@app.post("/config", dependencies=[Depends(limiter.limit("10/minute"))])
 def update_config(
     config: ConfigUpdate,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
@@ -1240,7 +1266,7 @@ def update_config(
         "message": f"Updated {config.section}.{config.key} to {new_value} (nur für diese Laufzeit)",
     }
 
-@app.post("/control")
+@app.post("/control", dependencies=[Depends(limiter.limit("10/minute"))])
 async def control_system(
     cmd: ControlCommand,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
@@ -1287,7 +1313,7 @@ async def control_system(
     return {"status": "success", "message": f"{cmd.command} accepted"}
 
 
-@app.get("/config/export")
+@app.get("/config/export", dependencies=[Depends(limiter.limit("30/minute"))])
 def export_config(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
@@ -1312,7 +1338,7 @@ def export_config(
         raise HTTPException(status_code=500, detail="Konfiguration konnte nicht exportiert werden") from exc
 
 
-@app.post("/command")
+@app.post("/command", dependencies=[Depends(limiter.limit("10/minute"))])
 async def handle_command(
     cmd: ControlCommand,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
