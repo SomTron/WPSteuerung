@@ -258,7 +258,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # Storage direkt nutzen (slowapi's MemoryStorage)
         storage = self.limiter._storage
-        current = await storage.get(limit_key)
+        current = storage.get(limit_key)
         current = int(current) if current else 0
         
         # Limit: 100/minute default, aber für spezifische Endpoints stricter
@@ -273,7 +273,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
         
         # Inkrementieren
-        await storage.set(limit_key, str(current + 1), expire=60)
+        storage.set(limit_key, str(current + 1), expire=60)
 
         # 3. Body puffern (Stream konsumieren, aber für FastAPI neu aufbereiten)
         body = await request.body()
