@@ -224,25 +224,65 @@ app = FastAPI(
     version=API_CONTRACT_VERSION,
 )
 
-# Rate-Limiting: Key function bevorzugt API-Key, dann X-Forwarded-For, dann Remote-IP.
-# So wird pro API-Key (echter Nutzer) limitiert, nicht pro Tunnel-IP.
-def _rate_limit_key(request: Request) -> str:
-    # 1. API-Key aus Header (bester Identifier für echte Nutzer)
-    api_key = request.headers.get("X-API-Key")
-    if api_key:
-        return f"apikey:{api_key[:16]}"  # Prefix + gekürzt für Logs
-
-    # 2. X-Forwarded-For (Tailscale Funnel setzt das)
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return f"forwarded:{forwarded.split(',')[0].strip()}"
-
-    # 3. Fallback: Remote-Adresse
-    return get_remote_address(request)
+# Rate-Limiting mit Body-Buffering (Custom Middleware).
+# Läuft VOR FastAPI's Body-Parser, puffert den Body, prüft Limit,
+# und reicht Request mit intaktem Body an FastAPI weiter.
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 
-limiter = Limiter(key_func=_rate_limit_key, default_limits=["100/minute"])
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """
+    Rate-Limit-Middleware mit Body-Buffering.
+    Läuft VOR FastAPI's Body-Parser, puffert den Body, prüft Limit,
+    und reicht Request mit intaktem Body an FastAPI weiter.
+    """
+    def __init__(self, app, limiter: Limiter):
+        super().__init__(app)
+        self.limiter = limiter
+
+    async def dispatch(self, request: Request, call_next):
+        # 1. Key bestimmen (nur Headers, kein Body!)
+        key = self._get_key(request)
+
+        # 2. Rate-Limit prüfen (ohne Body zu konsumieren)
+        try:
+            self.limiter.check_request_limit(request, key)
+        except RateLimitExceeded as exc:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded", "retry_after": exc.retry_after},
+                headers={"Retry-After": str(exc.retry_after)},
+            )
+
+        # 3. Body puffern (Stream konsumieren, aber für FastAPI neu aufbereiten)
+        body = await request.body()
+
+        # Request neu bauen mit intaktem Body
+        request._body = body
+
+        async def buffered_receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+        request._receive = buffered_receive
+
+        return await call_next(request)
+
+    def _get_key(self, request) -> str:
+        # 1. API-Key (bester Identifier)
+        api_key = request.headers.get("X-API-Key")
+        if api_key:
+            return f"apikey:{api_key[:16]}"
+        # 2. X-Forwarded-For (Tailscale Funnel)
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return f"forwarded:{forwarded.split(',')[0].strip()}"
+        # 3. Fallback: Remote-IP
+        return get_remote_address(request)
+
+
+limiter = Limiter(key_func=lambda r: "global", default_limits=["100/minute"])
 app.state.limiter = limiter
+app.add_middleware(RateLimitMiddleware, limiter=limiter)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Live-Daten niemals durch Browser, FastAPI-Proxy oder Service Worker cachen.
