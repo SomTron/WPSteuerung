@@ -19,17 +19,82 @@ Dieses Repository enthält Hilfsskripte zur komfortablen Wartung und Aktualisier
 - **`manager_status.py`**: Standardbibliothek-Helfer für das Dashboard. Liest Statusfelder aus CSV-Header und Dateiende; die Zyklusanzahl wird blockweise gezählt, ohne große Dateien in den Speicher zu laden.
 - **`wg-endpoint-check.sh`**: Read-only-Diagnose der WireGuard-Erreichbarkeit (Dienst, `wg0.conf`, Interface, `ip_forward`, ufw, öffentliche IPv4/IPv6, CGNAT-Hinweis, EUI-64-Prüfung der IPv6-Adresse). Gibt am Ende eine fertige `Endpoint`-Zeile aus.
 - **`setup_cloudflare_tunnel.sh`**: Fernzugriff über Cloudflare Tunnel einrichten – der Weg, wenn der Anschluss hinter CGNAT steht und WireGuard von unterwegs nicht nutzbar ist. Ohne `--install` nur Diagnose.
+- **`tailscale-funnel.service`** (Systemd-Unit): Dauerhafter Tailscale Funnel für Port 8000 (`*.ts.net`), Start nach `tailscaled`, Restart bei Crash. Kein Admin-Panel-Zugriff nötig, läuft mit Debian-Stable Tailscale.
 
-### Automatische Datenanalyse
+### Cloudflare Tunnel Setup
 
-`wp-manager.sh` Option 17/18 verwendet bevorzugt die laufende, monatlich
-rotierte Historie `Steuerung/csv log/zyklen.csv`. Sie wird nach jedem
-abgeschlossenen Kompressorlauf fortgeschrieben.
+`setup_cloudflare_tunnel.sh` richtet einen Cloudflare Tunnel für Fernzugriff ein.
 
-Option 20 öffnet die Analyse-Verwaltung: Status/next run, manueller Testlauf,
-Timer installieren/reparieren/aktivieren oder deaktivieren sowie Analyse-Journal.
-Der Timer aktualisiert die Standardbibliothek-Analyse täglich um 04:30 Uhr (plus
-bis zu 5 Minuten randomized delay) unter `logs/analyse_auto/`.
+**Features:**
+- Prüft CGNAT (WAN-IP vs. Exit-IP)
+- Prüft lokale Erreichbarkeit (`/health`)
+- Prüft API-Key & CORS (`WPS_API_KEY`, `WPS_CORS_ORIGINS`)
+- Installiert `cloudflared` als Systemd-Service
+- Ohne `--install` nur Diagnose
+
+```bash
+./Updater/setup_cloudflare_tunnel.sh              # nur Diagnose
+./Updater/setup_cloudflare_tunnel.sh --install    # einrichten (Token eingeben)
+```
+
+**Nach Installation im Cloudflare Dashboard:**
+1. Public Hostname → `http://localhost:8000`
+2. Access Policy (Zero Trust → Access → Applications) – Pflicht!
+3. CORS in `/etc/wpssteuerung/api.env`: `WPS_CORS_ORIGINS=https://deine-domain.example`
+
+---
+
+### Tailscale Funnel (Alternative)
+
+`tailscale-funnel.service` (Systemd-Unit) richtet einen dauerhaften Tailscale Funnel ein.
+
+**Features:**
+- Keine Domain nötig (`*.ts.net`)
+- Funktioniert hinter CGNAT & ohne IPv6
+- Access Control: "Only tailnet devices" (nur Geräte mit Tailscale-App)
+- Systemd-Unit: Start nach `tailscaled`, Restart on failure
+- Funktioniert mit Debian-Stable Tailscale (kein `tailscale set --funnel` nötig)
+
+```bash
+# Einmalig auf dem Pi:
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+sudo tailscale set --funnel=8000  # dauerhaft registrieren (Admin-Panel sichtbar)
+
+# Oder als Systemd-Service (läuft mit Debian-Stable Tailscale):
+sudo systemctl enable --now tailscale-funnel-8000
+# URL: https://raspberrypiz2.tailfb8dd1.ts.net/
+```
+
+**Access Control (Admin-Panel):**
+https://login.tailscale.com/admin/network/funnel → Access control → **Only tailnet devices**
+
+---
+
+### Rate-Limiting (API-Schutz)
+
+Die API nutzt **slowapi** für Rate-Limiting auf schreibenden Endpoints.
+
+**Konfiguration:**
+- **Key**: API-Key > X-Forwarded-For > Remote-IP (pro Nutzer, nicht pro IP)
+- **Default**: 100 req/min
+- **Schreib-Endpoints**: 10/min (`/control`, `/command`, `/config`)
+- **Config Export**: 30/min (`/config/export`)
+
+**Endpoints mit Limit:**
+| Endpoint | Methode | Limit |
+|---|---|---|
+| `/control` | POST | 10/min |
+| `/command` | POST | 10/min |
+| `/config` | POST | 10/min |
+| `/config/export` | GET | 30/min |
+
+**Dependency:** `slowapi` (in `requirements.txt`)
+
+```bash
+# Installation im Venv:
+/home/patrik/WPSteuerung/.venv/bin/pip install -r requirements.txt
+```
 
 ### Sicherer Start mit Fehlerausgabe und Downgrade
 

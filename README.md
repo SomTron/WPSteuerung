@@ -24,6 +24,8 @@ Eine umfassende Open-Source-Lösung zur Steuerung und Optimierung von Wärmepump
 - **📊 Daten-Logging**: Kontinuierliches Logging aller Messwerte (oben/mittig/unten/Verdampfer) im 10-Sekunden-Takt; monatliche CSV-Rotation verhindert unbegrenztes Wachstum. Jeder Neustart schreibt die **GitHub-Revision** (Commit) ins Log.
 - **🔄 Zyklus-Historie**: Nach jedem realen Kompressorlauf wird sofort `Steuerung/csv log/zyklen.csv` fortgeschrieben – inklusive Start-/Endzeit, Dauer, Stromquelle, Regel, Abschaltgrund und Temperaturen oben/mittig/unten (Start + Maxima).
 - **🕵️ Automatische Log-Analyse**: Der systemd-Timer `wp-analyse.timer` aktualisiert täglich den vollständigen Analysereport (Tages-KPIs, Zyklen, Overshoot, Morgen-Netzbezug, Stale-Phasen) plus CSV-Dateien.
+- **🛡️ API-Rate-Limiting**: Schreibende Endpoints (`/control`, `/command`, `/config`, `/config/export`) sind per **slowapi** gegen Brute-Force und DoS geschützt – Limit pro API-Key (10/min), nicht pro IP. Funktioniert durch Tailscale/Cloudflare Tunnel hinweg.
+- **🌐 Fernzugriff ohne Portforwarding**: **Tailscale Funnel** (`*.ts.net`) oder **Cloudflare Tunnel** – beide funktionieren hinter CGNAT, ohne offene Ports und ohne IPv6. Tailscale Funnel bietet zusätzliche Access Control („Only tailnet devices“).
 
 ---
 
@@ -127,8 +129,27 @@ auch WireGuard von unterwegs nicht nutzbar – unabhängig von Schlüssel und
 Portfreigabe. Hinzu kommt, dass der Mobilfunk-Zugang oft gar kein IPv6
 mitbringt, ein IPv6-Endpoint dort also ebenfalls nicht erreichbar ist.
 
-Ein **Cloudflare Tunnel** umgeht beides: Der Pi baut eine ausgehende
-Verbindung auf, es wird kein Port geöffnet und kein IPv6 benötigt.
+Zwei Lösungen, **beide ohne offene Ports und ohne IPv6**:
+
+### Option A: Tailscale Funnel (empfohlen, kostenlos, `*.ts.net`)
+
+```bash
+# Auf dem Pi:
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+# → Link im Terminal öffnen, mit GitHub/Google/Microsoft anmelden
+
+# Funnel dauerhaft aktivieren (Port 8000):
+sudo tailscale set --funnel=8000
+# → permanente URL: https://raspberrypiz2.tailfb8dd1.ts.net/
+```
+
+**Zugriffsschutz (Access Control):**
+- Admin-Panel: https://login.tailscale.com/admin/network/funnel
+- **Only tailnet devices** → nur Geräte mit installierter Tailscale-App (Handy/PC) kommen ran
+- Alternative: **Specific users** (E-Mail/PIN) oder **Anyone on the internet**
+
+### Option B: Cloudflare Tunnel (wenn eigene Domain gewünscht)
 
 ```bash
 cd ~/WPSteuerung
@@ -136,11 +157,9 @@ cd ~/WPSteuerung
 ./Updater/setup_cloudflare_tunnel.sh --install    # einrichten
 ```
 
-Danach im Cloudflare-Dashboard den *Public Hostname* auf
-`http://localhost:8000` setzen und – wichtig – eine **Access-Policy** für
-die Domain anlegen, damit die Steuerung ohne Anmeldung nicht erreichbar ist.
-Vorher über **Option 24** den `WPS_API_KEY` erzeugen, sonst sind alle
-Schreibbefehle und der Not-Aus-Knopf wirkungslos.
+Danach im Cloudflare-Dashboard:
+1. **Public Hostname** auf `http://localhost:8000` setzen
+2. **Access Policy** anlegen (*Zero Trust → Access → Applications*) – Pflicht!
 
 Für die reine WireGuard-Diagnose (Dienst, Konfiguration, CGNAT, Stabilität
 der IPv6-Adresse) gibt es `Updater/wg-endpoint-check.sh`.
