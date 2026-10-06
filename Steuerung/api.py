@@ -229,6 +229,10 @@ app = FastAPI(
 # und reicht Request mit intaktem Body an FastAPI weiter.
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+import time
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -236,6 +240,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     Rate-Limit-Middleware mit Body-Buffering.
     Läuft VOR FastAPI's Body-Parser, puffert den Body, prüft Limit,
     und reicht Request mit intaktem Body an FastAPI weiter.
+    Nutzt slowapi's Storage direkt für Rate-Limit-Checks.
     """
     def __init__(self, app, limiter: Limiter):
         super().__init__(app)
@@ -245,20 +250,33 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 1. Key bestimmen (nur Headers, kein Body!)
         key = self._get_key(request)
 
-        # 2. Rate-Limit prüfen (ohne Body zu konsumieren)
-        try:
-            self.limiter.check_request_limit(request, key)
-        except RateLimitExceeded as exc:
+        # 2. Rate-Limit prüfen über Storage (ohne Body zu konsumieren)
+        # slowapi nutzt: key = f"{limit.key}:{key}:{window}"
+        # Window = aktuelle Minute (für per-minute limits)
+        window = int(time.time() // 60)
+        limit_key = f"global:{key}:{window}"
+        
+        # Storage direkt nutzen (slowapi's MemoryStorage)
+        storage = self.limiter._storage
+        current = await storage.get(limit_key)
+        current = int(current) if current else 0
+        
+        # Limit: 100/minute default, aber für spezifische Endpoints stricter
+        limit = self._get_limit_for_path(request.url.path)
+        
+        if current >= limit:
+            retry_after = 60 - (int(time.time()) % 60)
             return JSONResponse(
                 status_code=429,
-                content={"detail": "Rate limit exceeded", "retry_after": exc.retry_after},
-                headers={"Retry-After": str(exc.retry_after)},
+                content={"detail": "Rate limit exceeded", "retry_after": retry_after},
+                headers={"Retry-After": str(retry_after)},
             )
+        
+        # Inkrementieren
+        await storage.set(limit_key, str(current + 1), expire=60)
 
         # 3. Body puffern (Stream konsumieren, aber für FastAPI neu aufbereiten)
         body = await request.body()
-
-        # Request neu bauen mit intaktem Body
         request._body = body
 
         async def buffered_receive():
@@ -278,6 +296,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return f"forwarded:{forwarded.split(',')[0].strip()}"
         # 3. Fallback: Remote-IP
         return get_remote_address(request)
+
+    def _get_limit_for_path(self, path: str) -> int:
+        """Bestimmt Limit basierend auf Pfad."""
+        if path.startswith("/control") or path.startswith("/command") or path.startswith("/config"):
+            return 10  # 10/min für schreibende Endpoints
+        if path.startswith("/config/export"):
+            return 30  # 30/min für Export
+        return 100  # Default 100/min
 
 
 limiter = Limiter(key_func=lambda r: "global", default_limits=["100/minute"])
