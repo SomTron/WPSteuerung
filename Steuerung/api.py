@@ -245,27 +245,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, limiter: Limiter):
         super().__init__(app)
         self.limiter = limiter
+        self._counters = {}
 
     async def dispatch(self, request: Request, call_next):
         # 1. Key bestimmen (nur Headers, kein Body!)
         key = self._get_key(request)
 
-        # 2. Rate-Limit prüfen über Storage (ohne Body zu konsumieren)
-        # slowapi nutzt: key = f"{limit.key}:{key}:{window}"
-        # Window = aktuelle Minute (für per-minute limits)
-        window = int(time.time() // 60)
-        limit_key = f"global:{key}:{window}"
-        
-        # Storage direkt nutzen (slowapi's MemoryStorage)
-        storage = self.limiter._storage
-        current = storage.increment(limit_key, expire=60)
-        current = int(current) if current else 0
-        
-        # Limit: 100/minute default, aber für spezifische Endpoints stricter
+        # 2. Rate-Limit pruefen mit eigenem Counter (unabhaengig von slowapi-Storage-API)
+        # Fixpunkt-Fenster: pro (key, minute) ein Zaehler im Prozess-Speicher.
+        now = time.time()
+        window = int(now // 60)
+        limit_key = f"{key}:{window}"
+
+        current = self._counters.get(limit_key, 0) + 1
+        self._counters[limit_key] = current
+
+        # Alte Fenster aufraeumen (Memory-Leak-Schutz)
+        if len(self._counters) > 4096:
+            stale = [k for k in self._counters if int(k.rsplit(':', 1)[1]) < window]
+            for k in stale:
+                self._counters.pop(k, None)
+
+        # Limit: 100/minute default, aber fuer spezifische Endpoints stricter
         limit = self._get_limit_for_path(request.url.path)
-        
+
         if current > limit:
-            retry_after = 60 - (int(time.time()) % 60)
+            retry_after = 60 - (int(now) % 60)
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded", "retry_after": retry_after},
