@@ -25,6 +25,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+import time
 from typing import Optional, Dict, Any
 import os
 from datetime import datetime, timedelta
@@ -227,12 +230,6 @@ app = FastAPI(
 # Rate-Limiting mit Body-Buffering (Custom Middleware).
 # Läuft VOR FastAPI's Body-Parser, puffert den Body, prüft Limit,
 # und reicht Request mit intaktem Body an FastAPI weiter.
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-import time
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
