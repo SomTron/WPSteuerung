@@ -69,6 +69,8 @@ KNOWN_END_CODES = {
     "dienst_neustart", "api_manuell", "boiler_bereits_warm",
     "regelungsfehler", "nachtsperre", "warte_quelle", "verdampfer",
     "daten_stale", "sonstige_sperre",
+    "schichtung", "schichtungsdeckel", "overshoot_vorhersage",
+    "komfortverletzung", "start_vorhersage",
     "unknown", "unbekannt",
 }
 

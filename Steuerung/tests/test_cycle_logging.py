@@ -279,3 +279,35 @@ async def test_redundantes_force_off_veraendert_pause_nicht(monkeypatch):
     ) is True
     assert state.stats.last_compressor_off_time == off_time
     assert state.control.kompressor_ein is False
+
+
+# ============================================================================
+# ============================================================================
+# Befund 07.10.2026 (aus zyklen.csv): schichtung/overshoot_vorhersage liefen
+# als reason_code "unbekannt" durch. Die Endegrund-Mappings muessen ALLE
+# echten AUS-Gruende abdecken, sonst wird die Zyklen-Historie unauswertbar.
+#
+def test_end_code_schichtung_erkannt():
+    from cycle_logging import _end_code
+    assert _end_code("schichtung") == "schichtung"
+    assert _end_code("Schichtungs-Deckel") == "schichtung"  # fuzzy-Match
+    assert _end_code("Schichtungsschutz greift") == "schichtung"
+
+
+def test_end_code_overshoot_erkannt():
+    from cycle_logging import _end_code
+    assert _end_code("overshoot_vorhersage") == "overshoot_vorhersage"
+    assert _end_code("Overshoot-Vorhersage: Rate 24C/h") == "overshoot_vorhersage"
+
+
+def test_end_code_bekannte_bleiben_erhalten():
+    from cycle_logging import _end_code
+    assert _end_code("boiler_max") == "boiler_max"
+    assert _end_code("regel_aus") == "regel_aus"
+    assert _end_code("dienst_neustart") == "dienst_neustart"
+
+
+def test_end_code_unbekannt_nur_fuer_unklassifizierbares():
+    from cycle_logging import _end_code
+    assert _end_code("irgendwas_neues") == "unbekannt"
+    assert _end_code("") == "unbekannt"

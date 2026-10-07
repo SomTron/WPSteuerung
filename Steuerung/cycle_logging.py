@@ -56,12 +56,18 @@ def _end_code(end_grund, blocking_code=None):
     if text in {"boiler_max", "regel_aus", "keine_regel", "mindestlaufzeit", "mindestpause",
                 "uebertemperatur", "sensorfehler", "druckfehler", "hardwarefehler",
                 "kompressor_verifizierung", "verifizierung_fehler", "legionellen_timeout",
-                "dienst_neustart", "api_manuell", "unknown", "unbekannt"}:
+                "dienst_neustart", "api_manuell", "unknown", "unbekannt",
+                "schichtung", "schichtungsdeckel", "overshoot_vorhersage",
+                "komfortverletzung", "start_vorhersage"}:
         return text
     if "boiler" in text or "max" in text:
         return "boiler_max"
     if "verifiz" in text:
         return "verifizierung_fehler"
+    if "schichtung" in text:
+        return "schichtung"
+    if "overshoot" in text:
+        return "overshoot_vorhersage"
     if "sensor" in text:
         return "sensorfehler"
     if "druck" in text:
