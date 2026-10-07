@@ -269,3 +269,95 @@ def test_pv_aus_regel_behaelt_ihren_48_grad_setpoint():
     )
     ergebnis = SimpleNamespace(name="PV_unten", einschalten=False)
     assert pcl._begrenze_ohne_pv(ergebnis, 48.0, state, config) == 48.0
+
+
+# ============================================================================
+# Befund 07.10.2026: Falsches Lernfenster
+# ============================================================================
+# Vorher fiel ein Morgen-Eintrag (start_uhr < 12) ohne gelerntes Morgen-
+# Fenster (None) auf das ABEND-Fenster zurueck: aus der 5-8-Uhr-Garantie
+# wurde ein 16-17-Uhr-Fenster und die morgendliche Garantie war still tot.
+#
+def _morgen_cfg():
+    from json_config import MindestTempEintrag
+
+    cfg = WPSteuerungConfig().mindest_temp
+    cfg.eintraege = [
+        MindestTempEintrag(
+            name="Morgen", temperaturfuehler="unten", min_temp_c=40.0,
+            start_uhr=5, ende_uhr=8, hysterese_k=2.0,
+            fenster_aus_lernen=True, nachtsperre_ueberschreiben=True,
+        )
+    ]
+    return cfg
+
+
+def test_morgen_eintrag_ohne_morgen_lernfenster_bleibt_konfiguriert():
+    """Regression 07.10.2026: Abend-Fenster darf Morgen-Garantie nicht toeten."""
+    temps = {"oben": 50.0, "mittig": 45.0, "unten": 35.0}
+    erg = pc.evaluate_mindesttemp(
+        _morgen_cfg(), temps, 6,
+        nachtsperre_start=19, nachtsperre_ende=8,
+        learned_evening_window=(16.0, 20.0),
+    )
+    e = finde(erg, "Morgen")
+    # Vorher: "auserhalb Fenster 16-17 Uhr" und einschalten=None
+    assert e.aktiv and e.einschalten is True
+    assert "16" not in e.grund, e.grund
+
+
+def test_morgen_eintrag_nutzt_morgen_lernfenster():
+    temps = {"oben": 50.0, "mittig": 45.0, "unten": 35.0}
+    erg = pc.evaluate_mindesttemp(
+        _morgen_cfg(), temps, 6,
+        nachtsperre_start=19, nachtsperre_ende=8,
+        learned_morning_window=(5.5, 8.5),
+    )
+    e = finde(erg, "Morgen")
+    assert e.aktiv and e.einschalten is True
+    assert "gelernt 5.5-8.5" in e.grund
+
+
+def test_abend_eintrag_nutzt_abend_lernfenster():
+    from json_config import MindestTempEintrag
+
+    cfg = WPSteuerungConfig().mindest_temp
+    cfg.eintraege = [
+        MindestTempEintrag(
+            name="Abend", temperaturfuehler="unten", min_temp_c=40.0,
+            start_uhr=17, ende_uhr=21, hysterese_k=2.0,
+            fenster_aus_lernen=True, nachtsperre_ueberschreiben=True,
+        )
+    ]
+    temps = {"oben": 50.0, "mittig": 45.0, "unten": 35.0}
+    erg = pc.evaluate_mindesttemp(
+        cfg, temps, 18,
+        nachtsperre_start=19, nachtsperre_ende=8,
+        learned_morning_window=(5.5, 8.5),
+    )
+    e = finde(erg, "Abend")
+    assert e.aktiv and e.einschalten is True
+    # Morgen-Fenster darf die Abend-Garantie nicht verrenken
+    assert "gelernt 5.5-8.5" not in e.grund, e.grund
+
+
+def test_abend_eintrag_ohne_abend_lernfenster_bleibt_konfiguriert():
+    from json_config import MindestTempEintrag
+
+    cfg = WPSteuerungConfig().mindest_temp
+    cfg.eintraege = [
+        MindestTempEintrag(
+            name="Abend", temperaturfuehler="unten", min_temp_c=40.0,
+            start_uhr=17, ende_uhr=21, hysterese_k=2.0,
+            fenster_aus_lernen=True, nachtsperre_ueberschreiben=True,
+        )
+    ]
+    temps = {"oben": 50.0, "mittig": 45.0, "unten": 35.0}
+    erg = pc.evaluate_mindesttemp(
+        cfg, temps, 18,
+        nachtsperre_start=19, nachtsperre_ende=8,
+        learned_morning_window=(5.5, 8.5),
+    )
+    e = finde(erg, "Abend")
+    assert e.aktiv and e.einschalten is True
+    assert "gelernt" not in e.grund, e.grund

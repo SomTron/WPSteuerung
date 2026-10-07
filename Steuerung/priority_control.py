@@ -308,14 +308,22 @@ def evaluate_mindesttemp(
             result.grund = "MindestTemp-Regel inaktiv"
             ergebnisse.append(result)
             continue
-
         # Zeitfenster: statisch aus Config oder dynamisch gelernt?
         start_uhr = eintrag.start_uhr
         ende_uhr = eintrag.ende_uhr
         fenster_hinweis = ""
+        # Passendes gelerntes Fenster: Morgen-Eintraege nutzen NUR das
+        # Morgen-Fenster, Abend-Eintraege NUR das Abend-Fenster.
+        # Befund 07.10.2026: Vorher fiel ein Morgen-Eintrag ohne gelerntes
+        # Morgen-Fenster (None) auf das ABEND-Fenster zurueck und bekam
+        # dessen Stundenbereich (z.B. 16-20h) mit seinen eigenen
+        # Klemmgrenzen gemischt -> aus der 5-8-Uhr-Garantie wurde ein
+        # 16-17-Uhr-Fenster und die morgendliche Garantie war still tot.
+        # Ist das passende Fenster None, bleibt das konfigurierte Fenster
+        # unveraendert (kein Lernen, kein Fallback aufs falsche Fenster).
         lern_fenster = (
             learned_morning_window
-            if (eintrag.start_uhr < 12 and learned_morning_window is not None)
+            if eintrag.start_uhr < 12
             else learned_evening_window
         )
         if eintrag.fenster_aus_lernen and lern_fenster is not None:
