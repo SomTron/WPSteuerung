@@ -240,7 +240,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     Rate-Limit-Middleware mit Body-Buffering.
     Läuft VOR FastAPI's Body-Parser, puffert den Body, prüft Limit,
     und reicht Request mit intaktem Body an FastAPI weiter.
-    Nutzt slowapi's Storage direkt für Rate-Limit-Checks.
+    Eigener Prozess-Counter (Fixpunkt-Fenster), unabhaengig von slowapi.
     """
     def __init__(self, app, limiter: Limiter):
         super().__init__(app)
@@ -255,7 +255,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Fixpunkt-Fenster: pro (key, minute) ein Zaehler im Prozess-Speicher.
         now = time.time()
         window = int(now // 60)
-        limit_key = f"{key}:{window}"
+        # Counter pro Client + Limit-Tier: schreibende Endpoints
+        # (/control etc., Limit 10) teilen sich nicht mit /status (Limit 100).
+        limit = self._get_limit_for_path(request.url.path)
+        limit_key = f"{key}:{limit}:{window}"
 
         current = self._counters.get(limit_key, 0) + 1
         self._counters[limit_key] = current
@@ -265,9 +268,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             stale = [k for k in self._counters if int(k.rsplit(':', 1)[1]) < window]
             for k in stale:
                 self._counters.pop(k, None)
-
-        # Limit: 100/minute default, aber fuer spezifische Endpoints stricter
-        limit = self._get_limit_for_path(request.url.path)
 
         if current > limit:
             retry_after = 60 - (int(now) % 60)
@@ -283,7 +283,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         request._body = body
 
         async def buffered_receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return {"type": "http.request", "body": body, "more_body": False}
         request._receive = buffered_receive
 
         return await call_next(request)
@@ -302,10 +302,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _get_limit_for_path(self, path: str) -> int:
         """Bestimmt Limit basierend auf Pfad."""
-        if path.startswith("/control") or path.startswith("/command") or path.startswith("/config"):
-            return 10  # 10/min für schreibende Endpoints
         if path.startswith("/config/export"):
-            return 30  # 30/min für Export
+            return 30  # 30/min fuer Export (VOR /config pruefen!)
+        if path.startswith("/control") or path.startswith("/command") or path.startswith("/config"):
+            return 10  # 10/min fuer schreibende Endpoints
         return 100  # Default 100/min
 
 
