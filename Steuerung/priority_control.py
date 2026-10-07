@@ -98,14 +98,56 @@ def _fmt_pv(value: object) -> str:
         return "n/a"
 
 
+# Plausibilitaetsbereich fuer Boiler-/Verdampfer-Fuehler (Grad C).
+# DS18B20-Fehlerbilder: -127.0 = Fuehler abgerissen/offen, 85.0 = Konver-
+# tierung nicht abgewartet (klassisch!). 85 liegt im Bereich und kann nicht
+# statisch erkannt werden - dagegen schuetzt die Sprungpruefung der
+# Messwerterfassung. Ein -127 oder +300 (GPIO-Muell) fuehrt sonst zu
+# absurdem Regelverhalten, statt wie bei einer professionellen Steuerung
+# den Fuehler als DEFEKT zu behandeln (Wert verwerfen, Warnung, fail-safe).
+SENSOR_PLAUSIBEL_MIN_C = -30.0
+SENSOR_PLAUSIBEL_MAX_C = 99.0
+
+# Throttle fuer Sensor-Warnungen (eine Meldung je Fuehler und 10 Minuten)
+_sensor_warn_memo: Dict[str, datetime] = {}
+SENSOR_WARN_INTERVAL_MIN = 10
+
+
 def _parse_sensor(
     temp_dict: Dict[str, Optional[float]], sensor_name: str
 ) -> Optional[float]:
-    """Liest einen Sensorwert aus dem Dictionary (mit Alias-Unterstützung)."""
+    """Liest einen Sensorwert aus dem Dictionary (mit Alias-Unterstützung).
+
+    Plausibilitaetspruefung: Werte ausserhalb des Bereichs werden als
+    Sensorfehler behandelt (None statt Unsinn) und mit gedrosselter
+    Warnung protokolliert. Die Regelung faellt damit auf das fail-safe-
+    Verhalten zurueck (Regel inaktiv, Notfallschutz bleibt Schutzer).
+    """
     # Alias-Mapping: "mitte" -> "mittig" (abweichende Benennung im JSON vs. Code)
     alias_map = {"mitte": "mittig"}
     resolved = alias_map.get(sensor_name, sensor_name)
-    return temp_dict.get(resolved)
+    wert = temp_dict.get(resolved)
+    if wert is None:
+        return None
+    try:
+        wert = float(wert)
+    except (TypeError, ValueError):
+        return None
+    if not (SENSOR_PLAUSIBEL_MIN_C <= wert <= SENSOR_PLAUSIBEL_MAX_C):
+        jetzt = datetime.now()
+        letzte = _sensor_warn_memo.get(sensor_name)
+        if letzte is None or (jetzt - letzte) >= timedelta(
+            minutes=SENSOR_WARN_INTERVAL_MIN
+        ):
+            _sensor_warn_memo[sensor_name] = jetzt
+            logging.warning(
+                "Sensor '%s' liefert unplausiblen Wert %.1f C "
+                "(Bereich %.0f..%.0f) -> wird als DEFEKT verworfen, "
+                "Regeln behandeln ihn als nicht verfuegbar",
+                sensor_name, wert, SENSOR_PLAUSIBEL_MIN_C, SENSOR_PLAUSIBEL_MAX_C,
+            )
+        return None
+    return wert
 
 
 def _is_nachtsperre(now_hour: int, start: int, ende: int) -> bool:
