@@ -12,6 +12,7 @@ from typing import Optional, Dict, Tuple, List
 from rule_types import RegelErgebnis
 
 from energy_source import (
+    Energiequelle,
     batterie_entladung_watt,
     classify_energy_source,
 )
@@ -1382,6 +1383,8 @@ def _mittagstief_stunden(
         h += 1
     if not stunden:
         return 0.0, ""
+    # Mitternachtssprung (z.B. 22,23,0,1) erzeugt keinen fortlaufenden
+    # Bereich - dann nur die Dauer ausgeben, nicht eine falsche Spanne.
     if stunden[-1] - stunden[0] == len(stunden) - 1:
         label = f"{stunden[0]}-{stunden[-1] + 1} Uhr"
     else:
@@ -1609,20 +1612,28 @@ def evaluate_adaptive_pv(
 
     # Nur eine zentral bestätigte PV-Quelle darf AdaptivePV auslösen.
     #pv_acpower ist die Erzeugung; Netzeinspeisung allein beweist keine PV-Leistung.
-    quelle_ok, quelle_text = _energiequelle_mit_grund(
-        pv_leistung,
-        soc,
-        1.0,
-        0.0,
-        -50.0,
+    # Enum statt String-Match auf die Begruendung: Der Text kann sich aendern,
+    # die Quelle als Wert nicht (Befund 07.10.2026 - Robustheit).
+    _pv_status = classify_energy_source(
         pv_acpower=pv_acpower,
-        battery_power=battery_power,
-        battery_min_watt=1.0,
+        feedin_watt=pv_leistung,
+        batpower_raw=battery_power,
+        soc=soc,
         solar_stale=solar_stale,
+        pv_min_watt=1.0,
+        battery_min_watt=1.0,
+        soc_min_prozent=0.0,
+        max_netzkauf_watt=-50.0,
     )
-    if quelle_ok and "PV" not in quelle_text:
+    if _pv_status.quelle == Energiequelle.PV:
+        quelle_ok, quelle_text = True, _pv_status.begruendung
+    else:
         quelle_ok = False
-        quelle_text = "Batterie verfuegbar; AdaptivePV steuert ausschliesslich PV"
+        quelle_text = (
+            "Batterie verfuegbar; AdaptivePV steuert ausschliesslich PV"
+            if _pv_status.quelle == Energiequelle.BATTERIE
+            else _pv_status.begruendung
+        )
     if not quelle_ok:
         result.set_reason_code("waiting_source")
         result.grund = f"AdaptivePV wartet auf PV: {quelle_text}"
