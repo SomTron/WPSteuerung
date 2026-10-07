@@ -1543,8 +1543,12 @@ async def run_logic_step(session, state, learning_engine=None, befehle=None):
             active = bool(params.get("active"))
             if mode == "bademodus":
                 state.bademodus_aktiv = active
+                import modi_persistenz
+                modi_persistenz.speichere_modi(state)
             elif mode == "urlaubsmodus":
                 state.urlaubsmodus_aktiv = active
+                import modi_persistenz
+                modi_persistenz.speichere_modi(state)
         elif command == "force_on":
             manual_force_on = True
             state.control.manual_force_on_pending = True

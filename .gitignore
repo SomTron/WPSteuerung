@@ -10,6 +10,12 @@ Infos
 
 # Haltbarer Zustands-Schnappschuss (Laufzeit, nie committen)
 last_state.txt
+# Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
+letzter_lauf.json
+absturz_historie.json
+
+# Modi-Persistenz (Bademodus/Urlaubsmodus, Laufzeit-Zustand, nie committen)
+Steuerung/modi_zustand.json
 Steuerung/legionellen_plan.json
 legionellen_plan.json
 

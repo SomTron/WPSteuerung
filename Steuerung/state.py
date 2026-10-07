@@ -161,6 +161,14 @@ class State:
         self.bademodus_aktiv: bool = False
         self.awaiting_urlaub_duration: bool = False
         self.awaiting_custom_duration: bool = False
+
+        # Persistenz: Bademodus/Urlaubsmodus ueberleben Dienst-Neustarts
+        # (Befund 07.10.2026: Deployment warf den Bademodus still weg).
+        try:
+            import modi_persistenz
+            modi_persistenz.lade_modi(self)
+        except Exception:  # pragma: no cover - nur bei Import-Problemen
+            logging.exception("Modi-Persistenz konnte nicht geladen werden")
         
         # Sommer-Modus: Temperaturoffset bei mehrtägig guter PV-Prognose
         self.sommer_modus_aktiv: bool = False

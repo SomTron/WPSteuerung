@@ -179,6 +179,8 @@ async def _notaus_aufheben(session, chat_id, bot_token, state):
 async def aktivere_bademodus(session, chat_id, bot_token, state):
     """Aktiviert den Bademodus."""
     state.bademodus_aktiv = True
+    import modi_persistenz
+    modi_persistenz.speichere_modi(state)
     keyboard = get_keyboard(state)
     message = "🛁 Bademodus aktiviert. Kompressor steuert nach erhöhtem Sollwert (untere Temperatur)."
     logging.info("Bademodus aktiviert")
@@ -187,6 +189,8 @@ async def aktivere_bademodus(session, chat_id, bot_token, state):
 async def deaktivere_bademodus(session, chat_id, bot_token, state):
     """Deaktiviert den Bademodus."""
     state.bademodus_aktiv = False
+    import modi_persistenz
+    modi_persistenz.speichere_modi(state)
     keyboard = get_keyboard(state)
     message = "🛁 Bademodus deaktiviert."
     logging.info("Bademodus deaktiviert")
@@ -245,6 +249,8 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
         state.urlaubsmodus_aktiv = True
         state.urlaubsmodus_start = now
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
+        import modi_persistenz
+        modi_persistenz.speichere_modi(state)
 
         urlaubsabsenkung = int(config.Urlaubsmodus.URLAUBSABSENKUNG)
         keyboard = get_keyboard(state)
@@ -266,6 +272,8 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
         state.urlaubsmodus_aktiv = True
         state.urlaubsmodus_start = now
         state.urlaubsmodus_ende = now + timedelta(days=duration_days)
+        import modi_persistenz
+        modi_persistenz.speichere_modi(state)
         keyboard = get_keyboard(state)
         await send_telegram_message(session, chat_id, f"🌴 Urlaubsmodus aktiviert für {duration_days} Tage.", bot_token, reply_markup=keyboard)
         state.awaiting_urlaub_duration = False
@@ -276,6 +284,8 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
 async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     """Deaktiviert den Urlaubsmodus."""
     state.urlaubsmodus_aktiv = False
+    import modi_persistenz
+    modi_persistenz.speichere_modi(state)
     keyboard = get_keyboard(state)
     await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus deaktiviert.", bot_token, reply_markup=keyboard)
 
