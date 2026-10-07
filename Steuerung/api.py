@@ -258,13 +258,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # Storage direkt nutzen (slowapi's MemoryStorage)
         storage = self.limiter._storage
-        current = storage.get(limit_key)
+        current = storage.increment(limit_key, expire=60)
         current = int(current) if current else 0
         
         # Limit: 100/minute default, aber für spezifische Endpoints stricter
         limit = self._get_limit_for_path(request.url.path)
         
-        if current >= limit:
+        if current > limit:
             retry_after = 60 - (int(time.time()) % 60)
             return JSONResponse(
                 status_code=429,
@@ -272,8 +272,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(retry_after)},
             )
         
-        # Inkrementieren
-        storage.set(limit_key, str(current + 1), expire=60)
 
         # 3. Body puffern (Stream konsumieren, aber für FastAPI neu aufbereiten)
         body = await request.body()
@@ -1556,3 +1554,7 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
     except Exception as e:
         logging.error(f"Error reading history: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")
+
+
+
+
