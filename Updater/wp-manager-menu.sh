@@ -2,6 +2,10 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+#       den Fuehler als DEFEKT verworfen, Regeln behandeln ihn als nicht
+#       verfuegbar). Header zeigt Modi-Zustand (modi_zustand.json), Option 17
+#       zaehlt die Endgruende der angezeigten Zyklen inkl. reason_code=unbekannt.
+#       Banner-Version auf v1.16 nachgezogen (hing auf v1.13 trotz v1.15).
 # v1.15: Option 25 installiert Steuerung/wpsteuerung.service nach
 #       /etc/systemd/system. Bisher installierte KEIN Skript diese Unit,
 #       die Doku sagte "selbst anlegen" - auf dem Pi lief eine handgebaute
@@ -1263,6 +1267,14 @@ while true; do
         RECENT_OOM_COUNT=$(journalctl -k --since '24 hours ago' --no-pager 2>/dev/null \
             | grep -Eic 'Out of memory|Killed process' || true)
     fi
+    # Sensor-Defekt-Verdacht (priority_control WARNING 'liefert unplausiblen
+    # Wert'): defekte DS18B20-Fuehler sind kein ERROR, wuerden aber ohne
+    # eigene Zeile unsichtbar bleiben (Befund 07.10.2026).
+    RECENT_SENSOR_WARN_COUNT="n/a"
+    if command -v journalctl >/dev/null 2>&1; then
+        RECENT_SENSOR_WARN_COUNT=$(journalctl -u wpsteuerung --since '24 hours ago' --no-pager 2>/dev/null \
+            | grep -Eic 'liefert unplausiblen Wert' || true)
+    fi
 
     # Cache erst jetzt fuellen - vorher waeren die Werte noch nicht berechnet.
     HEADER_CACHE_STAMP=$(date +%s 2>/dev/null || echo 0)
@@ -1272,7 +1284,7 @@ while true; do
     # unguarded 'clear' stand hier frueher: fehlt das Kommando auf dem Pi,
     # schrieb es eine Fehlermeldung und blieb wirkungslos.
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.13                 ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager v1.16                 ${NC}\n"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Manager:  %s (Menue: %s)\n" "$MANAGER_REPO" "$SCRIPT_DIR/wp-manager-menu.sh"
@@ -1319,6 +1331,28 @@ while true; do
     printf "CSV:       Temperaturdaten vor %s | Zyklen: %s, letzter vor %s (%s)\n" \
         "$HEATING_AGE" "$CYCLE_COUNT" "$CYCLE_AGE" "$CYCLE_LAST"
     printf "           letzter Zyklus: %s\n" "$CYCLE_REASON"
+    # Modi-Zustand (Bademodus/Urlaubsmodus) - nach einem Deployment sieht man
+    # sofort, ob ein Nutzer-Modus noch aktiv ist (modi_persistenz).
+    MODI_LINE=""
+    if [ -f "$TARGET_DIR/modi_zustand.json" ]; then
+        MODI_LINE=$(python3 - "$TARGET_DIR/modi_zustand.json" 2>/dev/null <<'WPMODI'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        d = json.load(fh)
+except Exception:
+    sys.exit(0)
+teile = []
+if d.get("bademodus_aktiv"):
+    teile.append("Bademodus AKTIV")
+if d.get("urlaubsmodus_aktiv"):
+    teile.append("Urlaubsmodus AKTIV")
+if teile:
+    print(" | ".join(teile))
+WPMODI
+)
+    fi
+    [ -n "$MODI_LINE" ] && printf "Modi:      ${YELLOW}%s${NC}\n" "$MODI_LINE"
     printf "Analyse:   Timer %s/%s, Autostart %s | nächst: %s\n" \
         "$ANALYSIS_ACTIVE" "$ANALYSIS_ENABLED" "$ANALYSIS_ENABLED" "$ANALYSIS_NEXT"
     printf "VPN:       %b%s\n" "$VPN_STATUS" "$VPN_INFO"
@@ -1340,6 +1374,12 @@ while true; do
         printf "Diagnose:   24 h: ${GREEN}keine Fehler/Tracebacks${NC}, OOM: %s\n" "$RECENT_OOM_COUNT"
     else
         printf "Diagnose:   24-h-Journal nicht verfügbar\n"
+    fi
+    if [ "$RECENT_SENSOR_WARN_COUNT" != "n/a" ] && [ "$RECENT_SENSOR_WARN_COUNT" != "0" ]; then
+        LAST_SENSOR_WARN=$(journalctl -u wpsteuerung --since '24 hours ago' --no-pager 2>/dev/null \
+            | grep -Ei 'liefert unplausiblen Wert' | tail -n 1 | cut -c1-100)
+        printf "Sensor:     ${RED}%s Defekt-Verdacht in 24 h${NC}\n" "$RECENT_SENSOR_WARN_COUNT"
+        [ -n "$LAST_SENSOR_WARN" ] && printf "  ${RED}-> %s${NC}\n" "$LAST_SENSOR_WARN"
     fi
     [ -n "$LOG_SIZE" ] && printf "Log:        heizungssteuerung.log (%s)\n" "$LOG_SIZE"
     printf -- "${BLUE}---------------------------------------------------------${NC}\n\n"
@@ -1523,6 +1563,16 @@ while true; do
                     } | column -s ';' -t
                 else
                     tail -n "$zyk_n" "$ZYKLEN_CSV"
+                fi
+                # Endgruende der angezeigten Zyklen zaehlen - die Spalte 7/8
+                # direkt zu lesen ist bei 20 Zeilen schwer; die Summe zeigt
+                # sofort, ob etwas Unbekanntes/Ungepflegtes durchlaeuft.
+                if command -v awk >/dev/null 2>&1; then
+                    printf "${CYAN}--- Endgruende (letzte %s Zyklen) ---${NC}\n" "$zyk_n"
+                    awk -F';' 'NR>1 { g[$7]++; if ($8 == "unbekannt") u++ }
+                        END { for (k in g) printf "  %-22s %s\n", k, g[k];
+                              if (u) printf "  %-22s %s\n", "reason_code=unbekannt", u }' \
+                        "$ZYKLEN_CSV"
                 fi
                 wait_for_key
             fi
