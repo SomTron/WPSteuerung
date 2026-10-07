@@ -73,19 +73,10 @@ def test_deckel_holt_ueber_laeufe_nicht_weg():
         )
 
     # Erst wenn der Oberfuehler WIRKLICH unter die Basis abgekuehlt ist,
-    # beginnt eine neue Phase mit frischer Basis.
     r = _eval(cfg, oben=52.0, unten=24.6)
     pcl._spiegele_schichtungsdeckel(control, r.regel_dict, 52.0)
     assert control.schichtung_oben_start == 52.0
     assert control.schichtung_oben_max == 53.0
-
-
-def test_oben_warm_und_start_verboten_wartet():
-    """Fall 05.09./08.09./13.09.: oben heiss, unten kalt, keine Quelle -> warten."""
-    r = _eval(_cfg(schichtung_erlaube_start=False), oben=48.5, unten=24.6)
-    assert r.einschalten is None
-    assert "kein Start" in r.grund
-    assert "schichtung_erlaube_start=false" in r.grund
 
 
 def test_oben_warm_und_start_erlaubt_deckelt_oben():

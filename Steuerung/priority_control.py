@@ -668,6 +668,7 @@ def evaluate_notfallschutz(
     legionellen_angekuendigt: bool = False,
     notfall_aktiv: bool = False,
     now_hour: Optional[int] = None,
+    nacht_ende: int = 8,
 ) -> RegelErgebnis:
     """Notfallschutz (Prio 110): Reiner Schutzleiter fuer die
     Brauchwasser-Mindesttemperatur.
@@ -742,7 +743,9 @@ def evaluate_notfallschutz(
     cutoff = getattr(nf_cfg, "bis_uhr", None)
     if cutoff is not None and now_hour is not None and int(cutoff) > 0:
         _cut = int(cutoff)
-        _nacht_ende = 8      # wie sicherheit.nachtsperre_ende (Default)
+        # Nachtsperren-Ende kommt aus der Config (bisher hardcodiert 8 -
+        # bei abweichender Nachtsperre passte der Cutoff sonst nicht mehr).
+        _nacht_ende = max(int(nacht_ende), 0)
         if _cut > _nacht_ende:
             _gesperrt = int(now_hour) >= _cut or int(now_hour) < _nacht_ende
         else:
@@ -937,7 +940,7 @@ def evaluate_zeitfenster(
         name="Zeitfenster",
         prioritaet=zf.prioritaet,
         aktiv=False,
-        grund="Auserhalb Zeitfenster",
+        grund="Ausserhalb Zeitfenster",
     )
 
     if not zf.aktiv:
@@ -989,6 +992,7 @@ def evaluate_abweichung(
     pv_acpower: Optional[float] = None,
     battery_power: Optional[float] = None,
     solar_stale: bool = False,
+    notfall_einschalten_c: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: haelt den Boiler auf Solltemperatur (Komfort-Boden).
@@ -1183,6 +1187,30 @@ def evaluate_abweichung(
                     )
                     return result
                 else:
+                    # Tiefenschutz gilt AUCH wenn der Schichtungs-Warmstart
+                    # verboten ist: Faellt der Fuehler auf/unter die Notfall-
+                    # Schwelle (Deployment 36 C wie der Notfallschutz), ist
+                    # Durchkuehlen schlimmer als Schichtung - dann heizen.
+                    # Befund 07.10.2026: frueher blockte der Zweig die Regel
+                    # komplett; der Notfallschutz (Prio 110) griff erst unter
+                    # seiner eigenen Schwelle -> Luecke ohne Heizentscheid.
+                    notfall_grenze = (
+                        float(notfall_einschalten_c)
+                        if notfall_einschalten_c is not None
+                        else abw.solltemperatur_c - max(
+                            getattr(abw, "netz_notfall_offset_k", 8.0), 0.0
+                        )
+                    )
+                    if temp <= notfall_grenze:
+                        result.einschalten = True
+                        result.grund = (
+                            f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
+                            f"+{abweichung:.1f}K >= +{abw.einschalten_bei_abweichung_k}K, "
+                            f"oben {temp_oben:.1f}C >= {abw.schichtung_min_oben_c:.1f}C, "
+                            f"aber {abw.temperaturfuehler} {temp:.1f}C <= {notfall_grenze:.1f}C "
+                            f"(Notfall-Tiefgrenze) -> EIN trotz Schichtungsschutz"
+                        )
+                        return result
                     result.einschalten = None
                     result.grund = (
                         f"Soll {abw.solltemperatur_c}C - {abw.temperaturfuehler} {temp:.1f}C = "
@@ -2420,6 +2448,7 @@ def bewerte_alle_regeln(
         legionellen_angekuendigt=_leg_angekuendigt,
         notfall_aktiv=notfall_aktiv,
         now_hour=now_hour,
+        nacht_ende=nachtsperre_ende,
     )
     ergebnisse.append(ergebnis)
 
@@ -2536,6 +2565,7 @@ def bewerte_alle_regeln(
         pv_acpower=_pv_signal,
         battery_power=battery_power,
         solar_stale=solar_stale,
+        notfall_einschalten_c=float(config.notfallschutz.einschalten_bei_c),
     )
     ergebnisse.append(ergebnis)
 
@@ -2627,11 +2657,6 @@ def bewerte_alle_regeln(
     # Legionellen-Wartefälle (None) bleiben sichtbar und können einen anderen
     # aktiven Regler nicht fälschlich als effektive Hardwarequelle überschreiben.
     aktive_regeln = [e for e in ergebnisse if e.aktiv and e.einschalten is not None]
-    gewinner = max(
-        aktive_regeln,
-        key=lambda e: e.prioritaet,
-        default=None,
-    )
 
     if not aktive_regeln:
         # Keine aktive Regel mit klarer EIN/AUS-Entscheidung.
