@@ -25,23 +25,31 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 | Prio | Regel | Zweck | Quelle |
 |---|---|---|---|
 | 110 | **Notfallschutz** | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren (Wochenende, Nachtsperre); Abschaltung nur am *eigenen* Lauf; **spätestens bis `bis_uhr` (22:00)**, nachts gesperrt; Start nur, wenn die Mindestlaufzeit vorher endet (Ausnahme Legionella) | `notfallschutz` |
-| 100 | Wochenende | Wochenend-Vorheizen ab `fruehestens_uhr` | `wochenende` |
+| 100 | Wochenende | Wochenend-Vorheizen ab `fruehestens_uhr` (9 Uhr). **Blockt auch den Legionellen-Start** vor 9 Uhr – die Fahrt wird ab 9 Uhr nachgeholt (`test_legionellen_mode.py`) | `wochenende` |
 | 90 | Legionellen | Legionellenprophylaxe 1×/Woche (Ziel 60 °C, Limit 65 °C); **temporär hebt Boiler-Limit von 48 auf 65 °C** | `legionellen` |
 | 85 | **Einspeisung** | PV-Shaping am Netzlimit (7500 W) – gratis Strom nutzen | `einspeisung` |
 | 82 | CalcStart | Berechneter Start für gelernte Zapf-Zeit (17:00) | `calculated_start` |
 | 78 | **AdaptivePV** | Exklusive PV-Schwelle, sobald Forecast vorhanden | `adaptive_pv` |
-| 78 | PV_unten / PV_mitte | PV-Backup bei fehlendem Forecast (500/700 W) | `pv_regeln[]` |
-| 75 | **Batterie** | Heizen aus voller Hausbatterie ohne Netzbezug | `batterie` |
+| 78 | PV_unten / PV_mitte | PV-Backup bei fehlendem Forecast (500/700 W). **Derzeit praktisch ruhend**: seit AdaptivePV (Sep. 2026) greift es nur noch, wenn keine Prognose vorliegt | `pv_regeln[]` |
+| 75 | **Batterie** | Heizen aus voller Hausbatterie ohne Netzbezug. **Derzeit `aktiv=false`** – den Batterie-Pfad deckt das Quellen-Gate der Abweichungs-Regel ab (SOC ≥ 90 % ohne Netzkauf) | `batterie` |
 | 65 | **MinTemp-\*** | Mindest-Temperatur-Garantien pro Fühler+Zeitfenster | `mindest_temp` |
-| 60 | Komfort | PV-Komfort ≤ 38 °C mit etwas PV (nur PV); Notfall liegt bei Prio 110 | `komfort` |
+| 60 | Komfort | PV-Komfort ≤ 38 °C mit etwas PV (nur PV); Notfall liegt bei Prio 110. **Derzeit `aktiv=false`** – den Komfort-Boden decken die MinTemp-Garantien (42 °C) | `komfort` |
 | 57 | Forecast | Morgen schlecht → heute vorheizen; morgen gut → sparen | `forecast` |
-| 53 | Zeitfenster | Zeitfenster 6–16 Uhr mit min. 410 W PV | `zeitfenster` |
+| 53 | Zeitfenster | Zeitfenster 6–16 Uhr mit min. 410 W PV. **Derzeit `aktiv=false`** (von AdaptivePV abgelöst) | `zeitfenster` |
 | 47 | Abweichung | Solltemperatur ± Hysterese am unteren Fühler | `abweichung` |
 
 Dazu immer aktiv (keine Priorität nötig):
 
 - **Nachtsperre** (19–8): blockt alle *Einschaltungen*; Ausnahmen siehe unten
 - **Sicherheit**: Überhitzung/Notfall greift vor allem anderen
+
+> **Wer liefert das 48-°C-AUS?** `AdaptivePV`, `CalcStart` und `Einspeisung`
+> haben alle einen eigenen AUS-Zweig bei `tmax_c` (48 °C). Im Entscheidungslog
+> steht dort fast immer `Einspeisung`, weil sie die höchste dieser Prioritäten
+> hat (85). Nachts (Nachtsperre) sind alle drei inaktiv – dann übernimmt
+> `Abweichung` (Prio 47) das AUS, weil `soll − temp` dort ≤ +0,7 K ist.
+> Der Boiler-Deckel wird also immer von genau einer Regel getragen; die
+> AUS-Zweige der niedriger priorisierten Regeln sind der Rückfall.
 
 ---
 
