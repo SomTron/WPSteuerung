@@ -139,6 +139,71 @@ class TestDebounceSchaltverzug:
         assert res["soll_einschalten"] is True
         assert state.control.previous_modus == "Abweichung"
 
+
+# ============================================================
+# 1b) Entscheidungslog-Anreicherung (A1: PV-Erzeugung, A2: Override)
+# ============================================================
+class TestEntscheidungslogAnreicherung:
+    @pytest.mark.asyncio
+    async def test_log_reicht_pv_erzeugung_durch(self):
+        """A1: Der Log-Aufruf uebergibt die PV-Erzeugung (DC-Seite) - vorher
+        stand pv_erzeugung_w im Bestandslog durchgaengig auf null."""
+        import priority_control as pc
+        from unittest.mock import patch
+
+        state = _min_state(previous="Abweichung")
+        state.solar.pv_erzeugung = 2914.0
+        state.solar.acpower = 210.0
+        gewinner = pc.RegelErgebnis(
+            name="Abweichung", prioritaet=47, aktiv=True, einschalten=True,
+            grund="Soll 44.0C - unten 40.0C = +4.0K -> EIN",
+        )
+        with patch("priority_control_logic.bewerte_alle_regeln",
+                   return_value=(gewinner, [gewinner])), \
+             patch("priority_control_logic.entscheidungs_log.schreibe_eintrag") as log:
+            await pcl.determine_mode_and_setpoints(state, 40.0, 43.0)
+
+        kwargs = log.call_args.kwargs
+        assert kwargs["pv_erzeugung_watt"] == 2914.0
+        assert kwargs["pv_acpower_watt"] == 210.0
+
+    @pytest.mark.asyncio
+    async def test_log_meldet_regel_empfehlung_bei_abweichung(self):
+        """A2: Gewinner will EIN, aber der Debounce ist noch offen ->
+        soll_einschalten=False, regel_empfehlung=True. Damit kann das Log den
+        Override ausweisen statt sich zu widersprechen."""
+        import priority_control as pc
+        from unittest.mock import patch
+
+        state = _min_state()  # previous = "Keine Regel aktiv"
+        gewinner = pc.RegelErgebnis(
+            name="Abweichung", prioritaet=47, aktiv=True, einschalten=True,
+            grund="Soll 44.0C - unten 40.0C = +4.0K -> EIN",
+        )
+        with patch("priority_control_logic.bewerte_alle_regeln",
+                   return_value=(gewinner, [gewinner])), \
+             patch("priority_control_logic.entscheidungs_log.schreibe_eintrag") as log:
+            await pcl.determine_mode_and_setpoints(state, 40.0, 43.0)
+
+        kwargs = log.call_args.kwargs
+        assert kwargs["soll_einschalten"] is False
+        assert kwargs["regel_empfehlung"] is True
+
+    @pytest.mark.asyncio
+    async def test_log_regel_empfehlung_ist_none_ohne_gewinner(self):
+        """A2: Ohne Gewinner-Regel gibt es keine EIN/AUS-Empfehlung (None),
+        also auch keinen behaupteten Widerspruch."""
+        from unittest.mock import patch
+
+        state = _min_state()
+        with patch("priority_control_logic.bewerte_alle_regeln",
+                   return_value=(None, [])), \
+             patch("priority_control_logic.entscheidungs_log.schreibe_eintrag") as log:
+            await pcl.determine_mode_and_setpoints(state, 40.0, 43.0)
+
+        assert log.call_args.kwargs["regel_empfehlung"] is None
+
+
 # ============================================================
 # 2) PV-Mindestlaufzeit entkoppeln
 # ============================================================

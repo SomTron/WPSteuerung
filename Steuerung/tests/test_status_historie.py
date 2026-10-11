@@ -175,3 +175,35 @@ def test_zweiter_aufruf_kommt_aus_dem_cache(tmp_path, monkeypatch):
 def test_fehlende_datei_liefert_none(tmp_path):
     fehlt = tmp_path / "gibts_nicht.csv"
     assert api._historisches_wh_qm(str(fehlt)) is None
+
+
+def test_solar_datenalter_wird_gemeldet():
+    """B4b: _solar_age_s liefert das Alter der Solax-Livedaten in Sekunden."""
+    import pytz
+    from types import SimpleNamespace
+
+    tz = pytz.timezone("Europe/Berlin")
+    jetzt = datetime.now(tz)
+    old_state = api.shared_state
+    try:
+        api.shared_state = SimpleNamespace(
+            local_tz=tz,
+            solar=SimpleNamespace(last_api_call=jetzt - timedelta(minutes=4)),
+        )
+        alter = api._solar_age_s()
+    finally:
+        api.shared_state = old_state
+    assert alter is not None
+    assert 200 <= alter <= 260
+
+
+def test_solar_datenalter_ohne_zeitstempel_ist_none():
+    from types import SimpleNamespace
+
+    old_state = api.shared_state
+    try:
+        api.shared_state = SimpleNamespace(
+            local_tz=None, solar=SimpleNamespace(last_api_call=None))
+        assert api._solar_age_s() is None
+    finally:
+        api.shared_state = old_state

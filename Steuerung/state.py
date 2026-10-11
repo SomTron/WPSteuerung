@@ -94,6 +94,10 @@ class ControlState:
         self.manual_force_on_pending: bool = False
         self._pending_start_rule: Optional[str] = None
         self._pending_start_source: Optional[str] = None
+        # Zeitpunkt der letzten bestaetigten Gewinner-Wahl. Traegt die
+        # Mindesthaltezeit (D(c)): ein frisch bestaetigter Gewinner bleibt
+        # GEWINNER_MINDESTHALTE_MIN lang, bevor ein anderer uebernehmen darf.
+        self._gewinner_bestaetigt_seit: Optional[datetime] = None
         self.consecutive_control_errors: int = 0
         self._rate_messungen: deque = deque(maxlen=5)
         self._rate_confidence: float = 0.0

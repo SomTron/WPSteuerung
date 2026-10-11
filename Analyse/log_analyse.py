@@ -49,6 +49,10 @@ KURZZYKLUS_MIN = 20.0            # < x Minuten = Kurzzyklus
 NETZKAUF_GRENZE_W = -50.0        # feedin < x => Haus kauft Netzstrom
 PV_VERPASST_AB_W = 500.0         # Einspeisung >= x waehrend Standby = "verschenkte PV"
 MORGEN_FENSTER = (6, 12)         # Uhrzeiten fuer "Morgen-Netzbezug"-Analyse
+# Zustandsdauer im Entscheidungslog: der Beitrag einer Zeile wird gedeckelt,
+# damit eine Log-Luecke (Dienst-Ausfall) nicht als Zustandsdauer durchschlaegt.
+DT_CAP_LAEUFT_S = 120.0          # laufende WP: Herzschlag 75 s (< 120 s)
+DT_CAP_STILLSTAND_S = 900.0      # Stillstand: Herzschlag 900 s (blockierte Starts)
 
 # --------------------------------------------------------------------------- #
 # Normalisierung des Logs (bekannte MojiBake-Folgen aus cp1252-Fehltranskodierung)
@@ -496,6 +500,48 @@ def parse_log(pfad):
     }
 
 
+def _blockiert_nachlauf_je_tag(rows):
+    """Tages-Minuten fuer blockierte Starts und Nachlauf aus dem Entscheidungslog.
+
+    Zwei Bremsposten, die sich direkt aus dem Log ablesen lassen und im
+    Bestandslog 24.08.-11.10.2026 deutlich sichtbar waren:
+
+    - **blockiert**: Regel will EIN (``soll_einschalten=True``), der Kompressor
+      laeuft aber nicht (``kompressor_laeuft=False``) - Start durch Mindestpause,
+      Start-Antizipation oder Boiler-Naehe gesperrt. 530 solcher Phasen,
+      laengste 732 min (12,2 h).
+    - **nachlauf**: Kompressor laeuft (``True``), ``soll_einschalten=False``
+      (z. B. PV-Einbruch vor Ablauf der Mindestlaufzeit). 248 Phasen, laengste
+      772 min (12,9 h).
+
+    Ein Zustand gilt bis zur naechsten Zeile; die Beitragsdauer ist je Zeile
+    gedeckelt (siehe DT_CAP_*), damit eine Log-Luecke nicht durchschlaegt.
+    Rueckgabe: ``{tag: {"blockiert_min": float, "nachlauf_min": float}}``.
+    """
+    eintraege = []
+    for r in rows or []:
+        ts = parse_timestamp(r.get("ts"))
+        if ts is None:
+            continue
+        eintraege.append((
+            ts, bool(r.get("soll_einschalten")), bool(r.get("kompressor_laeuft")),
+        ))
+    eintraege.sort(key=lambda x: x[0])
+
+    je_tag = defaultdict(lambda: {"blockiert_min": 0.0, "nachlauf_min": 0.0})
+    for i in range(len(eintraege) - 1):
+        ts, soll, laeuft = eintraege[i]
+        dt = (eintraege[i + 1][0] - ts).total_seconds()
+        if dt <= 0:
+            continue
+        tag = ts.strftime("%Y-%m-%d")
+        if soll and not laeuft:
+            je_tag[tag]["blockiert_min"] += min(dt, DT_CAP_STILLSTAND_S) / 60.0
+        elif laeuft and not soll:
+            je_tag[tag]["nachlauf_min"] += min(dt, DT_CAP_LAEUFT_S) / 60.0
+    return je_tag
+
+
 # ------------------------------------------------------- Auswertungen ---- #
 def analysiere(parsed):
     snapshots, zyklen, ereignisse = parsed["snapshots"], parsed["zyklen"], parsed["ereignisse"]
@@ -529,6 +575,17 @@ def analysiere(parsed):
         fc = forecast_pro_tag.get(tag, {})
         t["forecast_today"] = fc.get("today")
         t["forecast_tomorrow"] = fc.get("tomorrow")
+    # --- Blockierte Starts / Nachlauf je Tag (aus dem Entscheidungslog) ---
+    # Diese beiden Bremsposten lassen sich nur aus dem strukturierten
+    # Entscheidungslog ableiten (soll vs. laeuft), nicht aus dem Textlog.
+    je_tag_entscheidung = _blockiert_nachlauf_je_tag(parsed.get("decision_rows") or [])
+    for tag, werte in je_tag_entscheidung.items():
+        tage[tag]["blockiert_min"] = round(werte["blockiert_min"], 1)
+        tage[tag]["nachlauf_min"] = round(werte["nachlauf_min"], 1)
+    for t in tage.values():
+        t.setdefault("blockiert_min", 0.0)
+        t.setdefault("nachlauf_min", 0.0)
+    out["blockiert_nachlauf"] = je_tag_entscheidung
     out["tage"] = tage
 
     # --- Morgen-Netzbezug je Tag (Quelle) ---
@@ -671,7 +728,8 @@ def export_csve(parsed, out, outdir):
 
     # 3) Tages-KPIs
     felder = ["tag", "starts", "laufzeit_min", "netz_min", "pv_bat_min",
-              "kurzzylen", "boiler_max", "overshoot", "forecast_today", "forecast_tomorrow"]
+              "kurzzylen", "boiler_max", "overshoot", "blockiert_min",
+              "nachlauf_min", "forecast_today", "forecast_tomorrow"]
     tage_sort = sorted(out["tage"].items())
     _schreibe_csv(os.path.join(outdir, "tagesuebersicht.csv"),
                   [{"tag": k, **v} for k, v in tage_sort], felder)
@@ -731,14 +789,15 @@ def erzeuge_bericht(parsed, out, outdir, stats_roh):
 
     ap("\n## 2. Tages-KPIs\n")
     ap("| Tag | Starts | Laufzeit (min) | davon Netz | davon PV/Bat | Kurzzyklen (<20m) | "
-       "BoilerMax | Overshoot | Prognose heute |")
-    ap("|---|---|---|---|---|---|---|---|---|")
+       "BoilerMax | Overshoot | Blockiert (min) | Nachlauf (min) | Prognose heute |")
+    ap("|---|---|---|---|---|---|---|---|---|---|---|")
     for tag, t in sorted(out["tage"].items()):
         fc = t.get("forecast_today")
         fc_s = (f"{fc:.2f}" if fc is not None else "–")
         ap(f"| {tag} | {t['starts']} | {t['laufzeit_min']:.0f} | {t['netz_min']:.0f} | "
            f"{t['pv_bat_min']:.0f} | {t['kurzzylen']} | {t['boiler_max']} | "
-           f"{t['overshoot']} | {fc_s} |")
+           f"{t['overshoot']} | {t.get('blockiert_min', 0.0):.0f} | "
+           f"{t.get('nachlauf_min', 0.0):.0f} | {fc_s} |")
 
     ap("\n## 3. Zyklen-Analyse\n")
     zyklen = parsed["zyklen"]
@@ -913,6 +972,8 @@ def main(argv=None):
     )
     parsed["quality_report"] = quality_report
     parsed["decision_quality"] = decision_quality
+    # Fuer die Tages-KPIs "blockierte Starts"/"Nachlauf" (analysiere()).
+    parsed["decision_rows"] = decision_rows
 
     out = analysiere(parsed)
     os.makedirs(AUSGABE_DIR, exist_ok=True)

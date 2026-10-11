@@ -136,6 +136,23 @@ def test_herzschlag_laeuft_kurzer_als_stillstand(tmp_path):
         ) is True
 
 
+def test_herzschlag_stillstand_ist_15_minuten(tmp_path):
+    """C2: Der Stillstands-Herzschlag liegt bei 15 min (900 s), nicht 30 min.
+
+    Ein Dienst-Ausfall im Stillstand war zuvor bis zu 30 min unsichtbar
+    (Bestandslog 24.08.-11.10.2026: mehrere 12-14 h-Luecken).
+    """
+    patcher, log_datei = _log_pfad(tmp_path)
+    with patcher:
+        t0 = datetime(2026, 10, 3, 15, 42, 5)
+        _schreibe(log_datei, _eintrag("Einspeisung", t0, soll=False, laeuft=False))
+
+        # 800 s < 900 s -> noch unterdrueckt
+        assert _schreibe_eintrag("Einspeisung", t0 + timedelta(seconds=800)) is False
+        # 900 s seit dem letzten ECHTEN Schreibvorgang -> faellig
+        assert _schreibe_eintrag("Einspeisung", t0 + timedelta(seconds=900)) is True
+
+
 def test_schreibfehler_wird_gemeldet(tmp_path, caplog):
     """Ein Schreibfehler muss im Journal auftauchen, nicht nur im Debug-Log."""
     patcher, log_datei = _log_pfad(tmp_path)

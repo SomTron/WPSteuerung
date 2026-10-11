@@ -61,6 +61,17 @@ except ImportError:
 # erreicht (Incident 26.08.: EIN bei unten 47.94C -> nach 2 min BOILERMAX-AUS).
 BOILER_MAX_EIN_ABSTAND_K = 2.0
 
+# Mindesthaltezeit des Gewinners (Nutzerentscheidung D(c), 5 min).
+# Ein einmal bestaetigter Gewinner bleibt mindestens so lange gueltig, bevor
+# ein ANDERER Gewinner uebernehmen darf. Hintergrund: Im Bestandslog flatterte
+# der Notfallschutz am 03.09.2026 40-mal in 30 min, weil `oben` zwischen 36.0
+# und 36.06C pendelte - der 2-Loop-Debounce (~20 s) ist gegen ein 0.06-K-
+# Rauschen zu kurz. Wichtig: Die Sicherheits-Abschaltungen (Boiler-Max,
+# Ueberhitzung, Not-Aus, Druckschalter) liegen AUSSERHALB dieser Gewinner-Wahl
+# und greifen unveraendert sofort; nur die Wahl zwischen den Regeln wird
+# gedaempft.
+GEWINNER_MINDESTHALTE_MIN = 5.0
+
 
 def set_last_compressor_off_time(state, time_val):
     """Setzt den Zeitpunkt des letzten Kompressor-Ausschaltens."""
@@ -840,9 +851,17 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # Regel-Kanten).
     modus = res["modus"]
     prev_modus = getattr(state.control, "previous_modus", None)
+    # Ursache, falls ein Gewinnerwechsel zurueckgehalten wird (Debounce oder
+    # Mindesthaltezeit). Wandert als Override-Hinweis ins Entscheidungslog (A2).
+    wechsel_grund = None
 
     if gewinner is not None and modus != prev_modus:
-        ist_bestaetigt = bool(_gewinner_debounce(state, modus))
+        if _gewinner_debounce(state, modus):
+            ist_bestaetigt = True
+        else:
+            ist_bestaetigt = False
+            # Ursache fuer den Override-Hinweis im Entscheidungslog (A2).
+            wechsel_grund = "Gewinnerwechsel noch nicht bestaetigt (Debounce)"
     else:
         # Kein Wechsel / keine Regel aktiv: Empfehlung sofort uebernehmen und
         # einen ggf. pendelnden Pending-Zustand aufloesen.
@@ -852,6 +871,18 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         except Exception:
             pass
 
+    # Mindesthaltezeit des Gewinners (D(c)): Ein bestaetigter Wechsel wird
+    # zusaetzlich verzoegert, solange der zuletzt bestaetigte Gewinner noch
+    # keine GEWINNER_MINDESTHALTE_MIN steht. Damit pendelt die Wahl an scharfen
+    # Kanten nicht (Log 03.09.2026: Notfallschutz 40x/30 min bei oben
+    # 36.0-36.06C). previous_modus und die wirksame Empfehlung bleiben stehen.
+    if ist_bestaetigt and _gewinner_haltezeit_blockiert(state, modus):
+        ist_bestaetigt = False
+        wechsel_grund = (
+            f"Mindesthaltezeit des Gewinners aktiv "
+            f"({GEWINNER_MINDESTHALTE_MIN:.0f} min)"
+        )
+
     if ist_bestaetigt:
         state.control.previous_modus = modus
         # effective_rule_name/active_rule_name bleiben hier unverändert.
@@ -859,6 +890,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # Hardware-Start; laufende Zyklen behalten ihre Startquelle.
         state.control._soll_einschalten_bestaetigt = bool(should_on)
         if modus != prev_modus:
+            # Startzeitpunkt der Haltezeit (D(c)) - erst hier, nach der
+            # Haltezeit-Pruefung, damit ein blockierter Wechsel sie nicht
+            # vorzeitig zuruecksetzt.
+            state.control._gewinner_bestaetigt_seit = _now_for_state(state)
             logging.info(
                 f"Wechsel zu Regel: {res['modus']} ({'EIN' if should_on else 'AUS'})"
             )
@@ -899,6 +934,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 feedin_watt=pv_leistung,
                 batpower_watt=getattr(state.solar, "batpower", None),
                 pv_acpower_watt=getattr(state.solar, "acpower", None),
+                # Die tatsaechliche Erzeugung (DC-Seite). Ohne sie stand im Log
+                # immer null, obwohl state.solar.pv_erzeugung gefuellt war -
+                # PV-gestuetzte Freigaben liessen sich so nicht nachrechnen.
+                pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
                 hausverbrauch_watt=getattr(state.solar, "hausverbrauch", None),
                 pv_ueberschuss_watt=getattr(state.solar, "pv_ueberschuss", None),
                 soc=getattr(state.solar, "soc", None),
@@ -910,6 +949,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 setpoint_aus=getattr(state.control, "aktueller_ausschaltpunkt", None),
                 stale_s=stale_s,
                 reason_code=getattr(gewinner, "reason_code", None) if gewinner else None,
+                # Rohempfehlung der Gewinner-Regel (None, wenn die Regel keine
+                # EIN/AUS-Entscheidung trifft). Weicht sie von soll_einschalten
+                # ab, dokumentiert das Log den Override (Mindestlaufzeit etc.).
+                regel_empfehlung=(
+                    getattr(gewinner, "einschalten", None) if gewinner else None
+                ),
                 ts=_now_for_state(state),
                 diagnostics={
                     "reason_code": getattr(gewinner, "reason_code", None) if gewinner else None,
@@ -935,6 +980,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                     # stand (PV-Shaping sagte EIN, Komfort sagte AUS).
                     "blocking_reason": getattr(state.control, "blocking_reason", None),
                     "blocking_code": getattr(state.control, "blocking_code", None),
+                    # Ursache, wenn ein Gewinnerwechsel zurueckgehalten wurde
+                    # (Debounce/Haltezeit). Ohne sie blieb `handlung_override`
+                    # ohne Detail ("Handlung AUS trotz Regel-EIN").
+                    "regelwechsel_grund": wechsel_grund,
                     "ausschluss_grund": getattr(state.control, "ausschluss_grund", None),
                     "sperrinfo": _sperrinfo_fuer_log(state),
                     "soll_einschalten_bestaetigt": bool(
@@ -1213,6 +1262,32 @@ def _gewinner_debounce(state, modus):
         control._pending_modus = None
         return True
     return False
+
+
+def _gewinner_haltezeit_blockiert(state, modus) -> bool:
+    """True, wenn ein frisch bestaetigter Gewinner noch geschuetzt ist (D(c)).
+
+    Ein bestaetigter Gewinnerwechsel darf erst nach ``GEWINNER_MINDESTHALTE_MIN``
+    wieder abgeloest werden; bis dahin bleibt ``previous_modus`` (und damit die
+    wirksame Schaltempfehlung) stehen. Ein Wechsel AUF denselben Gewinner ist
+    nie blockiert. Robust gegen Mock-States - nur ``getattr``.
+    """
+    control = getattr(state, "control", None)
+    if control is None:
+        return False
+    if modus == getattr(control, "previous_modus", None):
+        return False
+    seit = getattr(control, "_gewinner_bestaetigt_seit", None)
+    # _REAL_DATETIME statt `datetime`: einige Tests patchen das Modul-Attribut
+    # `datetime` (siehe _now_for_state), dann waere `isinstance(x, datetime)`
+    # ein TypeError.
+    if not isinstance(seit, _REAL_DATETIME):
+        return False
+    try:
+        vergangen_min = (_now_for_state(state) - seit).total_seconds() / 60.0
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return 0.0 <= vergangen_min < GEWINNER_MINDESTHALTE_MIN
 
 
 def _taktschutz_blockiert(state, cfg) -> float:

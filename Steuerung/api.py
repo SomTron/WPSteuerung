@@ -586,6 +586,30 @@ def _solar_stale_status() -> bool:
         return True
 
 
+def _solar_age_s() -> Optional[int]:
+    """Alter der Solax-Livedaten in Sekunden (None, wenn nicht ermittelbar).
+
+    Macht die Datengranularitaet sichtbar: ``get_solax_data`` liefert bis zu
+    5 min die gecachte Antwort (CACHE_TTL), obwohl der Refresh-Loop alle 60 s
+    laeuft. Im Bestandslog lagen 38 % der Regelentscheidungen auf 3-5 min alten
+    Daten. Der Stale-Schutz greift erst bei 15 min - das Alter selbst war
+    bisher nur im Systemlog ("Alter=Xs") sichtbar, nicht in der WebApp.
+    """
+    if shared_state is None:
+        return None
+    try:
+        last_api_call = getattr(shared_state.solar, "last_api_call", None)
+        if not isinstance(last_api_call, datetime):
+            return None
+        jetzt = now_for(shared_state)
+        if jetzt.tzinfo is None and last_api_call.tzinfo is not None:
+            jetzt = last_api_call.replace(tzinfo=None)
+        return max(0, int((jetzt - last_api_call).total_seconds()))
+    except Exception as exc:
+        logging.debug("Solax-Datenalter nicht ermittelbar: %s", exc)
+        return None
+
+
 # Cache fuer das historische 14-Tage-Mittel der Einspeisung (Wh/qm).
 # Grund: /status wird vom Dashboard alle 5 s abgefragt; ein vollstaendiger
 # pd.read_csv() ueber ALLE 20 Spalten pro Aufruf kostet auf dem Pi spuerbar
@@ -1008,6 +1032,12 @@ def get_status():
                     "reason_code": e.get("reason_code") or (e.get("diagnostics") or {}).get("reason_code"),
                     "soll_einschalten": bool(e.get("soll_einschalten")),
                     "laeuft": bool(e.get("kompressor_laeuft")),
+                    # EIN/AUS-Empfehlung der Gewinner-Regel und der Override-
+                    # Hinweis, falls die Handlung davon abwich (Mindestlaufzeit,
+                    # Mindestpause, Debounce, Sicherheit). Die WebApp kann damit
+                    # eine Zeile "-> AUS" bei soll_einschalten=true erklaeren.
+                    "regel_empfehlung": e.get("regel_empfehlung"),
+                    "handlung_override": e.get("handlung_override"),
                 }
                 for e in entscheidungs_log.historie(stunden=12, limit=30)
             ]
@@ -1081,6 +1111,9 @@ def get_status():
 
     # Einmal ermitteln und in 'energy' + 'status_indikatoren' wiederverwenden
     solar_stale = _solar_stale_status()
+    # Datenalter der Solax-Livedaten (B4b): macht die ~5-min-Cache-Granularitaet
+    # sichtbar, ohne den Abruftakt zu aendern (Rate-Limit).
+    solar_age_s = _solar_age_s()
 
     pv_profil_info: dict = {}
     forecast_info: dict = {}
@@ -1194,6 +1227,9 @@ def get_status():
             "forecast_today": getattr(shared_state.solar, 'forecast_today', None),
             "forecast_tomorrow": getattr(shared_state.solar, 'forecast_tomorrow', None),
             "solar_stale": solar_stale,
+            # Alter der Livedaten in Sekunden (B4b). Zeigt die ~5-min-Cache-
+            # Granularitaet, auch wenn `solar_stale` noch False ist.
+            "solar_age_s": solar_age_s,
             "forecast_day2": getattr(shared_state.solar, 'forecast_day2', None),
             "forecast_stale": bool(getattr(shared_state, "forecast_stale", False)),
             "forecast_age_s": getattr(shared_state, "forecast_age_s", None),
@@ -1229,6 +1265,7 @@ def get_status():
         "pv_profil": pv_profil_info,
         "status_indikatoren": {
             "solar_stale": solar_stale,
+            "solar_age_s": solar_age_s,
             # Neu: macht die FOLGE des Stale-Zustands sichtbar. Ohne diese
             # Information wirkt "Solar-Daten veraltet" wie eine Nebensache -
             # tatsaechlich pausieren dann alle Quellenregeln und die
@@ -1280,6 +1317,11 @@ def get_history_regeln(
         "data": [
             {"timestamp": e.get("ts"), "regel": e.get("gewinner") or "Keine",
              "reason_code": e.get("reason_code"),
+             # Override-Hinweis (A2): Regel-Empfehlung vs. tatsaechliche
+             # Handlung. So kann die WebApp im Chart-Tooltip erklaeren, warum
+             # eine Zeile "-> AUS" bei laufender WP auftaucht.
+             "regel_empfehlung": e.get("regel_empfehlung"),
+             "handlung_override": e.get("handlung_override"),
              "laeuft": bool(e.get("kompressor_laeuft"))}
             for e in eintraege
         ],

@@ -580,9 +580,17 @@ for e in eintraege:
     hb_txt = ("%.0fW" % hb) if isinstance(hb, (int, float)) else "-"
     ub = e.get("pv_ueberschuss_w")
     ub_txt = ("%.0fW" % ub) if isinstance(ub, (int, float)) else "-"
+    # Override sichtbar machen (A2): weicht die Handlung von der Regel-
+    # Empfehlung ab (Mindestlaufzeit/-pause, Debounce, Sicherheit), nennt
+    # handlung_override den Grund. Ohne diesen Hinweis liest sich
+    # "soll=EIN | WP=AUS" neben einem "-> EIN"-Grund wie ein Fehler.
+    ov = e.get("handlung_override")
+    grund_txt = str(e.get("grund", ""))
+    if ov:
+        grund_txt = "[Override] %s | %s" % (ov, grund_txt)
     print("%s | %s | soll=%s | WP=%s | PV=%s | Ueber=%s | Haus=%s | einsp=%s | SOC=%s | unten=%sC | %s" % (
         e.get("ts", "?"), e.get("gewinner", "-"), soll, laeuft, p_txt, ub_txt, hb_txt, f_txt,
-        e.get("soc"), e.get("t_unten"), str(e.get("grund", ""))[:60]))
+        e.get("soc"), e.get("t_unten"), grund_txt[:140]))
 print("-" * 78)
 
 # Die KPI-Funktion benoetigt WP-Leistung und Strompreis als Pflichtargumente.

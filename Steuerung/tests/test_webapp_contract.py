@@ -33,6 +33,22 @@ def test_webapp_sortiert_regelhistorie_und_sendet_api_key():
     assert "headers: apiHeaders({ 'Content-Type': 'application/json' })" in html
 
 
+def test_webapp_zeigt_override_hinweis_im_regel_tooltip():
+    """A2: Der Chart-Tooltip nennt den Override, wenn die Handlung von der
+    Regel-Empfehlung abwich (Mindestlaufzeit, Debounce, Sicherheit)."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "regelOverride: []" in html
+    assert "handlung_override" in html
+    assert "tooltipOverride: temperatureHistory.regelOverride" in html
+
+
+def test_webapp_zeigt_datenalter_der_solardaten():
+    """B4b: Das Alter der Solax-Livedaten wird sichtbar (5-min-Granularitaet)."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert 'id="energy-age"' in html
+    assert "setText('energy-age', formatAge(energy.solar_age_s))" in html
+
+
 def test_mobile_layout_verhindert_globales_horizontales_scrolling():
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")
     assert "@media (max-width: 600px)" in html

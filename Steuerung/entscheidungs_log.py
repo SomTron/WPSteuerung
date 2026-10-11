@@ -2,9 +2,13 @@
 """Entscheidungs-Log und Energiebilanz (KPIs) der WP-Steuerung.
 
 Schreibt pro Regelzyklus eine Zeile als JSON Lines (entscheidungs_log.jsonl):
-    {"ts": "...", "gewinner": "...", "grund": "...", "soll_einschalten": bool,
-     "kompressor_laeuft": bool, "feedin_w": float, "batpower_w": float,
-     "soc": float, "t_unten": float, "t_oben": float}
+    {"ts": "...", "schema": 2, "gewinner": "...", "grund": "...",
+     "soll_einschalten": bool, "kompressor_laeuft": bool, "feedin_w": float,
+     "batpower_w": float, "soc": float, "t_unten": float, "t_oben": float}
+
+`schema` ist die Version des Eintrags-Formats (siehe SCHEMA_VERSION). Auswertungen
+erkennen daran, welche Felder erwartbar sind; die ersten Generationen des
+Bestands (vor dem 25.09.2026) tragen das Feld noch nicht.
 
 Daraus leitet sich ab:
 - die Entscheidungs-Historie fuer API/Webapp ("Warum lief die WP um 3 Uhr?")
@@ -74,9 +78,19 @@ MAX_GENERATIONEN = 7           # .old.1 ... .old.7
 # Handlungswechseln, ohne dass ein vollstaendiges Pi-Einlesen zu teuer wird.
 MAX_EINTRAEGE_LESEN = 20_000
 HEARTBEAT_SEKUNDEN = 75.0      # Zwangsschreibintervall laufender WP (< dt-Cap 120 s)
-HEARTBEAT_STILLSTAND_SEKUNDEN = 1_800.0  # Lebenszeichen bei Stillstand (30 min)
+# Lebenszeichen bei Stillstand. Von 30 auf 15 min gesenkt: ein Dienst-Ausfall
+# im Stillstand war bis zu 30 min unsichtbar (Bestandslog 24.08.-11.10.2026
+# zeigte mehrere 12-14 h-Luecken). Die Mehrkosten sind minimal (~+48 Zeilen/Tag
+# = ~31 KB bei ~650 Byte/Zeile), die Ausfallerkennung dafuer doppelt so schnell.
+HEARTBEAT_STILLSTAND_SEKUNDEN = 900.0
 LOG_TIMEZONE = pytz.timezone(DEFAULT_TIMEZONE)
 IDLE_GEWINNER = "Idle"         # keine Regel fordert Heizbetrieb
+# Maximale Laenge des Gewinner-Grundes im Log (Freitext der Gewinner-Regel).
+GEWINNER_GRUND_MAX = 200
+#: Version des Eintrags-Schemas. Erlaubt Auswertungen, eindeutig zu erkennen,
+#: welche Felder erwartbar sind - statt "Feld fehlt" mit "gab es damals noch
+#: nicht" zu verwechseln (die ersten ~5 Wochen des Bestands sind "arm").
+SCHEMA_VERSION = 2
 
 # Quellnamen der Energiebilanz
 QUELLE_PV = "pv"
@@ -110,6 +124,50 @@ def _zahl(wert) -> str:
         return f"{float(wert):g}"
     except (TypeError, ValueError):
         return "-"
+
+
+def _handlung_override(
+    regel_empfehlung: Optional[bool],
+    soll_einschalten: bool,
+    diagnostics: Optional[Dict],
+) -> Optional[str]:
+    """Kurzer Hinweis, wenn die Handlung von der Regel-Empfehlung abweicht.
+
+    ``grund`` beschreibt die Entscheidung der GEWINNER-Regel, ``soll_einschalten``
+    dagegen die tatsaechlich an die Hardware gegebene Empfehlung (nach
+    Mindestlaufzeit/-pause, Debounce und Sicherheits-Overrides). Im Log
+    24.08.-11.10.2026 widersprachen sich beide in 79 Zeilen ("-> AUS" bei
+    ``soll_einschalten=true`` und umgekehrt); ohne ``diagnostics`` war im
+    Alt-Format kein Grund der Abweichung erkennbar. Dieser Hinweis macht den
+    Override explizit - als eigenes Feld UND als Marker im Grundtext.
+
+    ``regel_empfehlung=None`` (Regel trifft keine EIN/AUS-Entscheidung) liefert
+    bewusst keinen Hinweis: dann liegt gar kein Widerspruch vor.
+
+    Der Detailtext kommt aus ``diagnostics.blocking_reason`` (Hardware-Sperre,
+    z. B. Mindestlaufzeit). Fehlt sie - etwa bei einem reinen Debounce oder der
+    Gewinner-Mindesthaltezeit (D(c)) -, nennt ``diagnostics.regelwechsel_grund``
+    die Ursache.
+    """
+    if regel_empfehlung is None:
+        return None
+    if bool(regel_empfehlung) == bool(soll_einschalten):
+        return None
+    regel_richtung = "EIN" if regel_empfehlung else "AUS"
+    handlung = "EIN" if soll_einschalten else "AUS"
+    detail = None
+    if isinstance(diagnostics, dict):
+        # Reihenfolge: die konkrete Hardware-Sperre (blocking_reason) ist am
+        # aussagekraeftigsten; fehlt sie (z. B. reiner Debounce/Haltezeit),
+        # nennt regelwechsel_grund die Ursache.
+        detail = (
+            diagnostics.get("blocking_reason")
+            or diagnostics.get("blocking_code")
+            or diagnostics.get("regelwechsel_grund")
+        )
+    basis = f"Handlung {handlung} trotz Regel-{regel_richtung}"
+    return f"{basis}: {str(detail)[:80]}" if detail else basis
+
 
 # Cache der zuletzt geschriebenen Zeile (pfad-gebunden, damit Tests mit
 # umgeleitetem LOG_DATEI nicht gegenseitig stoeren).
@@ -279,6 +337,7 @@ def schreibe_eintrag(
     setpoint_aus: Optional[float] = None,
     stale_s: Optional[int] = None,
     reason_code: Optional[str] = None,
+    regel_empfehlung: Optional[bool] = None,
     diagnostics: Optional[Dict] = None,
     ts: Optional[datetime] = None,
 ) -> bool:
@@ -308,6 +367,13 @@ def schreibe_eintrag(
     Ueberschuss sagt, wieviel PV-Leistung nach Deckung des Hauses fuer die
     Waermepumpe uebrig bleibt - die eigentliche Groesse fuer eine
     solarbetriebene Zuschaltung.
+
+    `regel_empfehlung` ist die EIN/AUS-Empfehlung der GEWINNER-Regel, also
+    das, was der `grund`-Text beschreibt. Sie kann von `soll_einschalten`
+    (der tatsaechlich an die Hardware gegebenen Empfehlung) abweichen, wenn
+    Mindestlaufzeit/-pause, Debounce oder Sicherheit eingreifen. Dann traegt
+    `handlung_override` einen kurzen Hinweis auf den Override und der
+    `grund`-Text bekommt denselben Hinweis als Marker angehaengt.
     """
     # Leerer Gewinner/Grund waere im Log nicht interpretierbar ("Dienst laeuft,
     # aber keine Regel will" vs. "Regel hat entschieden: AUS"). Deshalb wird
@@ -323,10 +389,24 @@ def schreibe_eintrag(
             f"Ueberschuss {_zahl(pv_ueberschuss_watt)}W, "
             f"Haus {_zahl(hausverbrauch_watt)}W, SOC {_zahl(soc)}%)"
         )
+    # Abweichung zwischen Regel-Empfehlung und tatsaechlicher Handlung
+    # explizit machen: sonst liest sich eine Zeile "-> AUS" bei
+    # soll_einschalten=true wie ein Fehler (Log 24.08.-11.10.2026: 79 Zeilen).
+    override = _handlung_override(regel_empfehlung, soll_einschalten, diagnostics)
+    if override:
+        marker = f" [{override}]"
+        gewinner_grund = (
+            gewinner_grund[: max(GEWINNER_GRUND_MAX - len(marker), 0)] + marker
+        )
+    empfehlung_wert = None if regel_empfehlung is None else bool(regel_empfehlung)
+    diag = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+    diag["regel_empfehlung"] = empfehlung_wert
+    diag["handlung_override"] = override
     eintrag = {
         "ts": (ts or _log_now()).isoformat(timespec="seconds"),
+        "schema": SCHEMA_VERSION,
         "gewinner": gewinner_name,
-        "grund": gewinner_grund[:200],
+        "grund": gewinner_grund[:GEWINNER_GRUND_MAX],
         "soll_einschalten": bool(soll_einschalten),
         "kompressor_laeuft": bool(kompressor_laeuft),
         "feedin_w": round(float(feedin_watt), 1) if feedin_watt is not None else None,
@@ -349,7 +429,14 @@ def schreibe_eintrag(
         "setpoint_aus": round(float(setpoint_aus), 1) if setpoint_aus is not None else None,
         "stale_s": stale_s,
         "reason_code": reason_code,
-        "diagnostics": dict(diagnostics) if isinstance(diagnostics, dict) else {},
+        # EIN/AUS-Empfehlung der Gewinner-Regel vs. tatsaechliche Handlung:
+        # weichen sie ab, nennt handlung_override den Grund (Mindestlaufzeit,
+        # Mindestpause, Debounce, Sicherheit). Damit ist der frueher
+        # widerspruechliche Grundtext ("-> AUS" bei soll_einschalten=true)
+        # eindeutig aufloesbar.
+        "regel_empfehlung": empfehlung_wert,
+        "handlung_override": override,
+        "diagnostics": diag,
     }
     try:
         global _cache_pfad, _cache_zeile, _pending_pfad, _pending_regelwechsel

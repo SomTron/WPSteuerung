@@ -147,6 +147,172 @@ def test_ohne_pv_erzeugung_bleibt_feld_null(tmp_path):
     assert eintrag["feedin_w"] == 1500.0
 
 
+def test_pv_erzeugung_wird_als_feld_geschrieben(tmp_path):
+    """A1: pv_erzeugung_w wird aus dem Erzeugungswert (DC-Seite) befuellt.
+
+    Vorher war das Feld im gesamten Bestandslog (24.08.-11.10.2026) in allen
+    1872 Zeilen null, weil der Aufrufer den Wert nicht durchreichte - obwohl
+    ``state.solar.pv_erzeugung`` gefuellt war.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="MinTemp-Mittag-Mitte",
+            gewinner_grund="Quelle ok",
+            soll_einschalten=True,
+            kompressor_laeuft=True,
+            feedin_watt=0.0,
+            pv_acpower_watt=210.0,
+            pv_erzeugung_watt=2914.0,
+            soc=70.0,
+            t_unten=36.0,
+            t_oben=45.0,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert eintrag["pv_erzeugung_w"] == 2914.0
+    # Getrennt vom Wechselstromausgang gehalten:
+    assert eintrag["pv_acpower_w"] == 210.0
+
+
+def test_handlung_override_markiert_abweichung(tmp_path):
+    """A2: Weicht die Handlung von der Regel-Empfehlung ab, ist das sichtbar.
+
+    Frueher stand im Log "-> AUS" bei ``soll_einschalten=true`` (79 Zeilen im
+    Bestand), ohne dass der Grund der Abweichung erkennbar war.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="Einspeisung",
+            gewinner_grund="Einspeisung: unten 48.0C >= 48.0C -> AUS",
+            soll_einschalten=True,          # Handlung: laeuft weiter
+            kompressor_laeuft=True,
+            regel_empfehlung=False,          # Regel wollte AUS
+            diagnostics={
+                "blocking_reason": (
+                    "Regel 'Einspeisung' sagt AUS, warte auf Mindestlaufzeit (noch 6m)"
+                ),
+            },
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert eintrag["regel_empfehlung"] is False
+    assert eintrag["handlung_override"].startswith("Handlung EIN trotz Regel-AUS")
+    assert "Mindestlaufzeit" in eintrag["handlung_override"]
+    # Der Grundtext selbst traegt denselben Hinweis:
+    assert "Handlung EIN trotz Regel-AUS" in eintrag["grund"]
+    # Und die Diagnose spiegelt das Feld:
+    assert eintrag["diagnostics"]["handlung_override"] == eintrag["handlung_override"]
+    assert eintrag["diagnostics"]["regel_empfehlung"] is False
+
+
+def test_handlung_override_aus_trotz_regel_ein(tmp_path):
+    """A2: Regel will EIN, Handlung bleibt AUS (Start blockiert) -> Hinweis."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="AdaptivePV",
+            gewinner_grund="AdaptivePV: PV 2368W >= 150W -> EIN",
+            soll_einschalten=False,
+            kompressor_laeuft=False,
+            regel_empfehlung=True,
+            diagnostics={
+                "blocking_reason": "Start gesperrt: Mindestpause nach letztem Lauf",
+            },
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert eintrag["handlung_override"].startswith("Handlung AUS trotz Regel-EIN")
+    assert "Mindestpause" in eintrag["handlung_override"]
+
+
+def test_handlung_override_nutzt_regelwechsel_grund(tmp_path):
+    """A2-Feinschliff: fehlt blocking_reason, nennt der Hinweis die Wechselursache."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="Abweichung",
+            gewinner_grund="Soll 44.0C - unten 40.0C = +4.0K -> EIN",
+            soll_einschalten=False,
+            kompressor_laeuft=False,
+            regel_empfehlung=True,
+            diagnostics={
+                "regelwechsel_grund": "Gewinnerwechsel noch nicht bestaetigt (Debounce)",
+            },
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert "Handlung AUS trotz Regel-EIN" in eintrag["handlung_override"]
+    assert "Debounce" in eintrag["handlung_override"]
+
+
+def test_handlung_override_bleibt_leer_ohne_abweichung(tmp_path):
+    """A2: Bei Gleichlauf bleibt der Grund unveraendert und der Hinweis leer."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="AdaptivePV",
+            gewinner_grund="AdaptivePV: PV 3000W -> EIN",
+            soll_einschalten=True,
+            kompressor_laeuft=True,
+            regel_empfehlung=True,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert eintrag["regel_empfehlung"] is True
+    assert eintrag["handlung_override"] is None
+    assert eintrag["grund"] == "AdaptivePV: PV 3000W -> EIN"
+
+
+def test_handlung_override_ohne_regel_empfehlung(tmp_path):
+    """A2: Ohne Regel-Empfehlung (None) wird kein Widerspruch behauptet.
+
+    Eine Regel, die keine EIN/AUS-Entscheidung trifft, darf nicht als
+    "ueberstimmt" gekennzeichnet werden.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="Idle",
+            gewinner_grund="keine Regel fordert Heizbetrieb",
+            soll_einschalten=True,
+            kompressor_laeuft=True,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert eintrag["regel_empfehlung"] is None
+    assert eintrag["handlung_override"] is None
+
+
+def test_handlung_override_marker_bleibt_innerhalb_der_grenze(tmp_path):
+    """A2: Der Override-Marker wird nicht von der 200-Zeichen-Grenze gekappt."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag(
+            gewinner_name="Einspeisung",
+            gewinner_grund="x" * 400,
+            soll_einschalten=True,
+            kompressor_laeuft=True,
+            regel_empfehlung=False,
+        )
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readlines()[-1])
+    assert len(eintrag["grund"]) <= el.GEWINNER_GRUND_MAX
+    assert "Handlung EIN trotz Regel-AUS" in eintrag["grund"]
+
+
+def test_schema_version_wird_geschrieben(tmp_path):
+    """B3: Jede neue Zeile traegt eine Schema-Version."""
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag("PV_unten", "g", True, True)
+        with open(log_datei, encoding="utf-8") as f:
+            eintrag = json.loads(f.readline())
+    assert eintrag["schema"] == el.SCHEMA_VERSION
+    assert el.SCHEMA_VERSION >= 2
+
+
 def test_schreibe_feld_stale_s(tmp_path):
     """Empfehlung 3.5: stale_s wird als Feld mitgeschrieben (rueckwaertskomp.)."""
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
@@ -668,8 +834,12 @@ def test_stillstand_schreibt_herzschlag_nach_intervall(tmp_path):
 
 
 def test_stillstandsintervall_ist_konfigurierbar():
-    """Die 30-Minute-Schwelle ist eine Konstante, kein Magic Number."""
-    assert el.HEARTBEAT_STILLSTAND_SEKUNDEN == 1_800.0
+    """Das Stillstands-Intervall ist eine Konstante, kein Magic Number.
+
+    Von 30 auf 15 min gesenkt (C2): ein Dienst-Ausfall im Stillstand war
+    zuvor bis zu 30 min unsichtbar.
+    """
+    assert el.HEARTBEAT_STILLSTAND_SEKUNDEN == 900.0
     assert el.HEARTBEAT_STILLSTAND_SEKUNDEN > el.HEARTBEAT_SEKUNDEN, \
         "Stillstand darf nicht oefter schreiben als die laufende WP"
 

@@ -57,6 +57,37 @@ def test_git_revision_fallback_ohne_environment_ist_ermittelbar(monkeypatch):
     assert revision == "unknown" or (len(revision) >= 4 and " " not in revision)
 
 
+def test_blockiert_nachlauf_je_tag_aus_entscheidungslog():
+    """D3: blockierte Starts und Nachlauf je Tag aus dem Entscheidungslog."""
+    import log_analyse
+
+    rows = [
+        {"ts": "2026-09-26T16:40:50", "soll_einschalten": True, "kompressor_laeuft": False},
+        {"ts": "2026-09-26T16:55:50", "soll_einschalten": True, "kompressor_laeuft": False},
+        {"ts": "2026-09-26T17:00:50", "soll_einschalten": True, "kompressor_laeuft": True},
+        {"ts": "2026-09-26T17:05:50", "soll_einschalten": False, "kompressor_laeuft": True},
+        {"ts": "2026-09-26T17:06:50", "soll_einschalten": False, "kompressor_laeuft": True},
+    ]
+    je_tag = log_analyse._blockiert_nachlauf_je_tag(rows)
+    t = je_tag["2026-09-26"]
+    # 15 min + 5 min blockiert (Zeile 0 und 1), 1 min Nachlauf (Zeile 3)
+    assert round(t["blockiert_min"], 1) == 20.0
+    assert round(t["nachlauf_min"], 1) == 1.0
+
+
+def test_blockiert_nachlauf_deckelt_log_luecke():
+    """Eine grosse Luecke (Dienst-Ausfall) darf nicht als Zustandsdauer zaehlen."""
+    import log_analyse
+
+    rows = [
+        {"ts": "2026-09-26T10:00:00", "soll_einschalten": True, "kompressor_laeuft": False},
+        {"ts": "2026-09-26T20:00:00", "soll_einschalten": True, "kompressor_laeuft": False},
+    ]
+    je_tag = log_analyse._blockiert_nachlauf_je_tag(rows)
+    # 10 h Luecke -> auf DT_CAP_STILLSTAND_S (900 s = 15 min) gedeckelt
+    assert round(je_tag["2026-09-26"]["blockiert_min"], 1) == 15.0
+
+
 def test_cycles_schema_und_qualitaet_werden_unterschieden(tmp_path):
 
     path = tmp_path / "zyklen.csv"

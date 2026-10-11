@@ -1704,7 +1704,8 @@
                     sollwerte: [],
                     regelIdx: [],
                     regelFarben: [],
-                    regelTooltip: []
+                    regelTooltip: [],
+                    regelOverride: []
                 };
 
                 // Regel-Historie parallel laden (fuer Overlay)
@@ -1756,12 +1757,14 @@
                 // je Punkt die zuletzt bekannte gewinnende Regel.
                 let zeigerR = 0;
                 let letzteRegel = 'Keine';
+                let letzteOverride = null;
                 const parseTs = (s) => new Date(s).getTime();
                 historyData.data.forEach(point => {
                     const tsPunkt = parseTs(point.timestamp);
                     while (zeigerR < regelnDaten.length &&
                            parseTs(regelnDaten[zeigerR].timestamp) <= tsPunkt) {
                         letzteRegel = regelnDaten[zeigerR].regel;
+                        letzteOverride = regelnDaten[zeigerR].handlung_override || null;
                         zeigerR++;
                     }
                     if (!namenZuIdx.has(letzteRegel)) {
@@ -1770,6 +1773,11 @@
                     temperatureHistory.regelIdx.push(namenZuIdx.get(letzteRegel));
                     temperatureHistory.regelFarben.push(regelFarbe(letzteRegel));
                     temperatureHistory.regelTooltip.push(letzteRegel);
+                    // Override-Hinweis (A2): nennt den Grund, wenn die Handlung
+                    // von der Regel-Empfehlung abwich (Mindestlaufzeit/-pause,
+                    // Debounce, Sicherheit) - statt eines widerspruechlichen
+                    // "-> AUS" bei laufender WP.
+                    temperatureHistory.regelOverride.push(letzteOverride);
                 });
                 window._regelnLegende = Array.from(namenZuIdx.keys());
 
@@ -1934,7 +1942,8 @@
                                     borderWidth: 0,
                                     fill: true,
                                     backgroundColor: temperatureHistory.regelFarben,
-                                    tooltipContent: temperatureHistory.regelTooltip
+                                    tooltipContent: temperatureHistory.regelTooltip,
+                                    tooltipOverride: temperatureHistory.regelOverride
                                 }] : [])
                             ]
                         },
@@ -1955,7 +1964,10 @@
                                     callbacks: {
                                         label: function(ctx) {
                                             if (ctx.dataset.label === 'Aktive Regel' && ctx.dataset.tooltipContent) {
-                                                return 'Regel: ' + ctx.dataset.tooltipContent[ctx.dataIndex];
+                                                const regel = 'Regel: ' + ctx.dataset.tooltipContent[ctx.dataIndex];
+                                                const ov = ctx.dataset.tooltipOverride
+                                                    ? ctx.dataset.tooltipOverride[ctx.dataIndex] : null;
+                                                return ov ? [regel, '⚠ ' + ov] : regel;
                                             }
                                             return ctx.dataset.label + ': ' + ctx.parsed.y;
                                         }
@@ -2650,6 +2662,9 @@
             // dem ersten Rendern stehen.
             setText('energy-pv', energy.pv_generation_w ?? NO_DATA);
             setText('energy-haus', energy.hausverbrauch_w ?? NO_DATA);
+            // Datenalter der Solax-Livedaten (B4b): zeigt die ~5-min-Granularitaet
+            // des Wechselrichters, auch wenn solar_stale noch False ist.
+            setText('energy-age', formatAge(energy.solar_age_s));
             setText('energy-forecast-today', fmtForecast(energy.forecast_today));
             setText('energy-forecast-tomorrow', fmtForecast(energy.forecast_tomorrow));
             setText('energy-forecast-day2', fmtForecast(energy.forecast_day2));
@@ -2893,6 +2908,7 @@
                         <div class="info-row"><span class="info-label">Batterie-Leistung</span><span class="info-value"><span id="energy-battery">${energy.battery_power ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label">Einspeisung</span><span class="info-value"><span id="energy-feedin">${energy.feed_in ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label" title="Tatsächliche Erzeugung der Strings (Gleichstromseite)">PV-Erzeugung</span><span class="info-value"><span id="energy-pv">${energy.pv_generation_w ?? NO_DATA}</span> W</span></div>
+                        <div class="info-row"><span class="info-label" title="Alter der Solax-Livedaten. Der Wechselrichter aktualisiert nur etwa alle 5 Minuten (API-Rate-Limit) - Regelentscheidungen nutzen daher bis zu ~5 min alte Werte. Der Stale-Schutz greift erst bei 15 min.">Datenalter (Solar)</span><span class="info-value" id="energy-age">${NO_DATA}</span></div>
                         <div class="info-row"><span class="info-label" title="Was das Haus aktuell aufnimmt">Hausverbrauch</span><span class="info-value"><span id="energy-haus">${energy.hausverbrauch_w ?? NO_DATA}</span> W</span></div>
                         <div class="info-row"><span class="info-label" title="Wechselrichter-Ausgang = Haus + Netz. Nachts rund 250 W, obwohl die Sonne nichts liefert - nicht mit der PV-Erzeugung verwechseln.">Wechselrichter-Ausgang (AC)</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? NO_DATA}</span> W</span></div>
                         <div class="info-row" id="energy-stale-row" style="display:none;color:#ff6b6b"><span class="info-label">⚠ Solar-Daten</span><span class="info-value">veraltet -> PV-Regeln pausiert</span></div>
