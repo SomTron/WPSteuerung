@@ -22,6 +22,12 @@ Schreibstrategie (gegen Spam bei identischen Zyklen):
   reines Rauschen (Median-Abstand 119 s, Minimum 10 s).
 - Im Webapp erscheinen dadurch echte Umschaltzeitpunkte statt Wiederholungen.
 
+Historie-Fenster (Anzeige Option 15 im Manager, /history/regeln in der API):
+- Die Detail-Ansicht reicht 8 Tage zurueck. Damit dieses Fenster vollstaendig
+  verfuegbar ist, muessen sowohl die Rotations-Schwelle (MAX_BYTES) als auch
+  der Lese-Deckel (MAX_EINTRAEGE_LESEN) mitspielen; MAX_GENERATIONEN begrenzt
+  die Gesamthistorie. Aeltere Zeilen fallen bei der Rotation endgueltig weg.
+
 Lebenszeichen im Stillstand: ohne Eintrag ist ein langer Stillstand von einem
 abgestuerzten Dienst nicht unterscheidbar - im Log 18.09.-01.10.2026 standen
 12,9 h ohne Zeile, deren Vorzeile noch "kompressor_laeuft: true" behauptete.
@@ -55,9 +61,18 @@ from constants import (
 )
 
 LOG_DATEI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entscheidungs_log.jsonl")
-MAX_BYTES = 2_000_000          # Rotation bei ~2 MB -> naechste Generation
-MAX_GENERATIONEN = 7           # .old.1 ... .old.7, ~4 Monate Historie
-MAX_EINTRAEGE_LESEN = 5000
+# Rotations-Schwelle je Generation. Die Detail-Anzeige (Manager-Option 15)
+# reicht 8 Tage zurueck. Bei ~650 Byte/Zeile und bis zu ~1.150 Zeilen/Tag
+# (Herzschlag alle 75 s bei laufender WP) sind das rund 7,5 MB je 8 Tage.
+# 8 MB decken das mit Reserve ab, sodass ein 8-Tage-Fenster in ein bis zwei
+# Generationen passt. (Zuvor 2 MB - das deckte nur noch wenige Tage ab, seit
+# der Herzschlag den Log-Volumen deutlich erhoeht hat.)
+MAX_BYTES = 8_000_000          # Rotation bei ~8 MB -> naechste Generation
+MAX_GENERATIONEN = 7           # .old.1 ... .old.7
+# Lese-Cap: muss das 8-Tage-Fenster komplett abdecken. Worst Case rund
+# 1.150 Zeilen/Tag => ~9.200 Zeilen; 20.000 lassen Luft fuer Zeilen aus
+# Handlungswechseln, ohne dass ein vollstaendiges Pi-Einlesen zu teuer wird.
+MAX_EINTRAEGE_LESEN = 20_000
 HEARTBEAT_SEKUNDEN = 75.0      # Zwangsschreibintervall laufender WP (< dt-Cap 120 s)
 HEARTBEAT_STILLSTAND_SEKUNDEN = 1_800.0  # Lebenszeichen bei Stillstand (30 min)
 LOG_TIMEZONE = pytz.timezone(DEFAULT_TIMEZONE)
@@ -111,6 +126,18 @@ _schreibfehlerzaehler = 0  # Schreibfehler zaehlen, aber das Journal nicht flute
 # Frist nicht verlaengern, sonst schiebt sich der Heartbeat endlos hinaus
 # (im Test: nach 1800 s immer noch nicht faellig).
 _letzte_schreib_ts = None
+
+# Cache der vollstaendig gelesenen Logzeilen. `_lies_zeilen()` wird pro
+# Statusabfrage zweimal aufgerufen (Entscheidungen + KPIs), und die WebApp
+# pollt /status alle 5 s. Ohne Cache wuerde jede Abfrage saemtliche
+# Generationen neu von der SD-Karte lesen und JSON-parsen - nach der
+# Vergroesserung von MAX_BYTES/MAX_EINTRAEGE_LESEN waere das auf dem Pi
+# spuerbar. Der Schluessel aus (Pfad, Groesse, mtime) invalidiert automatisch,
+# sobald geschrieben oder rotiert wird (zusaetzlich explizit in
+# `schreibe_eintrag`).
+_lies_cache_pfad: Optional[str] = None
+_lies_cache_key = None
+_lies_cache_zeilen: List[Dict] = []
 
 
 def _letzte_logzeile() -> Optional[Dict]:
@@ -326,7 +353,7 @@ def schreibe_eintrag(
     }
     try:
         global _cache_pfad, _cache_zeile, _pending_pfad, _pending_regelwechsel
-        global _letzte_schreib_ts
+        global _letzte_schreib_ts, _lies_cache_key
         if _pending_pfad != LOG_DATEI:
             _pending_pfad = LOG_DATEI
             _pending_regelwechsel = []
@@ -366,11 +393,18 @@ def schreibe_eintrag(
         if os.path.exists(LOG_DATEI) and os.path.getsize(LOG_DATEI) > MAX_BYTES:
             _rotiere()
             _cache_zeile = None
+            # Nach der Rotation hat sich der Dateisatz geaendert -> Lese-Cache
+            # verwerfen, damit die naechste Abfrage die neue Aufteilung sieht.
+            _lies_cache_key = None
         with open(LOG_DATEI, "a", encoding="utf-8") as f:
             f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
         _cache_pfad = LOG_DATEI
         _cache_zeile = eintrag
         _letzte_schreib_ts = _parse_log_datetime(eintrag.get("ts"))
+        # Die angehaengte Zeile muss die naechste Abfrage erreichen. Der
+        # mtime/size-Schluessel aendert sich zwar ohnehin, aber die explizite
+        # Invalidierung schuetzt auch bei grober Zeitaufloesung des Dateisystems.
+        _lies_cache_key = None
         return True
     except OSError as e:
         # Logging darf den Regelbetrieb niemals stoeren. Ein Schreibfehler
@@ -395,7 +429,7 @@ def _rotiere() -> None:
     Vorher gab es nur EINE Generation (.old), die bei jeder Rotation ueberschrieben
     wurde: bei ~227 Zeilen/Tag und 2 MB war das Historie von maximal ~16 Tagen -
     zu wenig fuer Saison- und Wettervergleiche. MAX_GENERATIONEN aelterer
-    Dateien ergeben stattdessen rund vier Monate.
+    Dateien ergeben stattdessen (je nach Log-Volumen) mehrere Monate.
     """
     try:
         generationen = max(int(MAX_GENERATIONEN), 1)
@@ -423,17 +457,35 @@ def _alle_logpfade() -> List[str]:
     return pfade
 
 
+def _lese_schluessel(pfade: List[str]):
+    """Identitaet der Logdateien fuer den Lese-Cache (Pfad + Groesse + mtime)."""
+    schluessel = []
+    for pfad in pfade:
+        try:
+            st = os.stat(pfad)
+            schluessel.append((pfad, st.st_size, st.st_mtime))
+        except OSError:
+            schluessel.append((pfad, None, None))
+    return tuple(schluessel)
+
+
 def _lies_zeilen() -> List[Dict]:
-    """Liest alle Log-Generationen, aelteste zuerst.
+    """Liest alle Log-Generationen, aelteste zuerst (mit Lese-Cache).
 
     Liest die Generationen von der JUENGSTEN zur aeltesten und bricht ab,
-    sobald MAX_EINTRAEGE_LESEN Eintraege zusammen sind. Bei 7 Generationen
-    x 2 MB waere ein vollstaendiges Einlesen auf dem Pi unnoetig teuer.
+    sobald MAX_EINTRAEGE_LESEN Eintraege zusammen sind. Ein 8-Tage-Fenster
+    umfasst im Worst Case ~9.200 Zeilen - der Deckel schuetzt davor, alle
+    Generationen vollstaendig einzulesen. Das Ergebnis wird gecacht, damit die
+    5-Sekunden-Statusabfrage (Entscheidungen + KPIs = zwei Aufrufe) die Dateien
+    nicht jedes Mal neu von der SD-Karte liest und JSON parst.
     """
+    global _lies_cache_pfad, _lies_cache_key, _lies_cache_zeilen
+    pfade = [p for p in _alle_logpfade() if os.path.exists(p)]
+    schluessel = _lese_schluessel(pfade)
+    if _lies_cache_pfad == LOG_DATEI and _lies_cache_key == schluessel:
+        return list(_lies_cache_zeilen)
     bloecke: List[List[Dict]] = []
-    for pfad in reversed(_alle_logpfade()):  # juengste Datei zuerst
-        if not os.path.exists(pfad):
-            continue
+    for pfad in reversed(pfade):  # juengste Datei zuerst
         zeilen: List[Dict] = []
         try:
             with open(pfad, encoding="utf-8") as f:
@@ -456,7 +508,11 @@ def _lies_zeilen() -> List[Dict]:
             break
     # Bloecke liegen juengste Datei zuerst -> fuer die Ausgabe umkehren.
     zeilen_gesamt = [z for b in reversed(bloecke) for z in b]
-    return zeilen_gesamt[-MAX_EINTRAEGE_LESEN:]
+    ergebnis = zeilen_gesamt[-MAX_EINTRAEGE_LESEN:]
+    _lies_cache_pfad = LOG_DATEI
+    _lies_cache_key = schluessel
+    _lies_cache_zeilen = ergebnis
+    return list(ergebnis)
 
 
 def historie(stunden: float = 24, limit: int = 100) -> List[Dict]:

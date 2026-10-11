@@ -292,6 +292,10 @@ export WPS_QUALITY_REPORT=/pfad/quality_report.json
 - **KPI-Anzeige (Option 15)**: Die KPI-Funktion benoetigt WP-Leistung und
   Strompreis. Der parameterlose Aufruf war ein `TypeError` und schlug immer fehl.
   Beide Werte werden jetzt aus `wp_steuerung_parameter.json` gelesen.
+- **Entscheidungs-Log (Option 15)**: zeigt jetzt die letzten 8 Tage (192 h)
+  statt 72 h. Damit das Fenster vollstaendig verfuegbar ist, rotiert das Log
+  bei 8 MB je Generation (statt 2 MB) und der Lese-Deckel liegt bei 20.000
+  Zeilen; ein Lese-Cache haelt die 5-s-Statusabfrage guenstig.
 - **Kein Shell-Quoting-Risiko**: Python-Code bekommt Pfade und Parameter ueber
   Umgebungsvariablen (`WPS_STEER_DIR`). Ein Pfad mit Anfuehrungszeichen kann den
   Aufruf nicht mehr zerstoeren. Der Startbericht liegt in `startup_report.py`.

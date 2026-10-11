@@ -78,6 +78,11 @@ def isolate_entscheidungslog(tmp_path, monkeypatch):
     monkeypatch.setattr(entscheidungs_log, "LOG_DATEI", test_pfad)
     monkeypatch.setattr(entscheidungs_log, "_cache_pfad", None)
     monkeypatch.setattr(entscheidungs_log, "_cache_zeile", None)
+    # Auch der Lese-Cache (vollstaendig gelesene Zeilen) darf nicht zwischen
+    # Tests mit unterschiedlichen tmp_paths stehen bleiben.
+    monkeypatch.setattr(entscheidungs_log, "_lies_cache_pfad", None)
+    monkeypatch.setattr(entscheidungs_log, "_lies_cache_key", None)
+    monkeypatch.setattr(entscheidungs_log, "_lies_cache_zeilen", [])
     # Auch der Sammel-Zustand fuer Regelwechsel ohne Handlungswechsel muss pro
     # Test zurueckgesetzt werden, sonst wandert er in den naechsten Test.
     monkeypatch.setattr(entscheidungs_log, "_pending_pfad", None)
@@ -89,6 +94,9 @@ def isolate_entscheidungslog(tmp_path, monkeypatch):
     yield
     entscheidungs_log._cache_pfad = None
     entscheidungs_log._cache_zeile = None
+    entscheidungs_log._lies_cache_pfad = None
+    entscheidungs_log._lies_cache_key = None
+    entscheidungs_log._lies_cache_zeilen = []
     entscheidungs_log._pending_pfad = None
     entscheidungs_log._pending_regelwechsel = []
     entscheidungs_log._letzte_schreib_ts = None

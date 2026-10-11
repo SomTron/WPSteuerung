@@ -953,3 +953,77 @@ def test_pcl_reicht_mittelfuehler_und_setpoints_an():
     # CalcStart-Nachrechnung: Prognose, erlernte Zielzeit und Kalibrierung
     assert '"forecast_today_wh_qm": forecast_today_wh' in quelle
     assert '"learned_target_hour": gelernte_zielzeit' in quelle
+
+
+# --- 8-Tage-Fenster (Manager-Option 15) + Lese-Cache ---------------------
+
+def test_acht_tage_fenster_wird_vollstaendig_gelesen(tmp_path):
+    """Option 15 fragt 192 h ab - auch der 8 Tage alte Eintrag muss dabei sein.
+
+    Zuvor lag das Fenster bei 72 h; die Anzeige begann dann hart am
+    Fensterrand (z. B. 2026-10-09T08:57:51 = Abfragezeitpunkt minus 72 h).
+    Der Lese-Deckel darf ein 8-Tage-Fenster nicht abschneiden.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        jetzt = el._log_now()
+        # 8 Eintraege ueber 8 Tage. Die Handlung alterniert, sonst unterdrueckt
+        # der Dedupe die Zeilen.
+        for tage in range(7, -1, -1):
+            ts = jetzt - timedelta(days=tage, minutes=1)
+            el.schreibe_eintrag(f"T{tage}", "x", tage % 2 == 0, tage % 2 == 0, ts=ts)
+        acht_tage = el.historie(stunden=192, limit=100)
+        sieben_tage = el.historie(stunden=168, limit=100)
+    namen8 = {e["gewinner"] for e in acht_tage}
+    namen7 = {e["gewinner"] for e in sieben_tage}
+    assert namen8 == {f"T{i}" for i in range(8)}, \
+        f"8-Tage-Fenster unvollstaendig: {sorted(namen8)}"
+    # Das 7-Tage-Fenster (alter Stand) darf den aeltesten Eintrag NICHT zeigen.
+    assert "T7" not in namen7
+    assert "T0" in namen7
+
+
+def test_historie_grenzen_decken_das_acht_tage_fenster():
+    """Vertrag: Rotation und Lese-Deckel passen zum 8-Tage-Fenster.
+
+    Ein Tag umfasst im Worst Case rund 1.150 Zeilen (Herzschlag alle 75 s bei
+    laufender WP). Waeren MAX_EINTRAEGE_LESEN oder MAX_BYTES zu klein, wuerde
+    das Fenster stillschweigend abgeschnitten - genau der Befund, der die
+    Anzeige frueher nur bis zum Fensterrand reichen liess.
+    """
+    assert el.MAX_EINTRAEGE_LESEN >= 8 * 1_200
+    # Eine Generation muss das 8-Tage-Fenster mit Reserve halten koennen.
+    assert el.MAX_BYTES >= 7_000_000
+
+
+def test_manager_option15_fragt_acht_tage_ab():
+    """Der Anzeigepfad muss 192 h (8 Tage) anfordern, nicht mehr 72 h."""
+    pfad = os.path.join(os.path.dirname(__file__), "..", "..",
+                        "Updater", "wp-manager-menu.sh")
+    with open(pfad, encoding="utf-8") as f:
+        skript = f.read()
+    assert "historie(192" in skript
+    assert "historie(72" not in skript
+
+
+def test_lese_cache_haelt_und_wird_bei_append_verworfen(tmp_path):
+    """Der Lese-Cache darf frische Entscheidungen nicht verschlucken.
+
+    /status liest den Log zweimal pro Aufruf (Entscheidungen + KPIs), alle
+    5 s. Der Cache spart das erneute Lesen von der SD-Karte, muss aber nach
+    jedem Schreibvorgang verworfen werden - sonst fehlt die neueste Zeile.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        el.schreibe_eintrag("R1", "x", True, True)
+        assert [z["gewinner"] for z in el._lies_zeilen()] == ["R1"]
+        # Zweiter Aufruf (Cache-Treffer) liefert denselben Stand.
+        assert [z["gewinner"] for z in el._lies_zeilen()] == ["R1"]
+        # Handlungswechsel -> neue Zeile; der Cache muss sie sehen.
+        el.schreibe_eintrag("R2", "y", False, False)
+        assert [z["gewinner"] for z in el._lies_zeilen()] == ["R1", "R2"]
+        # Direkter Dateizugriff (wie in Analyseskripten) wird ebenfalls erkannt.
+        with open(log_datei, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": el._log_now().isoformat(timespec="seconds"),
+                                "gewinner": "R3"}) + "\n")
+        assert [z["gewinner"] for z in el._lies_zeilen()] == ["R1", "R2", "R3"]

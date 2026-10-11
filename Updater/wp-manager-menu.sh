@@ -6,6 +6,10 @@
 #       verfuegbar). Header zeigt Modi-Zustand (modi_zustand.json), Option 17
 #       zaehlt die Endgruende der angezeigten Zyklen inkl. reason_code=unbekannt.
 #       Banner-Version auf v1.16 nachgezogen (hing auf v1.13 trotz v1.15).
+# v1.17: Option 15 zeigt 8 Tage statt 72 h. Dafuer wurde das Entscheidungslog
+#       vergroessert (Rotations-Schwelle 2 MB -> 8 MB, Lese-Deckel 5000 ->
+#       20000 Zeilen) und ein Lese-Cache ergaenzt, damit die 5-s-Statusabfrage
+#       die Dateien nicht jedes Mal neu von der SD-Karte liest.
 # v1.15: Option 25 installiert Steuerung/wpsteuerung.service nach
 #       /etc/systemd/system. Bisher installierte KEIN Skript diese Unit,
 #       die Doku sagte "selbst anlegen" - auf dem Pi lief eine handgebaute
@@ -552,12 +556,14 @@ except Exception as exc:
     raise SystemExit(1)
 
 try:
-    eintraege = el.historie(72, limit=zeilen)
+    # 8 Tage (192 h): die Detailansicht soll etwa die letzte Woche zeigen,
+    # nicht nur die letzten drei Tage.
+    eintraege = el.historie(192, limit=zeilen)
 except Exception as exc:
     print("Historie nicht lesbar: %s" % exc)
     raise SystemExit(1)
 
-print("Letzte %d Entscheidungen (72 h):" % len(eintraege))
+print("Letzte %d Entscheidungen (8 Tage):" % len(eintraege))
 print("-" * 78)
 for e in eintraege:
     laeuft = "EIN" if e.get("kompressor_laeuft") else "AUS"

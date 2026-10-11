@@ -254,7 +254,10 @@ Vor dem Regel-Aufruf passiert:
     setzen `previous_modus` und zählen für den Taktschutz (`_track_wechsel`).
 12. **Entscheidungslog** (`entscheidungs_log.jsonl`, JSON-Lines): pro Zyklus ein
     Eintrag (Gewinner, Grund, soll_einschalten, Kompressor-Status, PV, SOC,
-    Temperaturen) – nie blockierend, Fehler werden nur gedebuggt.
+    Temperaturen) – nie blockierend, Fehler werden nur gedebuggt. Das Log
+    rotiert bei 8 MB je Generation (`.old.1`…`.old.7`); die Detailansicht
+    (Manager-Option 15) reicht 8 Tage zurück, der Lese-Deckel liegt bei
+    20.000 Zeilen.
 
 ### 3.5 Die Schaltentscheidung (`handle_compressor_on`/`handle_compressor_off`)
 
