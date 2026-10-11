@@ -1266,6 +1266,12 @@ def get_status():
         "status_indikatoren": {
             "solar_stale": solar_stale,
             "solar_age_s": solar_age_s,
+            # V7: Anzahl Schichtungs-Warmstarts ohne PV/Batterie-Quelle.
+            # Im Bestandslog 0 - der Zaehler macht einen Rueckfall sichtbar,
+            # ohne das Verhalten zu aendern.
+            "schichtung_netz_warmstarts": int(
+                getattr(shared_state.control, "schichtung_netz_warmstarts", 0) or 0
+            ),
             # Neu: macht die FOLGE des Stale-Zustands sichtbar. Ohne diese
             # Information wirkt "Solar-Daten veraltet" wie eine Nebensache -
             # tatsaechlich pausieren dann alle Quellenregeln und die

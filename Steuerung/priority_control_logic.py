@@ -754,6 +754,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # Alle Ergebnisse im State speichern fuer API/HTML-Anzeige
     state.control.alle_ergebnisse = alle_ergebnisse
 
+    # V7-Beobachtung: laeuft ein Schichtungs-Warmstart ohne PV/Batterie-Quelle?
+    # Nur zaehlen/melden - das Verhalten bleibt unveraendert.
+    netz_warmstart = _beobachte_schichtung_netz(state, gewinner)
+
     # Ergebnis aufbereiten
     should_on = gewinner is not None and gewinner.einschalten is True
 
@@ -984,6 +988,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                     # (Debounce/Haltezeit). Ohne sie blieb `handlung_override`
                     # ohne Detail ("Handlung AUS trotz Regel-EIN").
                     "regelwechsel_grund": wechsel_grund,
+                    # V7: Schichtungs-Warmstart ohne PV/Batterie-Quelle
+                    # (Beobachtung, kein Eingriff).
+                    "schichtung_netz_warmstart": netz_warmstart,
                     "ausschluss_grund": getattr(state.control, "ausschluss_grund", None),
                     "sperrinfo": _sperrinfo_fuer_log(state),
                     "soll_einschalten_bestaetigt": bool(
@@ -1439,6 +1446,45 @@ def _logge_heizplan(
         if isinstance(wert, (int, float)) and not isinstance(wert, bool):
             teile.append(f"{label} {float(wert):.1f}h")
     logging.info(" | ".join(teile))
+
+
+def _beobachte_schichtung_netz(state, gewinner) -> bool:
+    """Beobachtet einen Schichtungs-Warmstart OHNE Quelle (V7).
+
+    Der Warmstart-Zweig der Abweichungs-Regel liegt VOR dem Quellen-Gate und
+    koennte theoretisch mit Netzstrom heizen. Im Bestandslog 24.08.-11.10.2026
+    trat das nie auf (407 Warmstarts, alle mit PV/Batterie). Damit ein
+    Rueckfall sofort auffaellt, zaehlen wir ihn als Flanke (nicht pro Loop)
+    und melden ihn gedrosselt - OHNE das Verhalten zu aendern.
+
+    Rueckgabe: True, wenn der aktuell gewinnende Warmstart ohne Quelle laeuft.
+    """
+    regel_dict = getattr(gewinner, "regel_dict", None)
+    aktiv = bool(
+        isinstance(regel_dict, dict) and regel_dict.get("schichtung_netz_fallback")
+    )
+    control = getattr(state, "control", None)
+    if control is None:
+        return aktiv
+    vorher = bool(getattr(control, "_schichtung_netz_aktiv", False))
+    try:
+        control._schichtung_netz_aktiv = aktiv
+    except Exception:
+        pass
+    if aktiv and not vorher:
+        try:
+            control.schichtung_netz_warmstarts = int(
+                getattr(control, "schichtung_netz_warmstarts", 0)
+            ) + 1
+        except (TypeError, ValueError):
+            control.schichtung_netz_warmstarts = 1
+        if check_log_throttle(state, "_log_schichtung_netz", interval_minutes=60):
+            logging.warning(
+                "SCHICHTUNGS-WARMSTART MIT NETZ: die Abweichungs-Regel heizt "
+                "ohne PV/Batterie-Quelle (Tiefenschutz). Im Bestandslog trat "
+                "das nie auf - bitte Quelle/Schichtung pruefen."
+            )
+    return aktiv
 
 
 def _spiegele_schichtungsdeckel(control, regel_dict, t_oben) -> None:

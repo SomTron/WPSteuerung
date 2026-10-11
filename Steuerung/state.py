@@ -98,6 +98,11 @@ class ControlState:
         # Mindesthaltezeit (D(c)): ein frisch bestaetigter Gewinner bleibt
         # GEWINNER_MINDESTHALTE_MIN lang, bevor ein anderer uebernehmen darf.
         self._gewinner_bestaetigt_seit: Optional[datetime] = None
+        # V7-Beobachtung: Anzahl Schichtungs-Warmstarts OHNE PV/Batterie-Quelle
+        # (Abweichungs-Regel, Zweig VOR dem Quellen-Gate). Im Bestandslog
+        # 24.08.-11.10.2026 nie aufgetreten - dient nur der Frueherkennung.
+        self.schichtung_netz_warmstarts: int = 0
+        self._schichtung_netz_aktiv: bool = False
         self.consecutive_control_errors: int = 0
         self._rate_messungen: deque = deque(maxlen=5)
         self._rate_confidence: float = 0.0
