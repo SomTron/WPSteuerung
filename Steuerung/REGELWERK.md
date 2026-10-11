@@ -16,7 +16,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 | **Strom-Priorität: PV direkt > Batterie > Netz** | PV-Regeln + AdaptivePV reagieren auf echte Netzeinspeisung; Batterie-Regel nutzt nur SOC-Überschuss ohne Netzkauf; sonst läuft nichts |
 | **Boiler als PV-Buffer** | Bei Überschuss heizen bis 48 °C; bei schlechter Prognose morgen → heute vorheizen; bei guter Prognose → heute sparen |
 | **Dauer-Sonne → Buffer nicht voll laden** | Sommermodus senkt nach 3 guten Tagen den Abweichungs-Soll (−3 K) und die PV-Abschaltpunkte (−2 K → 46 °C statt 48 °C) |
-| **Komfort-Garantien** | Oben mittags ≥ 40 °C; Mitte am Abend ≥ 42 °C zum Duschen – Vorheizen bis zum Nachtsperren-Beginn (19 Uhr), danach kein Nacht-Heizen mehr |
+| **Komfort-Garantien** | MinTemp-Garantien (Prio 65): **Mitte mittags ≥ 42 °C** (9–16 Uhr) und **Mitte abends ≥ 42 °C** (17–22 Uhr) zum Duschen – Vorheizen bis zum Nachtsperren-Beginn (19 Uhr), danach kein Nacht-Heizen mehr |
 
 ---
 
@@ -35,7 +35,7 @@ alle Regeln (`bewerte_alle_regeln` in `priority_control.py`), und die Regel mit 
 | 65 | **MinTemp-\*** | Mindest-Temperatur-Garantien pro Fühler+Zeitfenster | `mindest_temp` |
 | 60 | Komfort | PV-Komfort ≤ 38 °C mit etwas PV (nur PV); Notfall liegt bei Prio 110. **Derzeit `aktiv=false`** – den Komfort-Boden decken die MinTemp-Garantien (42 °C) | `komfort` |
 | 57 | Forecast | Morgen schlecht → heute vorheizen; morgen gut → sparen | `forecast` |
-| 53 | Zeitfenster | Zeitfenster 6–16 Uhr mit min. 410 W PV. **Derzeit `aktiv=false`** (von AdaptivePV abgelöst) | `zeitfenster` |
+| 53 | Zeitfenster | Zeitfenster 16–17 Uhr mit min. 410 W PV. **Derzeit `aktiv=false`** (von AdaptivePV abgelöst) | `zeitfenster` |
 | 47 | Abweichung | Solltemperatur ± Hysterese am unteren Fühler | `abweichung` |
 
 Dazu immer aktiv (keine Priorität nötig):
@@ -47,7 +47,7 @@ Dazu immer aktiv (keine Priorität nötig):
 > haben alle einen eigenen AUS-Zweig bei `tmax_c` (48 °C). Im Entscheidungslog
 > steht dort fast immer `Einspeisung`, weil sie die höchste dieser Prioritäten
 > hat (85). Nachts (Nachtsperre) sind alle drei inaktiv – dann übernimmt
-> `Abweichung` (Prio 47) das AUS, weil `soll − temp` dort ≤ +0,7 K ist.
+> `Abweichung` (Prio 47) das AUS, weil `soll − temp` dort ≤ +0,0 K ist.
 > Der Boiler-Deckel wird also immer von genau einer Regel getragen; die
 > AUS-Zweige der niedriger priorisierten Regeln sind der Rückfall.
 
@@ -55,7 +55,7 @@ Dazu immer aktiv (keine Priorität nötig):
 
 ## 3. Die Regeln im Detail
 
-### 3.1 Einspeisung (PV-Shaping am Netzlimit) — Prio 83
+### 3.1 Einspeisung (PV-Shaping am Netzlimit) — Prio 85
 
 > Vorgabe: Es darf nicht mehr als ~7500 W eingespeist werden. Genau dieser
 > Zeitraum ist der ideale Heizzeitraum – der Strom wäre sonst gedrosselt worden.
@@ -76,7 +76,7 @@ ausschalten_bei_c, temperaturfuehler}`
 Berechnet selbstständig, wann der Kompressor spätestens starten muss, damit zur
 gelernten Zapf-Zeit genug warmes Wasser bereitsteht:
 
-- Ziel: `solltemperatur_c` (44 °C) am unteren Fühler zur **gelernten** Zielzeit
+- Ziel: `solltemperatur_c` (42 °C) am unteren Fühler zur **gelernten** Zielzeit
   (default 17:00, siehe Kapitel 5 „Selbstlernen")
 - Benötigte Vorlaufzeit = Temperaturdifferenz ÷ saisonal **gelernter Heizrate**
   (+ Sicherheitspuffer); bei sehr sonnigem HEUTE (`forecast_today_wh_qm`) wird der
@@ -96,7 +96,7 @@ und startete bei Bewölkung notfalls schon Stunden vorher mit Netzstrom. Jetzt:
   letzten halben Stunde statt stundenlang vorher
 - Der „ZU SPÄT"-Notfall (Puffer negativ) bleibt unverändert als letzte Rettung
 
-### 3.3 PV-Regeln — Prio 81/80
+### 3.3 PV-Regeln — Prio 78
 
 Klassisches PV-Shaping über die **echte Netzeinspeisung** (`feedinpower`):
 Solange Hausverbrauch und Batterieladung den Solarstrom schlucken, feuern sie
@@ -109,6 +109,10 @@ nicht – genau die gewünschte Reihenfolge PV-Haus → PV-Batterie → PV-WP.
 ### 3.4 Batterie-Regel — Prio 75
 
 > Vorgabe: erst PV direkt, dann Batterie, erst ganz zum Schluss Netzstrom.
+
+**Derzeit `aktiv=false`.** Den Batterie-Pfad deckt das Quellen-Gate der
+Abweichungs-Regel ab (SOC ≥ 90 % ohne Netzkauf) – die Vorgabe bleibt damit
+erfüllt; die Regel bleibt als eigenständiger Weg verfügbar.
 
 Heizen mit Hausbatterie-Strom, **ohne dass das Haus Netzstrom kauft**:
 
@@ -141,7 +145,7 @@ Pro Eintrag (`mindest_temp.eintraege[]`) gilt:
 
 | Eintrag | Fühler | Garantie | Fenster (default) |
 |---|---|---|---|
-| Mittag-Mitte | mittig | ≥ 42 °C ohne PV / bis 48 °C mit PV | 11–16 Uhr |
+| Mittag-Mitte | mittig | ≥ 42 °C ohne PV / bis 48 °C mit PV | 9–16 Uhr |
 | Abend-Mitte | mittig | ≥ 42 °C ohne PV / bis 48 °C mit PV | 17–22 Uhr *(lernend, effektiv bis Nachtsperren-Beginn)* |
 
 - **EIN**, wenn der Fühler unter der Mindesttemperatur liegt – **auch während der
@@ -152,7 +156,7 @@ Pro Eintrag (`mindest_temp.eintraege[]`) gilt:
   **bis zum Sperren-Beginn** (19 Uhr): Vor dem Duschen wird rechtzeitig auf 42 °C
   vorgeheizt, kühlt der Boiler nach dem Duschen ab, wird nicht mehr nachgeheizt –
   nachts gäbe es dafür ohnehin kein PV und die Nachtsperre bleibt unangetastet.
-  Letzte Komfort-Linie bleibt weiterhin der Komfort-Notfall (3.6).
+  Letzte Komfort-Linie bleibt weiterhin der Notfallschutz (Prio 110, 3.11).
 - Zwischen `min_temp_c` und `min_temp_c + hysterese_k` (Standard 0 K) tritt die
   Regel stumm zurück. Die Basisregel selbst erzeugt keinen AUS-Befehl; eine
   bestätigte PV-Quelle darf den laufenden Zyklus bis 48 °C weiterführen.
@@ -170,14 +174,17 @@ nachtsperre_ueberschreiben}}`
 
 ### 3.6 Komfort — Prio 60
 
-- **Notfall:** oben ≤ 36 °C → EIN, **auch in der Nachtsperre** (letzte Komfort-Linie)
+**Derzeit `aktiv=false`.** Den Komfort-Boden decken die MinTemp-Garantien
+(42 °C, 3.5); der frühere „Komfort-Notfall" ist als eigenständige Regel
+**Notfallschutz** (Prio 110, 3.11) ausgekoppelt.
+
 - **Komfort:** unten ≤ 38 °C UND etwas PV (≥ 50 W) → EIN
 
 ### 3.7 Forecast — Prio 57
 
 Nimmt die Wh/m²-Prognose von MORGEN (Richtung bewusst so gewählt):
 
-- **Morgen schlecht** (≤ 800 Wh/m²): heute vorheizen (bis `t_vorheiz_ab_c` = 44 °C)
+- **Morgen schlecht** (≤ 800 Wh/m²): heute vorheizen (bis `t_vorheiz_ab_c` = 42 °C)
   im Fenster 8–19 Uhr – also bis zum Nachtsperren-Beginn
 - **Morgen gut** (≥ 3000 Wh/m²): zwischen 11–15 Uhr nicht unnötig heizen – morgen
   kommt wieder PV-Strom
@@ -192,10 +199,10 @@ heizte notfalls mit Batterie-/Netzstrom. Jetzt gilt für den EIN-Wunsch:
   priorisierte Regeln wie Abweichung entscheiden weiter. Mit
   `vorheiz_netz_erlaubt: true` stellt man das alte Verhalten (Netzstrom erlaubt)
   wieder her. Die Sparen-Entscheidung (AUS) braucht keine Quelle.
-- Sicherheitsnetz bleibt der Komfort-Notfall (3.6): Fällt oben ≤ 36 °C, heizt er
-  auch nachts – unabhängig vom Quellen-Gate.
+- Sicherheitsnetz bleibt der Notfallschutz (Prio 110, 3.11): Fällt oben ≤ 36 °C,
+  heizt er auch nachts – unabhängig vom Quellen-Gate.
 
-### 3.8 AdaptivePV — Prio 55
+### 3.8 AdaptivePV — Prio 78
 
 Dynamische Einspeise-Schwelle statt fester Werte (wirkt auch ohne konfigurierte
 `pv_regeln`, z. B. Basis 300 W):
@@ -208,24 +215,26 @@ Dynamische Einspeise-Schwelle statt fester Werte (wirkt auch ohne konfigurierte
 
 ### 3.9 Zeitfenster — Prio 53
 
-6–16 Uhr mit mindestens 410 W PV-Einspeisung heizen, solange der mittlere Fühler
+**Derzeit `aktiv=false`** (von AdaptivePV abgelöst).
+
+16–17 Uhr mit mindestens 410 W PV-Einspeisung heizen, solange der mittlere Fühler
 unter 50 °C bleibt. Klassisches „nutz den Tag"-Backup.
 
 ### 3.10 Abweichung — Prio 47
 
-Grundregel: **unterer Fühler** vs. Solltemperatur (Deployment 44 °C). Der untere
+Grundregel: **unterer Fühler** vs. Solltemperatur (aktiv **42 °C**). Der untere
 Fühler ist der kälteste Punkt und der Frühindikator für „Boiler entladen"
 (Zapfung bringt Kaltwasser unten ein); „oben" bleibt durch die Schichtung lange
 warm. Regelfühler ist konfigurierbar (`temperaturfuehler`).
 
-- EIN, wenn `soll − temp ≥ einschalten_bei_abweichung_k` (Deployment +4,9 K)
-- AUS, wenn `soll − temp ≤ ausschalten_bei_abweichung_k` (Deployment +0,7 K)
+- EIN, wenn `soll − temp ≥ einschalten_bei_abweichung_k` (aktiv **+4,9 K**)
+- AUS, wenn `soll − temp ≤ ausschalten_bei_abweichung_k` (aktiv **+0,0 K**)
 - **Schichtungsschutz:** Ist `oben ≥ schichtung_min_oben_c` (Default 42 °C),
   entscheidet `schichtung_erlaube_start`:
   - `false`: es wird **NICHT** geheizt – die Regel wartet. Verhindert
     die sinnlosen Morgen-Netzläufe bei geschichtetem Boiler (oben heiß, unten kalt).
-  - `true` (**Deployment seit 28.09.2026**): Warmstart mit Deckel – oben darf nur
-    um `schichtung_max_steig_k` (Deployment 1 K) steigen. Grund: Bei `oben 57.8 °C`
+  - `true` (**aktiv seit 28.09.2026**): Warmstart mit Deckel – oben darf nur
+    um `schichtung_max_steig_k` (aktiv **1 K**) steigen. Grund: Bei `oben 57.8 °C`
     / `unten 23.7 °C` (Log 28.09.) blockierte `false` jeden Start – der untere Boiler
     blieb dauerhaft kalt, weil *keine* Regel den Schichtungs-Check umgehen konnte.
   ⚠️ Dieser Zweig liegt **vor** dem Quellen-Gate: bei `true` kann also auch ohne
@@ -245,7 +254,7 @@ tagsueber quellenblind und heizte bei Durchkuehlung mit Netzstrom. Jetzt:
 
 - Normalfall: EIN nur mit echter PV-Einspeisung (>= 50 W) oder voller Batterie
   ohne Netzkauf - sonst wartet die Regel (stumm, kein AUS)
-- **Tiefenschutz**: `solltemperatur_c - netz_notfall_offset_k` (Default 8 K, **Deployment 12 K**)
+- **Tiefenschutz**: `solltemperatur_c - netz_notfall_offset_k` (Default 8 K, **aktiv 12 K**)
   wird die Waermepumpe trotz Netzstrom erlaubt - der Boiler kuehlt nie ganz
   durch, nur weil keine Sonne scheint. Begründung für 12 K: nach der Nachtsperre liegt „unten"
   regelmäßig bei ≈ 33 °C, wodurch die 8-K-Schwelle (36 °C) **jeden Morgen**
@@ -262,7 +271,7 @@ den Netzstart - auch unter der Tiefenschutz-Schwelle. Absicherungen:
 
 - Effektive Prognose = `forecast_today_wh_qm × fc_ratio`, erst ab
   `pv_warten_forecast_schwelle_wh_qm` wird gewartet. Default 2.500 Wh/m²,
-  **Deployment 1.200 Wh/m²**: auch mäßige Sonnentage sollen erst PV abwarten,
+  **aktiv 1.200 Wh/m²**: auch mäßige Sonnentage sollen erst PV abwarten,
   statt morgens Netzstrom zu verbrauchen.
 - `pv_warten_aktiv: false` schaltet das Overlay komplett ab
 - Unter `pv_warten_unten_min_c` (default 20 °C) gilt als „echt kalt“
@@ -270,13 +279,35 @@ den Netzstart - auch unter der Tiefenschutz-Schwelle. Absicherungen:
 
 ---
 
+### 3.11 Notfallschutz / Wochenende / Legionellen (Prio 110 / 100 / 90)
+
+Diese drei Regeln stehen über allen PV-/Komfort-Regeln (Kapitel 2) und haben
+je einen eigenen Zweck:
+
+- **Notfallschutz (110)** – reiner Schutzleiter: `oben ≤ 36 °C` heizt **vor allen
+  Sperren** (Wochenende, Nachtsperre). Die Abschaltung (`oben ≥ 38 °C`) gilt
+  **nur für den eigenen Lauf** – ein von Komfort/PV gestarteter Lauf wird nicht
+  abgewürgt. Spätestens bis `bis_uhr` (22 Uhr), nachts gesperrt; ein Start
+  erfolgt nur, wenn die Mindestlaufzeit vorher endet (Ausnahme: angekündigte
+  Legionellenfahrt).
+- **Wochenende (100)** – blockiert **Starts** vor `fruehestens_uhr` (9 Uhr),
+  auch den Legionellen-Start; die Fahrt wird ab 9 Uhr nachgeholt. Ein *laufender*
+  Zyklus wird nicht abgewürgt (die Regel bleibt dann stumm, `einschalten=None`).
+- **Legionellen (90)** – Prophylaxe 1×/Woche (bevorzugt Donnerstag, spätestens
+  Samstag), Ziel `target_temp_c` 60 °C, Limit `legionellen_max_temp_c` 65 °C.
+  Während der Fahrt hebt sie das Boiler-Limit von 48 auf 65 °C an (sonst bräche
+  der 48-°C-Puffer die Prophylaxe ab). Start bevorzugt mit PV
+  (`pv_start_min_watt` 500 W) oder voller Batterie; `spaeteste_start_uhr` 16 Uhr,
+  `max_tage_ohne_lauf` 14 als Sicherheitsnetz.
+
 ## 4. Übergreifende Mechanismen
 
 ### 4.1 Nachtsperre (19–8 Uhr)
 
 Blockiert alle *Einschaltpunkte*. Bewusste Ausnahmen (Garantien):
 
-1. Komfort-Notfall (oben ≤ 36 °C) — Prio 60
+1. Notfallschutz (oben ≤ 36 °C) — Prio 110 (eigenständige Regel; der frühere
+   „Komfort-Notfall" ist dorthin ausgekoppelt)
 2. Mindest-Temp-Garantien innerhalb ihrer Fenster **mit
    `"nachtsperre_ueberschreiben": true`** — Prio 65 (Default)
    - Ausnahme: Einträge mit `false` (z. B. Abend-Mitte) feuern nicht in der
@@ -295,7 +326,7 @@ Bewertung pro Kalendertag, Rücksetzung bei jeder schlechten Prognose). Nach
 
 | Wirkung | Offset | Ziel |
 |---|---|---|
-| Abweichungs-Soll | −3 K (40 → 37 °C) | Boiler nicht jeden Tag voll heizen |
+| Abweichungs-Soll | −3 K (42 → 39 °C) | Boiler nicht jeden Tag voll heizen |
 | PV-Abschaltpunkte & AdaptivePV-tmax | −2 K (48 → 46 °C) | **Buffer wird bei Dauer-Sonne bewusst nicht voll geladen – Max-Temperatur minimiert** |
 
 Klemmung: Der Abschaltpunkt bleibt mindestens 2 K über dem Einschaltpunkt.
@@ -316,7 +347,7 @@ Pause aus. Ab `max_wechsel_pro_stunde` (8) wird die Mindestpause auf
 Sicherheitsabschaltung gehen weiterhin vor.
 
 Wichtig: Gezählt werden nur tatsächliche Hardware-Schaltvorgänge (z. B.
-`AUS → EIN` oder `EIN → AUS`) – **nicht** jeder Loop-Durchlauf (~13 s). Ein
+`AUS → EIN` oder `EIN → AUS`) – **nicht** jeder Loop-Durchlauf (~10 s). Ein
 stabiler Gewinner über Stunden bleibt im hardware_seitigen Histogramm daher
 ohne zusätzliche Takteinträge.
 
@@ -328,7 +359,15 @@ Zusätzlich flattersicher:
   gegen Komfort-AUS bei `unten ≥ 42 °C`, SOC-Grenze 90 %) – Sensor-/SOC-Jitter
   dort erzeugte sonst Dutzende echte Wechsel pro Stunde. Ein-Sensor-Ticks
   bleiben jetzt ohne Wirkung; die Verzögerung eines echten Wechsels beträgt
-  maximal einen Loop (~13 s).
+  maximal einen Loop (~10 s).
+- **Gewinner-Mindesthaltezeit** (`GEWINNER_MINDESTHALTE_MIN = 5 min`,
+  `_gewinner_haltezeit_blockiert`): Ein einmal bestätigter Gewinner bleibt
+  mindestens 5 min stehen, bevor ein **anderer** Gewinner übernehmen darf.
+  Grund: Im Bestandslog flatterte der Notfallschutz am 03.09.2026 40×/30 min,
+  weil `oben` zwischen 36,0 und 36,06 °C pendelte – der 2-Loop-Debounce ist
+  gegen ein 0,06-K-Rauschen zu kurz. Ein Wechsel *auf denselben* Gewinner ist
+  nie blockiert; die Sicherheits-Abschaltungen (Boiler-Max, Überhitzung,
+  Not-Aus, Druck) liegen außerhalb dieser Wahl und greifen unverändert sofort.
 - **Episode-Logging**: „Taktschutz aktiv" wird nur beim Übergang in die
   Episode gemeldet, „Taktschutz beendet" beim Verlassen – nicht mehr bei jedem
   Durchlauf. Die Meldung „verlängert Pause" erscheint max. alle 30 min.
@@ -345,17 +384,21 @@ positiven Live-Heizraten. Der Status und das Entscheidungslog enthalten
 ### 4.6 Hartes Boiler-Maximum & Ein-Sperre in Limitnaehe
 
 Zwei voneinander unabhaengige Schutzebenen am Bezugsfuehler
-(`boiler_max_fuehler`, **Deployment `max`** = heissester verfuegbarer Fühler)
-gegen das Limit `max_temp_c` (48 C):
+(`boiler_max_fuehler`) gegen das Limit `max_temp_c` (48 C).
 
-- **`max` statt `unten` (Nutzerentscheidung 28.09.2026):** Bei geschichtetem Boiler
+**Aktive Config: `boiler_max_fuehler = "unten"`.** Der Wert ist konfigurierbar
+(`"unten"`, `"mittig"`, `"oben"`, `"max"` = heißester verfügbarer Fühler).
+
+- **Option `"max"` statt `"unten"` (Befund 28.09.2026):** Bei geschichtetem Boiler
   bleibt `unten` lange kalt, während `oben` bereits am Limit steht. Mit festem
-  Fühler `unten` griff das 48-C-Limit dann **nie** (Log 28.09.: oben 57.8 C /
-  unten 23.7 C nach Legionellenprophylaxe) - der Boiler stand am Limit, ohne dass
-  die Abschaltung ausgeloest wurde. Mit `max` zaehlt der heisseste Fühler.
-  Die 2-Zonen-Ausnahme der Ein-Sperre ("unten nahe am Limit, aber mittig noch
-  kalt -> starten") gilt im `max`-Modus **nicht** mehr - sie wuerde dort genau
-  verkehrt weiterheizen lassen.
+  Fühler `unten` kann das 48-C-Limit dann **nie** greifen (Log 28.09.: oben
+  57,8 C / unten 23,7 C nach Legionellenprophylaxe) - der Boiler stand am Limit,
+  ohne dass die Abschaltung ausgeloest wurde. Mit `max` zaehlt der heisseste
+  Fühler. Die 2-Zonen-Ausnahme der Ein-Sperre ("unten nahe am Limit, aber mittig
+  noch kalt -> starten") gilt im `max`-Modus **nicht** mehr - sie wuerde dort
+  genau verkehrt weiterheizen lassen.
+  ⚠️ **Die Repo-Config steht aktuell auf `"unten"`.** Ob `"max"` aktiv sein soll,
+  ist eine Betreiber-Entscheidung (ändert das Abschaltverhalten!).
 - **Legionellen-Nachlauf (`sicherheit.legionellen_nachlauf_min`, Default 180 min):**
   Nach dem Ende der Prophylaxe bleibt das Limit noch 3 Stunden auf
   `legionellen_max_temp_c` (65 C) angehoben. Grund: Der Boiler ist danach
@@ -368,8 +411,8 @@ gegen das Limit `max_temp_c` (48 C):
    boiler_max_hysterese_k` (= 46 C) gesetzt: Ein Neustart ist erst wieder
    moeglich, wenn der Fuehler die Schwelle unterschreitet. Telegram-Warnung inklusive.
 2. **Ein-Sperre im Naecherbereich (proaktiv, seit Incident 26.08.2026):** Schon
-   **vor** dem Einschalten greift `boiler_max_ein_abstand_k` (default **2.0 K**):
-   Liegt der Fuehler bei >= max_temp_c - Abstand (= 46 C), wird kein EIN mehr
+   **vor** dem Einschalten greift `boiler_max_ein_abstand_k` (aktiv **3.0 K**):
+   Liegt der Fuehler bei >= max_temp_c - Abstand (= 45 C), wird kein EIN mehr
    ausgeloest, sondern nur der Blocking-Reason „Boiler-Max-Naehe ..." gesetzt.
    Hintergrund: Startet die WP knapp unter dem Limit, erreicht sie es noch
    innerhalb der Mindestlaufzeit -> Kurzlauf mit gebrochener Laufzeit und
@@ -377,7 +420,7 @@ gegen das Limit `max_temp_c` (48 C):
    bei unten 47,94 C genau 2 min und loeste dann BOILERMAX-AUS aus).
 
 Die Ein-Sperre gilt dauerhaft im Naecherbereich (unabhaengig vom
-Kuehlschwellen-Flag) und hebt sich automatisch auf, sobald wieder >= 2 K Luft
+Kuehlschwellen-Flag) und hebt sich automatisch auf, sobald wieder >= 3 K Luft
 zum Limit bestehen. Sonderfall bleibt erlaubt: oben warm (48,7 C) / unten kalt
 (30 C) -> EIN, weil nur der Bezugsfuehler zaehlt.
 
@@ -399,7 +442,7 @@ Die Rate stammt aus der Live-Messung (`state.control._rate_messung`), der
 gelernten Rate der Lern-Engine oder `rate_fallback_c_h`. Der Telegram-Alarm
 „Boiler-Max-Naehe“ wird auf 1x/Tag gedrosselt (frueher bis zu 38x/Woche).
 
-### 4.6 Taktungs-Reduktion: PV-Weiterlauf-Band & Hysterese-Sparen (3.2)
+### 4.7 Taktungs-Reduktion: PV-Weiterlauf-Band & Hysterese-Sparen (3.2)
 
 - **PV-Weiterlauf-Band** (`zyklus.pv_weiterlauf_abschalt_delay_min`, default
   3 min): Will eine PV-Regel waehrend eines laufenden Zyklus wegen „PV zu
@@ -443,11 +486,22 @@ statische Konfiguration.
 
 ### 5.4 Quellen-Attribution je Heizzyklus
 
-Jeder Zyklus (>5 min) speichert jetzt die mittlere Netzeinspeisung und den
-mittleren SOC waehrend der Laufzeit und wird klassifiziert:
+Die Quelle eines Zyklus wird **beim Start** festgehalten
+(`state.control.source_at_start`, Werte `PV` / `Batterie` / `Netz` aus
+`energy_source`) und landet als Spalte `quelle` in `csv log/zyklen.csv`.
+Fehlt der Startwert (Alt-Datensatz), greift ein **Regelname-Fallback**
+(`cycle_logging._quelle`): `AdaptivePV`/`Einspeisung`/`PV_*` → `pv`,
+`Batterie` → `batterie`, alle übrigen Regeln (Legionellen, Notfallschutz,
+Abweichung, CalcStart, Komfort, Zeitfenster, Wochenende, API) → `netz`,
+sonst `unbekannt`.
 
-- `pv` (Mittel >= 400 W), `batterie` (SOC >= 90 % ohne Netzkauf),
-  `netz` (Netzkauf im Mittel), sonst `gemischt`
+> ⚠️ Das ist **nicht** dieselbe Kennzahl wie der Energie-Split im
+> Entscheidungslog (`entscheidungs_log.kpis`, sichtbar unter `/status` → `kpi`).
+> Der rechnet je Regelzyklus aus `feedin`/`batpower` und kennt
+> `pv` / `batterie` / `netz` / `unklar` (Schwellen in `constants.py`).
+> Der Regelname-Fallback in `zyklen.csv` kann deshalb von der gemessenen
+> Quelle abweichen (Beispiel: ein `Abweichung`-Lauf wird ohne
+> `source_at_start` als `netz` geführt, obwohl er real überwiegend aus PV lief).
 
 Daraus entsteht der Laufzeit-Split ("Wie viel deiner Warmwasser-Waerme kam
 wirklich aus PV?") plus die **Zu-frueh-Erkennung**: Endet ein Nicht-PV-Zyklus
@@ -509,16 +563,21 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
 
 ```jsonc
 {
-  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 2.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "rate_fallback_c_h": 12.0, "overshoot_vorhersage_aktiv": true, "overshoot_rate_schwelle_c_h": 12.0, "overshoot_reserve_k": 0.8 },
-  "abweichung":   { "solltemperatur_c": 40, "schichtung_min_oben_c": 42, "pv_warten_aktiv": true, "pv_warten_forecast_schwelle_wh_qm": 2500, "pv_warten_bis_uhr": 12, "pv_warten_unten_min_c": 20 },
-  "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500 },
-  "zyklus":       { "mindestlaufzeit_minuten": 60, "pv_min_laufzeit_minuten": 10, "pv_weiterlauf_abschalt_delay_min": 3.0 },
-  "batterie":     { "min_soc_prozent": 90, "max_netzbezug_watt": -50 },
-  "adaptive_pv":  { "tmax_c": 48, "einschalten_bis_c": 45, "sparen_hysterese_k": 1.0, "hysterese_forecast_schwelle_wh_qm": 2500 },
+  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 3.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "ueberhitzung_c": 58, "notfall_c": 36, "legionellen_nachlauf_min": 180 },
+  "abweichung":   { "solltemperatur_c": 42, "einschalten_bei_abweichung_k": 4.9, "ausschalten_bei_abweichung_k": 0.0, "schichtung_min_oben_c": 42, "schichtung_netz_max_oben_c": 45, "pv_warten_aktiv": true, "pv_warten_forecast_schwelle_wh_qm": 1200, "pv_warten_bis_uhr": 12, "pv_warten_unten_min_c": 20 },
+  "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500, "ausschalten_bei_c": 48 },
+  "zyklus":       { "mindestlaufzeit_minuten": 60, "mindestpausenzeit_minuten": 30, "pv_min_laufzeit_minuten": 10, "pv_weiterlauf_abschalt_delay_min": 3.0 },
+  "batterie":     { "aktiv": false, "min_soc_prozent": 90, "max_netzbezug_watt": -50 },
+  "adaptive_pv":  { "base_threshold_watt": 300, "tmax_c": 48, "sparen_hysterese_k": 1.0, "hysterese_forecast_schwelle_wh_qm": 2500 },
   "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen+nachtsperre_ueberschreiben */ ] },
   "sommer_modus": { "temperatur_offset_c": -3.0, "pv_ausschalt_offset_c": -2.0 }
 }
 ```
+
+> Die Liste ist ein **Auszug**. Maßgeblich ist immer
+> `wp_steuerung_parameter.json`; fehlende Schlüssel nehmen ihre Defaults aus
+> `json_config.py` an. Werte mit dem Zusatz „aktiv" oben im Text entsprechen
+> genau dieser Datei (Stand des letzten Reviews).
 
 ## 8. Tests
 
