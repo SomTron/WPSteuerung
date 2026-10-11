@@ -8,13 +8,13 @@ Vorher: Unten 48.8 >= Limit 48 -> alle Regeln sagten AUS, aber die
 Mindestlaufzeit hielt den Kompressor noch ~10 min fest und heizte oben
 auf 51.7 C weiter. Neu: Der BoilerMax-Abschalter bricht die Laufzeit.
 
-Nachtrag (Nutzerentscheidung 28.09.2026): `boiler_max_fuehler` ist jetzt
-`"max"` - es zaehlt der HEISSESTE Fuehler, nicht mehr fest "unten". Der
-User-Fall oben ("oben 48,7 / unten 30 -> einschalten") ist damit bewusst
-UMKEHRT: bei geschichtetem Boiler stand oben am Limit, waehrend unten kalt
-war - die WP wurde in den am Limit stehenden Boiler hinein geheizt
-(Log 28.09.: oben 57.8 C / unten 23.7 C nach Legionellenprophylaxe).
-Siehe `test_userfall_oben_warm_unten_kalt_kein_einschalten`.
+Nachtrag (Stand der aktiven Config): `boiler_max_fuehler` ist `"unten"` - der
+Bezugsfuehler fuer das 48-C-Brauchwasserziel ist der untere Fuehler. Der Schutz
+des OBEREN Bereichs ist der Ueberhitzungsschutz (58/65 C auf `t_oben`); ein
+48-C-Deckel auf `oben` wuerde das Nachheizen eines geschichteten Boilers
+(oben warm, unten kalt) abschneiden (Messung Oktober 2026: `oben` im Mittel
+47,4 C / max 54,2 C, `unten` dabei ~40,8 C). Der `"max"`-Modus bleibt als
+Alternative konfigurierbar - Tests dazu setzen `boiler_max_fuehler` explizit.
 """
 import os
 import sys
@@ -584,15 +584,63 @@ def test_legionellen_nachlauf_hebt_limit_auf_65():
     assert wiederein == pytest.approx(63.0)
 
 
-def test_legionellen_nachlauf_laeft_ab():
-    """Nach 180 min ist das normale 48C-Limit wieder aktiv."""
+def test_legionellen_abkuehlphase_haelt_limit_oben():
+    """Nach 180 min UND oben 57,8 C bleibt das Limit auf 65 C (Abkuehlphase)."""
     state = baue_state(t_unten=48.5, t_oben=57.8, t_mittig=50.0)
     state.legionellen_aktiv = False
     state.legionellen_temp_override = None
     state.control.requested_rule_name = None
     state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=181)
     _temp, limit, _wie, _f = pcl._boiler_max_info(state)
+    assert limit == 65.0
+
+
+def test_legionellen_limit_faellt_nach_abkuehlung():
+    """Zeitablauf UND `oben` deutlich unter dem Limit -> wieder 48 C."""
+    state = baue_state(t_unten=45.0, t_oben=44.0, t_mittig=44.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=181)
+    _temp, limit, _wie, _f = pcl._boiler_max_info(state)
     assert limit == 48.0
+
+
+def test_legionellen_abkuehlphase_ist_begrenzt():
+    """Nach LEGIONELLEN_ABKUEHL_MAX_H gilt wieder das normale Limit."""
+    state = baue_state(t_unten=48.5, t_oben=57.8, t_mittig=50.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(
+        hours=pcl.LEGIONELLEN_ABKUEHL_MAX_H + 1)
+    _temp, limit, _wie, _f = pcl._boiler_max_info(state)
+    assert limit == 48.0
+
+
+def test_legionellen_nachlauf_haelt_innerhalb_der_frist():
+    """Innerhalb der Nachlaufzeit bleibt das Limit angehoben - auch wenn `oben`
+    schon abgekuehlt ist (reiner Zeitnachlauf)."""
+    state = baue_state(t_unten=45.0, t_oben=44.0, t_mittig=44.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=10)
+    _temp, limit, _wie, _f = pcl._boiler_max_info(state)
+    assert limit == 65.0
+
+
+def test_ueberhitzungsschutz_im_nachlauf_angehoben():
+    """Konsistenz: Im Nachlauf/der Abkuehlphase gilt auch fuer den
+    Ueberhitzungsschutz das angehobene Limit - sonst wuerde ein Start bei
+    oben 60 C sofort am 58er-Schutz abgebrochen, obwohl das Boiler-Max auf
+    65 C steht."""
+    state = baue_state(t_unten=48.5, t_oben=60.0, t_mittig=55.0)
+    state.legionellen_aktiv = False
+    state.legionellen_temp_override = None
+    state.control.requested_rule_name = None
+    state.legionellen_end_time = datetime.now(TZ) - timedelta(minutes=181)
+    assert pcl._effektive_ueberhitzung_schwelle(state) == 65.0
 
 
 def test_legionellen_nachlauf_0_deaktiviert():

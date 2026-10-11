@@ -72,6 +72,14 @@ BOILER_MAX_EIN_ABSTAND_K = 2.0
 # gedaempft.
 GEWINNER_MINDESTHALTE_MIN = 5.0
 
+#: Obergrenze der Abkuehlphase nach einer Legionellenfahrt (Stunden).
+#: Nutzeranforderung: Nach der Prophylaxe bleibt das angehobene Limit
+#: (legionellen_max_temp_c) so lange aktiv, bis `oben` das normale Limit
+#: DEUTLICH unterschritten hat - sonst wuerde das 48-C-Limit einen noch
+#: heissen Boiler sofort abwuergen. Diese Frist begrenzt die Phase, damit der
+#: Schutz nicht dauerhaft ausser Kraft bleibt.
+LEGIONELLEN_ABKUEHL_MAX_H = 12.0
+
 
 def set_last_compressor_off_time(state, time_val):
     """Setzt den Zeitpunkt des letzten Kompressor-Ausschaltens."""
@@ -1561,12 +1569,13 @@ def _effektives_legionellen_limit(state, include_requested: bool = True):
 def _boiler_max_fuehler_und_temp(state, cfg):
     """Ermittelt (fuehler_name, temp) fuer das harte Boiler-Maximum.
 
-    ``boiler_max_fuehler = "max"`` (Deployment seit 28.09.2026) nimmt den
-    HEISSESTEN verfuegbaren Fühler. Begruendung: Bei geschichtetem Boiler
-    bleibt der untere Fühler lange kalt, während oben bereits am Limit steht
-    (Log 28.09.: oben 57.8 C / unten 23.7 C nach Legionellenprophylaxe). Mit
-    festem Fühler "unten" griff das 48-C-Limit in diesem Zustand nie - der
-    Boiler stand am Limit, ohne dass die Abschaltung ausgeloest wurde.
+    Der Fuehler kommt aus ``sicherheit.boiler_max_fuehler`` (aktiv: ``"unten"``).
+    ``"max"`` nimmt den HEISSESTEN verfuegbaren Fühler (Alternative fuer stark
+    geschichtete Boiler) und aendert das Abschaltverhalten. Der Schutz des
+    OBEREN Bereichs ist bewusst NICHT diese Ebene, sondern der
+    Ueberhitzungsschutz (58/65 C auf ``t_oben``): Ein 48-C-Deckel auf ``oben``
+    wuerde das Nachheizen eines geschichteten Boilers (oben warm, unten kalt,
+    z. B. nach einer Zapfung) abschneiden und den Boiler am Limit takten.
     """
     fuehler_cfg = getattr(cfg, "boiler_max_fuehler", None) or "unten"
     sensors = getattr(state, "sensors", None)
@@ -1588,32 +1597,91 @@ def _boiler_max_fuehler_und_temp(state, cfg):
     return fuehler_cfg, float(wert)
 
 
-def _legionellen_nachlauf_aktiv(state, cfg) -> bool:
-    """True, solange das Boiler-Maximum nach der Prophylaxe noch angehoben ist.
-
-    Nach dem Ende der Legionellenprophylaxe bleibt der Boiler bewusst sehr
-    heiss. Ohne diesen Nachlauf wuerde das 48-C-Limit sofort greifen und jeden
-    weiteren Lauf abwuergen, bis der Boiler wieder abgekuehlt ist - die
-    Solltemperatur zu halten waere dann nicht mehr moeglich.
-    """
-    nachlauf = getattr(cfg, "legionellen_nachlauf_min", 0.0)
-    if not isinstance(nachlauf, (int, float)) or isinstance(nachlauf, bool):
-        return False
-    if nachlauf <= 0:
-        return False
-    ende = getattr(state, "legionellen_end_time", None)
+def _vergangen_seit(state, ende):
+    """Zeitdifferenz jetzt - ende (tz-sicher); None wenn nicht bestimmbar."""
     if not isinstance(ende, datetime):
-        return False
+        return None
     try:
         jetzt = _now_for_state(state)
         if jetzt.tzinfo is None and ende.tzinfo is not None:
             jetzt = jetzt.replace(tzinfo=ende.tzinfo)
         elif jetzt.tzinfo is not None and ende.tzinfo is None:
             ende = ende.replace(tzinfo=jetzt.tzinfo)
-        vergangen = jetzt - ende
+        return jetzt - ende
     except (TypeError, ValueError):
+        return None
+
+
+def _legionellen_abkuehlphase_aktiv(state, cfg) -> bool:
+    """True, solange `oben` nach der Prophylaxe noch nicht deutlich abgekuehlt ist.
+
+    Nutzeranforderung: Das angehobene Limit gilt so lange weiter, bis der
+    Boiler OBEN das normale Limit DEUTLICH unterschritten hat
+    (`max_temp_c - boiler_max_hysterese_k`, Standard 46 C). Sonst wuerde das
+    48-C-Limit einen noch heissen, nur passiv abkuehlenden Boiler sofort
+    abwuergen. Begrenzt auf LEGIONELLEN_ABKUEHL_MAX_H Stunden.
+    """
+    limit = getattr(cfg, "max_temp_c", None)
+    hyst = getattr(cfg, "boiler_max_hysterese_k", 2.0)
+    if not isinstance(limit, (int, float)) or isinstance(limit, bool):
+        return False
+    if not isinstance(hyst, (int, float)) or isinstance(hyst, bool):
+        hyst = 2.0
+    sensors = getattr(state, "sensors", None)
+    oben = getattr(sensors, "t_oben", None)
+    if not isinstance(oben, (int, float)) or isinstance(oben, bool):
+        return False
+    if float(oben) <= float(limit) - float(hyst):
+        return False
+    vergangen = _vergangen_seit(state, getattr(state, "legionellen_end_time", None))
+    if vergangen is None:
+        return False
+    return timedelta() <= vergangen <= timedelta(hours=LEGIONELLEN_ABKUEHL_MAX_H)
+
+
+def _legionellen_nachlauf_aktiv(state, cfg) -> bool:
+    """True, solange das angehobene Limit nach der Prophylaxe gilt.
+
+    Nach dem Ende der Legionellenprophylaxe bleibt der Boiler bewusst sehr
+    heiss. Ohne diesen Nachlauf wuerde das 48-C-Limit sofort greifen und jeden
+    weiteren Lauf abwuergen, bis der Boiler wieder abgekuehlt ist - die
+    Solltemperatur zu halten waere dann nicht mehr moeglich.
+
+    Zwei Bedingungen (ODER), beide nur wenn `legionellen_nachlauf_min > 0`:
+    * Zeitnachlauf: innerhalb `legionellen_nachlauf_min` nach dem Fahrtende.
+    * Abkuehlphase: `oben` hat das normale Limit noch nicht deutlich
+      unterschritten (max. LEGIONELLEN_ABKUEHL_MAX_H Stunden).
+    """
+    nachlauf = getattr(cfg, "legionellen_nachlauf_min", 0.0)
+    if not isinstance(nachlauf, (int, float)) or isinstance(nachlauf, bool):
+        return False
+    if nachlauf <= 0:
+        return False
+    if _legionellen_abkuehlphase_aktiv(state, cfg):
+        return True
+    vergangen = _vergangen_seit(state, getattr(state, "legionellen_end_time", None))
+    if vergangen is None:
         return False
     return vergangen <= timedelta(minutes=float(nachlauf))
+
+
+def _erhoehtes_legionellen_limit(state, sicher_cfg):
+    """Angehobenes Legionellen-Limit, solange es gilt - sonst None.
+
+    Gilt waehrend einer aktiven/angeforderten Fahrt sowie im Nachlauf
+    (Zeit- ODER Abkuehlphase, siehe _legionellen_nachlauf_aktiv). Damit nutzen
+    Boiler-Maximum UND Ueberhitzungsschutz dieselbe Anhebung.
+    """
+    limit = _effektives_legionellen_limit(state)
+    if limit is not None:
+        return limit
+    if not _legionellen_nachlauf_aktiv(state, sicher_cfg):
+        return None
+    lle_cfg = getattr(getattr(state, "priority_config", None), "legionellen", None)
+    kandidat = getattr(lle_cfg, "legionellen_max_temp_c", None)
+    if isinstance(kandidat, (int, float)) and not isinstance(kandidat, bool):
+        return float(kandidat)
+    return None
 
 
 def _boiler_max_info(state):
@@ -1621,8 +1689,8 @@ def _boiler_max_info(state):
 
     temp kann None sein (Fuehler fehlt) -> die Pruefungen entfallen dann.
     Bei aktiver Legionellenprophylaxe UND waehrend des Nachlaufs
-    (`sicherheit.legionellen_nachlauf_min`) wird das Limit auf
-    legionellen_max_temp_c erhoeht (wenn gesetzt).
+    (`sicherheit.legionellen_nachlauf_min` bzw. Abkuehlphase) wird das Limit
+    auf legionellen_max_temp_c erhoeht (wenn gesetzt).
     """
     cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
     if cfg is None:
@@ -1632,17 +1700,9 @@ def _boiler_max_info(state):
         return None, None, None, fuehler
     # Standard-Limit aus Config
     limit = float(getattr(cfg, "max_temp_c", 48.0))
-    # Legionellen-Uebersteuerung: Nutze den Override/aktiven Lauf bzw. die
-    # bestaetigte Wunschregel. Der Standard-Boiler-Schutz wird dabei nicht
-    # deaktiviert, nur sein numerisches Limit wird temporaer angehoben.
-    legionellen_limit = _effektives_legionellen_limit(state)
-    if legionellen_limit is None and _legionellen_nachlauf_aktiv(state, cfg):
-        lle_cfg = getattr(
-            getattr(state, "priority_config", None), "legionellen", None
-        )
-        kandidat = getattr(lle_cfg, "legionellen_max_temp_c", None)
-        if isinstance(kandidat, (int, float)) and not isinstance(kandidat, bool):
-            legionellen_limit = float(kandidat)
+    # Legionellen-Uebersteuerung (Fahrt + Nachlauf/Abkuehlphase). Der
+    # Standard-Schutz wird dabei nicht deaktiviert, nur sein Limit angehoben.
+    legionellen_limit = _erhoehtes_legionellen_limit(state, cfg)
     if legionellen_limit is not None and legionellen_limit > limit:
         limit = legionellen_limit
 
@@ -1890,6 +1950,11 @@ def _effektive_ueberhitzung_schwelle(state) -> float:
     ueberhitzung_c dynamisch auf legionellen_max_temp_c (z.B. 65C) angehoben,
     damit der Ueberhitzungsschutz die Prophylaxefahrt (Ziel 60/65C) nicht
     vorzeitig abbricht.
+
+    Seit der Nutzeranforderung „Schutz bleibt oben, bis der Boiler wieder
+    abgekuehlt ist" gilt die Anhebung auch im Nachlauf/der Abkuehlphase
+    (``_erhoehtes_legionellen_limit``) - sonst wuerde ein Start mit oben 60C
+    sofort am 58er-Schutz abgebrochen, obwohl das Boiler-Max noch auf 65C steht.
     """
     cfg = getattr(state, "priority_config", None)
     sicherheit = getattr(cfg, "sicherheit", None)
@@ -1898,8 +1963,8 @@ def _effektive_ueberhitzung_schwelle(state) -> float:
         base = 58.0
     # Legionellen aktiv ODER temp_override gesetzt (robust gegen MagicMocks /
     # Neustart-Zustaende, in denen legionellen_aktiv evtl. erst im naechsten
-    # Lifecycle-Zyklus wieder True ist).
-    legionellen_limit = _effektives_legionellen_limit(state)
+    # Lifecycle-Zyklus wieder True ist) - plus Nachlauf/Abkuehlphase.
+    legionellen_limit = _erhoehtes_legionellen_limit(state, sicherheit)
     if (
         legionellen_limit is not None
         and legionellen_limit > float(base)

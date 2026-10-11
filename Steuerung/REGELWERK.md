@@ -383,27 +383,38 @@ positiven Live-Heizraten. Der Status und das Entscheidungslog enthalten
 
 ### 4.6 Hartes Boiler-Maximum & Ein-Sperre in Limitnaehe
 
-Zwei voneinander unabhaengige Schutzebenen am Bezugsfuehler
-(`boiler_max_fuehler`) gegen das Limit `max_temp_c` (48 C).
+**Zwei Schutzebenen, bewusst getrennt:**
 
-**Aktive Config: `boiler_max_fuehler = "unten"`.** Der Wert ist konfigurierbar
-(`"unten"`, `"mittig"`, `"oben"`, `"max"` = heißester verfügbarer Fühler).
+| Ebene | Limit (normal / Legionellen) | Fühler | Zweck |
+|---|---|---|---|
+| **Überhitzungsschutz** | 58 / 65 °C | **`oben`** (fest) | Schutz des Boiler-Oberteils – greift **unabhängig von den Regeln**, auch gegen Regelfehler |
+| **Boiler-Maximum** | 48 / 65 °C | `boiler_max_fuehler` = **`"unten"`** | Brauchwasser-/PV-Puffer-Ziel am unteren Fühler |
 
-- **Option `"max"` statt `"unten"` (Befund 28.09.2026):** Bei geschichtetem Boiler
-  bleibt `unten` lange kalt, während `oben` bereits am Limit steht. Mit festem
-  Fühler `unten` kann das 48-C-Limit dann **nie** greifen (Log 28.09.: oben
-  57,8 C / unten 23,7 C nach Legionellenprophylaxe) - der Boiler stand am Limit,
-  ohne dass die Abschaltung ausgeloest wurde. Mit `max` zaehlt der heisseste
-  Fühler. Die 2-Zonen-Ausnahme der Ein-Sperre ("unten nahe am Limit, aber mittig
-  noch kalt -> starten") gilt im `max`-Modus **nicht** mehr - sie wuerde dort
-  genau verkehrt weiterheizen lassen.
-  ⚠️ **Die Repo-Config steht aktuell auf `"unten"`.** Ob `"max"` aktiv sein soll,
-  ist eine Betreiber-Entscheidung (ändert das Abschaltverhalten!).
-- **Legionellen-Nachlauf (`sicherheit.legionellen_nachlauf_min`, Default 180 min):**
-  Nach dem Ende der Prophylaxe bleibt das Limit noch 3 Stunden auf
-  `legionellen_max_temp_c` (65 C) angehoben. Grund: Der Boiler ist danach
-  bewusst sehr heiss; ohne Nachlauf wuerde das 48-C-Limit sofort jeden weiteren
-  Lauf abwuergen, bis der Boiler wieder abgekuehlt ist.
+**Warum das Boiler-Maximum auf `"unten"` bleibt (Entscheidung):** Ein 48-°C-Deckel
+auf `oben` würde den Normalbetrieb brechen. Messung Oktober 2026 (Kompressor
+läuft, ohne Legionellen): `oben` liegt im Mittel bei **47,4 °C** (max 54,2 °C)
+und ist in **32 %** der Zeit ≥ 48 °C, während `unten` erst bei ~40,8 °C steht –
+normale Schichtung, z. B. nach einer Zapfung. Ein `oben`-Deckel bei 48 würde
+dieses Nachheizen abschneiden und den Boiler am Limit takten. **Der Schutz des
+oberen Bereichs ist Aufgabe des Überhitzungsschutzes** (58/65 °C). Die Option
+`"max"` (heißester Fühler) bleibt konfigurierbar, ändert aber das
+Abschaltverhalten (dann zählt der heißeste Fühler, und die 2-Zonen-Ausnahme der
+Ein-Sperre entfällt).
+
+**Legionellen-Anhebung (`_erhoehtes_legionellen_limit`):** Während einer Fahrt
+**und danach** bleibt das Limit auf `legionellen_max_temp_c` (65 °C) angehoben –
+**für Boiler-Maximum und Überhitzungsschutz gemeinsam** (sonst würde ein Start
+bei `oben` 60 °C sofort am 58er-Schutz abgebrochen). Die Anhebung endet, wenn
+
+- der Zeitnachlauf abgelaufen ist (`sicherheit.legionellen_nachlauf_min`,
+  180 min) **und**
+- der Boiler `oben` das normale Limit **deutlich unterschritten** hat
+  (`max_temp_c − boiler_max_hysterese_k` = **46 °C**),
+
+spätestens aber nach `LEGIONELLEN_ABKUEHL_MAX_H` (12 h). So bleibt der Boiler
+nach der Prophylaxe nutzbar (er kühlt nur passiv ab) und das 48-°C-Limit greift
+erst wieder, wenn er wirklich abgekühlt ist. `legionellen_nachlauf_min = 0`
+schaltet die Anhebung nach der Fahrt komplett ab.
 
 1. **Abschaltung (nachtraeglich):** Erreicht der Fuehler 48 C, wird der Kompressor
    sofort ausgeschaltet - auch wenn dadurch die Mindestlaufzeit gebrochen wird.
