@@ -119,6 +119,19 @@ mitgelieferte Skript nehmen (read-only, ohne Zusatzpakete):
 python3 Updater/dns-diag.py 100.100.100.100 192.168.178.1 1.1.1.1 8.8.8.8
 ```
 
+Die eingetragenen Namen werden zusaetzlich **beim Start der Steuerung** geprueft
+(UDP/53, 1 s je Eintrag, Ergebnis pro Prozess gecacht). Was nicht antwortet, wird
+uebersprungen und geloggt - ein Tippfehler oder ein Routerwechsel kann damit
+keinen Ausfall mehr erzeugen:
+
+```bash
+grep -i "DNS-Nameserver.*antwortet nicht" /var/log/wps/heizungssteuerung.log | tail -3
+```
+
+Antwortet keiner der Eintraege, greift automatisch der System-Resolver (ebenfalls
+mit WARNING im Log). Die Pruefung selbst kann den Start nicht verhindern - sie
+liefert im Fehlerfall einfach "nicht erreichbar".
+
 Nur Server eintragen, die auch antworten. Welchen Resolver die Steuerung nutzt,
 steht beim Start im Log:
 

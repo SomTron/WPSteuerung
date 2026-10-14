@@ -2,6 +2,8 @@ import aiohttp
 
 import asyncio
 import logging
+import socket
+import struct
 from aiohttp.resolver import AsyncResolver
 
 try:
@@ -45,6 +47,81 @@ def dns_nameserver(config=None) -> list:
     return [teil.strip() for teil in roh.split(",") if teil.strip()]
 
 
+# Wie lange auf eine Antwort eines Nameservers gewartet wird. Ein lokaler
+# Resolver antwortet in Millisekunden (Messung 14.10.2026: Router 6 ms,
+# Tailscale 17 ms) - 1 s ist reichlich Reserve und begrenzt den Startverzug.
+DNS_PROBE_TIMEOUT_S = 1.0
+
+# Ergebnis-Cache: create_robust_aiohttp_session() wird zweimal aufgerufen
+# (Hauptprogramm und Telegram-Task). Ohne Cache wuerde zweimal geprobt.
+_DNS_PROBE_CACHE: dict = {}
+
+
+def dns_probe_paket(name: str = "hc-ping.com") -> bytes:
+    """Kleine DNS-Anfrage (A-Record, RD=1) als Bytes - ohne Zusatzpakete."""
+    frage = b""
+    for teil in name.split("."):
+        frage += bytes([len(teil)]) + teil.encode("ascii")
+    return (
+        struct.pack(">HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
+        + frage
+        + b"\x00"
+        + struct.pack(">HH", 1, 1)
+    )
+
+
+def dns_server_erreichbar(server: str, timeout: float = DNS_PROBE_TIMEOUT_S) -> bool:
+    """Antwortet der Nameserver auf eine kurze UDP/53-Abfrage?
+
+    Schuetzt vor veralteten Eintraegen in ``[Netzwerk] DNS_SERVER`` (z.B. nach
+    einem Routerwechsel oder Tippfehler). Ein toter Server an erster Stelle ist
+    nicht nur langsam: c-ares wartet vor jedem Wechsel seinen Timeout ab - das
+    kann die aiohttp-Deadline reissen und genau den Ausfall erzeugen, den die
+    feste Liste verhindern soll.
+
+    Jede Antwort zaehlt als erreichbar, auch NXDOMAIN/SERVFAIL: es geht nur
+    darum, ob der Server ueberhaupt antwortet. Der Aufruf blockiert hoechstens
+    ``timeout`` Sekunden und laeuft nur beim Erzeugen der Session (mit Cache
+    einmal pro Prozess).
+    """
+    if not server:
+        return False
+
+    family = socket.AF_INET6 if ":" in server else socket.AF_INET
+    try:
+        # Nameserver muessen IP-Literale sein (verlangt c-ares ebenfalls). Ohne
+        # diese Pruefung wuerde sendto() einen Hostnamen ueber den System-Resolver
+        # aufloesen - genau der blockierende Pfad, den wir vermeiden wollen.
+        socket.inet_pton(family, server)
+    except OSError:
+        return False
+
+    # Alles ab hier fehlertolerant: die Startpruefung darf den Start der
+    # Steuerung unter keinen Umstaenden verhindern.
+    sock = None
+    try:
+        sock = socket.socket(family, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(dns_probe_paket(), (server, 53))
+        sock.recvfrom(2048)
+        return True
+    except Exception:
+        return False
+    finally:
+        if sock is not None:
+            sock.close()
+
+
+def erreichbare_nameserver(nameserver, timeout: float = DNS_PROBE_TIMEOUT_S) -> list:
+    """Konfigurierte Nameserver pruefen und nur die antwortenden zurueckgeben."""
+    schluessel = (tuple(nameserver), timeout)
+    if schluessel not in _DNS_PROBE_CACHE:
+        _DNS_PROBE_CACHE[schluessel] = [
+            s for s in nameserver if dns_server_erreichbar(s, timeout)
+        ]
+    return list(_DNS_PROBE_CACHE[schluessel])
+
+
 def create_robust_aiohttp_session(config=None):
     """aiohttp-Session mit nicht-blockierendem DNS-Resolver.
 
@@ -55,9 +132,27 @@ def create_robust_aiohttp_session(config=None):
     Fernzugriff, dazu Sensor-Timeouts).
 
     Der Nameserver kommt aus ``[Netzwerk] DNS_SERVER``; ohne Angabe bleibt es
-    beim System-Resolver aus ``/etc/resolv.conf``.
+    beim System-Resolver aus ``/etc/resolv.conf``. Konfigurierte Server werden
+    beim Start kurz geprueft - wer nicht antwortet, wird uebersprungen und
+    geloggt (siehe ``erreichbare_nameserver``).
     """
     nameserver = dns_nameserver(config)
+
+    if nameserver:
+        erreichbar = erreichbare_nameserver(nameserver)
+        if len(erreichbar) != len(nameserver):
+            logging.warning(
+                "DNS-Nameserver %s aus [Netzwerk] DNS_SERVER antwortet nicht "
+                "(UDP/53, %.1fs) - wird uebersprungen.",
+                ", ".join(s for s in nameserver if s not in erreichbar),
+                DNS_PROBE_TIMEOUT_S,
+            )
+        nameserver = erreichbar
+        if not nameserver:
+            logging.warning(
+                "Kein Name aus [Netzwerk] DNS_SERVER erreichbar - "
+                "verwende System-Resolver."
+            )
 
     if nameserver:
         try:

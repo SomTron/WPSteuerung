@@ -44,19 +44,27 @@ TILT = 30
 
 [Netzwerk]
 # Nameserver fuer die ausgehenden HTTP-Verbindungen (Healthcheck, Telegram,
-# Solax). Komma-getrennt, z.B.:
-#   DNS_SERVER = 192.168.178.1, 1.1.1.1
+# Solax). Komma-getrennt.
 #
-# Leer lassen = System-Resolver aus /etc/resolv.conf (empfohlener Default).
-# Auf einem Pi, dessen resolv.conf von Tailscale verwaltet wird, ist das
-# jedoch ein Single Point of Failure: faellt tailscaled aus, sind Healthcheck,
-# Telegram und die Solax-API gleichzeitig blind, waehrend der Fernzugriff
-# weiterlaeuft. Dann hier einen lokal erreichbaren Nameserver eintragen -
-# bevorzugt die Fritz!Box.
+# Leer lassen = System-Resolver aus /etc/resolv.conf (Default). Der folgt
+# automatisch jeder Netz-/Router-Aenderung, haengt aber an tailscaled: faellt es
+# aus, sind Healthcheck, Telegram und Solax gleichzeitig blind, waehrend der
+# Fernzugriff (Funnel) weiterlaeuft. Wer Tailscale aus dem Pfad nehmen will,
+# traegt hier Namen ein - die ortsunabhaengige Tailnet-Adresse zuerst, den
+# Router danach:
+#   DNS_SERVER = 100.100.100.100, 192.168.178.1
 #
-# Bitte KEINE oeffentlichen Resolver fest eintragen, ohne sie vorher zu
-# testen (dig @8.8.8.8 hc-ping.com). Sind sie im Netz gesperrt, scheitert
-# jeder Lookup mit "aiodns.error.DNSError: (12, 'Timeout while contacting
-# DNS servers')". Die Werte hier sind umgebungsspezifisch und gehoeren
-# deshalb in config.ini, nicht in den Code.
+# Die Reihenfolge ist wichtig: c-ares wartet den Timeout des ersten Eintrags ab,
+# bevor es den naechsten nimmt. Ein veralteter ERSTER Eintrag kostet daher bei
+# jedem Lookup Zeit; an zweiter Stelle kostet er nichts.
+#
+# Alle Eintraege werden beim Start kurz geprueft (UDP/53, 1 s). Was nicht
+# antwortet, wird uebersprungen und als WARNING geloggt - ein Tippfehler oder
+# ein Routerwechsel erzeugt damit keinen Ausfall mehr.
+#
+# Bitte KEINE oeffentlichen Resolver fest eintragen, ohne sie vorher zu testen
+# (python3 Updater/dns-diag.py 1.1.1.1 8.8.8.8). Sind sie im Netz gesperrt,
+# scheitert jeder Lookup mit "aiodns.error.DNSError: (12, 'Timeout while
+# contacting DNS servers')". Diese Werte sind umgebungsspezifisch und gehoeren
+# in config.ini, nicht in den Code.
 DNS_SERVER =
