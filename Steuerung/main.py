@@ -909,6 +909,12 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         battery_min_watt=float(getattr(cfg, "min_batterieleistung_watt", 50.0)),
         soc_min_prozent=float(getattr(cfg, "min_soc_prozent", 90.0)),
         max_netzkauf_watt=float(getattr(cfg, "max_netzbezug_watt", -50.0)),
+        # Die Quellenpruefung richtet sich nach der ERZEUGUNG (DC-Seite), nicht
+        # nach dem Wechselstromausgang: nachts liefert die Batterie den
+        # AC-Ausgang (~250 W), waehrend die DC-Seite 0 W meldet. Ohne diesen
+        # Wert fiel `classify_energy_source` auf `acpower` zurueck und meldete
+        # die Anlage nachts faelschlich als "PV" (Befund 14.10.2026, 21:44).
+        pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
     )
     state.solar.energy_source = source_status.quelle.value
     state.energy_source_detail = source_status.begruendung
@@ -1711,6 +1717,9 @@ def build_heizungsdaten_zeile(state):
             batpower_raw=getattr(state.solar, "batpower", None),
             soc=getattr(state.solar, "soc", None),
             solar_stale=bool(getattr(state, "solar_stale", False)),
+            # Wie im regulaeren Pfad: die Erzeugung (DC) statt des AC-Ausgangs,
+            # damit der Diagnose-Fallback dieselbe Quelle wie die Anlage nennt.
+            pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
         )
         power_source = source_status.quelle.value
         # Rueckwaertskompatibilitaet fuer historische/teilweise befuellte States:

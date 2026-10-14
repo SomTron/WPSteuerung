@@ -146,3 +146,25 @@ def test_jede_durchreichstelle_in_bewerte_alle_regeln_nutzt_die_auflosung():
     assert "_pv_signal = pv_acpower if pv_erzeugung_watt is None" in rumpf, (
         "die Aufloesung von AC-Wert und Erzeugung fehlt"
     )
+
+
+def test_main_reicht_die_erzeugung_an_die_quellenklassifikation():
+    """Auch ``main.py`` muss die DC-Erzeugung uebergeben.
+
+    Befund 14.10.2026: ``state.solar.energy_source`` wurde aus dem AC-Ausgang
+    klassifiziert und meldete nachts "PV", obwohl die Batterie lieferte -
+    dieselbe Fehlerklasse wie bei ``bewerte_alle_regeln``, nur an der
+    Status-/Anzeige-Stelle (mode.source_current).
+    """
+    import main
+
+    with open(main.__file__, encoding="utf-8") as fh:
+        quelle = fh.read()
+
+    aufrufe = quelle.count("classify_energy_source(")
+    mit_dc = quelle.count('pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None)')
+    assert aufrufe >= 1, "kein classify_energy_source-Aufruf in main.py gefunden"
+    assert aufrufe == mit_dc, (
+        f"{aufrufe} classify_energy_source-Aufrufe, aber nur {mit_dc} mit "
+        "pv_erzeugung_watt -> nachts droht erneut die Fehldiagnose 'PV'"
+    )

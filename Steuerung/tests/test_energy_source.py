@@ -398,3 +398,40 @@ def test_stale_und_fehlende_daten_sind_fail_safe():
     )
     assert unbekannt.quelle is Energiequelle.NETZ
     assert unbekannt.verfuegbar is False
+
+
+def test_nachts_liefert_die_batterie_nicht_pv():
+    """Befund 14.10.2026, 21:44: AC 553 W, DC 0 W, Batterie entlaedt 548 W.
+
+    Der AC-Ausgang wird nachts von der Batterie gespeist, nicht von der Sonne.
+    Stuetzt sich die Klassifikation auf ``pv_acpower`` (Fallback), meldet die
+    Anlage faelschlich "PV". Mit der echten Erzeugung (``pv_erzeugung_watt``)
+    verschwindet die Fehldiagnose.
+    """
+    ohne_dc = classify_energy_source(
+        pv_acpower=553.0, feedin_watt=0.0, batpower_raw=-548.0, soc=74.0,
+        pv_min_watt=50.0, battery_min_watt=50.0,
+        soc_min_prozent=90.0, max_netzkauf_watt=-50.0,
+    )
+    assert ohne_dc.quelle is Energiequelle.PV, (
+        "Fallback auf den AC-Wert = alter Zustand; hier bewusst dokumentiert"
+    )
+
+    mit_dc = classify_energy_source(
+        pv_acpower=553.0, feedin_watt=0.0, batpower_raw=-548.0, soc=74.0,
+        pv_min_watt=50.0, battery_min_watt=50.0,
+        soc_min_prozent=90.0, max_netzkauf_watt=-50.0,
+        pv_erzeugung_watt=0.0,
+    )
+    assert mit_dc.quelle is not Energiequelle.PV
+    # SOC 74% < 90% -> keine Batteriefreigabe, also Netz - aber nie "PV".
+    assert mit_dc.quelle is Energiequelle.NETZ
+
+    batterie = classify_energy_source(
+        pv_acpower=553.0, feedin_watt=0.0, batpower_raw=-548.0, soc=95.0,
+        pv_min_watt=50.0, battery_min_watt=50.0,
+        soc_min_prozent=90.0, max_netzkauf_watt=-50.0,
+        pv_erzeugung_watt=0.0,
+    )
+    assert batterie.quelle is Energiequelle.BATTERIE
+
