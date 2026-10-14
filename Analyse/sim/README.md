@@ -60,6 +60,60 @@ Aufruf:
 py -3 Analyse/sim/check_legionella_zustand.py
 ```
 
+## Start-Antizipation: Kandidatenvergleich (Befund 14.10.2026)
+
+Anlass: Im Nutzerprotokoll vom 14.10. blockte die Start-Antizipation um 18:05
+einen quellengestuetzten CalcStart-Start ("hub zur Obergrenze nur 6,1K (Rate
+21C/h, Confidence 40% -> 18min < 60min Mindestlaufzeit)"), obwohl im **selben**
+Lauf Heizplan und CalcStart **5,7 C/h** nannten. Verdacht: zwei verschiedene
+Ratenquellen fuer dieselbe physikalische Groesse.
+
+```bash
+py -3 Analyse/sim/kandidaten.py --szenarien winter_misch --tage 14
+py -3 Analyse/sim/kandidaten.py --varianten basis --tage 14
+```
+
+Kandidaten: `rate_cap` (Antizipations-Rate auf `heating_rate_max_c_h` = 6 C/h
+begrenzt), `rate_cap_12` (12 C/h), `calcstart_pv` (CalcStart als
+quellengesteuerter Lauf, 10 statt 60 min), `antizipation_aus` (Grenzwert).
+
+Ergebnis (10 Tage, Schritte 60 s, identische Seeds):
+
+| Szenario | Kandidat | Netz/Tag | Kurzlaeufe | Antiz.-Sperre | min unten |
+| --- | --- | --- | --- | --- | --- |
+| September | basis | 0,02 kWh | 14 | 2,37 h | 36,6 C |
+| September | rate_cap | 0,02 kWh | 15 | 0,00 h | 37,7 C |
+| Dezember misch | basis | 3,49 kWh | 24 | 21,18 h | 31,3 C |
+| Dezember misch | rate_cap_12 | 3,49 kWh | 24 | 21,18 h | 31,3 C |
+| Dezember misch | rate_cap | 3,69 kWh | 29 | 14,27 h | 31,5 C |
+| Dezember misch | antizipation_aus | 3,74 kWh | 35 | 0,00 h | 33,8 C |
+
+Drei belegte Aussagen:
+
+1. **Im PV-reichen Betrieb ist die Regel praktisch wirkungslos** (2,4 h Sperre,
+   danach identische Kennzahlen bis auf Rauschen) - sie kostet dort nichts.
+2. **Jede Lockerung erkauft Komfort mit Netzstrom UND mehr Kurzlaeufen.**
+   Im wechselhaften Dezember kostet `rate_cap` +0,20 kWh/Tag Netz und +5
+   Kurzlaeufe; das komplette Abschalten +0,24 kWh/Tag und +11 Kurzlaeufe.
+   `rate_cap` ist damit eine Zwischenstufe ohne eigenen Vorteil.
+3. **`calcstart_pv` ist im Modell ein No-op - strukturell.** CalcStart gewinnt
+   dort **keinen einzigen Lauf** (Laeufe je Regel: nur AdaptivePV, Abweichung,
+   Notfallschutz, Forecast). Die Simulation kann diesen Kandidaten deshalb
+   **nicht** bewerten; die Frage "ist CalcStart ein PV-Lauf (10 min) oder ein
+   Bedarfslauf (60 min)?" bleibt eine Entscheidung des Betreibers.
+
+**Grenze der Aussage:** Das Modell rechnete mit Raten unter 12 C/h, die
+Anlage mit 21 C/h (Begruendung siehe `learning_engine.py:46-50`:
+*"Laeuft der untere Knoten sichtbar schneller, ist das ein Lokaleffekt und
+kein Mass fuer die Startplanung."*). Die **Richtung** der Aussagen ist
+uebertragbar, die Groesse der Effekte nicht.
+
+**Beschluss:** Keine Aenderung an der Start-Antizipation und keiner
+Mindestlaufzeit. Die beobachtete Stunde im Nutzerprotokoll ist die
+Mindestlaufzeit-Sperre (Verdichterschutz) nach einem Start, den die
+Antizipation selbst durchgelassen hat (Hub 20,8 K -> 59,4 min + 1 >= 60) -
+kein Regelungsfehler.
+
 ## Szenarien
 
 | Name | Beschreibung |

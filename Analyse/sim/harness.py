@@ -77,6 +77,13 @@ def lade_steuerung():
                  "safety_logic", "root"):
         lg = logging.getLogger(name)
         lg.setLevel(logging.ERROR)
+
+    # Der Entscheidungslog darf durch Simulationslaeufe NICHT wachsen: sonst
+    # schreibt jeder Lauf in den Produktionslog und rotiert ihn (beobachtet am
+    # 14.10.2026: sechs entscheidungs_log.jsonl.old.N im Repo). Die Tests
+    # biegen ihn in conftest.py genauso um.
+    entscheidungs_log.LOG_DATEI = os.path.join(
+        tempfile.gettempdir(), "wpsim_entscheidungs_log.jsonl")
     return pcl, le_mod, entscheidungs_log, legionellen_plan
 
 
