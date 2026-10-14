@@ -9,6 +9,24 @@
 # --- Laufzeit ---
 aiofiles
 aiohttp
+# Nicht-blockierender DNS-Resolver (empfohlen). Ohne aiodns nutzt aiohttp den
+# ThreadedResolver: jeder Lookup belegt einen Thread des Default-Executors und
+# verzoegert damit auch asyncio.to_thread-Aufrufe (Sensor-Lesung), wenn die
+# Namensaufloesung stockt (Befund 13.10.2026: Healthcheck-Alarm bei intaktem
+# Fernzugriff, dazu Sensor-Timeouts).
+#
+# aiodns nutzt den System-Resolver aus /etc/resolv.conf. Auf dem Pi verwaltet
+# TAILSCALE diese Datei (Nameserver 100.100.100.100 / fd7a:115c:a1e0::53) - ein
+# tailscaled-Aussetzer blockiert dann jeden Lookup. Dagegen laesst sich in
+# config.ini unter [Netzwerk] DNS_SERVER ein lokal erreichbarer Nameserver
+# eintragen (z.B. die Fritz!Box).
+#
+# Bitte KEINE oeffentlichen Resolver fest verdrahten: sind sie im Netz gesperrt,
+# scheitert jeder Lookup mit
+# "aiodns.error.DNSError: (12, 'Timeout while contacting DNS servers')".
+#
+# Edge/armv7 (32-bit): ggf. vorher "sudo apt-get install -y libc-ares-dev".
+aiodns
 fastapi
 pydantic>=2.0        # api.py nutzt field_validator/model_validator (Pydantic v2)
 pytz

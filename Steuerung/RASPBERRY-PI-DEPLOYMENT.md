@@ -72,6 +72,53 @@ pip install -r requirements.txt
 
 `
 
+### 5b. DNS-Resolver (`aiodns` + `[Netzwerk] DNS_SERVER`)
+
+Der Pi loest Namen ueber `/etc/resolv.conf` auf - und die wird auf diesem Setup von
+**Tailscale** verwaltet (`nameserver 100.100.100.100` / `fd7a:115c:a1e0::53`). Faellt
+`tailscaled` kurz aus oder haengt das Upstream-Forwarding, stockt damit *jede*
+Namensaufloesung: Healthcheck-Ping, Telegram und die Solax-API laufen in Timeouts,
+**waehrend der Fernzugriff unveraendert funktioniert** (Befund 13.10.2026:
+Healthcheck-Alarm bei erreichbarem Pi, dazu Sensor-Timeouts).
+
+Zwei Stellschrauben, unabhaengig voneinander:
+
+1. **`aiodns`** (in `requirements.txt`) - nicht-blockierender Resolver. Ohne
+   `aiodns` belegt jeder Lookup einen Thread des Default-Executors und
+   verzoegert damit auch die Sensor-Lesung (`asyncio.to_thread`).
+2. **`[Netzwerk] DNS_SERVER`** in `config.ini` - Nameserver fuer die ausgehenden
+   HTTP-Verbindungen (Healthcheck, Telegram, Solax). Leer = System-Resolver.
+   Hier gehoert ein **im eigenen Netz erreichbarer** Server hinzu (bevorzugt die
+   Fritz!Box), damit diese Verbindungen nicht an Tailscale haengen.
+
+```ini
+[Netzwerk]
+# bevorzugt die Fritz!Box - kein oeffentliches DNS noetig
+DNS_SERVER = 192.168.178.1
+```
+
+**Nicht raten - vorher testen.** Sind oeffentliche Resolver im Netz gesperrt,
+scheitert *jeder* Lookup mit
+`aiodns.error.DNSError: (12, 'Timeout while contacting DNS servers')`:
+
+```bash
+dig +time=2 +tries=1 @192.168.178.1 hc-ping.com   # Router
+dig +time=2 +tries=1 @1.1.1.1       hc-ping.com   # oeffentlich
+```
+
+Nur Server eintragen, die auch antworten. Welchen Resolver die Steuerung nutzt,
+steht beim Start im Log:
+
+```bash
+grep -i "DNS-Resolver" /var/log/wps/heizungssteuerung.log | tail -2
+```
+
+Auf 32-bit-Raspberry-Pi-OS (armv7) vorher:
+
+```bash
+sudo apt-get install -y libc-ares-dev
+```
+
 ### 6. Konfiguration anpassen
 ```bash
 # Kopiere die Beispiel-Config

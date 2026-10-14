@@ -51,6 +51,27 @@ class WetterprognoseConfig(BaseModel):
     LONGITUDE: float = Field(default=13.6361)
     TILT: int = Field(default=30)
 
+class NetzwerkConfig(BaseModel):
+    """Optionale DNS-Vorgabe fuer die aiohttp-Session.
+
+    Leer (Default) = System-Resolver aus ``/etc/resolv.conf`` - das ist der
+    sichere Wert, weil er immer dem entspricht, was das Betriebssystem ohnehin
+    nutzt. Ein hier eingetragener Server wird stattdessen direkt gefragt.
+
+    Warum das konfigurierbar sein muss: Oeffentliche Resolver wie 8.8.8.8 sind
+    NICHT in jedem Netz erreichbar (Filter, Captive Portal, Exit-Node). Ein
+    blockiertes UDP/53 erzeugt dann
+    ``aiodns.error.DNSError: (12, 'Timeout while contacting DNS servers')``
+    fuer JEDEN Lookup - Healthcheck, Telegram und Solax waeren gleichzeitig
+    blind. Ein lokal erreichbarer Nameserver (z.B. die Fritz!Box) ist die
+    richtige Wahl, wenn der System-Resolver an Tailscale haengt (Befund
+    13.10.2026).
+    """
+    DNS_SERVER: str = Field(
+        default="",
+        description="Komma-getrennte Nameserver (z.B. '192.168.178.1, 1.1.1.1'); leer = System-Resolver",
+    )
+
 # Bekannte Schluessel aus aelteren Versionen des Projekts - bewusst ohne
 # Funktion im aktuellen Code. Sie erzeugen nur noch eine INFO mit Hinweis,
 # WO der Wert heute konfiguriert wird, statt einer beunruhigenden Warnung.
@@ -86,6 +107,7 @@ class AppConfig(BaseModel):
     Solarueberschuss: SolarueberschussConfig = Field(default_factory=SolarueberschussConfig)
     Logging: LoggingConfig = Field(default_factory=LoggingConfig)
     Wetterprognose: WetterprognoseConfig = Field(default_factory=WetterprognoseConfig)
+    Netzwerk: NetzwerkConfig = Field(default_factory=NetzwerkConfig)
 
 class ConfigManager:
     def __init__(self, config_path: str = "config.ini"):

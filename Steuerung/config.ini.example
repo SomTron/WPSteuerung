@@ -41,3 +41,22 @@ ENABLE_FULL_LOG = True
 LATITUDE = 46.7142
 LONGITUDE = 13.6361
 TILT = 30
+
+[Netzwerk]
+# Nameserver fuer die ausgehenden HTTP-Verbindungen (Healthcheck, Telegram,
+# Solax). Komma-getrennt, z.B.:
+#   DNS_SERVER = 192.168.178.1, 1.1.1.1
+#
+# Leer lassen = System-Resolver aus /etc/resolv.conf (empfohlener Default).
+# Auf einem Pi, dessen resolv.conf von Tailscale verwaltet wird, ist das
+# jedoch ein Single Point of Failure: faellt tailscaled aus, sind Healthcheck,
+# Telegram und die Solax-API gleichzeitig blind, waehrend der Fernzugriff
+# weiterlaeuft. Dann hier einen lokal erreichbaren Nameserver eintragen -
+# bevorzugt die Fritz!Box.
+#
+# Bitte KEINE oeffentlichen Resolver fest eintragen, ohne sie vorher zu
+# testen (dig @8.8.8.8 hc-ping.com). Sind sie im Netz gesperrt, scheitert
+# jeder Lookup mit "aiodns.error.DNSError: (12, 'Timeout while contacting
+# DNS servers')". Die Werte hier sind umgebungsspezifisch und gehoeren
+# deshalb in config.ini, nicht in den Code.
+DNS_SERVER =

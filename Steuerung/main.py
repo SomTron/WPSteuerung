@@ -648,7 +648,7 @@ async def setup_application():
     api_thread.start()
     
     # 6. Session & Tasks
-    session = create_robust_aiohttp_session()
+    session = create_robust_aiohttp_session(state.config)
     state.session = session
     
     
