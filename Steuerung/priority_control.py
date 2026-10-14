@@ -2310,6 +2310,12 @@ def evaluate_legionellen(
             f"Legionellen: geplanter Termin {legionellen_planned_date} liegt in der Zukunft; "
             "warte auf den Plan"
         )
+        # Eigener Code: das Warten auf einen in der Zukunft geplanten Termin ist
+        # KEIN Warten auf eine gerade verfuegbare Quelle. Sonst waehlte
+        # `determine_mode_and_setpoints` die Regel ueber den Code
+        # "waiting_source" als "Gewuenschte Regel" - obwohl die Prophylaxe erst
+        # in Tagen startet und heute nichts anfordert (Befund 14.10.2026).
+        result.set_reason_code("planned_future")
         return result
     if legionellen_planned_date is not None and now.date() > legionellen_planned_date and not nachversuch:
         result.set_reason_code("planned_day_missed")

@@ -543,3 +543,45 @@ class TestSommerModus:
             assert config.abweichung.solltemperatur_c == 43.0,                 f"Soll sollte 43.0 sein, ist {config.abweichung.solltemperatur_c}"
             assert config.pv_regeln[0].einschalten_bei_c == 42.0
             assert config.pv_regeln[0].ausschalten_bei_c == 48.0
+
+
+class TestWartendeQuellenregel:
+    """Die 'Gewuenschte Regel' darf nur ein echtes, JETZT wartendes Quellen-
+    Beduerfnis sein - nicht ein erst in Tagen geplanter Termin."""
+
+    def test_zukunftsplan_zaehlt_nicht_als_wartende_quelle(self):
+        import priority_control_logic as pcl
+        from priority_control import RegelErgebnis
+
+        zukunft = RegelErgebnis(
+            name="Legionellen", prioritaet=90, aktiv=True, einschalten=None,
+            grund="Legionellen: geplanter Termin liegt in der Zukunft; warte auf den Plan",
+        )
+        zukunft.set_reason_code("planned_future")
+        assert pcl._wartende_quellenregel([zukunft]) is None
+
+    def test_echtes_quellenwarten_wird_gewaehlt(self):
+        import priority_control_logic as pcl
+        from priority_control import RegelErgebnis
+
+        wartend = RegelErgebnis(
+            name="Legionellen", prioritaet=90, aktiv=True, einschalten=None,
+            grund="Legionellen wartet auf PV/Batterie",
+        )
+        assert wartend.reason_code == "waiting_source"
+        assert pcl._wartende_quellenregel([wartend]) is wartend
+
+    def test_inaktive_und_entschiedene_regeln_zaehlen_nicht(self):
+        import priority_control_logic as pcl
+        from priority_control import RegelErgebnis
+
+        inaktiv = RegelErgebnis(
+            name="Legionellen", prioritaet=90, aktiv=False, einschalten=None,
+            grund="Legionellen wartet auf PV/Batterie",
+        )
+        start = RegelErgebnis(
+            name="PV_unten", prioritaet=78, aktiv=True, einschalten=True,
+            grund="starte",
+        )
+        assert pcl._wartende_quellenregel([inaktiv, start]) is None
+

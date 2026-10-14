@@ -656,3 +656,29 @@ class TestLegionellenWochenendeNachholung:
         )
         assert nach[0].name == "Legionellen"        # Nachholung um 09:00
         assert nach[0].einschalten is True
+
+
+def test_zukunftsplan_ist_kein_quellenwarten():
+    """Befund 14.10.2026: Die fuer Freitag geplante Prophylaxe wird am Mittwoch
+    als ``planned_future`` gefuehrt - nicht als ``waiting_source``.
+
+    Sonst waehlt ``determine_mode_and_setpoints`` ueber den Code
+    ``waiting_source`` die Regel als "Gewuenschte Regel", obwohl die Prophylaxe
+    erst in Tagen startet und heute nichts anfordert.
+    """
+    from priority_control import evaluate_legionellen
+
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6, start_uhr=8.0,
+        spaeteste_start_uhr=12, pv_start_min_watt=500.0,
+    )
+    result = evaluate_legionellen(
+        cfg,
+        {"oben": 48.5, "unten": 19.4, "mittig": 40.2},
+        datetime(2026, 10, 14, 21, 44),  # Mittwoch
+        legionellen_planned_date=date(2026, 10, 16),  # Freitag (in 2 Tagen)
+    )
+    assert result.aktiv is True
+    assert result.einschalten is None
+    assert result.reason_code == "planned_future"

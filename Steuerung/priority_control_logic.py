@@ -410,6 +410,25 @@ def _soll_priority_loggen(state, alle_ergebnisse) -> bool:
     return check_log_throttle(state, "_last_priority_log", interval_minutes=60.0)
 
 
+def _wartende_quellenregel(alle_ergebnisse):
+    """Erste Regel, die JETZT auf eine verfuegbare Quelle wartet.
+
+    Bewusst nur `reason_code == "waiting_source"`: eine Regel, die lediglich
+    auf einen in der Zukunft geplanten Termin wartet (`planned_future`, z.B.
+    die Legionellenprophylaxe erst in einigen Tagen), fordert heute nichts an
+    und darf nicht als "Gewuenschte Regel" erscheinen. Die Auswahl liegt hier
+    als eigene Funktion, damit genau dieses Verhalten testbar bleibt.
+    """
+    for e in alle_ergebnisse:
+        if (
+            getattr(e, "aktiv", False)
+            and getattr(e, "einschalten", None) is None
+            and getattr(e, "reason_code", "") == "waiting_source"
+        ):
+            return e
+    return None
+
+
 async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
     """
     Bestimmt den Betriebsmodus basierend auf den Prioritaeten-Regeln.
@@ -654,14 +673,7 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # `effective_*`-Felder beschreiben dagegen ausschließlich einen laufenden
     # Hardware-Zyklus und werden bei AUS nicht aus dem letzten Modus geerbt.
     if gewinner is None:
-        waiting = next(
-            (
-                e for e in alle_ergebnisse
-                if e.aktiv and e.einschalten is None
-                and getattr(e, "reason_code", "") == "waiting_source"
-            ),
-            None,
-        )
+        waiting = _wartende_quellenregel(alle_ergebnisse)
         state.control.requested_rule_name = waiting.name if waiting else None
     else:
         state.control.requested_rule_name = gewinner.name
