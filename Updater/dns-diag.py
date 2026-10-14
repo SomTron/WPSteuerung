@@ -151,13 +151,16 @@ def main():
     except OSError as exc:
         print(f"  [FEHL] {type(exc).__name__}: {exc}")
 
-    print("\n-- 4. aiodns in diesem Interpreter --")
+    print("\n-- 4. aiodns in DIESEM Interpreter --")
+    print(f"  Interpreter: {sys.executable}")
     try:
         import aiodns
     except ImportError:
-        print("  [WARN] aiodns fehlt - aiohttp faellt auf den ThreadedResolver zurueck.")
-        print("         Der belegt Threads; stockt DNS, verzoegert das auch die")
-        print("         Sensor-Lesung. Abhilfe: pip install -r requirements.txt")
+        print("  [WARN] aiodns fehlt HIER - aiohttp faellt hier auf den ThreadedResolver")
+        print("         zurueck (belegt Threads, verzoegert z.B. die Sensor-Lesung).")
+        print("         Das gilt nur fuer DIESEN Interpreter. Massgeblich ist der des")
+        print("         Dienstes:  systemctl show wpsteuerung -p ExecStart")
+        print("         Dort pruefen:  <venv>/bin/python -c 'import aiodns'")
     else:
         print(f"  [ ok ] aiodns vorhanden: {os.path.dirname(aiodns.__file__)}")
         for ziel in ([brauchbar[0]] if brauchbar else []) + [None]:
