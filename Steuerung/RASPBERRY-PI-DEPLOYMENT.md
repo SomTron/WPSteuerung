@@ -87,23 +87,36 @@ Zwei Stellschrauben, unabhaengig voneinander:
    `aiodns` belegt jeder Lookup einen Thread des Default-Executors und
    verzoegert damit auch die Sensor-Lesung (`asyncio.to_thread`).
 2. **`[Netzwerk] DNS_SERVER`** in `config.ini` - Nameserver fuer die ausgehenden
-   HTTP-Verbindungen (Healthcheck, Telegram, Solax). Leer = System-Resolver.
-   Hier gehoert ein **im eigenen Netz erreichbarer** Server hinzu (bevorzugt die
-   Fritz!Box), damit diese Verbindungen nicht an Tailscale haengen.
+   HTTP-Verbindungen (Healthcheck, Telegram, Solax). Leer = System-Resolver: der
+   folgt automatisch jeder Netz-/Router-Aenderung, haengt aber an `tailscaled`.
+   Wer Tailscale aus dem Pfad nehmen will, traegt hier Server ein.
 
 ```ini
 [Netzwerk]
-# bevorzugt die Fritz!Box - kein oeffentliches DNS noetig
-DNS_SERVER = 192.168.178.1
+# Tailnet-Adresse zuerst, Router danach - Begruendung siehe unten
+DNS_SERVER = 100.100.100.100, 192.168.178.1
 ```
+
+**Die Reihenfolge ist nicht beliebig.** c-ares fragt den ersten Eintrag und wartet
+dessen Timeout ab, bevor es den naechsten nimmt. Ein *veralteter erster* Eintrag
+(z.B. nach einem Routerwechsel) kostet deshalb bei JEDEM Lookup Zeit und kann die
+aiohttp-Deadline reissen - also genau den Ausfall erzeugen, den die Liste
+verhindern soll. Ein veralteter Eintrag an *zweiter* Stelle kostet dagegen nichts:
+c-ares bleibt beim ersten Antwortenden stehen.
+
+`100.100.100.100` gehoert deshalb nach vorn: die Tailnet-Adresse haengt am
+`tailscale0`-Interface, **nicht** an der Fritz!Box-IP, und bleibt bei Router-,
+Subnetz- oder Anschlusswechsel gleich. Der Router ist der schnelle Rueckfall
+(Messung 14.10.2026: Router 6 ms, Tailscale 17 ms, 1.1.1.1 25 ms, 8.8.8.8 32 ms).
 
 **Nicht raten - vorher testen.** Sind oeffentliche Resolver im Netz gesperrt,
 scheitert *jeder* Lookup mit
-`aiodns.error.DNSError: (12, 'Timeout while contacting DNS servers')`:
+`aiodns.error.DNSError: (12, 'Timeout while contacting DNS servers')`.
+`dig` ist auf dem Pi oft nicht installiert (Befund 14.10.2026), deshalb das
+mitgelieferte Skript nehmen (read-only, ohne Zusatzpakete):
 
 ```bash
-dig +time=2 +tries=1 @192.168.178.1 hc-ping.com   # Router
-dig +time=2 +tries=1 @1.1.1.1       hc-ping.com   # oeffentlich
+python3 Updater/dns-diag.py 100.100.100.100 192.168.178.1 1.1.1.1 8.8.8.8
 ```
 
 Nur Server eintragen, die auch antworten. Welchen Resolver die Steuerung nutzt,
