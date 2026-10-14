@@ -47,7 +47,7 @@ def dns_query(name):
 
 
 def udp_dns_test(server):
-    """UDP/53-Abfrage gegen einen Nameserver. Gibt (ok, info) zurueck."""
+    """UDP/53-Abfrage gegen einen Nameserver. Gibt (ok, dauer_ms, info) zurueck."""
     paket = dns_query(TESTNAME)
     family = socket.AF_INET6 if ":" in server else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_DGRAM)
@@ -56,11 +56,12 @@ def udp_dns_test(server):
     try:
         sock.sendto(paket, (server, 53))
         antwort, _ = sock.recvfrom(2048)
-        return True, f"{(time.time() - start) * 1000:.0f} ms, {len(antwort)} Bytes Antwort"
+        dauer_ms = (time.time() - start) * 1000
+        return True, dauer_ms, f"{dauer_ms:.0f} ms, {len(antwort)} Bytes Antwort"
     except socket.timeout:
-        return False, f"Timeout nach {TIMEOUT_S:.0f}s (UDP/53 gesperrt oder Server tot)"
+        return False, None, f"Timeout nach {TIMEOUT_S:.0f}s (UDP/53 gesperrt oder Server tot)"
     except OSError as exc:
-        return False, f"{type(exc).__name__}: {exc}"
+        return False, None, f"{type(exc).__name__}: {exc}"
     finally:
         sock.close()
 
@@ -133,9 +134,14 @@ def main():
         print("  [WARN] kein Server zum Testen - Adressen mitgeben, z.B.")
         print("         python3 Updater/dns-diag.py 192.168.178.1 100.100.100.100 1.1.1.1")
     ergebnisse = {s: udp_dns_test(s) for s in geprueft}
-    for s, (ok, info) in ergebnisse.items():
+    for s, (ok, _dauer, info) in ergebnisse.items():
         print(f"  [{' ok ' if ok else 'FEHL'}] {s:<18} {info}")
-    brauchbar = [s for s, (ok, _) in ergebnisse.items() if ok]
+    # Schnellster zuerst: ein lokaler Resolver (Router) antwortet typisch in
+    # wenigen Millisekunden und ist bei einem WAN-Aussetzer noch erreichbar.
+    brauchbar = sorted(
+        (s for s, (ok, _dauer, _info) in ergebnisse.items() if ok),
+        key=lambda s: ergebnisse[s][1],
+    )
 
     print("\n-- 3. System-Resolver (getaddrinfo, wie Python selbst aufloest) --")
     try:
@@ -175,9 +181,9 @@ def main():
 
     print("\n-- 6. Empfehlung --")
     if brauchbar:
-        print("  In config.ini eintragen (lokaler Server zuerst):")
+        print("  In config.ini eintragen (schnellster zuerst = typisch der Router):")
         print("    [Netzwerk]")
-        print(f"    DNS_SERVER = {brauchbar[0]}")
+        print(f"    DNS_SERVER = {', '.join(brauchbar[:2])}")
     else:
         print("  Keiner der getesteten Server hat geantwortet. Weitere Adressen testen:")
         print("    python3 Updater/dns-diag.py 192.168.178.1 100.100.100.100 1.1.1.1 8.8.8.8")
