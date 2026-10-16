@@ -636,6 +636,43 @@ def evaluate_einspeisung(
 
     # 3. EINSCHALTEN: Einspeisung am/am ueber dem Netzlimit
     if feedin_watt >= einsp_cfg.einspeisegrenze_watt:
+        # Schutz des oberen Speicherbereichs (Befund Oktober 2026): Der
+        # Boiler-Max-Bezugsfuehler ist 'unten', deshalb sah die Regel den
+        # Speicher als kalt, obwohl oben bereits fast ueberhitzt war. Waehrend
+        # einer Legionellenfahrt ist der obere Bereich bewusst heiss - dort
+        # gilt das Hygieneziel, keine Sperre.
+        temp_oben = _parse_sensor(temp_dict, "oben")
+        oben_cap = getattr(einsp_cfg, "oben_max_start_c", None)
+        if (
+            not legionellen_aktiv
+            and temp_oben is not None
+            and isinstance(oben_cap, (int, float))
+            and not isinstance(oben_cap, bool)
+            and temp_oben >= float(oben_cap)
+        ):
+            result.einschalten = False
+            result.grund = (
+                f"Einspeisung: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
+                f"(Speicher oben voll) -> kein Start"
+            )
+            return result
+        # Einschalthysterese (Befund Oktober 2026): Diese Regel hatte keine
+        # Untergrenze und startete bei unten 44,9 C - der Zyklus riss nach
+        # 9 min am Boiler-Maximum (48 C) ab. Erst unterhalb von
+        # `einschalten_bis_c` darf neu gestartet werden.
+        ein_bis = getattr(einsp_cfg, "einschalten_bis_c", None)
+        if (
+            not legionellen_aktiv
+            and isinstance(ein_bis, (int, float))
+            and not isinstance(ein_bis, bool)
+            and temp >= float(ein_bis)
+        ):
+            result.einschalten = None
+            result.grund = (
+                f"Einspeisung: {einsp_cfg.temperaturfuehler} {temp:.1f}C >= "
+                f"{float(ein_bis):.1f}C (Einschaltgrenze) -> warte"
+            )
+            return result
         result.einschalten = True
         result.grund = (
             f"PV-Shaping: Einspeisung {feedin_watt:.0f}W >= Grenze "
@@ -1641,6 +1678,26 @@ def evaluate_adaptive_pv(
         if _forecast_effektiv_wh_qm(forecast_today_wh_qm, 1.0) >= fc_schwelle:
             einschalten_bis_c = einschalten_bis_c - sparen_k
 
+    # Schutz des oberen Speicherbereichs (Befund Oktober 2026): Der
+    # Boiler-Max-Bezugsfuehler ist 'unten'. Am 12.10.2026 startete AdaptivePV
+    # bei unten 43,9 C, waehrend oben bereits 57,1 C stand (0,9 K vor der
+    # Ueberhitzung bei 58 C). Ist der obere Bereich voll, darf kein PV-Start
+    # mehr ausgeloest werden - der Speicher oben ist bereits gesaettigt.
+    temp_oben = _parse_sensor(temp_dict, "oben")
+    oben_cap = getattr(adaptive_cfg, "oben_max_start_c", None)
+    if (
+        temp_oben is not None
+        and isinstance(oben_cap, (int, float))
+        and not isinstance(oben_cap, bool)
+        and temp_oben >= float(oben_cap)
+    ):
+        result.einschalten = False
+        result.grund = (
+            f"AdaptivePV: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
+            f"(Speicher oben voll) -> kein Start trotz {sensor_name} {temp:.1f}C"
+        )
+        return result
+
     if temp >= einschalten_bis_c and not kompressor_ein:
         result.einschalten = None
         result.grund = (
@@ -2060,6 +2117,26 @@ def evaluate_calculated_start(
         return result
 
     if buffer_hours < 0:
+        # Befund 15.10.2026, 18:37: "ZU SPAET! Zeitablauf -> EIN (Notfall)" bei
+        # oben 48,4 C, mitte 48,0 C - nur unten fehlten 0,44 K. Der Speicher war
+        # zu zwei Dritteln auf Soll; der Notfall-Start haette nur einen Kurzlauf
+        # gegen das Boiler-Maximum erzeugt. Notfall nur bei echtem Defizit.
+        mindestdef = float(getattr(calc_cfg, "notfall_mindestdefizit_k", 0.0) or 0.0)
+        if (
+            mindestdef > 0.0
+            and temp_oben is not None
+            and temp_mitte is not None
+            and temp_oben >= calc_cfg.solltemperatur_c
+            and temp_mitte >= calc_cfg.solltemperatur_c
+            and diff_unten < mindestdef
+        ):
+            result.einschalten = None
+            result.grund = (
+                f"CalcStart: Zeitablauf, aber Speicher oben/mitte auf Soll "
+                f"({temp_oben:.1f}/{temp_mitte:.1f}C) und unten nur "
+                f"{diff_unten:.1f}K unter Ziel -> kein Notfall-Start"
+            )
+            return result
         # Bereits ueber Zielzeit oder zu spaet -> sofort heizen.
         # Netzfallback ist nur erlaubt, wenn explizit aktiviert und ab der
         # konfigurierten Uhrzeit freigegeben; sonst bleibt die Zapf-Garantie

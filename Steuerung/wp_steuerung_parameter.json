@@ -1,5 +1,5 @@
 {
-  "beschreibung": "600W WP Steuerung - optimierte Parameter (Pareto) mit PV-Shaping, Forecast, AdaptivePV, CalcStart",
+  "beschreibung": "600W WP Steuerung - optimierte Parameter (Pareto) mit PV-Shaping, Forecast, AdaptivePV, CalcStart; Okt. 2026: PV-Startgrenze 43 C, Start-Antizipation 25 min, oberer-Fuehler-Deckel 55 C, CalcStart-Notfall-Mindestdefizit 1 K",
   "wp": {
     "leistung_watt": 600,
     "typ": "binaer_ein_aus"
@@ -22,6 +22,7 @@
     "start_vorhersage_niedrig_confidence": 0.4,
     "start_vorhersage_hoch_confidence": 0.7,
     "start_vorhersage_niedrig_zusatzpuffer_min": 2.0,
+    "start_vorhersage_mindestlaufzeit_min": 25.0,
     "ueberhitzung_c": 58,
     "notfall_c": 36,
     "legionellen_nachlauf_min": 180
@@ -114,6 +115,8 @@
     "base_threshold_watt": 300,
     "temperaturfuehler": "unten",
     "tmax_c": 48,
+    "einschalten_bis_c": 43.0,
+    "oben_max_start_c": 55.0,
     "t_aggressiv_kalt_c": 35,
     "t_normal_kalt_c": 38,
     "fc_schwelle_gut_wh": 4000,
@@ -130,7 +133,8 @@
     "heizrate_gesamt_c_h": 2.0,
     "tmax_c": 48,
     "netz_solltemperatur_c": 38,
-    "netz_einschalten_ab_k": 1.0
+    "netz_einschalten_ab_k": 1.0,
+    "notfall_mindestdefizit_k": 1.0
   },
   "sommer_modus": {
     "aktiv": true,
@@ -183,7 +187,9 @@
     "einspeisegrenze_watt": 7500.0,
     "weiterlauf_ab_watt": 6500.0,
     "temperaturfuehler": "unten",
-    "ausschalten_bei_c": 48.0
+    "ausschalten_bei_c": 48.0,
+    "einschalten_bis_c": 43.0,
+    "oben_max_start_c": 55.0
   },
   "legionellen": {
       "aktiv": true,

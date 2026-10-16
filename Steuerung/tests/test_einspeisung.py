@@ -34,9 +34,31 @@ def bewerte(temp_dict, feedin, kompressor_ein=False, now_hour=12, config=None,
 # ── Einschalten am Netzlimit ──
 
 def test_einspeisung_an_grenze_einschalten():
-    erg = bewerte({"unten": 43.0}, feedin=7600.0)
+    # Unter der neuen Einschaltgrenze (43 C): Start erlaubt.
+    erg = bewerte({"unten": 42.0}, feedin=7600.0)
     assert erg.einschalten is True
     assert "PV-Shaping" in erg.grund
+
+
+def test_einspeisung_kein_start_oberhalb_der_einschaltgrenze():
+    """Befund Oktober 2026: Diese Regel hatte keine Einschalthysterese und
+    startete bei unten 44,9 C - der Zyklus riss nach 9 min am 48-C-Maximum ab.
+    """
+    erg = bewerte({"unten": 44.9}, feedin=7600.0)
+    assert erg.einschalten is None
+    assert "Einschaltgrenze" in erg.grund
+
+
+def test_einspeisung_kein_start_wenn_oben_heiss():
+    """Der Boiler-Max-Fuehler ist 'unten'; oben kann er fast ueberhitzt sein."""
+    erg = bewerte({"unten": 40.0, "oben": 56.0}, feedin=7600.0)
+    assert erg.einschalten is False
+    assert "Speicher oben voll" in erg.grund
+
+
+def test_einspeisung_start_bei_kaltem_oben_unveraendert():
+    erg = bewerte({"unten": 40.0, "oben": 50.0}, feedin=7600.0)
+    assert erg.einschalten is True
 
 
 # ── Legionellen-Ausnahme (Regression 25.09.2026) ──

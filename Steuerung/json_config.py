@@ -91,6 +91,20 @@ class SicherheitConfig(BaseModel):
         default=1.0,
         description="Reserve auf die erwartete Laufzeit (min)",
     )
+    # Befund Oktober 2026: Die Start-Antizipation rechnete fuer PV-Laeufe gegen
+    # `pv_min_laufzeit_minuten` (10 min). Bei ~20 C/h Heizrate reichen schon
+    # 3,5 K Hub - der Start wurde freigegeben und 9-14 min spaeter vom
+    # Boiler-Maximum abgewuergt. Fuer die Start-ERLAUBNIS gilt daher eine
+    # eigene, laengere Messlatte: der freie Hub muss diese Mindestlaufzeit
+    # rechtfertigen. Netz-Laeufe bleiben bei ihrer (hoeheren) Mindestlaufzeit.
+    start_vorhersage_mindestlaufzeit_min: float = Field(
+        default=25.0,
+        description=(
+            "Mindesthub fuer die Start-Antizipation (min). Der freie Hub bis "
+            "zum Ausschaltpunkt muss mindestens so lange reichen. "
+            "0 = aus (alte Logik gegen pv_min_laufzeit_minuten)."
+        ),
+    )
     start_vorhersage_niedrig_confidence: float = Field(
         default=0.4, description="Konfidenz unterhalb dieses Werts = niedrig",
     )
@@ -391,6 +405,21 @@ class EinspeisungConfig(BaseModel):
     )
     temperaturfuehler: str = Field(default="unten", description="Regelfühler")
     ausschalten_bei_c: float = Field(default=48.0, description="Ausschalten bei (°C)")
+    # Befund Oktober 2026: Diese Regel hatte gar keine Einschalthysterese - sie
+    # startete bei unten 44,9 C und lief nur 9 min bis 48,0 C (Boiler-Max).
+    # Einschalten ist jetzt nur noch unterhalb von `einschalten_bis_c` erlaubt;
+    # der Weiterlauf eines laufenden Zyklus bleibt davon unberuehrt.
+    einschalten_bis_c: float = Field(
+        default=43.0,
+        description="Einschalten nur unterhalb dieser Temperatur (Regelfuehler, °C)",
+    )
+    # Schutz des oberen Speicherbereichs: Der Boiler-Max-Fuehler ist 'unten',
+    # deshalb sah die Regel den Speicher als kalt, obwohl oben bereits kurz vor
+    # der Ueberhitzung (58 C) stand (Log 12.10.2026: Start bei oben 57,1 C).
+    oben_max_start_c: float = Field(
+        default=55.0,
+        description="Kein Start, wenn der Obere Fuehler so heiss oder heisser ist (°C)",
+    )
 
 
     @model_validator(mode="after")
@@ -403,6 +432,11 @@ class EinspeisungConfig(BaseModel):
             )
         if not (30.0 <= self.ausschalten_bei_c <= 50.0):
             raise ValueError("einspeisung: ausschalten_bei_c ausserhalb 30-50 C")
+        if not (0.0 < self.einschalten_bis_c < self.ausschalten_bei_c):
+            raise ValueError(
+                "einspeisung: einschalten_bis_c muss zwischen 0 und "
+                "ausschalten_bei_c liegen"
+            )
         return self
 
 
@@ -615,6 +649,20 @@ class AdaptivePVConfig(BaseModel):
     base_threshold_watt: float = Field(default=300.0, description="Basis-PV-Schwelle (W)")
     temperaturfuehler: str = Field(default="unten", description="Fuehler: oben/mitte/unten")
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
+    # Befund Oktober 2026: Die EIN-Grenze war implizit `tmax_c - 3` (45 C). Starts
+    # bei 43,4-43,9 C liefen so nur 9-14 min, bis der Bezugsfuehler (unten) das
+    # 48-C-Boiler-Maximum erreichte. Jetzt explizit (Default 43 C), konsistent
+    # mit den statischen PV-Regeln (42/48).
+    einschalten_bis_c: float = Field(
+        default=43.0,
+        description="Hysterese: EIN nur unterhalb dieser Temperatur (Grad C)",
+    )
+    # Schutz des oberen Speicherbereichs analog zur Einspeisungs-Regel: Der
+    # Boiler-Max-Fuehler ist 'unten', der obere Fuehler kann bereits heiss sein.
+    oben_max_start_c: float = Field(
+        default=55.0,
+        description="Kein Start, wenn der Obere Fuehler so heiss oder heisser ist (°C)",
+    )
     t_aggressiv_kalt_c: float = Field(default=35.0, description="Schwelle x0.5 wenn Temp unter Wert (Grad C)")
     t_normal_kalt_c: float = Field(default=38.0, description="Schwelle x0.7 wenn Temp unter Wert (Grad C)")
     fc_schwelle_gut_wh: float = Field(default=4000.0, description="Prognose >= Wert (Wh/qm): Schwelle x1.5 (konservativer)")
@@ -676,6 +724,10 @@ class AdaptivePVConfig(BaseModel):
             raise ValueError("adaptive_pv: fc_schwelle_schlecht muss <= fc_schwelle_gut sein")
         if not (0.0 <= self.sparen_hysterese_k < 10.0):
             raise ValueError("adaptive_pv.sparen_hysterese_k ausserhalb 0-10 K")
+        if not (0.0 < self.einschalten_bis_c < self.tmax_c):
+            raise ValueError(
+                "adaptive_pv: einschalten_bis_c muss zwischen 0 und tmax_c liegen"
+            )
         if not (0.0 <= self.min_start_watt <= 10000.0):
             raise ValueError("adaptive_pv.min_start_watt ausserhalb 0-10000 W")
         if not (0.0 <= self.max_start_watt <= 10000.0):
@@ -700,6 +752,18 @@ class CalculatedStartConfig(BaseModel):
     heizrate_unten_c_h: float = Field(default=3.0, description="Geschaetzte Heizrate unten (Grad C/h)")
     heizrate_gesamt_c_h: float = Field(default=2.0, description="Geschaetzte Heizrate gesamt (Grad C/h)")
     tmax_c: float = Field(default=48.0, description="Maximale Temperatur (Grad C)")
+    # Befund 15.10.2026: Um 18:37 meldete die Regel "ZU SPAET! Zeitablauf ->
+    # EIN (Notfall)", obwohl oben 48,4 C und mitte 48,0 C auf Soll standen und
+    # unten nur 0,44 K fehlten. Ein Notfall-Start bei Zeitablauf ist nur dann
+    # berechtigt, wenn wirklich ein spuerbares Defizit vorliegt.
+    notfall_mindestdefizit_k: float = Field(
+        default=1.0,
+        description=(
+            "Kein Notfall-Start bei Zeitablauf, wenn oben UND mitte bereits "
+            "auf Soll stehen und unten weniger als dieser Wert fehlt (K). "
+            "0 = aus (alte Logik)."
+        ),
+    )
 
     # Energie-Quellen-Gate: Frueh startet CalcStart nur mit PV/Batterie.
     # Ohne Quelle wartet die Regel bis zum ERRECHNETEN Spaetest-Start
@@ -804,6 +868,8 @@ class CalculatedStartConfig(BaseModel):
             )
         if self.netz_einschalten_ab_k < 0:
             raise ValueError("calculated_start: netz_einschalten_ab_k nicht negativ")
+        if self.notfall_mindestdefizit_k < 0:
+            raise ValueError("calculated_start: notfall_mindestdefizit_k nicht negativ")
         return self
 
 

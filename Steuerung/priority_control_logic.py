@@ -1116,6 +1116,9 @@ def _extract_einschaltpunkt(
     elif name == "Batterie":
         return config.batterie.einschalten_bei_c
     elif name == "Einspeisung":
+        direct = getattr(config.einspeisung, "einschalten_bis_c", None)
+        if isinstance(direct, (int, float)) and not isinstance(direct, bool):
+            return float(direct)
         return config.einspeisung.ausschalten_bei_c - 6.0  # Anzeige-Wert
     elif name == "Notfallschutz":
         return config.notfallschutz.einschalten_bei_c
@@ -2465,6 +2468,25 @@ async def handle_compressor_on(
         # Mittig nahe am Limit aber unten noch kalt -> nicht blockieren
         pass
 
+    # Schichtungs-Obergrenze (Befund 15.10.2026): Der Deckel aus dem
+    # Abweichungs-Warmstart wird in `handle_compressor_off` als
+    # Zwangsabschaltung durchgesetzt. Fehlte hier die Start-Sperre, wurde ein
+    # Lauf gestartet und 48 s spaeter (Log 15.10., 18:38) wieder abgewuergt.
+    # Ein Start auf/ueber dem Deckel ist von vornherein sinnlos.
+    schichtung_max = getattr(state.control, "schichtung_oben_max", None)
+    if (
+        isinstance(schichtung_max, (int, float))
+        and not isinstance(schichtung_max, bool)
+        and isinstance(t_oben, (int, float))
+        and not isinstance(t_oben, bool)
+        and float(t_oben) >= float(schichtung_max)
+    ):
+        state.control.blocking_reason = (
+            f"Schichtungs-Obergrenze aktiv (oben {float(t_oben):.1f}C >= "
+            f"{float(schichtung_max):.1f}C) - kein Start"
+        )
+        return False
+
     # Start-Antizipation (Empfehlung 3.1): Nur einschalten, wenn der freie
     # Hub bis zum Ausschaltpunkt reicht, um die Mindestlaufzeit inkl. Reserve
     # zu fuellen. Sonst entsteht ein Kurzlauf, der die Obergrenze erreicht und
@@ -2511,6 +2533,15 @@ async def handle_compressor_on(
                 regel_name or getattr(state.control, "active_rule_name", None)
             )
             minz_min = float(minz.total_seconds() / 60.0)
+            # Befund Oktober 2026: Fuer die Start-ERLAUBNIS galt bisher die
+            # (kurze) PV-Mindestlaufzeit (10 min). Daraus folgten geplante
+            # 9-14-Minuten-Starts, die sofort am Boiler-Maximum abrissen. Ein
+            # Start muss einen laengeren Hub rechtfertigen.
+            mindest_min = float(
+                getattr(_sic_cfg, "start_vorhersage_mindestlaufzeit_min", 0.0) or 0.0
+            )
+            if mindest_min > minz_min:
+                minz_min = mindest_min
             rate_confidence = float(getattr(state.control, "_rate_confidence", 0.1))
             state.control._last_start_anticipation = {
                 "blocked": erwartet_min + effective_puffer_min < minz_min,

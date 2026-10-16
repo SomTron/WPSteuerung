@@ -90,10 +90,13 @@ def _state(t_oben, t_unten=22.8, t_mittig=41.0):
 
 @pytest.mark.asyncio
 async def test_vollstaendiger_zyklus_schraubt_nicht_weg():
-    """Vier echte Zyklen: Start -> heizen bis Deckel -> Stopp -> naechster Start.
+    """Deckel schraubt sich nicht hoch - und ein Start AM Deckel wird verweigert.
 
     Der Oberfuehler darf nach allen Zyklen hoechstens einmal 1 K ueber die
-    Basis (55.0) gewandert sein - also bei 56.0 stehen bleiben.
+    Basis (55.0) gewandert sein - also bei 56.0 stehen bleiben. Neu
+    (Befund 15.10.2026): Sobald `oben` den Deckel erreicht hat, lehnt
+    `handle_compressor_on` den naechsten Start ab - sonst wuerde er 48 s
+    spaeter in `handle_compressor_off` wieder sterben.
     """
     state = _state(t_oben=55.0)
     dekel_je_zyklus = []
@@ -130,6 +133,13 @@ async def test_vollstaendiger_zyklus_schraubt_nicht_weg():
         )
         starts.append(state.control.kompressor_ein)
 
+        if not state.control.kompressor_ein:
+            # Oben steht bereits am Deckel -> Start verweigert (neu).
+            assert "Schichtungs-Obergrenze" in (
+                state.control.blocking_reason or ""
+            ), state.control.blocking_reason
+            continue
+
         # Der Lauf heizt den Oberfuehler bis zum Deckel
         state.control.kompressor_ein = True
         state.sensors.t_oben = deckel
@@ -140,7 +150,11 @@ async def test_vollstaendiger_zyklus_schraubt_nicht_weg():
             set_kompressor_status_func=set_status, regel_name="Abweichung",
         )
 
-    assert all(starts), f"nicht jeder Start war moeglich: {starts}"
+    # Erster Start moeglich (oben 55 < Deckel 56); danach steht oben am Deckel.
+    assert starts[0] is True, f"Start im ersten Zyklus verweigert: {starts}"
+    assert not any(starts[1:]), (
+        f"Start am Deckel haette verweigert werden muessen: {starts}"
+    )
     assert dekel_je_zyklus == [56.0] * 4, (
         f"Deckel wanderte ueber die Zyklen: {dekel_je_zyklus} - "
         "er darf nur einmalig 56.0 sein"
@@ -181,3 +195,31 @@ async def test_basis_ueberlebt_den_stopp_am_deckel():
     # Basis bleibt, nur der Deckel wird freigegeben.
     assert state.control.schichtung_oben_start == 55.0
     assert state.control.schichtung_oben_max is None
+
+
+@pytest.mark.asyncio
+async def test_start_am_schichtungsdeckel_wird_abgelehnt():
+    """Befund 15.10.2026, 18:38: Ein Start bei `oben` >= Deckel lief 48 s und
+    wurde von `handle_compressor_off` wieder abgewuergt (end_grund schichtung).
+    `handle_compressor_on` muss ihn von vornherein ablehnen."""
+
+    state = _state(t_oben=48.4)
+    state.control.schichtung_oben_max = 47.1
+    state.control.schichtung_oben_start = 46.1
+    state.control.kompressor_ein = False
+
+    async def set_status(st, ein, **kw):
+        st.control.kompressor_ein = ein
+        return True
+
+    erg = await pcl.handle_compressor_on(
+        state, None,
+        regelfuehler=state.sensors.t_unten, einschaltpunkt=45.0,
+        ausschaltpunkt=48.0, min_laufzeit=timedelta(minutes=30),
+        min_pause=timedelta(minutes=0), t_oben=48.4, t_mittig=47.9,
+        set_kompressor_status_func=set_status,
+    )
+    assert erg is False
+    assert state.control.kompressor_ein is False
+    assert "Schichtungs-Obergrenze" in (state.control.blocking_reason or "")
+

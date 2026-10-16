@@ -442,7 +442,11 @@ Die statische Ein-Sperre ist um zwei dynamische Schutzschichten ergaenzt:
   Ausschaltpunkt nicht, um Mindestlaufzeit + `start_vorhersage_puffer_min` zu
   fuellen, wird **nicht** eingeschaltet (`reason=start_vorhersage`) - die
   beobachteten 6-10-Minuten-Kurzlaeufe am Limit entfallen, statt in den
-  erzwungenen Laufzeit-Bruch/Kuehlphase zu laufen.
+  erzwungenen Laufzeit-Bruch/Kuehlphase zu laufen. Fuer die Start-ERLAUBNIS
+  gilt seit Oktober 2026 eine eigene, laengere Messlatte
+  (`start_vorhersage_mindestlaufzeit_min`, 25 min): Vorher zaehlte die kurze
+  PV-Mindestlaufzeit (10 min), wodurch geplante 9-14-Minuten-Starts am
+  Boiler-Maximum entstanden.
 - **AUS-Vorhersage** (`overshoot_vorhersage_aktiv`, `overshoot_rate_schwelle_c_h`,
   `overshoot_reserve_k`): Hat die Regel den Abschaltpunkt erreicht und wuerde
   die Mindestlaufzeit den Fuehler mit der aktuellen Rate ueber die Obergrenze
@@ -462,8 +466,31 @@ gelernten Rate der Lern-Engine oder `rate_fallback_c_h`. Der Telegram-Alarm
   sofort wirksam.
 - **AdaptivePV-Hysterese-Sparen** (`adaptive_pv.sparen_hysterese_k`, default
   1 K; `adaptive_pv.hysterese_forecast_schwelle_wh_qm`, default 2500 Wh/m²):
-  Bei sehr guter HEUTE-Prognose wird die EIN-Grenze gesenkt (45→44 C) - die WP
+  Bei sehr guter HEUTE-Prognose wird die EIN-Grenze gesenkt (43→42 C) - die WP
   startet tiefer und laeuft laenger statt oben-nahe zu takten.
+
+### 4.8 Schutzschichten gegen Kurzlaeufe (Befund Oktober 2026)
+
+Auswertung der Zyklen 01.-15.10.2026: 41 von 84 Zyklen waren kuerzer als
+20 min, 32 davon endeten hart am Boiler-Maximum. Vier Massnahmen:
+
+- **PV-Einschaltgrenze** (`einspeisung.einschalten_bis_c` und
+  `adaptive_pv.einschalten_bis_c`, beide **43 C**): Neu wird nur noch unterhalb
+  dieser Temperatur gestartet. Vorher startete AdaptivePV bei 45 C
+  (`tmax_c − 3`) und die Einspeisungs-Regel ganz ohne Untergrenze - der
+  Speicher sprang in 9-14 min auf 48 C und der Zyklus riss ab.
+- **Start-Antizipation mit 25-Minuten-Messlatte**
+  (`sicherheit.start_vorhersage_mindestlaufzeit_min`): Fuer die Start-Erlaubnis
+  zaehlt nicht mehr die kurze PV-Mindestlaufzeit (10 min), sondern ein
+  Mindesthub von 25 min. Netz-Laeufe bleiben bei 60 min.
+- **Oberer-Fuehler-Deckel** (`oben_max_start_c`, **55 C** in AdaptivePV und
+  Einspeisung): Der Boiler-Max-Bezugsfuehler ist `unten`; stand `oben` schon
+  kurz vor der Ueberhitzung (Log 12.10.: 57,1 C), startete die PV dennoch.
+  Jetzt kein Start mehr bei `oben >= 55 C`.
+- **Schichtungs-Start-Sperre** (`handle_compressor_on`): Lag `oben` bereits
+  auf/ueber `schichtung_oben_max`, wurde trotzdem gestartet und der Lauf 48 s
+  spaeter in `handle_compressor_off` abgewuergt (Log 15.10., 18:38). Jetzt
+  wird der Start von vornherein abgelehnt.
 
 ---
 
@@ -574,12 +601,13 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
 
 ```jsonc
 {
-  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 3.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "ueberhitzung_c": 58, "notfall_c": 36, "legionellen_nachlauf_min": 180 },
+  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 3.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "start_vorhersage_mindestlaufzeit_min": 25, "ueberhitzung_c": 58, "notfall_c": 36, "legionellen_nachlauf_min": 180 },
   "abweichung":   { "solltemperatur_c": 42, "einschalten_bei_abweichung_k": 4.9, "ausschalten_bei_abweichung_k": 0.0, "schichtung_min_oben_c": 42, "schichtung_netz_max_oben_c": 45, "pv_warten_aktiv": true, "pv_warten_forecast_schwelle_wh_qm": 1200, "pv_warten_bis_uhr": 12, "pv_warten_unten_min_c": 20 },
-  "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500, "ausschalten_bei_c": 48 },
+  "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500, "ausschalten_bei_c": 48, "einschalten_bis_c": 43, "oben_max_start_c": 55 },
   "zyklus":       { "mindestlaufzeit_minuten": 60, "mindestpausenzeit_minuten": 30, "pv_min_laufzeit_minuten": 10, "pv_weiterlauf_abschalt_delay_min": 3.0 },
   "batterie":     { "aktiv": false, "min_soc_prozent": 90, "max_netzbezug_watt": -50 },
-  "adaptive_pv":  { "base_threshold_watt": 300, "tmax_c": 48, "sparen_hysterese_k": 1.0, "hysterese_forecast_schwelle_wh_qm": 2500 },
+  "adaptive_pv":  { "base_threshold_watt": 300, "tmax_c": 48, "einschalten_bis_c": 43, "oben_max_start_c": 55, "sparen_hysterese_k": 1.0, "hysterese_forecast_schwelle_wh_qm": 2500 },
+  "calculated_start": { "solltemperatur_c": 42, "target_uhr": 17, "netz_solltemperatur_c": 38, "netz_einschalten_ab_k": 1.0, "notfall_mindestdefizit_k": 1.0 },
   "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen+nachtsperre_ueberschreiben */ ] },
   "sommer_modus": { "temperatur_offset_c": -3.0, "pv_ausschalt_offset_c": -2.0 }
 }

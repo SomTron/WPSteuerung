@@ -269,8 +269,9 @@ in `state.control._soll_einschalten` und ruft je nach Kompressor-Status:
    (Standard 58 °C; während Legionellen dynamisch auf `legionellen_max_temp_c`)
    → sofort AUS, `force=True`, `blocking_reason` setzen.
 2. **Boiler-Maximum** (hart, bricht Mindestlaufzeit): Bezugsfühler
-   (`sicherheit.boiler_max_fuehler`, **Standard/Deployment `max`** = heissester
-   verfügbarer Fühler) ≥ `sicherheit.max_temp_c` (Standard 48 °C) → AUS;
+   (`sicherheit.boiler_max_fuehler`, **Standard/Deployment `unten`** – die
+   Größe, nach der alle Heizregeln steuern; der obere Bereich wird über
+   `ueberhitzung_c` geschützt) ≥ `sicherheit.max_temp_c` (Standard 48 °C) → AUS;
    Wiedereinschalten erst, wenn Fühler ≤ `max_temp_c - boiler_max_hysterese_k`
    (Standard 46 °C); setzt `boiler_max_blockiert`.
    **Legionellen-Nachlauf:** Während der Fahrt *und* `legionellen_nachlauf_min`
@@ -529,11 +530,18 @@ Konfigurationsschlüsseln.
      7500 → 6500 W kompensiert den Eigenverbrauch der WP (~600 W), der die
      Einspeisung beim Start einbrechen lässt und sonst Flattern verursachen
      würde.
-  6. **Neustart:** `feedin >= einspeisegrenze_watt` (7500 W) → `EIN`.
+  6. **Neustart** (`feedin >= einspeisegrenze_watt`, 7500 W) – aber nur, wenn
+     der Regelfühler **unter** `einschalten_bis_c` (43 °C) liegt und der obere
+     Fühler **unter** `oben_max_start_c` (55 °C). Sonst `None` („warte") bzw.
+     `AUS` („Speicher oben voll"). Vorher startete die Regel bei unten 44,9 °C
+     und der Zyklus riss nach 9 min am 48-°C-Maximum ab (Befund Okt. 2026).
+     Während einer Legionellenfahrt gilt das Hygieneziel – die beiden Grenzen
+     greifen dann nicht.
   7. Sonst → `einschalten=None` (keine Aktion).
 - **Konfig:** `einspeisung.{aktiv (true), prioritaet (83),
   einspeisegrenze_watt (7500), weiterlauf_ab_watt (6500),
-  temperaturfuehler (unten), ausschalten_bei_c (48)}`.
+  temperaturfuehler (unten), ausschalten_bei_c (48), einschalten_bis_c (43),
+  oben_max_start_c (55)}`.
 
 ---
 
@@ -575,7 +583,10 @@ Konfigurationsschlüsseln.
         Starts für vernachlässigbare 0.x K. Steht in der Config `0`, gilt
         die alte Warte-Logik.
       - `buffer_hours < 0` → `EIN` („ZU SPÄT! Zeitablauf … (Notfall)") –
-        garantiert die Zapf-Versorgung, notfalls ohne PV.
+        garantiert die Zapf-Versorgung, notfalls ohne PV. **Ausnahme** (Befund
+        15.10.2026): Stehen `oben` **und** `mitte` bereits auf Soll und fehlt
+        unten weniger als `notfall_mindestdefizit_k` (1,0 K), unterbleibt der
+        Start – er hätte nur einen Kurzlauf gegen das Boiler-Maximum erzeugt.
       - Quelle vorhanden **und** `effektiver_puffer < 0.5 h` → `EIN`.
       - `buffer_hours <= spaetstart_puffer_h` (0.5) → `EIN`
         („SPAETEST-START … Zapf-Garantie; Quelle: …") – ebenfalls auch ohne
@@ -786,21 +797,25 @@ Konfigurationsschlüsseln.
   2. Nachtsperre → inaktiv.
   3. Sensor fehlt → inaktiv.
   4. `temp >= tmax_c` (48) → `AUS`.
-  5. **Einschalt-Hysterese (Default):** `temp >= einschalten_bis_c`
-     (= `tmax_c − 3.0`) und Kompressor aus → `einschalten=None`
-     (PV-Regel mit eigener Hysterese soll entscheiden).
-  6. **Temperatur-Anpassung:** `temp < t_aggressiv_kalt_c` (35) → Schwelle × 0.5;
+  5. **Oberer-Fühler-Deckel:** `temp_oben >= oben_max_start_c` (55 °C) → kein
+     Start („Speicher oben voll"). Schutz vor Starts kurz vor der Überhitzung
+     (Log 12.10.2026: Start bei unten 43,9 °C, oben 57,1 °C).
+  6. **Einschalt-Hysterese:** `temp >= einschalten_bis_c` (43 °C; bei sehr
+     guter Tagesprognose um `sparen_hysterese_k` tiefer → 42 °C) und
+     Kompressor aus → `einschalten=None` (PV-Regel mit eigener Hysterese soll
+     entscheiden).
+  7. **Temperatur-Anpassung:** `temp < t_aggressiv_kalt_c` (35) → Schwelle × 0.5;
      `temp < t_normal_kalt_c` (38) → Schwelle × 0.7.
-  7. **Prognose-Anpassung** (`prognose_eff = forecast × fc_ratio`):
+  8. **Prognose-Anpassung** (`prognose_eff = forecast × fc_ratio`):
      ≥ `fc_schwelle_gut_wh` (4000) → Schwelle × 1.5; ≤ `fc_schwelle_schlecht_wh`
      (1000) → Schwelle × 0.5.
-  8. `pv_leistung >= schwelle` → `EIN`; sonst `None`.
+  9. `pv_leistung >= schwelle` → `EIN`; sonst `None`.
 - **Konfig:** `adaptive_pv.{aktiv (true), prioritaet (78),
   exklusiv_mit_forecast (true), base_threshold_watt (300),
   temperaturfuehler (unten), tmax_c (48), t_aggressiv_kalt_c (35),
   t_normal_kalt_c (38), fc_schwelle_gut_wh (4000),
-  fc_schwelle_schlecht_wh (1000)}`.
-  `einschalten_bis_c` ist optional; Default: `tmax_c − 3.0`.
+  fc_schwelle_schlecht_wh (1000), einschalten_bis_c (43),
+  oben_max_start_c (55)}`.
 
 ---
 
@@ -844,8 +859,10 @@ Konfigurationsschlüsseln.
          (via `regel_dict`). Damit heizt die WP nach einer Legionellenfahrt
          (oben heiß, unten/mitte kalt) wieder – aber die obere Schicht darf
          nur noch um `schichtung_max_steig_k` (Standard **1,0 K**) steigen.
-         `handle_compressor_off` stoppt den Lauf bei Erreichen der Obergrenze
-         (`Schichtungs-Obergrenze`).
+         `handle_compressor_on` lehnt einen Start ab, wenn `oben` bereits
+         auf/ueber der Obergrenze steht (Befund 15.10.2026: sonst nur ein
+         48-Sekunden-Lauf); `handle_compressor_off` stoppt den Lauf bei
+         Erreichen der Obergrenze (`Schichtungs-Obergrenze`).
        - `schichtung_erlaube_start=false` → alte Logik: `einschalten=None`
          (kein Netz-Start, wenn oben noch warm – vermeidet unnötiges Heizen
          nach Zapfen).

@@ -267,6 +267,12 @@ async def test_on_freigabe_nach_abkuehlung_hebt_flag_auf():
     state.control.kompressor_ein = False
     state.control._soll_einschalten = True
     state.control.boiler_max_blockiert = 46.0
+    # Reale (langsame) Rate, damit der freie Hub die Start-Antizipation
+    # (25 min Mindesthub) erfuellt: Hub 3K bei 6 C/h = 30 min.
+    state.control._rate_messung = {
+        "ts": datetime.now(TZ) - timedelta(minutes=6),
+        "unten": 44.9,  # +0.6K in 0.1h = 6 C/h
+    }
     erg = await pcl.handle_compressor_on(
         state, None, regelfuehler=45.0, einschaltpunkt=45.0, ausschaltpunkt=48.0,
         min_laufzeit=timedelta(minutes=15), min_pause=timedelta(minutes=30),
@@ -395,14 +401,14 @@ async def test_on_blockiert_in_der_limitnaehe_ohne_vorheriges_limit():
 @pytest.mark.asyncio
 async def test_on_erlaubt_mit_zwei_kelvin_luft():
     """unten 45.9C (< 48 - 2K): EIN weiterhin erlaubt, sobald der freie Hub
-    mit der realen (langsamen) Rate die Mindestlaufzeit fuellt. Hier 6 C/h
-    -> 2.1K/6*60min = 21min >= 15min Mindestlaufzeit."""
+    mit der realen (langsamen) Rate die Mindestlaufzeit der Start-Antizipation
+    (25 min) fuellt. Hier 4 C/h -> 2.1K/4*60min = 31min >= 25min."""
     state = baue_state(t_unten=45.9)
     state.control.kompressor_ein = False
     state.control._soll_einschalten = True
     state.control._rate_messung = {
         "ts": datetime.now(TZ) - timedelta(minutes=6),
-        "unten": 45.3,  # +0.6K in 0.1h = 6 C/h
+        "unten": 45.5,  # +0.4K in 0.1h = 4 C/h
     }
     calls = []
     erg = await pcl.handle_compressor_on(
