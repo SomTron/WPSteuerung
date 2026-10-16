@@ -48,6 +48,9 @@ INFO_BLOCKING_CODES = frozenset({
 #: der Lauf dauerte 143,7 min gegen 60 min Mindestlaufzeit - die Meldung
 #: "Mindestlaufzeit gebrochen" war falsch und der Telegram-Alarm ein Fehlalarm
 #: fuer regulaeres Ende eines Heizlaufs.
+#: Dieselbe Familie traegt seit 16.10.2026 auch die *Kuehlphase* danach
+#: ("Boiler-Maximum-Kuehlphase ..."): Der Boiler kuehlt nur passiv ab, der
+#: Zyklus ist bereits beendet - das ist Normalzustand, kein Alarm.
 INFO_BLOCKING_MELDUNGEN = {
     "boiler_bereits_warm": "Boiler bereits heiss, kein Start noetig",
     "mindestpause": "Start gesperrt: Mindestpause nach letztem Lauf",
@@ -65,6 +68,13 @@ INFO_BLOCKING_FALLBACK = "Start nicht noetig bzw. gesperrt"
 #: generischen Musterpruefung geprueft, damit eine praezisere Benennung
 #: nicht am generischen ``sonstige_sperre`` klebt.
 _SONDER_CODES = (
+    # Kuehlphase nach einem Limit-Abschalten: derselbe planmaessige Zustand wie
+    # der Abschluss selbst, nur zeitlich danach (Nutzer-Log 16.10.2026, 16:51:
+    # "Boiler-Maximum-Kuehlphase (unten 55.9C, Einschalten erst <= 46.0C)"
+    # erzeugte einen Telegram-Alarm, obwohl der Boiler nur auskuehlt).
+    # Ohne diesen Eintrag greift die generische "boiler-max"-Pruefung weiter
+    # unten und der Normalzustand wird als Alarm gemeldet.
+    ("boiler-maximum-kuehlphase", "boiler_max_erreicht"),
     # Muss vor der generischen "boiler-max"-Pruefung stehen: der planmaessige
     # Abschluss traegt ebenfalls "boiler-maximum" im Text.
     ("boiler-maximum erreicht", "boiler_max_erreicht"),

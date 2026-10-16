@@ -58,11 +58,18 @@ def _payload(state):
         "Boiler-Max-Nähe (unten 56.0C)",
         "Zieltemp erreicht",
         "Schichtungs-Obergrenze (48.8C >= 48.8C (Start 47.8C))",
+        "Boiler-Maximum-Kuehlphase (unten 55.9C, Einschalten erst <= 46.0C)",
+        "Boiler-Maximum erreicht, Zyklus planmaessig beendet (unten 55.9C)",
     ],
 )
 def test_normalzustand_wird_als_info_klassifiziert(text):
-    assert blocking_code(text) == "boiler_bereits_warm"
     assert blocking_code(text) in INFO_BLOCKING_CODES
+    if "Kuehlphase" in text or "planmaessig beendet" in text:
+        # Planmaessiger Abschluss und die Kuehlphase danach sind derselbe
+        # Normalzustand - die harte Abschaltung bleibt davon getrennt.
+        assert blocking_code(text) == "boiler_max_erreicht"
+    else:
+        assert blocking_code(text) == "boiler_bereits_warm"
 
 
 @pytest.mark.parametrize(
@@ -241,6 +248,44 @@ async def test_boiler_bereits_warm_sendet_keinen_telegram_alarm(monkeypatch):
     assert gesendet == [], "Normalzustand darf keinen Alarm senden"
     assert state.control.blocking_code == "boiler_bereits_warm"
     assert state.control.last_blocking_reason
+
+
+@pytest.mark.asyncio
+async def test_kuehlphase_sendet_keinen_telegram_alarm(monkeypatch):
+    """Regression Nutzer-Log 16.10.2026, 16:51:04
+
+        Blocking: Boiler-Maximum-Kuehlphase (unten 55.9C, Einschalten erst <= 46.0C)
+        Sende Einmal-Alarm: Boiler-Maximum-Kuehlphase
+
+    Der Boiler kuehlt nach dem planmaessigen Abschluss nur passiv ab - das ist
+    kein Eingriff und keine Stoerung. Der Alarm war falsch bzw. ueberfluessig.
+    """
+    import main as M
+
+    gesendet = _patch_telegram(monkeypatch)
+    state = _alert_state(
+        "Boiler-Maximum-Kuehlphase (unten 55.9C, Einschalten erst <= 46.0C)"
+    )
+
+    await M.check_and_send_alerts(None, state)
+
+    assert gesendet == [], "Kuehlphase darf keinen Telegram-Alarm senden"
+    assert state.control.blocking_code == "boiler_max_erreicht"
+    assert state.control.last_blocking_reason
+
+
+@pytest.mark.asyncio
+async def test_hartes_boiler_maximum_alarmiert_weiterhin(monkeypatch):
+    """Gegenprobe: Der echte Eingriff am Limit (Regel wollte weiterheizen)."""
+    import main as M
+
+    gesendet = _patch_telegram(monkeypatch)
+    state = _alert_state("Boiler-Maximum (unten 48.5C >= 48.0C)")
+
+    await M.check_and_send_alerts(None, state)
+
+    assert len(gesendet) == 1
+    assert state.control.blocking_code == "boiler_max"
 
 
 @pytest.mark.asyncio

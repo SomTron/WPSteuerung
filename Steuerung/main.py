@@ -1413,20 +1413,44 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
         return
 
     started = state.legionellen_started_at
-    if started is not None:
+    # Zeitlimit als Notausstieg. 0 = kein Limit (Nutzeranforderung
+    # 16.10.2026: das 8-h-Limit brach eine Fahrt bei unten 55,9 C ab, Ziel
+    # war 60 C). Die Sicherheitsgrenzen (Boiler-Max 65 C, Ueberhitzungs-
+    # schutz) begrenzen die Fahrt unabhaengig davon.
+    limit_h = getattr(cfg, "max_duration_hours", 0)
+    if not isinstance(limit_h, (int, float)) or isinstance(limit_h, bool):
+        limit_h = 0
+    if float(limit_h) > 0 and started is not None:
         try:
             elapsed = safe_timedelta(now, started, state.local_tz)
         except (TypeError, ValueError):
             elapsed = timedelta(0)
-        if elapsed >= timedelta(hours=cfg.max_duration_hours):
+        if elapsed >= timedelta(hours=float(limit_h)):
+            # Ziel NICHT erreicht -> wie jeden anderen Abbruch vor dem Ziel
+            # behandeln: unvollstaendig vormerken und den Plan behalten, damit
+            # ein Nachversuch moeglich bleibt. Wuerde hier (wie frueher) der
+            # Plan geloescht, faellt die Prophylaxe still fuer die ganze
+            # Kalenderwoche aus - genau im Moment des Abbruchs.
             state.legionellen_aktiv = False
             state.legionellen_temp_override = None
             state.legionellen_started_at = None
             state.legionellen_target_reached_at = None
-            clear_plan(state, "Legionellenlauf Timeout", persist=True)
+            state.legionellen_end_time = now
+            state.legionellen_unvollstaendig = True
+            state._last_was_legionellen = True
+            _t_unten = getattr(getattr(state, "sensors", None), "t_unten", None)
+            _t_unten_txt = (
+                f"{float(_t_unten):.1f}C"
+                if isinstance(_t_unten, (int, float)) and not isinstance(_t_unten, bool)
+                else "n/a"
+            )
             logging.warning(
-                "Legionellenprophylaxe ABGEBROCHEN (Timeout: %.1fh >= %.1fh)",
-                elapsed.total_seconds() / 3600.0, cfg.max_duration_hours,
+                "Legionellenprophylaxe ABGEBROCHEN (Zeitlimit %.1fh >= %.1fh, "
+                "Ziel %.0fC nicht erreicht, unten %s) - unvollstaendig "
+                "vorgemerkt, erneuter Anlauf zulaessig.",
+                elapsed.total_seconds() / 3600.0, float(limit_h),
+                float(getattr(cfg, "target_temp_c", 60.0) or 60.0),
+                _t_unten_txt,
             )
             return
 

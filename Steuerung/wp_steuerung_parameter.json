@@ -200,6 +200,7 @@
       "letzter_tag": 6,
       "start_uhr": 8,
       "spaeteste_start_uhr": 16,
+      "max_duration_hours": 24,
       "erforderliche_wh_qm": 800.0,
       "mindest_prognose_wh_qm": 800.0,
       "tagwechsel_ab_diff_wh_qm": 300.0,

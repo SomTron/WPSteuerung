@@ -972,7 +972,13 @@ class LegionellenConfig(BaseModel):
     letzter_tag: int = Field(default=6, description="Spätester Tag für die Prophylaxe (6=Sonntag)")
     start_uhr: int = Field(default=8, description="Früheste Startstunde am Tag")
     spaeteste_start_uhr: int = Field(default=12, description="Späteste Startstunde (muss bis dahin begonnen haben)")
-    max_duration_hours: int = Field(default=8, description="Maximale Laufzeit der Legionellenfahrt (Stunden)")
+    max_duration_hours: int = Field(
+        default=24,
+        description=(
+            "Maximale Laufzeit der Legionellenfahrt (Stunden); 0 hebt das "
+            "Zeitlimit auf (nur die Sicherheitsgrenzen bleiben wirksam)"
+        ),
+    )
     erforderliche_wh_qm: float = Field(default=800.0, description="Mindest-PV-Prognose Wh/qm für den bevorzugten Tag")
     mindest_prognose_wh_qm: float = Field(default=800.0, description="Mindestprognose für einen planbaren Legionellen-Tag (Wh/qm)")
     tagwechsel_ab_diff_wh_qm: float = Field(default=300.0, description="Mindestvorsprung eines alternativen PV-Tages (Wh/qm)")
@@ -1014,8 +1020,17 @@ class LegionellenConfig(BaseModel):
             raise ValueError("mindest_prognose_wh_qm darf nicht groesser als die Gut-Schwelle sein")
         if self.erforderliche_wh_qm > self.pv_prognose_schwelle_gut:
             raise ValueError("erforderliche_wh_qm darf nicht groesser als die Gut-Schwelle sein")
-        if not (1 <= self.max_duration_hours <= 12):
-            raise ValueError(f"max_duration_hours={self.max_duration_hours} ausserhalb 1-12")
+        # Nutzeranforderung 16.10.2026: Das 8-h-Limit brach eine Fahrt bei
+        # unten 55,9 C (Ziel 60 C) ab, die kurz vor dem Ziel stand (4 C/h,
+        # Start bei 23,6 C). Das Limit ist der reine Notausstieg gegen einen
+        # endlos laufenden Lauf - die Sicherheitsgrenzen (Boiler-Max 65 C,
+        # Ueberhitzungsschutz) sind davon unabhaengig. Deshalb darf es deutlich
+        # weiter sein und per 0 ganz entfallen.
+        if not (0 <= self.max_duration_hours <= 48):
+            raise ValueError(
+                f"max_duration_hours={self.max_duration_hours} ausserhalb 0-48 "
+                "(0 = kein Zeitlimit)"
+            )
         if not (0 <= self.probezeit_minuten <= 240):
             raise ValueError("probezeit_minuten muss zwischen 0 und 240 liegen")
         if not (0 <= self.erforderliche_wh_qm <= 20000):

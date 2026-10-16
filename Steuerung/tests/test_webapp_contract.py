@@ -49,6 +49,17 @@ def test_webapp_zeigt_datenalter_der_solardaten():
     assert "setText('energy-age', formatAge(energy.solar_age_s))" in html
 
 
+def test_webapp_nutzt_die_sperr_einstufung_der_api():
+    """Normalzustaende (Boiler heiss, planmaessiger Boiler-Max-Abschluss samt
+    Kuehlphase) duerfen in der WebApp nicht als Warnung erscheinen. Die
+    Einstufung liefert die API als `blocking_kind`; der hartcodierte
+    Code-Vergleich bleibt nur als Rueckfall.
+    """
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "mode.blocking_kind" in html
+    assert "bkKind === 'info' ? 'badge badge-info' : 'badge badge-warning'" in html
+
+
 def test_mobile_layout_verhindert_globales_horizontales_scrolling():
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")
     assert "@media (max-width: 600px)" in html

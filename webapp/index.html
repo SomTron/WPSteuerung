@@ -2194,13 +2194,17 @@
             setText('rule-source-current', mode.source_current || mode.effective_source || '—');
             setText('rule-sensor', mode.active_rule_sensor ? 'Fuehler: ' + mode.active_rule_sensor : '');
             const rd = document.getElementById('rule-decision');
-            // "boiler_bereits_warm" ist ein Normalzustand (Boiler ist heiss,
-            // Start waere unnoetig) und keine Stoerung - deshalb Info statt
-            // Warnung. Die harte Boiler-Maximum-Abschaltung bleibt Warnung.
+            // Normalzustand vs. Stoerung kommt aus der API (`blocking_kind`):
+            // "boiler_bereits_warm" und "boiler_max_erreicht" (planmaessiger
+            // Abschluss bzw. Kuehlphase danach) sind Info, die harte
+            // Boiler-Maximum-Abschaltung bleibt Warnung. Der Code-Vergleich
+            // ist nur noch der Rueckfall fuer aeltere API-Antworten.
             const bk = mode.blocking_code || '';
+            const bkKind = mode.blocking_kind
+                || (bk === 'boiler_bereits_warm' ? 'info' : 'alarm');
             if (mode.blocking_reason) {
                 rd.textContent = mode.blocking_reason;
-                rd.className = bk === 'boiler_bereits_warm' ? 'badge badge-info' : 'badge badge-warning';
+                rd.className = bkKind === 'info' ? 'badge badge-info' : 'badge badge-warning';
             }
             else if (mode.soll_einschalten) { rd.textContent = 'EINSCHALTEN empfohlen'; rd.className = 'badge badge-success'; }
             else { rd.textContent = 'AUS - kein Bedarf'; rd.className = 'badge badge-danger'; }

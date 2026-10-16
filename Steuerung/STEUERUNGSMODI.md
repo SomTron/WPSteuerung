@@ -486,6 +486,14 @@ Konfigurationsschlüsseln.
   `AUS` und die Probezeit ist abgelaufen → `legionellen_last_done=heute`,
   `legionellen_aktiv=false`, Override gelöscht, Telegram-Erfolgsmeldung.
   Ohne Zielerreichung → Abbruch der Prophylaxe.
+- **Zeitlimit (`legionellen.max_duration_hours`):** Notausstieg gegen einen
+  endlos laufenden Lauf, **nicht** die Regelgrenze – die Fahrt endet am
+  Boiler-Maximum (65 °C) bzw. am Ziel + Probezeit. Standard **24 h**, `0` hebt
+  das Limit ganz auf. Nutzeranforderung 16.10.2026: Das alte 8-h-Limit brach
+  eine Fahrt bei unten 55,9 °C (Ziel 60 °C, Start bei 23,6 °C → 4 °C/h) ab,
+  die kurz vor dem Ziel stand. Ein Abbruch am Limit gilt wie jeder Abbruch vor
+  dem Ziel als `legionellen_unvollstaendig`: Plan bleibt stehen, Nachversuch
+  ist zulässig (vorher fiel die Prophylaxe für die ganze KW still aus).
 - **Nachtsperre:** Regel kennt keine Nachtsperre (Startzeit 8 Uhr liegt außerhalb).
 - **Wochentags-Gate (Start nur Freitag–Sonntag):** Die Prophylaxe startet
   **nur** an einem der erlaubten Tage (`bevorzugter_tag`..`letzter_tag`,
@@ -502,7 +510,8 @@ Konfigurationsschlüsseln.
   (erkannt über `legionellen_aktiv` **oder** `legionellen_temp_override`).
 - **Konfig:** `legionellen.{aktiv (true), prioritaet (90), target_temp_c (60),
   legionellen_max_temp_c (65), bevorzugter_tag (4), letzter_tag (6),
-  start_uhr (8), spaeteste_start_uhr (16), probezeit_minuten (30),
+  start_uhr (8), spaeteste_start_uhr (16), max_duration_hours (24; 0 = kein
+  Zeitlimit), probezeit_minuten (30),
   erforderliche_wh_qm (800), pv_prognose_schwelle_gut (2000)}`.
 - **Kompressor-Verifizierung im Legionellenmodus (seit 3.4):** Der untere
   Fuehler saettigt am oberen Boilerende (Nettorate ~0,5 °C/h < der 0,2-K-

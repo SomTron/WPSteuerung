@@ -1,6 +1,6 @@
 """Regressionen fuer persistente Legionellen-Tagesplanung."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytz
@@ -237,3 +237,77 @@ class TestAbbruchVorZiel:
         )
         assert ergebnis.aktiv is False
         assert "Bereits in KW" in ergebnis.grund
+
+
+# ===========================================================
+# Zeitlimit der Legionellenfahrt (Nutzeranforderung 16.10.2026)
+# ===========================================================
+
+class TestLegionellenZeitlimit:
+    """Das 8-h-Limit brach eine Fahrt ab, die kurz vor dem Ziel stand.
+
+    Nutzer-Log 16.10.2026, 16:50:44:
+        Legionellenprophylaxe ABGEBROCHEN (Timeout: 8.0h >= 8.0h)
+    Der Lauf hatte in 8 h von unten 23,6 C auf 55,9 C geheizt (4 C/h), das
+    Ziel war 60 C. Danach war zusaetzlich der Plan geraumt - die Prophylaxe
+    fiel fuer die Kalenderwoche aus. Deshalb: Limit deutlich weiter (Default
+    24 h) und per 0 vollstaendig abschaltbar; ein Abbruch am Limit wird wie
+    jeder Abbruch vor dem Ziel als unvollstaendig vorgemerkt.
+    """
+
+    @staticmethod
+    def _result(einschalten=True):
+        return {"gewinner_ergebnis": RegelErgebnis(
+            name="Legionellen", prioritaet=90, aktiv=True, einschalten=einschalten
+        )}
+
+    def test_default_ist_erweitert_und_abschaltbar(self):
+        assert LegionellenConfig().max_duration_hours == 24
+        # 0 hebt das Zeitlimit ganz auf.
+        assert LegionellenConfig(max_duration_hours=0).max_duration_hours == 0
+        assert LegionellenConfig(max_duration_hours=48).max_duration_hours == 48
+
+    def test_null_hebt_das_limit_auf(self):
+        import asyncio
+
+        st = _state()
+        st.priority_config.legionellen.max_duration_hours = 0
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = datetime.now(TZ) - timedelta(hours=30)
+
+        asyncio.run(_aktualisiere_legionellen_lifecycle(None, st, self._result()))
+
+        assert st.legionellen_aktiv is True, "0 = kein Zeitlimit, Lauf bleibt aktiv"
+
+    def test_zeitlimit_bleibt_notausstieg(self):
+        import asyncio
+
+        st = _state()
+        st.priority_config.legionellen.max_duration_hours = 24
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = datetime.now(TZ) - timedelta(hours=25)
+
+        asyncio.run(_aktualisiere_legionellen_lifecycle(None, st, self._result()))
+
+        assert st.legionellen_aktiv is False
+        assert st.legionellen_unvollstaendig is True
+        assert st.legionellen_end_time is not None
+
+    def test_abbruch_am_limit_behaelt_den_plan(self):
+        """Wie jeder Abbruch vor dem Ziel: der Nachversuch bleibt moeglich."""
+        import asyncio
+        from datetime import date as _date
+
+        st = _state()
+        st.priority_config.legionellen.max_duration_hours = 24
+        st.legionellen_planned_date = _date(2026, 10, 16)
+        st.legionellen_planned_tag = 4
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = datetime.now(TZ) - timedelta(hours=25)
+
+        asyncio.run(_aktualisiere_legionellen_lifecycle(None, st, self._result()))
+
+        assert st.legionellen_planned_date == _date(2026, 10, 16), (
+            "Der Plan darf am Zeitlimit nicht geraumt werden"
+        )
+        assert st.legionellen_planned_tag == 4

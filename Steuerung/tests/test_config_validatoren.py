@@ -46,6 +46,20 @@ def test_start_vorhersage_konfigurationsgrenzen():
         )
 
 
+def test_legionellen_zeitlimit_ist_erweitert():
+    """Nutzeranforderung 16.10.2026: Das 8-h-Limit brach eine Fahrt bei unten
+    55,9 C ab (Ziel 60 C), die kurz vor dem Ziel stand. Erlaubt sind jetzt
+    0 (kein Zeitlimit) bis 48 h; die Sicherheitsgrenzen bleiben unberuehrt.
+    """
+    assert LegionellenConfig().max_duration_hours == 24
+    assert LegionellenConfig(max_duration_hours=0).max_duration_hours == 0
+    assert LegionellenConfig(max_duration_hours=48).max_duration_hours == 48
+    with pytest.raises(ValueError, match="max_duration_hours"):
+        LegionellenConfig(max_duration_hours=49)
+    with pytest.raises(ValueError, match="max_duration_hours"):
+        LegionellenConfig(max_duration_hours=-1)
+
+
 def test_defaults_gueltig():
     """Alle Default-Werte muessen die Validatoren passieren."""
     config = WPSteuerungConfig()

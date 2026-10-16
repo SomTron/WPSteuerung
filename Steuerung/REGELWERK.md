@@ -298,7 +298,11 @@ je einen eigenen Zweck:
   Während der Fahrt hebt sie das Boiler-Limit von 48 auf 65 °C an (sonst bräche
   der 48-°C-Puffer die Prophylaxe ab). Start bevorzugt mit PV
   (`pv_start_min_watt` 500 W) oder voller Batterie; `spaeteste_start_uhr` 16 Uhr,
-  `max_tage_ohne_lauf` 14 als Sicherheitsnetz.
+  `max_tage_ohne_lauf` 14 als Sicherheitsnetz. Das Zeitlimit
+  `max_duration_hours` (Standard 24 h, 0 = aufgehoben) ist nur der Notausstieg
+  gegen einen endlos laufenden Lauf; ein Abbruch daran gilt als
+  „unvollständig" und lässt einen Nachversuch zu (Kap. 5.3 in
+  `STEUERUNGSMODI.md`).
 
 ## 4. Übergreifende Mechanismen
 
@@ -420,7 +424,14 @@ schaltet die Anhebung nach der Fahrt komplett ab.
    sofort ausgeschaltet - auch wenn dadurch die Mindestlaufzeit gebrochen wird.
    Zusätzlich wird die Kuehlschwelle `boiler_max_blockiert = max_temp_c -
    boiler_max_hysterese_k` (= 46 C) gesetzt: Ein Neustart ist erst wieder
-   moeglich, wenn der Fuehler die Schwelle unterschreitet. Telegram-Warnung inklusive.
+   moeglich, wenn der Fuehler die Schwelle unterschreitet. Zwei Faelle, bewusst
+   getrennt (Sperrfamilien in `blocking_codes.py`): Stand die Gewinner-Regel
+   ohnehin schon auf AUS, ist der Abschluss **planmaessig**
+   (`boiler_max_erreicht`) und die anschliessende Kuehlphase
+   (`Boiler-Maximum-Kuehlphase ...`) ebenso Normalzustand - beide bleiben in
+   Log, WebApp (`blocking_kind: info`) und `blocked` sichtbar, aber **ohne
+   Telegram-Alarm**. Nur der echte Eingriff gegen den Regelwillen alarmiert
+   (`boiler_max`).
 2. **Ein-Sperre im Naecherbereich (proaktiv, seit Incident 26.08.2026):** Schon
    **vor** dem Einschalten greift `boiler_max_ein_abstand_k` (aktiv **3.0 K**):
    Liegt der Fuehler bei >= max_temp_c - Abstand (= 45 C), wird kein EIN mehr
@@ -609,7 +620,8 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
   "adaptive_pv":  { "base_threshold_watt": 300, "tmax_c": 48, "einschalten_bis_c": 43, "oben_max_start_c": 55, "sparen_hysterese_k": 1.0, "hysterese_forecast_schwelle_wh_qm": 2500 },
   "calculated_start": { "solltemperatur_c": 42, "target_uhr": 17, "netz_solltemperatur_c": 38, "netz_einschalten_ab_k": 1.0, "notfall_mindestdefizit_k": 1.0 },
   "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen+nachtsperre_ueberschreiben */ ] },
-  "sommer_modus": { "temperatur_offset_c": -3.0, "pv_ausschalt_offset_c": -2.0 }
+  "sommer_modus": { "temperatur_offset_c": -3.0, "pv_ausschalt_offset_c": -2.0 },
+  "legionellen":  { "aktiv": true, "target_temp_c": 60, "legionellen_max_temp_c": 65, "max_duration_hours": 24, "bevorzugter_tag": 4, "letzter_tag": 6, "start_uhr": 8, "spaeteste_start_uhr": 16, "probezeit_minuten": 30 }
 }
 ```
 
