@@ -398,22 +398,27 @@ def _serve_app_shell(filename: str):
         return FileResponse(path, media_type=_APP_SHELL_FILES[filename])
     raise HTTPException(status_code=404, detail=f"{filename} not found")
 
-@app.get("/service-worker.js")
+# HEAD fuer die Huelle freigeben: In dieser FastAPI-Version (0.140) schaltet
+# @app.get HEAD nicht mit frei - /status und / antworten deshalb auf HEAD mit
+# "405 Method Not Allowed (allow: GET)". Fuer die Huelle ist HEAD aber
+# praktisch, weil curl -I und Uptime-Monitoring damit pruefen; /docs und
+# /openapi.json koennen es ebenfalls (GET, HEAD).
+@app.api_route("/service-worker.js", methods=["GET", "HEAD"])
 def serve_service_worker():
     """Service Worker unter '/' - sonst hat er keinen Scope fuer die App."""
     return _serve_app_shell("service-worker.js")
 
-@app.get("/manifest.json")
+@app.api_route("/manifest.json", methods=["GET", "HEAD"])
 def serve_manifest():
     """PWA-Manifest (Name, Icons, display=standalone)."""
     return _serve_app_shell("manifest.json")
 
-@app.get("/icon-192.png")
+@app.api_route("/icon-192.png", methods=["GET", "HEAD"])
 def serve_icon_192():
     """PWA-Icon 192x192."""
     return _serve_app_shell("icon-192.png")
 
-@app.get("/icon-512.png")
+@app.api_route("/icon-512.png", methods=["GET", "HEAD"])
 def serve_icon_512():
     """PWA-Icon 512x512."""
     return _serve_app_shell("icon-512.png")

@@ -87,10 +87,16 @@ def test_pwa_huelle_liegt_an_der_wurzel():
         "/icon-192.png": ("serve_icon_192", "image/png"),
         "/icon-512.png": ("serve_icon_512", "image/png"),
     }
-    vorhandene = {getattr(route, "path", "") for route in api.app.routes}
+    vorhandene = {getattr(route, "path", ""): route for route in api.app.routes}
     for pfad, (name, mime) in erwartet.items():
         assert pfad in vorhandene, (
             f"Route {pfad} fehlt - die Huelle ist nur unter /static erreichbar"
+        )
+        route = vorhandene[pfad]
+        # In FastAPI 0.140 schaltet @app.get HEAD nicht mit frei; ohne das
+        # laeuft jede Pruefung per `curl -I` / Monitoring ins 405.
+        assert {"GET", "HEAD"} <= set(route.methods), (
+            f"{pfad} erlaubt nur {sorted(route.methods)}"
         )
         endpoints = _endpunkte_fuer(pfad)
         assert [getattr(e, "__name__", "?") for e in endpoints] == [name]
