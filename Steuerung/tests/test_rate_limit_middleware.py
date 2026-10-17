@@ -148,3 +148,33 @@ def test_zaehler_raeumt_alte_fenster_auf():
 
     assert len(mw._counters) == 1000
     assert all(k.startswith("neu:") for k in mw._counters)
+
+
+# --- App-Huelle ist vom Limit ausgenommen -----------------------------------
+
+def test_app_huelle_ist_vom_limit_ausgenommen():
+    """Regression (17.10.2026): Ein 429 auf /, /index.html, /manifest.json
+    oder /service-worker.js brach die Service-Worker-Installation ab.
+
+    Die Huelle bekommt einen eigenen Limit-Tier; der Wert steckt im
+    Counter-Key, sie teilt sich das Kontingent also nicht mit /status.
+    """
+    mw = _mw()
+    for pfad in ("/", "/index.html", "/service-worker.js", "/manifest.json",
+                 "/icon-192.png", "/icon-512.png", "/static/service-worker.js",
+                 "/static/index.html"):
+        assert mw._get_limit_for_path(pfad) > 1000, pfad
+    # Live- und Schreibrouten bleiben unveraendert limitiert
+    assert mw._get_limit_for_path("/status") == 100
+    assert mw._get_limit_for_path("/control") == 10
+    assert mw._get_limit_for_path("/config/export") == 30
+
+
+def test_huelle_bleibt_auch_nach_vielen_anfragen_erreichbar():
+    """Vorher galt fuer / das Default-Limit (100/min): die 101. Anfrage war
+    ein 429 - genau das konnte mitten in die Installation des Service Workers
+    fallen."""
+    mw = _mw()
+    request = _FakeRequest(path="/")
+    for _ in range(150):
+        assert asyncio.run(_dispatch(mw, request)) == "OK"

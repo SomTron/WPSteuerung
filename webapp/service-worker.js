@@ -3,13 +3,27 @@
  * - cachel nur die statische App-Hülle
  * - /status, /history und Steuernachrichten bleiben immer live im Netz
  */
-const CACHE_NAME = 'wp-webapp-shell-v4';
+const CACHE_NAME = 'wp-webapp-shell-v5';
 const APP_SHELL = ['./', './index.html', './manifest.json'];
+
+// Ein einzelnes fehlendes Asset hat frueher die KOMPLETTE Installation
+// gesprengt: cache.addAll() ist alles-oder-nichts und lehnt mit TypeError ab,
+// sobald eine Antwort keinen 200er-Status hat (404 oder 429). Firefox meldete
+// dann "ServiceWorker script ... encountered an error during installation"
+// (17.10.2026). Jetzt wird jede Datei einzeln gecacht - die Huelle bleibt
+// nutzbar, auch wenn ein optionales Asset fehlt.
+function cacheAppShell(cache) {
+    return Promise.all(APP_SHELL.map(url =>
+        cache.add(url).catch(err =>
+            console.warn('App-Shell nicht gecacht:', url, err)
+        )
+    ));
+}
 
 self.addEventListener('install', event => {
     event.waitUntil(
         caches.open(CACHE_NAME)
-            .then(cache => cache.addAll(APP_SHELL))
+            .then(cache => cacheAppShell(cache))
             .then(() => self.skipWaiting())
     );
 });

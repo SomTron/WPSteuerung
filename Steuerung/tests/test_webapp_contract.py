@@ -1,5 +1,6 @@
 """Statische Verträge für WebApp-Einheiten, Fehleranzeige und PWA."""
 from pathlib import Path
+import json
 import re
 
 
@@ -336,3 +337,34 @@ def test_webapp_belastet_das_status_polling_nicht():
     """Die Fehlerhistorie wird separat, nicht alle 5 s, abgerufen."""
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")
     assert "const ERROR_INTERVAL_MS = 60000;" in html
+
+
+def test_service_worker_install_ueberlebt_ein_fehlendes_asset():
+    """Regression (17.10.2026): cache.addAll() ist alles-oder-nichts.
+
+    Es lehnt mit TypeError ab, sobald EINE Antwort keinen 200er-Status hat -
+    hier war das /manifest.json (404) bzw. zeitweise ein 429 des Rate-Limits.
+    Firefox meldete dann "ServiceWorker script at ... for scope ...
+    encountered an error during installation", und die WebApp lief ohne
+    Offline-Huelle weiter. Jetzt wird jede Datei einzeln gecacht.
+    """
+    worker = (WEBAPP / "service-worker.js").read_text(encoding="utf-8")
+    assert not re.search(r"cache\.addAll\(\s*APP_SHELL\s*\)", worker), (
+        "cache.addAll() ist alles-oder-nichts: ein einzelnes fehlendes Asset "
+        "oder ein 429 sprengt die komplette Installation"
+    )
+    assert re.search(r"cache\.add\(url\)\.catch", worker), (
+        "Jede Huelle-Datei muss einzeln und fehlertolerant gecacht werden"
+    )
+
+
+def test_manifest_icons_existieren():
+    """Das Manifest verwies auf icon-192/512.png - die Dateien fehlten (404).
+
+    Eine PWA ohne ladbare Icons ist nicht installierbar.
+    """
+    manifest = json.loads((WEBAPP / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["icons"], "Ohne Icons ist die PWA nicht installierbar"
+    for icon in manifest["icons"]:
+        assert (WEBAPP / icon["src"]).is_file(), f"Icon {icon['src']} fehlt"
+

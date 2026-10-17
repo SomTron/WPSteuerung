@@ -64,10 +64,51 @@ def test_stale_helper_behandelt_fehler_fail_safe():
 def test_wichtige_routen_vorhanden():
     """Smoke-Check: Alle vom Webapp benoetigten Routen existieren."""
     pfade = {"/", "/index.html", "/status", "/history", "/history/regeln",
-             "/config", "/control"}
+             "/config", "/control", "/service-worker.js", "/manifest.json"}
     vorhandene = {getattr(route, "path", "") for route in api.app.routes}
     for p in pfade:
         assert p in vorhandene, f"Route {p} fehlt"
+
+
+def test_pwa_huelle_liegt_an_der_wurzel():
+    """Regression (17.10.2026): Die PWA-Huelle lag nur unter /static.
+
+    index.html registriert den Service Worker relativ ('service-worker.js').
+    Bei der Seiten-URL '/' muss das Skript also unter /service-worker.js
+    liegen - ein Mount allein auf /static genuegte nicht. Firefox brach die
+    Registrierung mit "ServiceWorker script at .../service-worker.js for scope
+    .../ encountered an error during installation" ab, weil die Antwort ein
+    404 mit application/json war. Dasselbe galt fuer das Manifest und die
+    Icons (Firefox meldete dort 404 und installierte die PWA nicht).
+    """
+    erwartet = {
+        "/service-worker.js": ("serve_service_worker", "application/javascript"),
+        "/manifest.json": ("serve_manifest", "application/manifest+json"),
+        "/icon-192.png": ("serve_icon_192", "image/png"),
+        "/icon-512.png": ("serve_icon_512", "image/png"),
+    }
+    vorhandene = {getattr(route, "path", "") for route in api.app.routes}
+    for pfad, (name, mime) in erwartet.items():
+        assert pfad in vorhandene, (
+            f"Route {pfad} fehlt - die Huelle ist nur unter /static erreichbar"
+        )
+        endpoints = _endpunkte_fuer(pfad)
+        assert [getattr(e, "__name__", "?") for e in endpoints] == [name]
+        antwort = endpoints[0]()
+        assert antwort.media_type == mime, (
+            f"{pfad} wird als {antwort.media_type} ausgeliefert - erwartet {mime}"
+        )
+        assert os.path.isfile(antwort.path), f"{pfad} verweist auf eine fehlende Datei"
+
+
+def test_app_huelle_meldet_fehlende_datei_als_404(monkeypatch, tmp_path):
+    """Ein fehlendes Huelle-File ist ein 404 - kein 500 und kein KeyError."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(api, "_webapp_dir", str(tmp_path))
+    with pytest.raises(HTTPException) as exc:
+        api.serve_manifest()
+    assert exc.value.status_code == 404
 
 
 def test_status_route_enthaelt_api_contract():

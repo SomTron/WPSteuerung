@@ -232,6 +232,20 @@ app = FastAPI(
 # und reicht Request mit intaktem Body an FastAPI weiter.
 
 
+# App-Huelle (HTML-Seite, Service Worker, Manifest, Icons): Diese Dateien
+# gehoeren NICHT ins Rate-Limit. Der Service Worker laedt sie bei jeder
+# Installation nach - ein 429 auf einer dieser Anfragen liess die komplette
+# Installation scheitern ("ServiceWorker script ... encountered an error
+# during installation", 17.10.2026).
+_APP_SHELL_PATHS = {
+    "/", "/index.html", "/service-worker.js", "/manifest.json",
+    "/icon-192.png", "/icon-512.png",
+}
+# Die Huelle wird praktisch nie limitiert. Sie bekommt einen eigenen
+# Limit-Tier, damit sie sich das Kontingent nicht mit /status teilt.
+_APP_SHELL_LIMIT = 10 ** 6
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     Rate-Limit-Middleware mit Body-Buffering.
@@ -299,6 +313,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _get_limit_for_path(self, path: str) -> int:
         """Bestimmt Limit basierend auf Pfad."""
+        # Huelle/Service Worker VOR allem anderen: Diese Anfragen entscheiden,
+        # ob die WebApp ueberhaupt startet. Ein 429 brach die Service-Worker-
+        # Installation ab (17.10.2026).
+        if path in _APP_SHELL_PATHS or path.startswith("/static/"):
+            return _APP_SHELL_LIMIT
         if path.startswith("/config/export"):
             return 30  # 30/min fuer Export (VOR /config pruefen!)
         if path.startswith("/control") or path.startswith("/command") or path.startswith("/config"):
@@ -356,6 +375,48 @@ def serve_index():
 def serve_index_html():
     """Serve the main dashboard HTML page (direct URL)."""
     return serve_index()
+
+# PWA-Huelle an der WURZEL ausliefern.
+# Der Service Worker muss dort liegen, wo er steuern soll: index.html
+# registriert ihn relativ ('service-worker.js'), bei der Seiten-URL '/' ist das
+# also /service-worker.js. Vorher lag die Huelle nur unter /static - Firefox
+# brach die Registrierung mit "ServiceWorker script at .../service-worker.js
+# for scope .../ encountered an error during installation" ab (404,
+# application/json). Gleiches galt fuer manifest.json und die Icons.
+_APP_SHELL_FILES = {
+    "service-worker.js": "application/javascript",
+    "manifest.json": "application/manifest+json",
+    "icon-192.png": "image/png",
+    "icon-512.png": "image/png",
+}
+
+
+def _serve_app_shell(filename: str):
+    """Liefert eine Datei der App-Huelle aus webapp/ mit korrektem MIME-Typ."""
+    path = os.path.join(_webapp_dir, filename)
+    if os.path.isfile(path):
+        return FileResponse(path, media_type=_APP_SHELL_FILES[filename])
+    raise HTTPException(status_code=404, detail=f"{filename} not found")
+
+@app.get("/service-worker.js")
+def serve_service_worker():
+    """Service Worker unter '/' - sonst hat er keinen Scope fuer die App."""
+    return _serve_app_shell("service-worker.js")
+
+@app.get("/manifest.json")
+def serve_manifest():
+    """PWA-Manifest (Name, Icons, display=standalone)."""
+    return _serve_app_shell("manifest.json")
+
+@app.get("/icon-192.png")
+def serve_icon_192():
+    """PWA-Icon 192x192."""
+    return _serve_app_shell("icon-192.png")
+
+@app.get("/icon-512.png")
+def serve_icon_512():
+    """PWA-Icon 512x512."""
+    return _serve_app_shell("icon-512.png")
 
 # Global state references. /status liest nur aus dem Snapshot; Schreib-/Config-
 # Routen behalten den echten Main-Loop-State fuer die Queue.
