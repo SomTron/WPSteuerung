@@ -462,7 +462,14 @@ Die statische Ein-Sperre ist um zwei dynamische Schutzschichten ergaenzt:
   `overshoot_reserve_k`): Hat die Regel den Abschaltpunkt erreicht und wuerde
   die Mindestlaufzeit den Fuehler mit der aktuellen Rate ueber die Obergrenze
   treiben, wird **vorher** abgeschaltet (`reason=overshoot_vorhersage`) - statt
-  bei 49 C den Bruch zu erleben.
+  bei 49 C den Bruch zu erleben. **Befund 18.10.2026:** Der Zweig feuert
+  konstruktiv nur, wenn die Regel ihren Ausschaltpunkt schon erreicht hat - der
+  Lauf hat sein Ziel also erfuellt. Liegt die Prognose nur knapp ueber dem Limit
+  (`overshoot_warn_zusatz_k`, 2 K), ist das ein **planmaessiges Ende**: INFO,
+  eigener Info-Code `overshoot_planmaessig` (kein Telegram-Alarm). Deutliche
+  Ueberschreitungen bleiben Warnung mit Alarm. Im Log 14.09.–18.10.2026 waren
+  5 von 9 Abschaltungen Fehlausloesungen - u. a. eine Legionellenfahrt, die bei
+  `unten` 41,7 C mit der Prognose „68,5 C" abgewuergt wurde.
 
 Die Rate stammt aus der Live-Messung (`state.control._rate_messung`), dem
 Saisonmittel der Lern-Engine (`heat_rates[<Saison>].avg`) oder dem gelernten
@@ -523,6 +530,19 @@ Auswertung der Zyklen 01.-15.10.2026: 41 von 84 Zyklen waren kuerzer als
   auf/ueber `schichtung_oben_max`, wurde trotzdem gestartet und der Lauf 48 s
   spaeter in `handle_compressor_off` abgewuergt (Log 15.10., 18:38). Jetzt
   wird der Start von vornherein abgelehnt.
+- **CalcStart zaehlt als quellengesteuerter Lauf** (`_ist_pv_gesteuerter_lauf`):
+  CalcStart startete im Log 14.09.–18.10.2026 **8 Laeufe**, galt aber nie als
+  quellenabhaengig – also galten die vollen 60 min Mindestlaufzeit, obwohl der
+  Lauf am 18.10. sein Ziel (48 °C) nach 13,5 min erreicht hatte und nur noch
+  durch die Overshoot-Vorhersage beendet wurde. Jetzt entscheidet die
+  Startquelle (`state.control.source_at_start`): PV/Batterie → kurze
+  PV-Mindestlaufzeit (10 min), Netz-Notfall oder unbekannte Quelle → volle.
+- **Start-Sperren nennen ihren Grund nur bei Startwunsch**
+  (`_merke_start_sperre`): Die Start-Schutzregeln setzten ihren Sperrtext auch
+  dann, wenn keine Regel heizen wollte (Gewinner sagt AUS) und ueberschrieben
+  damit den `blocking_reason = None`-Zweig. Im Log 14.09.–18.10.2026 standen
+  51 Statuszeilen mit „Info: Start-Antizipation", waehrend der eigentliche
+  Grund (AdaptivePV: „Speicher oben voll") fehlte.
 
 ---
 
@@ -535,6 +555,16 @@ Mittelwert getrennt nach Winter / Übergang / Sommer (ab 3 Zyklen aktiv).
 CalcStart nutzt die Rate für die Vorlaufzeit-Berechnung – die Steuerung lernt also,
 *wie schnell* ihr Boiler in der jeweiligen Jahreszeit ist.
 
+**Befund 18.10.2026 (nur echte Aufwärmvorgänge zählen):** Die Zyklus-Rate wird
+technisch auf mindestens 0,1 K geklemmt. Zyklen, in denen der Fühler gefallen
+ist (Zapfung während des Laufs, Abkühlphase), liefen dadurch als „0,54 C/h"
+bzw. „0,0 C/h" in den Mittelwert – im Betriebslog 14.09.–18.10.2026 waren das
+11-Minuten-Zyklen mit fallender Temperatur und ein 1215-Minuten-„Zyklus" mit
+0,0 C/h. Ein solcher Eintrag senkt den Mittelwert bei `alpha=0,1` um 10 %.
+Deshalb zählt ein Zyklus nur noch, wenn der Fühler um mindestens
+`heating_rate_min_anstieg_k` (0,5 K) gestiegen ist; die Lernmeldung nennt den
+Grund (`zu kurz`, `keine Aufwaermung (unten -1,7K)`, `Anstieg 0,3K < 0,5K`).
+
 ### 5.2 Gelernte Zapf-Zeit (Zielzeit)
 
 Erkannte Warmwasser-Zapfungen (Temperaturabfall > 1.5 K am oberen Fühler,
@@ -542,6 +572,27 @@ Erkannte Warmwasser-Zapfungen (Temperaturabfall > 1.5 K am oberen Fühler,
 (`learned_target_hour`). Ab 3 Samples übernimmt **CalcStart** diese Zeit als
 Ziel-Uhrzeit – die Steuerung richtet die Vorheizung also automatisch am realen
 Duschverhalten aus.
+
+**Befund 18.10.2026 (Zapfung wird über ein Fenster verfolgt):** Das Ereignis
+wurde beim ERSTEN Sample über der Schwelle abgeschlossen und mit diesem
+Ein-Sample-Delta gespeichert. Im Betriebslog 14.09.–18.10.2026 hatten dadurch
+26 von 27 Ereignissen einen gewichteten Abfall < 1 K (die meisten exakt
+0,50 K = Schwellwert) – und der 10-Minuten-Cooldown verschluckte danach die
+ECHTE Zapfung: Am 18.10. wurde um 18:28 „gew. 0,56K" gelernt, während der
+Speicher von 41,8 auf 22,2 °C fiel. Jetzt:
+
+* Der Vorgang wird bis zur Ruhe (`usage_event_ruhe_min`, 5 min ohne neuen
+  Abfall) bzw. maximal `usage_event_fenster_max_min` (20 min) verfolgt; der
+  Zeitstempel bleibt der **Beginn** des Abfalls, gespeichert wird der maximale
+  Abfall ab Beginn.
+* Gelernt wird nur ein **plausibler** Vorgang: die *steile Phase* (Flanke
+  ≥ `usage_event_min_slope_k_min`, 1 K/min) muss mindestens
+  `usage_event_min_drop_k` (2 K) bewegt haben. Damit fallen Sensorrauschen
+  (kleiner Abfall) und das langsame Abkühlen nach einem Lauf (große Summe,
+  flache Flanke) heraus – beide werden protokolliert („nur protokolliert"),
+  verändern die Zielzeit aber nicht. Ebenso nutzen die gelernten Morgen-/Abend-
+  Fenster und die CalcStart-Zeitkorrektur nur plausible Ereignisse.
+* Der Cooldown zählt ab dem **Ende** des Vorgangs, nicht ab dessen Beginn.
 
 ### 5.3 Gelerntes Abend-Fenster (neu)
 

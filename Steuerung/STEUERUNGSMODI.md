@@ -986,7 +986,11 @@ die Prioritäten-Engine.
 - **Kompakt-Log:** Die 15-Zeilen-Regelbewertung erscheint nur bei
   Verdikt-Wechsel oder als 60-Min-Snapshot.
 - **Status-Kontext:** `PV=…W | Einspeis=…W | SOC=…% | Alter=…s`; veraltete
-  Solax-Daten werden mit `| STALE` gekennzeichnet.
+  Solax-Daten werden mit `| STALE` gekennzeichnet (ab
+  `SOLAR_DATA_STALE_THRESHOLD_MIN`, dort pausieren die PV-Regeln). Seit dem
+  Befund 18.10.2026 gibt es eine Vorwarnstufe: ab `SOLAR_DATA_ALTER_WARNUNG_MIN`
+  (5 min) steht `| Daten altern` im Status - die Regelung arbeitet dann bereits
+  mit alten Werten, pausiert aber noch nicht (Log: `Alter=427s` ohne Hinweis).
 - **Event-Codes:** `Kompressor EIN (cycle=7)`, `… AUS (cycle=7) reason=…`
   (`regel_aus | boiler_max | overshoot_vorhersage | start_vorhersage |
   schichtung | mindestlaufzeit`).
