@@ -1774,16 +1774,50 @@ def _zyklus_id(state) -> str:
 RATE_MESSFENSTER_MIN: float = 30.0
 
 
+def _planungsraten_grenzen(state):
+    """(lern_min_minuten, rate_max_c_h) aus der Lern-Konfiguration.
+
+    Bewusst DIESELBE Quelle wie ``learning_engine``: dort sind beide Werte
+    begruendet (kurze Zyklen messen die lokale Reaktion des unteren Knotens,
+    nicht das Durchheizen des Speichers; 300-l-Speicher mit 600 W und COP >= 3
+    ergibt ~5,2 K/h fuer den ganzen Speicher).
+
+    Fehlt die Konfiguration (Mocks, Alt-Zustaende, Zustand ohne
+    ``learning_engine``), gilt "keine Grenze" - dann verhaelt sich
+    ``_rate_fuer_entscheidung`` wie vor dem Befund vom 18.10.2026.
+    """
+    cfg = getattr(
+        getattr(getattr(state, "learning_engine", None), "data", None),
+        "config",
+        None,
+    )
+
+    def _zahl(name) -> float:
+        wert = getattr(cfg, name, None)
+        if isinstance(wert, (int, float)) and not isinstance(wert, bool):
+            return float(wert)
+        return 0.0
+
+    return _zahl("heating_rate_lern_min_minuten"), _zahl("heating_rate_max_c_h")
+
+
 def _rate_fuer_entscheidung(state, t_unten):
     """Robuste Heizrate (Median der jüngsten Messfenster) + Confidence.
 
     Ein einzelner Sensor-Tick kann die Startentscheidung stark verfälschen.
     Deshalb werden bis zu fünf positive Live-Messungen gespeichert und der
     Median der letzten drei Werte verwendet. Die Confidence ist 0.1 bei
-    Fallback, 0.4 bei gelernter Rate und bis 1.0 bei mindestens drei
-    plausiblen Live-Messungen.
+    Fallback, 0.3 beim Saisonmittel, 0.4 bei gelernter Rate und bis 1.0 bei
+    mindestens drei plausiblen Live-Messungen.
+
+    Alle Quellen unterliegen den Grenzen der Lern-Konfiguration (Zyklusdauer,
+    physikalische Obergrenze) - siehe ``_planungsraten_grenzen`` und die
+    Begruendung am Ende dieser Funktion.
     """
     jetzt = _now_for_state(state)
+    # Grenzen der Lern-Konfiguration einmal je Aufruf bestimmen: sie gelten
+    # fuer ALLE Quellen (Live-Proben, gelernter Zyklus, Saisonmittel).
+    lern_min, rate_max = _planungsraten_grenzen(state)
     messung = getattr(state.control, "_rate_messung", None)
     samples = getattr(state.control, "_rate_messungen", None)
     if not isinstance(samples, deque):
@@ -1836,21 +1870,76 @@ def _rate_fuer_entscheidung(state, t_unten):
         confidence = min(1.0, 0.4 + 0.2 * n)
     else:
         engine = getattr(state, "learning_engine", None)
-        zyklen = getattr(getattr(engine, "data", None), "cycles", None)
+        data = getattr(engine, "data", None)
+        zyklen = getattr(data, "cycles", None)
         learned = None
         if zyklen and isinstance(zyklen[-1], dict):
-            learned = zyklen[-1].get("rate_unten_c_h")
-        if isinstance(learned, (int, float)) and learned > 0:
+            letzter = zyklen[-1]
+            dauer = letzter.get("duration_min")
+            # BEFUND 18.10.2026 (Log 17:31-18:41): Der Lauf 17:40-17:53
+            # dauerte 13,5 min; die Lern-Engine hat seine 35,79 C/h
+            # ausdruecklich NICHT uebernommen ("zu kurz fuer die Rate",
+            # MW blieb 5,45). Die Entscheidungen rechneten trotzdem mit
+            # genau diesem verworfenen Wert: Die Start-Antizipation blockte
+            # von 18:06 bis 18:30 jeden Start (zuletzt einen 12,5-K-Hub,
+            # real 138 statt 21 min) und die Overshoot-Vorhersage beendete
+            # einen planmaessigen Lauf nach 13,5 von 60 min Mindestlaufzeit
+            # (Alarm Telegram). Ein Zyklus unter der Lern-Mindestdauer
+            # liefert daher keine Rate. Fehlt die Dauer im Datensatz (Alt-
+            # bestand), bleibt das Verhalten wie bisher.
+            zu_kurz = (
+                lern_min > 0
+                and isinstance(dauer, (int, float))
+                and not isinstance(dauer, bool)
+                and float(dauer) < lern_min
+            )
+            if not zu_kurz:
+                learned = letzter.get("rate_unten_c_h")
+        if (
+            isinstance(learned, (int, float))
+            and not isinstance(learned, bool)
+            and learned > 0
+        ):
             rate = float(learned)
             confidence = 0.4
         else:
-            cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
-            fallback = getattr(cfg, "rate_fallback_c_h", 12.0)
-            try:
-                rate = float(fallback) if float(fallback) > 0 else 12.0
-            except (TypeError, ValueError, OverflowError):
-                rate = 12.0
-            confidence = 0.1
+            # Kein brauchbarer letzter Zyklus: Das SAISONMITTEL der
+            # Learning-Engine ist die naechstbeste Quelle - dieselbe, die
+            # Heizplan und CalcStart schon verwenden. Damit gibt es fuer die
+            # Planungsrate eine Quelle statt zwei (Befund 14.10.2026: 21 C/h
+            # in der Antizipation gegen 5,7 C/h im selben Heizplan).
+            saison = None
+            ermittle = getattr(engine, "get_learned_heating_rate", None)
+            if callable(ermittle):
+                try:
+                    saison = ermittle(jetzt.month)
+                except (TypeError, ValueError, AttributeError, OverflowError):
+                    saison = None
+            if (
+                isinstance(saison, (int, float))
+                and not isinstance(saison, bool)
+                and saison > 0
+            ):
+                rate = float(saison)
+                confidence = 0.3
+            else:
+                cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+                fallback = getattr(cfg, "rate_fallback_c_h", 12.0)
+                try:
+                    rate = float(fallback) if float(fallback) > 0 else 12.0
+                except (TypeError, ValueError, OverflowError):
+                    rate = 12.0
+                confidence = 0.1
+
+    # Physikalische Obergrenze fuer ALLE Quellen. Laeuft der untere Knoten
+    # sichtbar schneller als der ganze Speicher (oben bereits warm,
+    # unten kalt nach Zapfung), ist das ein Lokaleffekt und kein Mass fuer
+    # die Hochrechnung bis zur Obergrenze: Am 18.10.2026 wurden aus
+    # 35 C/h "unten 48,0C + 46min -> 74,9C" prognostiziert, real blieb der
+    # Speicher bei 48,8 C stehen (+0,7 K in zwei Minuten). Die Lern-Engine
+    # kappt aus demselben Grund (heating_rate_max_c_h, 6 C/h).
+    if rate_max > 0:
+        rate = min(float(rate), rate_max)
 
     state.control._rate_confidence = round(float(confidence), 2)
     return float(rate)
