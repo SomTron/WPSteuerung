@@ -189,6 +189,20 @@ def finish_cycle(state, now, end_grund=None, csv_path=None):
     """Laufzeit abschliessen und genau eine Zeile dauerhaft anhaengen."""
     cycle = getattr(state, "_cycle_log", None)
     if not cycle:
+        # BEFUND 18.10.2026: Hier verschwanden Zyklen still. Im Betriebslog
+        # 14.09.-18.10.2026 standen 129 "Kompressor EIN" gegen 58 "Zyklus
+        # gespeichert"; Ursache sind Neustarts mitten im Lauf (11 Zyklen endeten
+        # mit reason=dienst_neustart): der Start-Snapshot liegt nur im RAM,
+        # `begin_cycle` laeuft beim Neustart neu und der vorherige Lauf hat
+        # keine Zeile. Statt stumm zu scheitern, wird das jetzt protokolliert -
+        # sonst ist die Differenz im Nachhinein nicht erklaerbar.
+        zyklus = getattr(getattr(state, "control", None), "zyklus_id", "?")
+        if end_grund:
+            logging.info(
+                f"Zyklus-Zeile fehlt (cycle={zyklus}, reason={end_grund}): kein "
+                f"Start-Snapshot (Neustart waehrend des Laufs?) - nur im "
+                f"Entscheidungslog sichtbar"
+            )
         return False
     state._cycle_log = None
 

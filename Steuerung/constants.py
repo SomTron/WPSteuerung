@@ -70,7 +70,14 @@ LEGIONELLEN_VERIFY_NUR_VERDAMPFER: bool = True
 
 # --- Solar Data Freshness ---
 # Einheitliche Frischegrenze für Solax-Livedaten und API/Regelung.
+# Ab diesem Alter pausieren die Solax-abhaengigen Regeln (PV, Batterie,
+# CalcStart, ...). Bis dahin wird weiter gerechnet.
 SOLAR_DATA_STALE_THRESHOLD_MIN: int = 15
+# Vorwarnstufe fuer die Statuszeile (Befund 18.10.2026): Ab diesem Alter steht
+# " | Daten altern" im Status, damit sichtbar ist, dass die Regelung mit alten
+# Werten arbeitet - noch bevor die Regeln pausieren. Die Pausengrenze bleibt
+# SOLAR_DATA_STALE_THRESHOLD_MIN (" | STALE").
+SOLAR_DATA_ALTER_WARNUNG_MIN: int = 5
 SOLAR_API_TIMEOUT_SEC: int = 10
 # Hintergrund-Refresh bleibt hart begrenzt; niemals den 10-s-Hauptloop blockieren.
 # Der Wert muss aber zum Retry-Budget passen, sonst bricht die Deadline die

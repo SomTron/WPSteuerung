@@ -71,6 +71,7 @@ from constants import (
     FORECAST_RETRY_INTERVAL_MIN,
     MAIN_LOOP_INTERVAL_SEC,
     COMPRESSOR_VERIFICATION_ERROR_THRESHOLD,
+    SOLAR_DATA_ALTER_WARNUNG_MIN,
     SOLAR_DATA_STALE_THRESHOLD_MIN,
     SOLAR_REFRESH_DEADLINE_SEC,
     SOLAR_REFRESH_INTERVAL_SEC,
@@ -1928,9 +1929,19 @@ async def log_system_state(state):
         # Stale-Daten-Marker (Empfehlung 3.5): Kennzeichnet Entscheidungen, die
         # auf veralteten Solax-Daten beruhen - fuer die spätere Analyse sofort
         # erkennbar, ob eine Ausschaltung einer Stillstand-Phase geschuldet war.
+        #
+        # BEFUND 18.10.2026: Angezeigt wurde erst ab der Pausengrenze
+        # (15 min). Um 18:40 stand "Alter=427s" (7 min) ohne Hinweis, obwohl
+        # die Regelung mit 7 Minuten alten Werten entschied und die Meldung
+        # "Solax-Refresh nach 45s nicht fertig" schon lief. Jetzt gibt es eine
+        # Vorwarnstufe (`SOLAR_DATA_ALTER_WARNUNG_MIN`, 5 min) - die Regeln
+        # pausieren weiterhin erst bei SOLAR_DATA_STALE_THRESHOLD_MIN.
         stale_flag = ""
-        if alter_s is not None and alter_s > SOLAR_DATA_STALE_THRESHOLD_MIN * 60:
-            stale_flag = " | STALE"
+        if alter_s is not None and alter_s >= SOLAR_DATA_ALTER_WARNUNG_MIN * 60:
+            if alter_s > SOLAR_DATA_STALE_THRESHOLD_MIN * 60:
+                stale_flag = " | STALE"
+            else:
+                stale_flag = " | Daten altern"
 
         log_line = (
             f"Status: {komp_status} | "

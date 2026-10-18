@@ -48,6 +48,25 @@ def test_altes_10_spalten_schema_wird_verlustfrei_migriert(tmp_path):
     assert rows[0]["start_oben"] == ""
 
 
+def test_fehlender_start_snapshot_wird_protokolliert(caplog):
+    """Befund 18.10.2026: Nach einem Neustart mitten im Lauf fehlt die
+    Zyklus-Zeile. Das darf nicht stumm passieren - im Betriebslog standen
+    129 "Kompressor EIN" gegen 58 "Zyklus gespeichert"."""
+    import logging
+
+    state = _state()
+    state.control.zyklus_id = 42          # kein Start-Snapshot vorhanden
+
+    with caplog.at_level(logging.INFO):
+        assert cycle_logging.finish_cycle(
+            state, datetime.now(timezone.utc), end_grund="dienst_neustart"
+        ) is False
+
+    assert "Zyklus-Zeile fehlt" in caplog.text
+    assert "cycle=42" in caplog.text
+    assert "dienst_neustart" in caplog.text
+
+
 def test_abschluss_speichert_start_maxima_und_endgrund(tmp_path):
     state = _state("Batterie")
     state.sensors.t_oben = 48.0

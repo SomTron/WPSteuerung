@@ -191,6 +191,48 @@ async def test_statuszeile_markiert_stale_daten(monkeypatch, caplog, tmp_path):
     assert "Alter=2700s" in meldungen[0]
 
 
+@pytest.mark.asyncio
+async def test_statuszeile_warnt_vor_alternden_daten(monkeypatch, caplog, tmp_path):
+    """Befund 18.10.2026: "Alter=427s" (7 min) trug keinen Hinweis, obwohl die
+    Regelung mit alten Werten entschied. Ab 5 min steht " | Daten altern" -
+    die Regeln pausieren weiterhin erst bei der 15-min-Grenze ("STALE")."""
+    import main
+    from constants import SOLAR_DATA_ALTER_WARNUNG_MIN
+
+    assert 0 < SOLAR_DATA_ALTER_WARNUNG_MIN < 15
+
+    state = SimpleNamespace(
+        local_tz=TZ,
+        sensors=SimpleNamespace(t_oben=48.0, t_mittig=43.0, t_unten=46.0,
+                                t_verd=12.0),
+        control=SimpleNamespace(
+            kompressor_ein=False,
+            aktueller_einschaltpunkt=42.0, aktueller_ausschaltpunkt=48.0,
+            blocking_reason=None, active_rule_name=None,
+            previous_modus="Keine Regel aktiv"),
+        solar=SimpleNamespace(
+            acpower=None, feedinpower=None, soc=None,
+            last_api_call=datetime.now(TZ) - timedelta(
+                minutes=SOLAR_DATA_ALTER_WARNUNG_MIN + 2)),
+    )
+    monkeypatch.setattr(main, "check_log_throttle", lambda *a, **k: True)
+    monkeypatch.setattr(main, "hardware_manager",
+                        SimpleNamespace(write_lcd=lambda *a, **k: None))
+    monkeypatch.setattr(main, "HEIZUNGSDATEN_CSV", str(tmp_path / "heiz.csv"))
+    monkeypatch.setattr(main, "build_heizungsdaten_zeile", lambda s: ["1", "2"])
+    monkeypatch.setattr(main, "write_last_state_snapshot", lambda s: None)
+
+    with caplog.at_level(logging.INFO):
+        await main.log_system_state(state)
+
+    meldungen = [r.message for r in caplog.records if r.message.startswith("Status:")]
+    assert meldungen
+    assert "Daten altern" in meldungen[0]
+    assert "STALE" not in meldungen[0], (
+        "Pausengrenze (15 min) darf hier noch nicht greifen"
+    )
+
+
 # ---------------- 6) Versionsmarker (GitHub-Rev) ---------------- #
 def test_git_revision_liefert_string():
     """Start-Up-Log nimmt die aktuelle GitHub-Revision (Robust-Fallback)."""
