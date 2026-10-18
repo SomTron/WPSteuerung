@@ -1,4 +1,6 @@
 """Regressionen fuer die zentrale Energiequellen-Klassifikation."""
+import re
+
 import pytest
 
 from energy_source import (
@@ -34,6 +36,35 @@ def test_pv_ist_nur_mit_echter_pv_leistung_und_ohne_netzkauf_erlaubt():
     )
     assert pv_mit_netzkauf.quelle is Energiequelle.NETZ
     assert pv_mit_netzkauf.verfuegbar is False
+
+
+def test_schwellenwert_steht_beim_entscheidenden_wert():
+    """Befund 18.10.2026: Die Meldung behauptete "Ueberschuss 0W >= 50W".
+
+    Der Ueberschuss stand neben der Schwelle, obwohl die ERZEUGUNG den
+    Nachweis erbrachte - im Betriebslog 14.09.-18.10.2026 waren 5 von 21
+    solchen Zeilen sachlich falsch formuliert. Jetzt steht der Schwelle
+    der Wert gegenueber, der sie erfuellt hat; der zweite Wert bleibt
+    als Kontext in Klammern.
+    """
+    # 1) Erzeugung entscheidet, Ueberschuss ist 0 W
+    pv = classify_energy_source(
+        pv_acpower=363.0, feedin_watt=0.0, batpower_raw=0.0, soc=50.0,
+        pv_min_watt=50.0, max_netzkauf_watt=-50.0,
+    )
+    assert pv.quelle is Energiequelle.PV
+    assert "PV-Erzeugung 363W >= 50W" in pv.begruendung
+    assert "Ueberschuss 0W >= 50W" not in pv.begruendung
+    assert "Ueberschuss 0W" in pv.begruendung  # als Kontext erhalten
+
+    # 2) Ueberschuss entscheidet (kaputte Erzeugungsanzeige)
+    ueb = classify_energy_source(
+        pv_acpower=0.0, feedin_watt=1500.0, batpower_raw=0.0, soc=50.0,
+        pv_min_watt=50.0, max_netzkauf_watt=-50.0,
+    )
+    assert ueb.quelle is Energiequelle.PV
+    assert re.search(r"Ueberschuss [\d.]+W >= 50W", ueb.begruendung), ueb.begruendung
+    assert not re.search(r"PV-Erzeugung [\d.]+W >= 50W", ueb.begruendung)
 
 
 def test_feedin_beweist_solar_auch_ohne_erzeugungsanzeige():

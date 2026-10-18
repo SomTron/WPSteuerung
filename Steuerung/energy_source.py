@@ -282,14 +282,26 @@ def classify_energy_source(
         # diese Diskrepanz ist das Symptom der stale Erzeugungsanzeige.
         # Einer der beiden kann None sein - der Weg ueber pv_ok laeuft auch
         # dann, wenn gar keine Erzeugung gemeldet wird.
+        #
+        # Die Schwelle steht NEBEN dem Wert, der sie erfuellt hat (Befund
+        # 18.10.2026): Vorher stand dort immer der Ueberschuss, sodass Zeilen
+        # wie "PV-Erzeugung 363W, Ueberschuss 0W >= 50W, kein Netzkauf" einen
+        # Vergleich behaupteten, der nie geprueft wurde - entschieden hatte
+        # die Erzeugung (5 von 21 solchen Zeilen im Log 14.09.-18.10.2026).
+        # Der zweite Wert bleibt als Kontext erhalten.
         erzeugung_txt = "n/a" if pv_signal is None else f"{pv_signal:.0f}W"
         ueberschuss_txt = "n/a" if ueberschuss is None else f"{ueberschuss:.0f}W"
-        return result(
-            Energiequelle.PV,
-            True,
-            f"PV-Erzeugung {erzeugung_txt}, Ueberschuss {ueberschuss_txt}"
-            f" >= {pv_threshold:.0f}W, kein Netzkauf",
-        )
+        if pv_ok:
+            begruendung = (
+                f"PV-Erzeugung {erzeugung_txt} >= {pv_threshold:.0f}W "
+                f"(Ueberschuss {ueberschuss_txt}), kein Netzkauf"
+            )
+        else:
+            begruendung = (
+                f"Ueberschuss {ueberschuss_txt} >= {pv_threshold:.0f}W "
+                f"(PV-Erzeugung {erzeugung_txt}), kein Netzkauf"
+            )
+        return result(Energiequelle.PV, True, begruendung)
 
     batterie_ok = (
         discharge is not None
