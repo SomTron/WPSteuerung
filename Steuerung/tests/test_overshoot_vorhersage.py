@@ -91,6 +91,51 @@ class TestAusVorhersage:
         assert "Overshoot-Vorhersage" in (state.control.blocking_reason or "")
 
     @pytest.mark.asyncio
+    async def test_knappe_ueberschreitung_gilt_als_planmaessig(self, caplog):
+        """Befund 18.10.2026: Der Zweig feuert nur, wenn die Regel ihren
+        Ausschaltpunkt erreicht hat. Liegt die Prognose nur knapp ueber dem
+        Limit, ist das ein planmaessiges Ende (INFO + Info-Code, kein Telegram);
+        deutlich darueber bleibt es eine Warnung."""
+        import logging as _logging
+
+        from blocking_codes import blocking_code
+
+        async def set_status(s, ein, **kw):
+            return True
+
+        # knapp: 47,5 C + 6 min x 14 C/h = 48,9 C (Ueberschreitung 0,9 K)
+        knapp = _state(t_unten=47.5, rate_diff_k=1.4)
+        with caplog.at_level(_logging.DEBUG):
+            erg = await pcl.handle_compressor_off(
+                knapp, None, regelfuehler=47.5, ausschaltpunkt=47.5,
+                min_laufzeit=timedelta(minutes=10), t_oben=50.0,
+                set_kompressor_status_func=set_status, regel_name=None,
+            )
+        assert erg is True
+        assert "planmaessig" in (knapp.control.blocking_reason or "")
+        assert blocking_code(knapp.control.blocking_reason) == "overshoot_planmaessig"
+        assert not any(
+            r.levelno >= _logging.WARNING and "OVERSHOOT" in r.message
+            for r in caplog.records
+        ), "planmaessiges Ende darf nicht als Warnung geloggt werden"
+
+        # deutlich: 47,5 C + 6 min x 30 C/h = 50,5 C (Ueberschreitung 3,0 K)
+        caplog.clear()
+        hart = _state(t_unten=47.5, rate_diff_k=3.0)
+        with caplog.at_level(_logging.DEBUG):
+            erg = await pcl.handle_compressor_off(
+                hart, None, regelfuehler=47.5, ausschaltpunkt=47.5,
+                min_laufzeit=timedelta(minutes=10), t_oben=50.0,
+                set_kompressor_status_func=set_status, regel_name=None,
+            )
+        assert erg is True
+        assert blocking_code(hart.control.blocking_reason) == "overshoot_vorhersage"
+        assert any(
+            r.levelno >= _logging.WARNING and "OVERSHOOT" in r.message
+            for r in caplog.records
+        ), "deutliche Ueberschreitung muss gewarnt werden"
+
+    @pytest.mark.asyncio
     async def test_kein_aus_unterhalb_abschaltpunkt(self):
         """t_max 47.0 < ausschaltpunkt 48 -> normale Heizung laeuft weiter."""
         state = _state(t_unten=47.0, rate_diff_k=2.4)

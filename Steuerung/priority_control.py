@@ -1945,12 +1945,30 @@ def evaluate_calculated_start(
 
     # Noch vor Zielzeit?
     if current_time >= ziel_uhr:
-        # Nach Zielzeit: nichts tun
+        # Nach Zielzeit ist der Fahrplan erfuellt - bewusst kein Notfall-Start
+        # (Vertrag: `test_calcstart_zielzeit.py`; die zu frueh gelernte Zielzeit
+        # darf keine Dauerstarts erzwingen). Liegt der Speicher danach trotzdem
+        # deutlich unter Soll, heizt die Abweichungs-Regel (Prio 47) - seit dem
+        # 18.10.2026 auch dann, wenn oben noch warm ist (Schichtungs-Start).
+        # Das Journal nennt diesen Weg jetzt ausdruecklich, damit "Nach
+        # Zielzeit" nicht mehr wie eine Stoerung aussieht (Befund 18.10.2026:
+        # unten fiel von 41 auf 22 C, waehrend die Regel nur "Nach Zielzeit"
+        # meldete).
+        defizit_unten = max(0.0, calc_cfg.solltemperatur_c - temp_unten)
+        mindestdef = float(getattr(calc_cfg, "notfall_mindestdefizit_k", 0.0) or 0.0)
+        hinweis = ""
+        if mindestdef > 0.0 and defizit_unten >= mindestdef:
+            hinweis = (
+                f" | unten {defizit_unten:.1f}K unter "
+                f"{calc_cfg.solltemperatur_c:.0f}C: Heizung laeuft ueber die "
+                f"Abweichungs-Regel (PV/Batterie)"
+            )
         result.grund = (
             f"CalcStart: Nach Zielzeit ({now_hour}:{now_minute:02d} > "
             f"{_uhr_text(ziel_uhr)} gelernt"
             + (f", konfiguriert {calc_cfg.target_uhr}:00" if learned_target_hour is not None else "")
             + ")"
+            + hinweis
         )
         return result
 

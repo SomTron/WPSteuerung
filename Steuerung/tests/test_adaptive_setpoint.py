@@ -48,6 +48,31 @@ def _adaptive(temp, **kw):
     return evaluate_adaptive_pv(**basis)
 
 
+def test_overshoot_planmaessig_ist_kein_alarm():
+    """Befund 18.10.2026: Die Vorhersage schaltet nur, wenn die Regel ihren
+    Ausschaltpunkt schon erreicht hat - der Lauf ist erfuellt. Knapp ueber dem
+    Limit darf das kein Telegram-Alarm sein (im Log: "unten 48.0C + 46min x
+    35C/h -> 74.9C (Limit 65.0C)", real 48,8 C)."""
+    from blocking_codes import INFO_BLOCKING_CODES, blocking_code
+
+    assert blocking_code(
+        "Overshoot-Vorhersage planmaessig (unten 48.0C + 46min x 35C/h "
+        "-> 52.6C, Limit 65.0C) - Ziel erreicht, nur 0.2K darueber"
+    ) == "overshoot_planmaessig"
+    assert "overshoot_planmaessig" in INFO_BLOCKING_CODES
+    # Der echte Eingriff bleibt alarmwuerdig
+    assert blocking_code(
+        "Overshoot-Vorhersage (unten 48.0C + 46min x 35C/h -> 74.9C >= 65.0C)"
+    ) == "overshoot_vorhersage"
+    assert "overshoot_vorhersage" not in INFO_BLOCKING_CODES
+
+
+def test_overshoot_zusatzgrenze_ist_konfigurierbar():
+    """Die Grenze zwischen planmaessig und Warnung steht in der Config."""
+    config = WPSteuerungConfig()
+    assert config.sicherheit.overshoot_warn_zusatz_k > 0.0
+
+
 def test_adaptivepv_start_nur_unter_der_einschaltgrenze():
     """43,5 C >= 43,0 C -> Hysterese, kein Start. 42,0 C -> EIN (PV)."""
     grenze = _adaptive({"unten": 43.5, "oben": 45.0})

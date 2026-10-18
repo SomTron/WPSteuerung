@@ -102,6 +102,48 @@ def test_start_antizipation_rechnet_mit_pv_mindestlaufzeit():
     assert gesamt < netz_minz_min, "Genau dieser Vergleich hat blockiert"
 
 
+def test_calcstart_nutzt_pv_mindestlaufzeit_nur_mit_solarquelle():
+    """Befund 18.10.2026: CalcStart startete 8 Laeufe in 5 Wochen, galt aber
+    nie als quellengesteuert -> 60 min Mindestlaufzeit, obwohl das Ziel nach
+    13,5 min erreicht war (der Lauf endete erst durch die Overshoot-Vorhersage).
+    Jetzt zaehlt die Quelle: PV/Batterie = quellengesteuert, Netz-Notfall nicht.
+    """
+    from types import SimpleNamespace
+
+    basis = timedelta(minutes=60)
+
+    def _state_mit_quelle(quelle):
+        return SimpleNamespace(
+            priority_config=SimpleNamespace(
+                zyklus=SimpleNamespace(
+                    pv_min_laufzeit_minuten=10,
+                    mindestlaufzeit_minuten=60,
+                )
+            ),
+            control=SimpleNamespace(
+                active_rule_name=None, _lauf_start_regel="CalcStart",
+                source_at_start=quelle,
+            ),
+        )
+
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "PV") is True
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "batterie") is True
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "Netz") is False
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", None) is False
+    # Andere Regeln bleiben unveraendert (auch ohne Quellenangabe)
+    assert pcl._ist_pv_gesteuerter_lauf("AdaptivePV") is True
+    assert pcl._ist_pv_gesteuerter_lauf("Einspeisung") is True
+    assert pcl._ist_pv_gesteuerter_lauf("Abweichung") is False
+
+    # PV-Lauf: kurze Mindestlaufzeit; Netz-Notfall und unbekannte Quelle: voll
+    assert pcl._effektive_mindestlaufzeit(
+        _state_mit_quelle("PV"), basis, "CalcStart") == timedelta(minutes=10)
+    assert pcl._effektive_mindestlaufzeit(
+        _state_mit_quelle("Netz"), basis, "CalcStart") == basis
+    assert pcl._effektive_mindestlaufzeit(
+        _state_mit_quelle(None), basis, "CalcStart") == basis
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

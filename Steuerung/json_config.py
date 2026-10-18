@@ -133,6 +133,17 @@ class SicherheitConfig(BaseModel):
         default=0.8,
         description="Sicherheitsabstand zur Obergrenze fuer die Abschaltprognose (K)",
     )
+    # Befund 18.10.2026: Die AUS-Vorhersage feuert nur, wenn die Regel ihren
+    # Ausschaltpunkt erreicht hat - der Lauf ist also erfuellt. Liegt die
+    # Prognose nur knapp ueber dem Limit, ist das ein planmaessiges Ende
+    # (INFO, kein Telegram). Erst bei deutlicher Ueberschreitung wird gewarnt.
+    overshoot_warn_zusatz_k: float = Field(
+        default=2.0,
+        description=(
+            "Ab dieser Ueberschreitung der Prognose gilt die Abschaltung als "
+            "Warnung/Alarm; darunter nur als planmaessiges Ende (K)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _pruefe_sicherheit(self):

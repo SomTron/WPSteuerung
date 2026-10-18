@@ -33,6 +33,12 @@ INFO_BLOCKING_CODES = frozenset({
     "mindestlaufzeit",
     "start_antizipation",
     "boiler_max_erreicht",
+    # Overshoot-Vorhersage, die nur knapp ueber dem Limit liegt: der Zyklus
+    # hat sein Ziel erreicht, die Mindestlaufzeit haette ihn nur unnoetig
+    # weitergeheizt. Telegram waere hier ein Fehlalarm (Befund 18.10.2026:
+    # "unten 48.0C + 46min x 35C/h -> 74.9C" bei Limit 65 C, real blieb der
+    # Speicher bei 48,8 C stehen). Deutliche Ueberschreitungen bleiben Warnung.
+    "overshoot_planmaessig",
 })
 
 #: Passende Logmeldung JE Sperrfamilie. Vorher gab es einen einzigen Text
@@ -60,6 +66,10 @@ INFO_BLOCKING_MELDUNGEN = {
         "Boiler-Maximum erreicht, Zyklus planmaessig beendet "
         "(Freigabe erst nach Abkuehlen)"
     ),
+    "overshoot_planmaessig": (
+        "Overshoot-Vorhersage: Ziel erreicht, Mindestlaufzeit haette das "
+        "Limit nur knapp ueberschritten"
+    ),
 }
 #: Fallback, falls eine neue Info-Familie ohne eigene Meldung hinzukommt.
 INFO_BLOCKING_FALLBACK = "Start nicht noetig bzw. gesperrt"
@@ -85,6 +95,10 @@ _SONDER_CODES = (
     ("mindestlaufzeit", "mindestlaufzeit"),
     ("min. pause", "mindestpause"),
     ("mindestpause", "mindestpause"),
+    # Muss VOR der generischen Overshoot-Pruefung stehen: der planmaessige
+    # Abschluss traegt denselben Wortlaut plus "(planmaessig)".
+    ("overshoot-vorhersage planmaessig", "overshoot_planmaessig"),
+    ("ueberschwing-vorhersage planmaessig", "overshoot_planmaessig"),
     ("overshoot-vorhersage", "overshoot_vorhersage"),
     ("ueberschwing-vorhersage", "overshoot_vorhersage"),
 )

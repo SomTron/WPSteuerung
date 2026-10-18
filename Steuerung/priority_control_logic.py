@@ -2008,12 +2008,42 @@ def _boiler_max_kontext(state, lauf_regel=None, gewinner_regel=None) -> str:
     )
 
 
-def _ist_pv_gesteuerter_lauf(name) -> bool:
+def _ist_pv_gesteuerter_lauf(name, quelle=None) -> bool:
     """True, wenn der laufende Kompressor-Lauf von einer PV-/Einspeisung-
-    Regel gestartet wurde (fuer die PV-Mindestlaufzeit-Entkopplung)."""
+    Regel gestartet wurde (fuer die PV-Mindestlaufzeit-Entkopplung).
+
+    CalcStart zaehlt nur dann dazu, wenn er mit PV oder Batterie gestartet ist
+    (Befund 18.10.2026): Er startet quellengesteuert oder als Netz-Notfall.
+    Im Betriebslog 14.09.-18.10.2026 startete er 8 Laeufe; fuer den Lauf
+    17:40-17:53 galt deshalb die volle 60-min-Mindestlaufzeit, obwohl das Ziel
+    nach 13,5 min erreicht war - der Lauf endete erst durch die
+    Overshoot-Vorhersage (Alarm). Die Quelle steht beim Start fest
+    (`state.control.source_at_start`); fehlt sie, bleibt es bei der vollen
+    Mindestlaufzeit (konservativ).
+    """
     if not isinstance(name, str) or not name:
         return False
+    if name == "CalcStart":
+        return str(quelle or "").strip().lower() in ("pv", "batterie")
     return name in ("Einspeisung", "AdaptivePV") or name.startswith("PV_")
+
+
+def _quelle_fuer_mindestlaufzeit(state, regel_name):
+    """Startquelle des laufenden Zyklus (fuer CalcStart, Befund 18.10.2026).
+
+    ``source_at_start`` setzt der Hardware-Start (main.set_kompressor_status);
+    ``source_current`` traegt die Quelle des laufenden Betriebs. Nur wenn dabei
+    PV oder Batterie steht, darf ein CalcStart-Lauf die kurze
+    PV-Mindestlaufzeit nutzen - ein Netz-Notfalllauf behaelt die volle.
+    """
+    if not isinstance(regel_name, str) or regel_name != "CalcStart":
+        return None
+    control = getattr(state, "control", None)
+    for feld in ("source_at_start", "source_current", "_lauf_start_source"):
+        wert = getattr(control, feld, None)
+        if isinstance(wert, str) and wert.strip():
+            return wert
+    return None
 
 
 def _effektive_mindestlaufzeit(state, min_laufzeit, regel_name=None) -> timedelta:
@@ -2034,7 +2064,7 @@ def _effektive_mindestlaufzeit(state, min_laufzeit, regel_name=None) -> timedelt
     # uebergeben (der Gewinner der Regelbewertung).
     if regel_name is None:
         return basis
-    if _ist_pv_gesteuerter_lauf(regel_name):
+    if _ist_pv_gesteuerter_lauf(regel_name, _quelle_fuer_mindestlaufzeit(state, regel_name)):
         cfg = getattr(getattr(state, "priority_config", None), "zyklus", None)
         wert = getattr(cfg, "pv_min_laufzeit_minuten", None)
         if isinstance(wert, (int, float)) and not isinstance(wert, bool):
@@ -2279,6 +2309,38 @@ async def handle_compressor_off(
                     state, False, force=True, t_boiler_oben=t_oben,
                     end_grund="overshoot_vorhersage",
                 ):
+                    # BEFUND 18.10.2026: Der Zweig feuert konstruktiv nur, wenn
+                    # die Regel ihren Ausschaltpunkt erreicht hat - der Lauf hat
+                    # sein Ziel also erfuellt, die Mindestlaufzeit haette ihn
+                    # nur weitergeheizt. Liegt die Prognose nur knapp ueber dem
+                    # Limit, ist das ein planmaessiges Ende (INFO, kein
+                    # Telegram-Alarm wie beim echten Eingriff): Im Log stand
+                    # "unten 48.0C + 46min x 35C/h -> 74.9C (Limit 65.0C)",
+                    # real blieb der Speicher bei 48,8 C stehen.
+                    zusatz_k = float(
+                        getattr(_sic_cfg, "overshoot_warn_zusatz_k", 2.0) or 0.0
+                    )
+                    ueberschreitung_k = t_prognose - limit
+                    if ueberschreitung_k < zusatz_k:
+                        state.control.blocking_reason = (
+                            f"Overshoot-Vorhersage planmaessig ({fuehler} "
+                            f"{t_max:.1f}C + {rest_min:.0f}min x "
+                            f"{rate_var:.0f}C/h -> {t_prognose:.1f}C, Limit "
+                            f"{limit:.1f}C) - Ziel erreicht, nur "
+                            f"{ueberschreitung_k:.1f}K darueber"
+                        )
+                        logging.info(
+                            f"OVERSHOOT-VORHERSAGE AUS (planmaessig) "
+                            f"(cycle={_zyklus_id(state)}) "
+                            f"reason=overshoot_planmaessig: {fuehler} "
+                            f"{t_max:.1f}C + {rest_min:.0f}min x "
+                            f"{rate_var:.0f}C/h -> ~{t_prognose:.1f}C "
+                            f"(Limit {limit:.1f}C, nur "
+                            f"{ueberschreitung_k:.1f}K darueber, Reserve "
+                            f"{reserve_k:.1f}K) "
+                            f"[{_boiler_max_kontext(state, lauf_regel=lauf_regel, gewinner_regel=regel_name)}]"
+                        )
+                        return True
                     state.control.blocking_reason = (
                         f"Overshoot-Vorhersage ({fuehler} {t_max:.1f}C + "
                         f"{rest_min:.0f}min x {rate_var:.0f}C/h "
@@ -2442,6 +2504,22 @@ async def handle_compressor_off(
     return False
 
 
+def _merke_start_sperre(state, text, start_gewuenscht: bool) -> None:
+    """Setzt den Sperrgrund einer Start-Schutzregel - nur bei Startwunsch.
+
+    BEFUND 18.10.2026: `handle_compressor_on` laeuft auch dann, wenn keine
+    Regel heizen will (Gewinner sagt AUS). Die Start-Schutzregeln setzten
+    ihren Grund trotzdem und ueberschrieben damit den spaeteren
+    `blocking_reason = None`-Zweig: Im Betriebslog 14.09.-18.10.2026 standen
+    51 Statuszeilen mit "Info: Start-Antizipation", obwohl in diesen Zyklen
+    gar kein Start beantragt war - der echte Grund (AdaptivePV: "Speicher oben
+    voll") fehlte dadurch im Journal. Ohne Startwunsch gehoert hier kein
+    Sperrgrund hin.
+    """
+    if start_gewuenscht:
+        state.control.blocking_reason = text
+
+
 async def handle_compressor_on(
     state,
     session,
@@ -2477,6 +2555,11 @@ async def handle_compressor_on(
     # Neu gefuellt wird er weiter unten, unmittelbar vor dem Startversuch.
     state.control._pending_start_rule = None
     state.control._pending_start_source = None
+
+    # Startwunsch der Prioritaeten-Engine (Befund 18.10.2026): Start-Sperren
+    # nennen ihren Grund nur, wenn ueberhaupt ein Start beantragt war - sonst
+    # gehoert der AUS-Grund des Gewinners in die Statuszeile.
+    _start_gewuenscht = bool(getattr(state.control, "_soll_einschalten", False))
 
     # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gültige
     # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
@@ -2544,10 +2627,14 @@ async def handle_compressor_on(
         # Regelschleife abwuergen. Gefunden in der Mehrtages-Simulation
         # (Analyse/sim), die den Speicher ohne t_mittig aufruft.
         _mittig_txt = "n/a" if t_mittig is None else f"{t_mittig:.1f}C"
-        state.control.blocking_reason = (
-            f"Boiler-Max-Naehe ({fuehler_nahe} {t_nahe:.1f}C, "
-            f"mittig {_mittig_txt}, "
-            f"Einschalten erst < {nahe_limit - ein_abstand:.1f}C)"
+        _merke_start_sperre(
+            state,
+            (
+                f"Boiler-Max-Naehe ({fuehler_nahe} {t_nahe:.1f}C, "
+                f"mittig {_mittig_txt}, "
+                f"Einschalten erst < {nahe_limit - ein_abstand:.1f}C)"
+            ),
+            _start_gewuenscht,
         )
         return False
     elif ref_close and not mittig_close:
@@ -2570,9 +2657,13 @@ async def handle_compressor_on(
         and not isinstance(t_oben, bool)
         and float(t_oben) >= float(schichtung_max)
     ):
-        state.control.blocking_reason = (
-            f"Schichtungs-Obergrenze aktiv (oben {float(t_oben):.1f}C >= "
-            f"{float(schichtung_max):.1f}C) - kein Start"
+        _merke_start_sperre(
+            state,
+            (
+                f"Schichtungs-Obergrenze aktiv (oben {float(t_oben):.1f}C >= "
+                f"{float(schichtung_max):.1f}C) - kein Start"
+            ),
+            _start_gewuenscht,
         )
         return False
 
@@ -2645,16 +2736,19 @@ async def handle_compressor_on(
                 "effective_buffer_min": round(effective_puffer_min, 1),
             }
             if erwartet_min + effective_puffer_min < minz_min:
-                state.control.blocking_reason = (
+                grund = (
                     f"Start-Antizipation: hub zur Obergrenze nur {hub_k:.1f}K "
                     f"(Rate {rate_var:.0f}C/h, Confidence {rate_confidence:.0%} -> "
                     f"{erwartet_min:.0f}min < {minz_min:.0f}min Mindestlaufzeit + "
                     f"{effective_puffer_min:.0f}min Reserve, Konfidenz {confidence_category})"
                 )
-                if check_log_throttle(state, "log_start_vorhersage_block", 10):
+                _merke_start_sperre(state, grund, _start_gewuenscht)
+                if _start_gewuenscht and check_log_throttle(
+                    state, "log_start_vorhersage_block", 10
+                ):
                     logging.info(
                         f"Start blockiert reason=start_vorhersage "
-                        f"(cycle={_zyklus_id(state)}): {state.control.blocking_reason}"
+                        f"(cycle={_zyklus_id(state)}): {grund}"
                     )
                 return False
 

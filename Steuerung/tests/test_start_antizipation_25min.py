@@ -87,6 +87,27 @@ async def _starte(state, regelname="AdaptivePV"):
 
 
 @pytest.mark.asyncio
+async def test_ohne_startwunsch_kein_antizipations_grund(caplog):
+    """Befund 18.10.2026: Die Start-Antizipation setzte ihren Sperrgrund auch
+    dann, wenn gar keine Regel heizen wollte (Gewinner sagt AUS) - im
+    Betriebslog standen 51 solcher "Info: Start-Antizipation"-Zeilen, waehrend
+    der echte Grund (AdaptivePV: "Speicher oben voll") fehlte."""
+    import logging as _logging
+
+    state = _state(rate_c_h=20.0, t_unten=45.9)   # Hub 2,1 K -> sonst blockiert
+    state.control._soll_einschalten = False       # keine Regel will heizen
+
+    with caplog.at_level(_logging.INFO):
+        ergebnis = await _starte(state, "AdaptivePV")
+
+    assert ergebnis is False
+    assert state.control.kompressor_ein is False
+    assert "Start-Antizipation" not in (state.control.blocking_reason or "")
+    assert state.control.blocking_reason is None
+    assert "Start blockiert reason=start_vorhersage" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_pv_start_mit_kurzem_hub_wird_blockiert():
     """unten 45,9 C -> Hub 2,1 K; bei 20 C/h nur ~6 min.
 
