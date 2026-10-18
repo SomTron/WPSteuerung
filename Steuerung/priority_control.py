@@ -650,11 +650,18 @@ def evaluate_einspeisung(
             and not isinstance(oben_cap, bool)
             and temp_oben >= float(oben_cap)
         ):
-            result.einschalten = False
-            result.grund = (
-                f"Einspeisung: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
-                f"(Speicher oben voll) -> kein Start"
-            )
+            if kompressor_ein:
+                result.einschalten = False
+                result.grund = (
+                    f"Einspeisung: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
+                    f"(Speicher oben voll) -> AUS"
+                )
+            else:
+                result.einschalten = None
+                result.grund = (
+                    f"Einspeisung: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
+                    f"(Speicher oben voll) -> kein Start"
+                )
             return result
         # Einschalthysterese (Befund Oktober 2026): Diese Regel hatte keine
         # Untergrenze und startete bei unten 44,9 C - der Zyklus riss nach
@@ -1691,11 +1698,31 @@ def evaluate_adaptive_pv(
         and not isinstance(oben_cap, bool)
         and temp_oben >= float(oben_cap)
     ):
-        result.einschalten = False
-        result.grund = (
-            f"AdaptivePV: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
-            f"(Speicher oben voll) -> kein Start trotz {sensor_name} {temp:.1f}C"
-        )
+        # BEFUND 18.10.2026 (Betriebslog 18:29:54): Der Text sagt "kein
+        # Start", die Regel lieferte aber `False` ("kein Heizen"). Weil der
+        # Gewinner nach Prioritaet bestimmt wird, verdeckte diese Sonderregel
+        # die rangniedrigere Abweichung (47): oben 61,6 C (Legionellen-
+        # Nachlauf), unten 37,0 C nach Zapfung, SOC 96 %, Batterie 263 W - die
+        # Abweichung wollte mit Batterieleistung heizen (Schichtungs-Start,
+        # Obergrenze oben 62,6 C), AdaptivePV verhinderte es 35 min lang, bis
+        # unten auf 22,2 C gefallen war. Ohne diesen Zweig haette das
+        # Quellen-Gate weiter unten ("AdaptivePV wartet auf PV") ohnehin
+        # `None` gemeldet - nur die Prioritaet des Deckels hat daraus ein Veto
+        # gemacht. Im Aus-Zustand daher `None` (keine Meinung), wie im
+        # Hysterese-Zweig darunter. Laeuft der Kompressor, bleibt es beim AUS:
+        # dann ist es die Ueberhitzungs-Bremse des laufenden PV-Zyklus.
+        if kompressor_ein:
+            result.einschalten = False
+            result.grund = (
+                f"AdaptivePV: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
+                f"(Speicher oben voll) -> AUS"
+            )
+        else:
+            result.einschalten = None
+            result.grund = (
+                f"AdaptivePV: oben {temp_oben:.1f}C >= {float(oben_cap):.1f}C "
+                f"(Speicher oben voll) -> kein Start trotz {sensor_name} {temp:.1f}C"
+            )
         return result
 
     if temp >= einschalten_bis_c and not kompressor_ein:

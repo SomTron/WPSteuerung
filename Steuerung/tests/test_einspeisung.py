@@ -50,10 +50,33 @@ def test_einspeisung_kein_start_oberhalb_der_einschaltgrenze():
 
 
 def test_einspeisung_kein_start_wenn_oben_heiss():
-    """Der Boiler-Max-Fuehler ist 'unten'; oben kann er fast ueberhitzt sein."""
+    """Der Boiler-Max-Fuehler ist 'unten'; oben kann er fast ueberhitzt sein.
+
+    Seit dem Befund 18.10.2026 ist der Aus-Zustand `None` ("kein Start")
+    statt `False` ("kein Heizen") - sonst verdeckt diese Regel (85) als
+    Gewinner die rangniedrigeren Heizregeln (z. B. Abweichung 47), wenn der
+    obere Bereich nach einer Legionellenfahrt noch heiss ist.
+    """
     erg = bewerte({"unten": 40.0, "oben": 56.0}, feedin=7600.0)
-    assert erg.einschalten is False
+    assert erg.einschalten is None
     assert "Speicher oben voll" in erg.grund
+    assert "kein Start" in erg.grund
+
+
+def test_einspeisung_oben_heiss_im_laufenden_zyklus_schaltet_ab():
+    """Gegenprobe zur Zweig-Erreichbarkeit.
+
+    In diesem Regelzweig kann `kompressor_ein` praktisch nicht True sein:
+    Laeuft die WP und speist die Anlage weiter ein, greift der
+    Weiterlauf-Zweig (Schritt 2, `weiterlauf_ab_watt` = 6500 W) bereits bei
+    `feedin >= 6500` - der Einschaltzweig (ab `einspeisegrenze_watt` = 7500)
+    ist dann nicht mehr erreichbar. Der Deckel war hier also immer nur ein
+    START-Veto; das `False` hat nie einen laufenden Zyklus beendet.
+    """
+    erg = bewerte({"unten": 40.0, "oben": 56.0}, feedin=8000.0,
+                  kompressor_ein=True)
+    assert erg.einschalten is True
+    assert "Weiterlauf" in erg.grund
 
 
 def test_einspeisung_start_bei_kaltem_oben_unveraendert():

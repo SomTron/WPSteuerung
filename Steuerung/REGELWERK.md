@@ -464,9 +464,21 @@ Die statische Ein-Sperre ist um zwei dynamische Schutzschichten ergaenzt:
   treiben, wird **vorher** abgeschaltet (`reason=overshoot_vorhersage`) - statt
   bei 49 C den Bruch zu erleben.
 
-Die Rate stammt aus der Live-Messung (`state.control._rate_messung`), der
-gelernten Rate der Lern-Engine oder `rate_fallback_c_h`. Der Telegram-Alarm
-„Boiler-Max-Naehe“ wird auf 1x/Tag gedrosselt (frueher bis zu 38x/Woche).
+Die Rate stammt aus der Live-Messung (`state.control._rate_messung`), dem
+Saisonmittel der Lern-Engine (`heat_rates[<Saison>].avg`) oder dem gelernten
+letzten Zyklus; `rate_fallback_c_h` gilt nur, wenn keine dieser Quellen
+verfuegbar ist. Seit dem Befund vom 18.10.2026 unterliegen **alle** Quellen
+denselben Grenzen wie das Lernen (`learning_engine.LearningConfig`): Ein Zyklus
+unter `heating_rate_lern_min_minuten` (30 min) liefert keine Rate, und keine
+Rate liegt ueber `heating_rate_max_c_h` (6 C/h). Vorher rechneten
+EIN-Antizipation und AUS-Vorhersage mit der ungekappten Rate des letzten
+Zyklus - im Betriebslog 18.10.2026 mit 35,79 C/h, obwohl die Lern-Engine genau
+diesen Wert verworfen hatte ("zu kurz fuer die Rate", Mittel blieb 5,45):
+"unten 48,0C + 46min x 35C/h -> 74,9C" (real blieb der Speicher bei 48,8 C)
+beendete einen planmaessigen Lauf nach 13,5 von 60 min Mindestlaufzeit, und der
+Schichtungs-Start um 18:30 (Hub 12,5 K, Scheinlaufzeit 21 min) blieb gesperrt.
+Der Telegram-Alarm „Boiler-Max-Naehe“ wird auf 1x/Tag gedrosselt (frueher bis
+zu 38x/Woche).
 
 ### 4.7 Taktungs-Reduktion: PV-Weiterlauf-Band & Hysterese-Sparen (3.2)
 
@@ -498,6 +510,15 @@ Auswertung der Zyklen 01.-15.10.2026: 41 von 84 Zyklen waren kuerzer als
   Einspeisung): Der Boiler-Max-Bezugsfuehler ist `unten`; stand `oben` schon
   kurz vor der Ueberhitzung (Log 12.10.: 57,1 C), startete die PV dennoch.
   Jetzt kein Start mehr bei `oben >= 55 C`.
+  **Im Aus-Zustand heisst das `einschalten=None` ("kein
+  Start"), nicht `False`** (Befund 18.10.2026): Als AUS-Gewinner verdeckte der
+  Deckel sonst die rangniedrigeren Heizregeln - im Betriebslog 18:29:54 stand
+  `oben` 61,6 C (Legionellen-Nachlauf) und `unten` 37,0 C nach einer Zapfung,
+  SOC 96 %, 263 W Batterieleistung; die Abweichung (47) wollte mit Batterie den
+  Schichtungs-Start (Obergrenze oben 62,6 C), AdaptivePV (78) verhinderte ihn
+  35 min lang, bis `unten` auf 22,2 C gefallen war. Laeuft der Kompressor,
+  bleibt der Deckel ein AUS (Ueberhitzungs-Bremse des laufenden PV-Zyklus).
+
 - **Schichtungs-Start-Sperre** (`handle_compressor_on`): Lag `oben` bereits
   auf/ueber `schichtung_oben_max`, wurde trotzdem gestartet und der Lauf 48 s
   spaeter in `handle_compressor_off` abgewuergt (Log 15.10., 18:38). Jetzt
