@@ -50,6 +50,9 @@ Steuerung/csv\ log/zyklen_*.csv
 !Analyse/*.csv
 Analyse/*.md
 Analyse/*.html
+# Ausnahme: die HANDGESCHRIEBENE Uebersicht der Analyse-Werkzeuge (die
+# uebrigen Markdown-Dateien dort sind generierte Berichte).
+!Analyse/README.md
 
 # Ignoriere Test-Outputs
 *_out.txt
