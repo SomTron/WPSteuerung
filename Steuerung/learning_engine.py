@@ -48,6 +48,13 @@ class LearningConfig:
     # den GANZEN Speicher. Laeuft der untere Knoten sichtbar schneller,
     # ist das ein Lokaleffekt und kein Mass fuer die Startplanung.
     heating_rate_max_c_h: float = 6.0
+    # Mindest-Anstieg, damit ein Zyklus in die Planungsrate eingeht. Ohne
+    # diese Grenze zaehlten Zyklen, in denen der Fuehler GEFALLEN ist: die
+    # Zyklus-Rate wird auf 0,1 K geklemmt und wurde so als "0,54 C/h" bzw.
+    # "0,0 C/h" gelernt (Befund 18.10.2026: 11-min-Zyklus mit 0,54 C/h bei
+    # fallender Temperatur, ein 1215-min-"Zyklus" mit 0,0 C/h). Bei alpha=0,1
+    # senkt ein solcher Eintrag das Lernmittel um 10 %.
+    heating_rate_min_anstieg_k: float = 0.5
 
     # ── Zielzeit (Zapfverhalten) ──
     target_hour_ewma_alpha: float = 0.15
@@ -55,6 +62,28 @@ class LearningConfig:
     max_usage_events: int = 100
     # ── Zapfung: ein Abfallvorgang darf nicht bei jedem 10-s-Sample neu zählen ──
     usage_event_cooldown_min: int = 10
+    # Zapfungs-Erkennung (Befund 18.10.2026): Das Ereignis wurde beim ERSTEN
+    # Sample ueber der Schwelle abgeschlossen und mit diesem Ein-Sample-Delta
+    # gespeichert. Im Betriebslog 14.09.-18.10.2026 hatten dadurch 26 von 27
+    # Ereignissen einen gewichteten Abfall < 1 K (die meisten exakt 0,50 K =
+    # Schwellwert) - und der 10-min-Cooldown verschluckte danach die ECHTE
+    # Zapfung: Am 18.10. wurde um 18:28 "gew. 0,56K" gelernt, waehrend der
+    # Speicher von 41,8 auf 22,2 C fiel. Der wert steuerte ausserdem die
+    # gelernte Abend-Zielzeit (18,4 h) und damit den CalcStart-Fahrplan.
+    #
+    # Jetzt wird das Ereignis ueber ein Fenster verfolgt (maximaler Abfall ab
+    # Beginn), und nur PLAUSIBLE Vorgaenge fliessen in die Zielzeit ein:
+    # staerkster Abfall >= usage_event_min_drop_k UND Flanke >= min_slope.
+    # Damit fallen sowohl das Sensorrauschen (kleiner Abfall) als auch das
+    # langsame Abkuehlen des Speichers (grosse Summe, flache Flanke) heraus -
+    # beide werden weiterhin protokolliert, aber nicht gelernt.
+    usage_event_ruhe_min: float = 5.0
+    usage_event_fenster_max_min: float = 20.0
+    usage_event_min_drop_k: float = 2.0
+    #: Ab dieser Flanke gilt ein Sample als "steile Phase". Der Speicher kuehlt
+    #: im Leerlauf mit bis zu 0,5 K/min ab (Log 14.09.-18.10.2026), eine
+    #: Zapfung bewegt den unteren Fuehler mit mehreren K/min - 1,0 trennt beides.
+    usage_event_min_slope_k_min: float = 1.0
 
 
     max_usage_per_half_day: int = 2
@@ -153,6 +182,11 @@ class UsageEvent:
     drop_oben_k: float
     # Gewichteter Gesamt-Abfall (gewichtet nach Sensorempfindlichkeit)
     drop_gesamt_k: float
+    #: True, wenn der Vorgang die Plausibilitaetsgrenzen erfuellt
+    #: (staerkster Abfall UND Flanke, siehe LearningConfig) und deshalb in
+    #: die gelernte Zielzeit einfliesst. Altbestand kennt das Feld nicht und
+    #: wird als plausibel gelesen.
+    plausibel: bool = True
 
 
 @dataclass
@@ -226,6 +260,10 @@ class LearningEngine:
         self._cycle_start_temps: Optional[Dict[str, float]] = None
         self._last_temps: Optional[Dict[str, Optional[float]]] = None
         self._last_temp_time: Optional[datetime] = None
+        # Laufender Zapfungs-Vorgang (max. Abfall/Flanke werden verfolgt,
+        # siehe _detect_usage/_verfolge_usage). Nur im RAM - ein Neustart
+        # verwirft ihn, das Ereignis ist dann verloren (unkritisch).
+        self._pending_usage: Optional[Dict] = None
         self._komfort_grenz_c: float = self.data.config.comfort_grenz_c
         # Solar-Tracking (Attribution/Kalibrierung/Surplus-Profil)
         self._cycle_feedin_ws: float = 0.0   # Zeitintegral Einspeisung [Ws]
@@ -403,6 +441,11 @@ class LearningEngine:
         grenze = to_naive(now - timedelta(days=tage))
         stunden = []
         for e in self.data.usage_events:
+            # Nur plausible Zapfungen: Sonst verschieben Sensorrauschen und das
+            # langsame Abkuehlen des Speichers das gelernte Fenster (Befund
+            # 18.10.2026: 26 von 27 Ereignissen waren Kleinabfaelle < 1 K).
+            if not e.get("plausibel", True):
+                continue
             ts = self._parse_ts(e.get("timestamp"))
             if ts is None:
                 continue
@@ -439,6 +482,10 @@ class LearningEngine:
             grenze = to_naive(now - timedelta(days=tage))
             stunden = []
             for e in self.data.usage_events:
+                # Nur plausible Zapfungen (Befund 18.10.2026): Sensorrauschen
+                # und langsames Abkuehlen wuerden das Fenster verbreitern.
+                if not e.get("plausibel", True):
+                    continue
                 ts = self._parse_ts(e.get("timestamp"))
                 if ts is None:
                     continue
@@ -930,11 +977,32 @@ class LearningEngine:
         hr = self.data.heat_rates.get(season, {"avg": 3.0, "count": 0})
         lern_min = float(getattr(self.data.config, "heating_rate_lern_min_minuten", 0.0))
         rate_max = float(getattr(self.data.config, "heating_rate_max_c_h", 0.0))
-        zaehlwert = duration_min >= lern_min if lern_min > 0 else True
+        # BEFUND 18.10.2026: `delta_unten` wird oben auf 0,1 K geklemmt, damit
+        # die Zyklus-Rate nie 0 wird. Ein Zyklus, in dem der Fuehler NICHT
+        # gestiegen ist (Zapfung waehrend des Laufs, Abkuehlphase), wurde damit
+        # als "0,54 C/h" bzw. "0,0 C/h" gezaehlt und zog das Lernmittel nach
+        # unten: Im Betriebslog 14.09.-18.10.2026 standen 11-min-Zyklen mit
+        # 0,54 C/h bei fallender Temperatur und ein 1215-min-"Zyklus" mit
+        # 0,0 C/h. Bei alpha=0,1 senkt ein solcher Eintrag den Mittelwert um
+        # 10 % - die Planungsrate (Heizplan) ist aber die Grundlage des
+        # gesamten CalcStart-Fahrplans.
+        anstieg_k = end_unten - start_unten
+        min_anstieg = float(
+            getattr(self.data.config, "heating_rate_min_anstieg_k", 0.5))
+        lang_genug = duration_min >= lern_min if lern_min > 0 else True
+        gewaermt = anstieg_k >= max(min_anstieg, 0.0)
+        zaehlwert = lang_genug and gewaermt
         if not zaehlwert:
             # Zyklus wird weiter protokolliert, zaehlt aber nicht zur Rate.
             new_avg, count = hr.get("avg", 3.0), hr.get("count", 0)
+            if not lang_genug:
+                grund = ", zu kurz fuer die Rate"
+            elif anstieg_k <= 0:
+                grund = f", keine Aufwaermung (unten {anstieg_k:+.1f}K)"
+            else:
+                grund = f", Anstieg {anstieg_k:.1f}K < {min_anstieg:.1f}K"
         else:
+            grund = ""
             rate_fuer_lernen = rate_unten
             gekappt = False
             if rate_max > 0 and rate_fuer_lernen > rate_max:
@@ -961,8 +1029,7 @@ class LearningEngine:
         logging.info(
             f"Learning: Heizzyklus - {duration_min:.0f}min, "
             f"unten {start_unten:.1f}->{end_unten:.1f}C = {rate_unten:.2f}C/h "
-            f"({season}, MW={new_avg:.2f}, n={count}"
-            + ("" if zaehlwert else ", zu kurz fuer die Rate") + ")"
+            f"({season}, MW={new_avg:.2f}, n={count}" + grund + ")"
         )
 
         self._cycle_start_time = None
@@ -1034,6 +1101,17 @@ class LearningEngine:
             "oben": 1.5,    # bester Schwellwert
         }
 
+        # Zapfungs-Verfolgung (Befund 18.10.2026): Einen laufenden Vorgang
+        # zuerst weiterverfolgen - waehrend einer Zapfung entstehen weitere
+        # Abfaelle, aber kein zweites Ereignis.
+        cfg = self.data.config
+        dt_min = 0.0
+        if isinstance(self._last_temp_time, datetime):
+            dt_min = max((now - self._last_temp_time).total_seconds() / 60.0, 0.0)
+        if self._pending_usage is not None:
+            self._verfolge_usage(now, current, previous, dt_min)
+            return
+
         # Ereignis erkennen: mindestens EIN Fühler ueberschreitet Schwellwert
         if not any(drops[s] >= SCHWELLWENGE[s] for s in drops):
             return
@@ -1044,9 +1122,11 @@ class LearningEngine:
         # Ein einziger Zapfvorgang erzeugt ueber mehrere Loop-Samples hinweg
         # viele Temperaturabfaelle. Ohne Entprellung wurden daraus bis zu 17
         # Events und die Lernzeit/-fenster wurden mit einem einzigen Vorgang
-        # mehrfach gewichtet. Nur ein Event je konfigurierbarem Zeitfenster
-        # zaehlen; die Rohdaten bleiben im Event selbst fuer die WebApp.
-        cooldown_s = max(0, int(self.data.config.usage_event_cooldown_min)) * 60
+        # mehrfach gewichtet. Seit dem Befund vom 18.10.2026 zaehlt das Fenster
+        # ab dem ENDE des letzten Vorgangs (vorher ab dessen Beginn) - der
+        # laufende Vorgang wird ohnehin verfolgt, der Cooldown schuetzt nur
+        # gegen Doppelzaehlung.
+        cooldown_s = max(0, int(cfg.usage_event_cooldown_min)) * 60
         if self._last_usage_event_time is not None:
             try:
                 seit_event = to_naive(now) - to_naive(self._last_usage_event_time)
@@ -1055,31 +1135,130 @@ class LearningEngine:
             except (TypeError, ValueError):
                 pass
 
-        # Gewichteten Gesamt-Abfall berechnen
-        # unten hat das hoechste Gewicht (1.0), mitte (0.5), oben (0.25)
-        # da unten der Hauptindikator fuer Warmwasserentnahme ist
+        # Vorgang eroeffnen: Beginn, Ausgangswerte und die erste Flanke.
+        self._pending_usage = {
+            "start": now,
+            "bewegung": now,
+            "before": dict(previous),
+            "after": dict(current),
+            "max_drop": {s: max(0.0, drops.get(s, 0.0)) for s in SCHWELLWENGE},
+            #: Abfall, der in der STELLEN Phase entstanden ist - nur er
+            #: entscheidet, ob der Vorgang als Zapfung gelernt wird.
+            "schnell_drop": {s: max(0.0, drops.get(s, 0.0)) for s in SCHWELLWENGE},
+            "max_slope": {
+                s: (max(0.0, drops.get(s, 0.0)) / dt_min if dt_min > 0 else 0.0)
+                for s in SCHWELLWENGE
+            },
+        }
+
+    def _verfolge_usage(self, now, current, previous, dt_min):
+        """Verfolgt einen laufenden Zapf-Vorgang bis zur Ruhe oder Fenstergrenze.
+
+        Gespeichert wird der maximale Abfall ab Vorgangsbeginn (nicht die Summe
+        der Sample-Deltas: der Speicher erholt sich zwischen zwei Zapfungen).
+        Angesammelt wird nur in der STELLEN Phase - die Flanke wird aus dem
+        Schritt zum VORIGEN Sample gebildet, nicht aus dem kumulierten Abfall:
+        sonst wirkte auch langsames Abkuehlen (2 K ueber 20 min) wie ein
+        schneller Abfall.
+        """
+        pend = self._pending_usage
+        cfg = self.data.config
+        grenze = float(cfg.usage_event_min_slope_k_min)
+        for sensor in list(pend["max_drop"]):
+            vorher = pend["before"].get(sensor)
+            letzter = previous.get(sensor)
+            jetzt = current.get(sensor)
+            if vorher is None or jetzt is None:
+                continue
+            abfall = vorher - jetzt
+            schritt = 0.0
+            if letzter is not None:
+                schritt = max(0.0, letzter - jetzt)
+            flanke = (schritt / dt_min) if dt_min > 0 else 0.0
+            if flanke >= grenze:
+                # steile Phase: hier entsteht die Zapfung
+                pend["schnell_drop"][sensor] = max(
+                    pend["schnell_drop"].get(sensor, 0.0), abfall)
+                pend["bewegung"] = now
+            if abfall > pend["max_drop"][sensor]:
+                # Gesamtabfall seit Vorgangsbeginn (auch die flache Auslauf-
+                # phase des Zapfstrahls) - wird protokolliert, nicht bewertet.
+                pend["max_drop"][sensor] = abfall
+                pend["after"][sensor] = jetzt
+            if flanke > pend["max_slope"][sensor]:
+                pend["max_slope"][sensor] = flanke
+
+        ruhe_min = (now - pend["bewegung"]).total_seconds() / 60.0
+        alter_min = (now - pend["start"]).total_seconds() / 60.0
+        if (ruhe_min >= float(cfg.usage_event_ruhe_min)
+                or alter_min >= float(cfg.usage_event_fenster_max_min)):
+            self._finalisiere_usage(now)
+
+    def _finalisiere_usage(self, now):
+        """Legt den verfolgten Vorgang als Ereignis ab und lernt die Zielzeit.
+
+        Gelernt wird nur ein PLAUSIBLER Vorgang (staerkster Abfall UND steilste
+        Flanke ueber den Grenzen). Sensorrauschen und das langsame Abkuehlen des
+        Speichers werden protokolliert (WebApp/Diagnose), veraendern die
+        gelernte Zielzeit aber nicht - vorher waren 26 von 27 Ereignissen
+        solche Kleinabfaelle (Betriebslog 14.09.-18.10.2026).
+        """
+        pend = self._pending_usage
+        self._pending_usage = None
+        if pend is None:
+            return
+        cfg = self.data.config
+        max_drop = pend["max_drop"]
+        schnell_drop = pend.get("schnell_drop", max_drop)
+        max_slope = pend["max_slope"]
         gewichte = {"unten": 1.0, "mittig": 0.5, "oben": 0.25}
-        drop_gesamt = sum(
-            drops[s] * gewichte[s] for s in drops
-        )
+        drop_gesamt = sum(max_drop.get(s, 0.0) * gewichte[s] for s in gewichte)
+        # Geurteilt wird ueber die STELLE Phase: ein 0,5-K-Sprung plus danach
+        # 2 K langsames Abkuehlen ergaebe sonst eine "Zapfung" von 2,5 K.
+        staerkster = max(schnell_drop.values()) if schnell_drop else 0.0
+        steilster = max(max_slope.values()) if max_slope else 0.0
+        plausibel = staerkster >= float(cfg.usage_event_min_drop_k)
+
+        def _wert(werte, sensor):
+            wert = werte.get(sensor)
+            if isinstance(wert, (int, float)) and not isinstance(wert, bool):
+                return round(float(wert), 1)
+            return 0.0
 
         event = UsageEvent(
-            timestamp=now.isoformat(),
-            temp_before_unten=round(previous["unten"], 1) if previous["unten"] is not None else 0.0,
-            temp_before_mitte=round(previous["mittig"], 1) if previous["mittig"] is not None else 0.0,
-            temp_before_oben=round(previous["oben"], 1) if previous["oben"] is not None else 0.0,
-            temp_after_unten=round(current["unten"], 1),
-            temp_after_mitte=round(current["mittig"], 1),
-            temp_after_oben=round(current["oben"], 1) if current["oben"] is not None else 0.0,
-            drop_unten_k=round(drops["unten"], 1),
-            drop_mitte_k=round(drops["mittig"], 1),
-            drop_oben_k=round(drops["oben"], 1),
+            timestamp=pend["start"].isoformat(),
+            temp_before_unten=_wert(pend["before"], "unten"),
+            temp_before_mitte=_wert(pend["before"], "mittig"),
+            temp_before_oben=_wert(pend["before"], "oben"),
+            temp_after_unten=_wert(pend["after"], "unten"),
+            temp_after_mitte=_wert(pend["after"], "mittig"),
+            temp_after_oben=_wert(pend["after"], "oben"),
+            drop_unten_k=_wert(max_drop, "unten"),
+            drop_mitte_k=_wert(max_drop, "mittig"),
+            drop_oben_k=_wert(max_drop, "oben"),
             drop_gesamt_k=round(drop_gesamt, 2),
+            plausibel=plausibel,
         )
         self.data.usage_events.append(asdict(event))
+        # Cooldown ab dem ENDE des Vorgangs.
         self._last_usage_event_time = now
-        if len(self.data.usage_events) > self.data.config.max_usage_events:
-            self.data.usage_events = self.data.usage_events[-self.data.config.max_usage_events:]
+        if len(self.data.usage_events) > cfg.max_usage_events:
+            self.data.usage_events = self.data.usage_events[-cfg.max_usage_events:]
+
+        uhrzeit = pend["start"].strftime("%H:%M")
+        dauer_min = (now - pend["start"]).total_seconds() / 60.0
+        if not plausibel:
+            logging.info(
+                f"Learning: Zapfung {uhrzeit} nur protokolliert "
+                f"({dauer_min:.0f} min, unten {max_drop.get('unten', 0.0):.1f}K, "
+                f"mitte {max_drop.get('mittig', 0.0):.1f}K, "
+                f"oben {max_drop.get('oben', 0.0):.1f}K, gew. {drop_gesamt:.2f}K; "
+                f"steile Phase nur {staerkster:.1f}K < "
+                f"{float(cfg.usage_event_min_drop_k):.1f}K, steilste Flanke "
+                f"{steilster:.1f}K/min) -> Zielzeit unveraendert"
+            )
+            self._save()
+            return
 
         # Nur erste Zapfung(en) pro Tageshaelfte beruecksichtigen
         ist_morgen = now.hour < 12
@@ -1089,30 +1268,32 @@ class LearningEngine:
             if e["timestamp"].startswith(today_str)
             and (ts := self._parse_ts(e["timestamp"])) is not None
             and (ts.hour < 12) == ist_morgen
+            and e.get("plausibel", True)
         ]
-        if len(today_events) <= self.data.config.max_usage_per_half_day:
-            hour_f = now.hour + now.minute / 60.0
+        if len(today_events) <= cfg.max_usage_per_half_day:
+            hour_f = pend["start"].hour + pend["start"].minute / 60.0
             # EWMA (alpha=0.15): reagiert auf Veraenderungen des
             # Duschverhaltens schneller als ein kumulativer Mittelwert
             if ist_morgen:
                 count = self.data.morning_target_hour_samples + 1
                 alt = self.data.learned_morning_target_hour
-                alpha_t = self.data.config.target_hour_ewma_alpha
+                alpha_t = cfg.target_hour_ewma_alpha
                 new_target = hour_f if count <= 1 else alt * (1.0 - alpha_t) + hour_f * alpha_t
                 self.data.learned_morning_target_hour = round(new_target, 2)
                 self.data.morning_target_hour_samples = count
             else:
                 count = self.data.target_hour_samples + 1
                 alt = self.data.learned_target_hour
-                alpha_t = self.data.config.target_hour_ewma_alpha
+                alpha_t = cfg.target_hour_ewma_alpha
                 new_target = hour_f if count <= 1 else alt * (1.0 - alpha_t) + hour_f * alpha_t
                 self.data.learned_target_hour = round(new_target, 2)
                 self.data.target_hour_samples = count
             self._save()
             logging.info(
-                f"Learning: Zapfung {now.strftime('%H:%M')} "
-                f"(unten {drops['unten']:.1f}K, mitte {drops['mittig']:.1f}K, "
-                f"oben {drops['oben']:.1f}K, gew. {drop_gesamt:.2f}K) -> "
+                f"Learning: Zapfung {uhrzeit} "
+                f"({dauer_min:.0f} min, unten {max_drop.get('unten', 0.0):.1f}K, "
+                f"mitte {max_drop.get('mittig', 0.0):.1f}K, "
+                f"oben {max_drop.get('oben', 0.0):.1f}K, gew. {drop_gesamt:.2f}K) -> "
                 f"{'Morgen-' if ist_morgen else 'Abend-'}"
                 f"Zielzeit {new_target:.1f}h (n={count})"
             )
@@ -1147,6 +1328,9 @@ class LearningEngine:
         treffer = [
             e for e in self.data.usage_events
             if (ts := self._parse_ts(e.get("timestamp"))) is not None and ts >= grenze
+            # Nur plausible Zapfungen: ein Kleinabfall (Rauschen) darf die
+            # Startzeit nicht verfruehen (Befund 18.10.2026).
+            and e.get("plausibel", True)
         ]
         if nur_unkompensierte:
             letzter_zyklus = self._letzter_zyklus_ende()

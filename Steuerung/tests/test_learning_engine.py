@@ -163,55 +163,131 @@ class TestHeizzyklen:
 # ── Zapfungs-Erkennung ────────────────────────────────────────────────
 
 class TestZapfung:
+    """Zapfungs-Erkennung nach der Neufassung vom 18.10.2026.
+
+    Ein Vorgang wird ueber ein Fenster verfolgt (Ruhe 5 min, max. 20 min) und
+    mit dem MAXIMALEN Abfall gespeichert. Gelernt wird er nur, wenn er
+    plausibel ist: staerkster Abfall >= 2 K UND Flanke >= 1 K/min. Vorher wurde
+    der Ein-Sample-Abfall gespeichert - dadurch hatten 26 von 27 Ereignissen
+    < 1 K, und der 10-min-Cooldown verschluckte danach die echte Zapfung
+    (18.10.2026: "gew. 0,56K" gelernt, waehrend der Speicher von 41,8 auf
+    22,2 C fiel).
+    """
+
+    def _zapfe(self, engine, start, unten_vor=43.0, unten_nach=40.0,
+               oben_vor=46.0, oben_nach=44.0, dauer_min=1):
+        """Steiler Abfall + Ruhe-Sample: erzeugt genau EIN Ereignis."""
+        engine.update(start, {"unten": unten_vor, "mittig": 44.0, "oben": oben_vor}, False)
+        engine.update(start + timedelta(minutes=dauer_min),
+                      {"unten": unten_nach, "mittig": 43.0, "oben": oben_nach}, False)
+        engine.update(start + timedelta(minutes=dauer_min + 6),
+                      {"unten": unten_nach, "mittig": 43.0, "oben": oben_nach}, False)
+
     def test_zapfung_am_abend_aktualisiert_zielzeit(self, engine):
         """Zapfungen sammeln sich als Zielzeit-Samples.
 
         API-Vertrag: get_learned_target_hour() liefert den Default 17.0,
         bis mind. 3 Samples gesammelt sind -- erst dann gilt der gelernte Wert.
         """
-        for i in range(3):
-            t = datetime(2026, 1, 15, 18, i * 10)
-            oben_vor = 46.0  # vor jeder Zapfung wieder "aufgefuellt"
-            engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": oben_vor}, False)
-            engine.update(t + timedelta(minutes=5),
-                          {"unten": 43.0, "mittig": 44.0, "oben": oben_vor - 2.0}, False)
+        for stunde, minute in ((18, 0), (18, 20), (18, 40)):
+            self._zapfe(engine, datetime(2026, 1, 15, stunde, minute))
 
-            if i == 0:
-                # Unterhalb der Schwelle gilt weiterhin der Default ...
-                assert engine.get_learned_target_hour() == 17.0
-                # ... auch wenn intern schon gelernt wurde
-                # Erste Zapfung: hour_f wird exakt uebernommen (Drop um 18:05)
-                assert engine.data.learned_target_hour == pytest.approx(18.083, abs=0.01)
-
-        # Alle 3 Zapfungen landen in der Historie ...
+        # Alle drei Vorgaenge landen in der Historie ...
         assert len(engine.data.usage_events) == 3
         # ... aber nur die ERSTEN 2 pro Abend fliessen in die Zielzeit ein
         # (Design im Code: "Nur erste Zapfung(en) heute Abend beruecksichtigen")
         assert engine.data.target_hour_samples == 2
-        # EWMA (alpha=0.15) aus den ersten beiden Ereignissen (~18:05/~18:15):
-        # z1=18.083 exakt, z2 = 18.083*0.85 + 18.25*0.15 = 18.108.
-        # Da weiterhin < 3 Samples: API liefert weiterhin den Default 17.0.
-        assert engine.data.learned_target_hour == pytest.approx(18.11, abs=0.005)
+        # Der Zeitstempel ist der BEGINN des Abfalls (erster Sample ueber der
+        # Schwelle), nicht das Ende des Verfolgungsfensters.
+        assert engine.data.usage_events[0]["timestamp"].startswith("2026-01-15T18:01")
+        # EWMA (alpha=0.15) aus 18:01 und 18:21: z1=18.017 exakt,
+        # z2 = 18.017*0.85 + 18.35*0.15 = 18.067.
+        assert engine.data.learned_target_hour == pytest.approx(18.07, abs=0.01)
         assert engine.get_learned_target_hour() == 17.0
 
     def test_zapfung_ausserhalb_des_zeitfensters_wird_ignoriert(self, engine):
-        t = datetime(2026, 1, 15, 4, 30)   # vor 05:00 (neues Fenster 05-23)
-        engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
-        engine.update(t + timedelta(minutes=10),
-                      {"unten": 43.0, "mittig": 44.0, "oben": 44.0}, False)
-        t2 = datetime(2026, 1, 15, 23, 30)  # ab 23:00
-        engine.update(t2, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
-        engine.update(t2 + timedelta(minutes=10),
-                      {"unten": 43.0, "mittig": 44.0, "oben": 44.0}, False)
+        # 04:30 liegt vor dem Fenster (05-23), 23:30 dahinter
+        for stunde, minute in ((4, 30), (23, 30)):
+            start = datetime(2026, 1, 15, stunde, minute)
+            engine.update(start, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
+            engine.update(start + timedelta(minutes=1),
+                          {"unten": 40.0, "mittig": 43.0, "oben": 44.0}, False)
+            engine.update(start + timedelta(minutes=7),
+                          {"unten": 40.0, "mittig": 43.0, "oben": 44.0}, False)
         assert engine.get_info()["total_usage_events"] == 0
+
+    def test_rauschen_und_echte_zapfung_sind_ein_vorgang(self, engine):
+        """Kernfall 18.10.2026, 18:28: Der erste kleine Schritt (0,6 K) loeste
+        die Erkennung aus, der Cooldown verschluckte die eigentliche Zapfung -
+        gelernt wurden "gew. 0,56K" statt der 19,6 K, die der Speicher verlor.
+        Jetzt verfolgt derselbe Vorgang den ganzen Abfall."""
+        t = datetime(2026, 1, 15, 18, 28)
+        engine.update(t, {"unten": 41.8, "mittig": 61.3, "oben": 61.6}, False)
+        engine.update(t + timedelta(minutes=1),
+                      {"unten": 41.2, "mittig": 61.3, "oben": 61.6}, False)
+        engine.update(t + timedelta(minutes=2),
+                      {"unten": 37.0, "mittig": 58.0, "oben": 61.4}, False)
+        engine.update(t + timedelta(minutes=4),
+                      {"unten": 27.0, "mittig": 52.0, "oben": 61.0}, False)
+        engine.update(t + timedelta(minutes=10),
+                      {"unten": 22.2, "mittig": 48.0, "oben": 60.5}, False)
+        engine.update(t + timedelta(minutes=16),
+                      {"unten": 22.2, "mittig": 48.0, "oben": 60.5}, False)
+
+        assert len(engine.data.usage_events) == 1, "Rauschen und Zapfung = EIN Vorgang"
+        eintrag = engine.data.usage_events[0]
+        assert eintrag["plausibel"] is True
+        assert eintrag["drop_unten_k"] == pytest.approx(19.6, abs=0.2)
+        assert eintrag["timestamp"].startswith("2026-01-15T18:29")
+        assert engine.data.target_hour_samples == 1
+
+    def test_kleinabfall_verschiebt_die_zielzeit_nicht(self, engine):
+        """Ein 0,5-K-Rauschen wird protokolliert, aber NICHT gelernt."""
+        t = datetime(2026, 1, 15, 18, 0)
+        engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
+        engine.update(t + timedelta(minutes=1),
+                      {"unten": 42.5, "mittig": 44.0, "oben": 46.0}, False)
+        engine.update(t + timedelta(minutes=7),
+                      {"unten": 42.5, "mittig": 44.0, "oben": 46.0}, False)
+
+        assert len(engine.data.usage_events) == 1
+        assert engine.data.usage_events[0]["plausibel"] is False
+        assert engine.data.usage_events[0]["drop_unten_k"] == pytest.approx(0.5)
+        assert engine.data.target_hour_samples == 0
+        assert engine.data.learned_target_hour == 17.0
+
+    def test_nur_die_steile_phase_zaehlt(self, engine):
+        """Rauschen plus anschliessendes Abkuehlen ergibt keine Zapfung.
+
+        Der Speicher kuehlt nach einem Lauf mit bis zu 0,5 K/min ab. Wuerde der
+        Vorgang nur nach der Gesamt-Summe beurteilt, entstuende daraus ueber das
+        20-min-Fenster eine scheinbare "Zapfung"; deshalb zaehlt nur die steile
+        Phase (>= 1 K/min in den Defaults).
+        """
+        t = datetime(2026, 1, 15, 18, 0)
+        engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
+        # steiler Sensor-Sprung loest die Erkennung aus (0,6 K in 1 min) ...
+        engine.update(t + timedelta(minutes=1),
+                      {"unten": 42.4, "mittig": 44.0, "oben": 46.0}, False)
+        # ... danach nur noch langsames Abkuehlen (0,1 K/min, 2 K gesamt)
+        for minute in range(2, 22):
+            engine.update(t + timedelta(minutes=minute),
+                          {"unten": 42.4 - 0.1 * (minute - 1), "mittig": 44.0,
+                           "oben": 46.0}, False)
+
+        assert len(engine.data.usage_events) == 1
+        eintrag = engine.data.usage_events[0]
+        assert eintrag["plausibel"] is False
+        # Der Vorgang endet 5 min nach der steilen Phase (Ruhe-Fenster), das
+        # anschliessende Abkuehlen wird also nur angeschnitten erfasst -
+        # GELERNT wird nichts, weil die steile Phase nur 0,6 K bewegte.
+        assert eintrag["drop_unten_k"] == pytest.approx(1.1, abs=0.1)
+        assert engine.data.target_hour_samples == 0
 
     def test_morgens_zapfung_zaehlt_zur_morgen_zielzeit(self, engine):
         """Zapfungen vor 12 Uhr lernen die MORGEN-Zielzeit, nicht die Abend-Zeit."""
         for i in range(4):
-            t = datetime(2026, 1, 9 + i, 7, 0)
-            engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
-            engine.update(t + timedelta(minutes=5),
-                          {"unten": 43.0, "mittig": 44.0, "oben": 44.0}, False)
+            self._zapfe(engine, datetime(2026, 1, 9 + i, 7, 0))
         info = engine.get_info()
         assert info["morning_target_hour_samples"] == 4
         assert engine.get_learned_morning_target_hour() == pytest.approx(7.0, abs=0.1)
@@ -221,7 +297,7 @@ class TestZapfung:
         # Gelerntes Morgenfenster vorhanden (ab 4 Samples in 14 Tagen)
         fenster = engine.get_learned_morning_window(now=datetime(2026, 1, 20, 12, 0))
         assert fenster is not None
-        assert fenster[0] <= 6.2   # Zapfungen ~07:05 minus 1h Vorlauf
+        assert fenster[0] <= 6.2   # Zapfungen ~07:01 minus 1h Vorlauf
         assert fenster[1] >= 7.5   # plus 45min Nachlauf
 
     def test_zeitlich_entprellte_zapfung(self, engine):
@@ -236,13 +312,9 @@ class TestZapfung:
             )
         assert len(engine.data.usage_events) == 1
 
-        # Nach der Cooldown-Zeit ist ein neuer, eigenstaendiger Abfall wieder
-        # ein gueltiges Lernereignis.
-        engine.update(
-            t + timedelta(minutes=11),
-            {"unten": 41.0, "mittig": 44.0, "oben": 45.0},
-            False,
-        )
+        # Nach dem Cooldown (gemessen ab dem ENDE des Vorgangs) ist ein neuer,
+        # eigenstaendiger Abfall wieder ein gueltiges Lernereignis.
+        self._zapfe(engine, t + timedelta(minutes=17))
         assert len(engine.data.usage_events) == 2
 
     def test_komfort_verletzung_wird_entprellt(self, engine, caplog):
@@ -365,15 +437,19 @@ class TestPersistenz:
                           {"unten": temp, "mittig": temp + 1, "oben": temp + 4}, False)
         assert len(engine.data.cycles) == 50
 
-        # Zapfungen: 101 Ereignisse im Fenster 16-23h. Fuer den
-        # Kapazitaets-Test wird die Entprellung bewusst deaktiviert.
-        engine.data.config.usage_event_cooldown_min = 0
+        # Zapfungen: Der Listen-Deckel wird unabhaengig von der Erkennungs-
+        # dynamik geprueft (die Ereignisse entstehen jetzt zeitgesteuert ueber
+        # das Verfolgungsfenster): 120 Alt-Eintraege + 1 neues Ereignis.
         z = datetime(2026, 1, 20, 17, 0)
-        oben = 46.0
-        for i in range(102):
-            engine.update(z + timedelta(minutes=i),
-                          {"unten": 43.0, "mittig": 44.0, "oben": oben}, False)
-            oben -= 2.0
+        engine.data.usage_events = [
+            {"timestamp": f"2026-01-0{1 + i % 9}T18:00:00", "drop_k": 3.0}
+            for i in range(120)
+        ]
+        engine.update(z, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
+        engine.update(z + timedelta(minutes=1),
+                      {"unten": 40.0, "mittig": 43.0, "oben": 44.0}, False)
+        engine.update(z + timedelta(minutes=7),
+                      {"unten": 40.0, "mittig": 43.0, "oben": 44.0}, False)
         assert len(engine.data.usage_events) == 100
 
 
