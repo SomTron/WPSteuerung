@@ -18,7 +18,7 @@ noetig). Sie aendern weder Code noch Konfiguration.
 py -3 Analyse/log_analyse_text.py logs/heizungssteuerung_log_18.10.26.txt bericht.txt
 ```
 
-Der Bericht enthaelt fuenf Abschnitte:
+Der Bericht enthaelt sechs Abschnitte:
 
 * **A) Gewinner-AUS gegen rangniedrigere EIN-Regeln** - der Gewinner der
   Regelbewertung ist die hoechste Prioritaet mit EIN/AUS. Eine AUS-Regel
@@ -33,6 +33,9 @@ Der Bericht enthaelt fuenf Abschnitte:
   kurz fuer die Rate" verworfenen) gegen die im Heizplan genannten Raten.
 * **E) Zaehler** - Kompressor EIN/AUS, gespeicherte Zyklen, unterdrueckte
   Abschaltwuensche.
+* **F) Code-Staende im Log** - alle `GitHub-Rev`-Marker mit Zeitraum und
+  Anzahl Starts. Zeigt, welche Code-Version wann gelaufen ist - ein Journal
+  ueber mehrere Deployments laesst sich damit in Abschnitte trennen.
 
 Beide Textfassungen der Antizipations-Meldung werden erkannt (mit und ohne
 `Confidence`/`Reserve`-Zusatz); nicht erkannte Zeilen werden angezeigt, damit

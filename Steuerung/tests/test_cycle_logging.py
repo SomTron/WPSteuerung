@@ -26,6 +26,9 @@ def test_schema_entspricht_der_bestehenden_loganalyse():
         "start_unten", "start_mittig", "start_oben",
         "max_unten", "max_mittig", "max_oben",
         "ueberschreitung_k", "start_verd",
+        # Code-Stand je Zeile (Nutzerwunsch 18.10.2026). Bewusst am Ende:
+        # so bleiben Bestandszeilen bei der Header-Migration unverschoben.
+        "rev",
     ]
 
 

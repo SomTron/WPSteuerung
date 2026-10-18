@@ -25,6 +25,7 @@ from logging_config import setup_logging
 from solax import get_solax_data
 import control_logic
 import priority_control_logic as pcl
+import code_revision
 from runtime_validation import (
     RuntimeContractError,
     validate_runtime_contract,
@@ -1998,28 +1999,12 @@ def _git_revision() -> str:
     Liefert 'kurzer-Hash [Branch] Betreff' oder 'unbekannt', falls kein
     Git-Repo verfuegbar ist. So ist spaeter jedem Log eindeutig zuzuordnen,
     mit welcher GitHub-Version die Steuerung gelaufen ist.
+
+    Die Ermittlung liegt in ``code_revision`` (gemeinsame Quelle fuer Journal,
+    Entscheidungslog und Zyklus-CSV); hier bleibt der Name erhalten, weil der
+    Start-Up-Test und das Log-Format daran haengen.
     """
-    try:
-        import subprocess as _sp
-        _base = os.path.dirname(os.path.abspath(__file__))
-
-        def _git(*args):
-            return _sp.run(
-                ["git", "-C", _base, *args],
-                capture_output=True, text=True, timeout=5,
-                check=False,
-            ).stdout.strip()
-
-        kurz = _git("rev-parse", "--short", "HEAD")
-        branch = _git("branch", "--show-current")
-        if not branch:
-            branch = _git("rev-parse", "--abbrev-ref", "HEAD")
-        subj = _git("log", "-1", "--format=%s")
-        if kurz:
-            return f"{kurz} [{branch or 'detached'}] {subj[:80]}"
-    except Exception:
-        pass
-    return "unbekannt"
+    return code_revision.startup_text()
 
 
 async def _melde_unsauberen_lauf(session, state):

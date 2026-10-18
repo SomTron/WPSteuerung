@@ -976,7 +976,13 @@ die Prioritäten-Engine.
 ### 8.1 Log-Marker (fuer spaetere Analyse)
 - **GitHub-Revision:** Jeder Neustart schreibt
   `Start WPSteuerung | GitHub-Rev: <kurz-hash> [branch] Betreff` – Logdateien
-  sind damit eindeutig einer Code-Version zuordenbar.
+  sind damit eindeutig einer Code-Version zuordenbar. Zusaetzlich traegt seit
+  dem 18.10.2026 **jede Zeile** des Entscheidungslogs (`entscheidungs_log*.jsonl`)
+  und der Zyklus-CSV (`rev`-Spalte) den Code-Stand: beide Dateien werden
+  monatlich rotiert und mischen sonst mehrere Code-Versionen, ohne dass
+  erkennbar ist, welcher Fix schon lief. Format `0cc0760` (identisch mit dem
+  Commit), `0cc0760+` (python-Dateien lokal geaendert) oder `unbekannt`
+  (kein Repo/git). Quelle: `code_revision.py`.
 - **Kompakt-Log:** Die 15-Zeilen-Regelbewertung erscheint nur bei
   Verdikt-Wechsel oder als 60-Min-Snapshot.
 - **Status-Kontext:** `PV=…W | Einspeis=…W | SOC=…% | Alter=…s`; veraltete

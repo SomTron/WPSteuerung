@@ -58,6 +58,8 @@ LERN = re.compile(
     r"Learning: Heizzyklus - (\d+)min, unten ([\d.]+)->([\d.]+)C = ([\d.]+)C/h "
     r"\((\w+), MW=([\d.]+), n=(\d+)(, zu kurz fuer die Rate)?\)")
 HEIZPLAN = re.compile(r"noch ([\d.]+)K bei ([\d.]+) C/h -> erreicht ca\. (\d{2}:\d{2})")
+# Startup-Marker: "Start WPSteuerung | GitHub-Rev: <hash> [branch] Betreff"
+REVISION = re.compile(r"GitHub-Rev: (\S+)(?: \[([^\]]*)\])?")
 
 #: Kappung der Planungsrate (Default `LearningConfig.heating_rate_max_c_h`).
 RATE_MAX_C_H = 6.0
@@ -102,7 +104,7 @@ def sammle(pfad):
     daten = {
         "bloecke": 0, "schatten": [], "persist": Counter(), "oben_voll": [],
         "start": [], "overshoot": [], "lern": [], "heizplan": [],
-        "zaehler": Counter(), "unbekannt": [],
+        "zaehler": Counter(), "unbekannt": [], "revisionen": [],
     }
     now = ""
     block = None
@@ -158,6 +160,10 @@ def sammle(pfad):
             m = HEIZPLAN.search(zeile)
             if m:
                 daten["heizplan"].append(float(m.group(2)))
+            m = REVISION.search(zeile)
+            if m:
+                daten["revisionen"].append(
+                    (now, m.group(1), m.group(2) or "", zeile.strip()[-80:]))
             for wort in ("Mindestlaufzeit noch nicht erreicht", "Zyklus gespeichert",
                          "Kompressor EIN", "Kompressor AUS"):
                 if wort in zeile:
@@ -262,6 +268,22 @@ def bericht(pfad, d):
     p("\n### E) Sonstige Zaehler")
     for k, v in sorted(d["zaehler"].items(), key=lambda kv: -kv[1]):
         p(f"    {v:6d} x  {k}")
+
+    p("\n### F) Code-Staende im Log (GitHub-Rev)")
+    revs = d["revisionen"]
+    p(f"Startup-Marker: {len(revs)}, verschiedene Revisionen: "
+      f"{len({r[1] for r in revs})}")
+    gesehen = {}
+    for ts, hash_wert, branch, _zeile in revs:
+        info = gesehen.setdefault(
+            hash_wert, {"von": ts, "bis": ts, "branch": branch, "n": 0})
+        info["bis"] = ts
+        info["n"] += 1
+    for hash_wert, info in gesehen.items():
+        p(f"    {hash_wert:<12} [{info['branch']:<28}] "
+          f"{info['von']} - {info['bis']}  ({info['n']} Starts)")
+    if not revs:
+        p("    (kein GitHub-Rev-Marker im Log - aeltere Programmversion)")
     return aus
 
 

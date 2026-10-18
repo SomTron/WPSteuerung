@@ -14,6 +14,8 @@ from datetime import datetime
 
 from utils import rotiere_csv_monatlich
 
+import code_revision
+
 
 CYCLE_CSV = os.path.join("csv log", "zyklen.csv")
 CYCLE_CSV_HEADER = [
@@ -21,6 +23,11 @@ CYCLE_CSV_HEADER = [
     "start_unten", "start_mittig", "start_oben",
     "max_unten", "max_mittig", "max_oben",
     "ueberschreitung_k", "start_verd",
+    # Code-Stand der Zeile (Nutzerwunsch 18.10.2026): Die Datei wird monatlich
+    # rotiert und mischt daher mehrere Code-Staende. Am Ende angehaengt, damit
+    # die Migration alter Header (siehe _migriere_cycle_header) verlustfrei
+    # bleibt: Bestandszeilen bekommen dort "" in dieser Spalte.
+    "rev",
 ]
 OVERSHOOT_LIMIT_C = 48.5
 
@@ -222,6 +229,7 @@ def finish_cycle(state, now, end_grund=None, csv_path=None):
         "max_oben": cycle.get("max_oben"),
         "ueberschreitung_k": ueberschreitung,
         "start_verd": cycle.get("start_verd"),
+        "rev": code_revision.kennung(),
     }
 
     if csv_path is None:

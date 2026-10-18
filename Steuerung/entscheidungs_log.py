@@ -56,6 +56,7 @@ from typing import Dict, List, Optional
 
 import pytz
 
+import code_revision
 from constants import (
     BATTERIE_LADUNG_MIN_W,
     DEFAULT_TIMEZONE,
@@ -405,6 +406,11 @@ def schreibe_eintrag(
     eintrag = {
         "ts": (ts or _log_now()).isoformat(timespec="seconds"),
         "schema": SCHEMA_VERSION,
+        # Code-Stand der Zeile (Nutzerwunsch 18.10.2026). Die Datei wird
+        # monatlich rotiert und mischt daher mehrere Code-Staende; ohne diese
+        # Angabe ist spaeter nicht entscheidbar, welcher Fix schon lief.
+        # "hash+" = lokale python-Aenderungen, "unbekannt" = kein Repo/git.
+        "rev": code_revision.kennung(),
         "gewinner": gewinner_name,
         "grund": gewinner_grund[:GEWINNER_GRUND_MAX],
         "soll_einschalten": bool(soll_einschalten),
