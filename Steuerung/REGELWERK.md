@@ -634,13 +634,23 @@ im Dashboard (webapp/index.html).
 
 ### 5.5 Forecast-Kalibrierung (Haus-spezifischer Langfehler)
 
-Taeglich ab 20 Uhr wird das Verhaeltnis *tatsaechlicher Tages-Netzeinschuss
-(Wh, integriert) / Tagesprognose (Wh/m2)* als EWMA (alpha=0.3) gelernt und auf
-0.3-2.0 geklemmt. Ab 3 Tageswerten multipliziert dieser Faktor die HEUTE-
+Taeglich ab 20 Uhr wird das Verhaeltnis *tatsaechlich erzeugte Tagesenergie*
+(Wh, integriert aus `powerdc1 + powerdc2`) / *Tagesprognose*
+(Wh/m2 x Arrayflaeche) als EWMA (alpha=0.3) gelernt und auf 0.3-2.0
+geklemmt. Ab 3 Tageswerten multipliziert dieser Faktor die HEUTE-
 Prognose in CalcStart UND AdaptivePV - ein Haus mit dauerhaft zu optimistischem
 Solcast lernt das in ~3 Tagen und wartet realistischer. Tage ohne brauchbare
 Prognose (<1000 Wh/m2) oder mit Datenluecken (<50 Wh Surplus) werden
 uebersprungen.
+
+**Der Zaehler ist die Erzeugung, nicht der Wechselstromausgang.**
+`acpower` ist Haus + Netz und liefert nachts ~250 W, obwohl die Sonne
+nicht scheint; die Erzeugung steht in `state.solar.pv_erzeugung`
+(`powerdc1 + powerdc2`). Befund 20.10.2026: `priority_control_logic` gab
+`pv_erzeugung_watt` an `learning_engine.update()` nicht weiter - die
+Engine zaehlte deshalb den Hausverbrauch als Erzeugung, der Quotient
+blieb dauerhaft zu klein (im Winter am unteren Klemmwert 0,3) und die
+Prognose wurde systematisch zu pessimistisch bewertet.
 
 ### 5.6 Surplus-Stundenprofil (Verbrauchsbewusstsein / Mittagstief)
 
