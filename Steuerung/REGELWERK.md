@@ -265,8 +265,44 @@ der Abendgarantie ist der September besser (67,3 h). Deshalb:
    Reserve vorhanden. Preis: derselbe wie Option 1, aber verteilt auf die
    Nachmittagsstunden, in denen das PV-Fenster noch offen ist.
 
-Die Simulation kann die Optionen quantifizieren; die Entscheidung ist
-eine Abwägung zwischen Duschkomfort und Netzstrom.
+##### Umsetzung (20.10.2026): Option 1 ist aktiv
+
+Nutzerentscheidung: **„der Abendkomfort geht vor"**.
+
+* Neues Config-Feld `sicherheit.start_vorhersage_ausnahme_regeln`
+  (Liste von Regelnamen, Standard: leer = unverändertes Verhalten).
+* Die Projektkonfiguration trägt `["MinTemp-Mittag-Mitte",
+  "MinTemp-Abend-Mitte"]`.
+* Die Nachtsperre bleibt **unverändert** (19–8 Uhr). Die Abendgarantie
+  feuert ohnehin um 17:36–18:47 Uhr, also innerhalb des erlaubten
+  Fensters – ein verlängertes Garantiefenster bis 22 Uhr bringt
+  nachweislich nichts (die Simulation liefert identische Zahlen).
+
+**Messergebnis mit der Ausnahme (14 Tage je Szenario, gleicher Harness):**
+
+| Szenario | Netz vorher → nachher | h mitte<40 °C | min mitte 20–22 h |
+| --- | --- | --- | --- |
+| wenig PV | 9,41 → 10,40 | 184 → 131 | 36,6 → **41,9 °C** |
+| Batterie leer | 9,66 → 10,65 | 184 → 131 | 36,6 → **41,9 °C** |
+| Batterie voll | 9,53 → 10,52 | 184 → 131 | 36,6 → **41,9 °C** |
+| wechselnd | 1,63 → 2,28 | 199 → 154 | 35,2 → **40,5 °C** |
+| ohne PV (Starknebel) | 14,69 → 17,01 | 273 → 148 | 32,7 → **41,4 °C** |
+| September | 0,60 → 0,60 | 103 → 103 | 40,5 → 40,5 °C |
+
+**Der September bleibt unberührt** – das ist der ganze Zweck der
+gezielten Ausnahme. Preis: **+1,0 kWh/Tag** im Winter (≈ 120 kWh/Jahr
+bei 120 Heiztagen, rund 36 €/Jahr).
+
+##### Nebenbefund: die Simulation war strenger als der Betrieb
+
+Beim Umsetzen fiel auf, dass der Harness `handle_compressor_on` **ohne**
+`regel_name` aufrief (der Produktivcode in `main.py` übergibt ihn). Damit
+rechnete die Antizipation in der Simulation **jeden** Start gegen die
+vollen 60 min statt gegen die PV-Mindestlaufzeit (10 min) – die Simulation
+war strenger als der Betrieb. Der Harness übergibt den Gewinner jetzt
+ebenso. Folge: die September-Basis verschiebt sich von 96,5 auf 103,1 h
+unter 40 °C – das ist die **Korrektur** der Simulation, keine Regression
+im Betrieb.
 
 ### 3.6 Komfort — Prio 60
 
@@ -554,6 +590,15 @@ Die statische Ein-Sperre ist um zwei dynamische Schutzschichten ergaenzt:
   (`start_vorhersage_mindestlaufzeit_min`, 25 min): Vorher zaehlte die kurze
   PV-Mindestlaufzeit (10 min), wodurch geplante 9-14-Minuten-Starts am
   Boiler-Maximum entstanden.
+- **Ausnahme fuer Garantie-Regeln** (`start_vorhersage_ausnahme_regeln`):
+  Regelnamen in dieser Liste sind von der EIN-Antizipation ausgenommen.
+  Grund (Nutzerentscheidung 20.10.2026, "der Abendkomfort geht vor"): Die
+  Antizipation blockierte die Mindest-Temperatur-Garantien immer - bei
+  ~4,3 K/h Heizrate und 1,0 K freiem Hub rechnet sie 15 min gegen 60 min
+  Mindestlaufzeit. Im Winter blieb das Abendminimum (20-22 Uhr) dadurch bei
+  36,6 C; mit der Ausnahme sind es 41,9 C. Preis: +1,0 kWh/Tag im
+  Winter. Die PV-Regeln bleiben geschuetzt (global abgeschaltet wuerde die
+  Einspeisung nachts starten).
 - **AUS-Vorhersage** (`overshoot_vorhersage_aktiv`, `overshoot_rate_schwelle_c_h`,
   `overshoot_reserve_k`): Hat die Regel den Abschaltpunkt erreicht und wuerde
   die Mindestlaufzeit den Fuehler mit der aktuellen Rate ueber die Obergrenze
@@ -790,7 +835,8 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
 
 ```jsonc
 {
-  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 3.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "start_vorhersage_mindestlaufzeit_min": 25, "ueberhitzung_c": 58, "notfall_c": 36, "legionellen_nachlauf_min": 180 },
+  "sicherheit":   { "max_temp_c": 48, "boiler_max_fuehler": "unten", "boiler_max_hysterese_k": 2.0, "boiler_max_ein_abstand_k": 3.0, "nachtsperre_start": 19, "nachtsperre_ende": 8, "start_vorhersage_aktiv": true, "start_vorhersage_puffer_min": 1.0, "start_vorhersage_mindestlaufzeit_min": 25,
+    "start_vorhersage_ausnahme_regeln": ["MinTemp-Mittag-Mitte", "MinTemp-Abend-Mitte"], "ueberhitzung_c": 58, "notfall_c": 36, "legionellen_nachlauf_min": 180 },
   "abweichung":   { "solltemperatur_c": 42, "einschalten_bei_abweichung_k": 4.9, "ausschalten_bei_abweichung_k": 0.0, "schichtung_min_oben_c": 42, "schichtung_netz_max_oben_c": 45, "pv_warten_aktiv": true, "pv_warten_forecast_schwelle_wh_qm": 1200, "pv_warten_bis_uhr": 12, "pv_warten_unten_min_c": 20 },
   "einspeisung":  { "einspeisegrenze_watt": 7500, "weiterlauf_ab_watt": 6500, "ausschalten_bei_c": 48, "einschalten_bis_c": 43, "oben_max_start_c": 55 },
   "zyklus":       { "mindestlaufzeit_minuten": 60, "mindestpausenzeit_minuten": 30, "pv_min_laufzeit_minuten": 10, "pv_weiterlauf_abschalt_delay_min": 3.0 },

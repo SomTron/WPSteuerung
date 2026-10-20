@@ -502,6 +502,13 @@ class Simulation:
                 state, None, regelfuehler, einschaltpunkt, ausschaltpunkt,
                 self.min_laufzeit, self.min_pause, state.sensors.t_oben,
                 state.sensors.t_mittig, self._set_kompressor,
+                # Der Gewinner wird fuer die Start-Antizipation gebraucht:
+                # `active_rule_name` ist im Aus-Zustand per Definition None,
+                # die PV-Mindestlaufzeit (10 min) wuerde dadurch nie greifen.
+                # Ohne dieses Argument prueft die Antizipation JEDEN Start
+                # gegen die vollen 60 min - die Simulation war damit
+                # strenger als der Produktivbetrieb (Befund 20.10.2026).
+                regel_name=gewinner_name,
             )
         await self._legionellen_lifecycle(result)
 

@@ -131,3 +131,63 @@ async def test_pv_start_mit_langem_hub_wird_erlaubt():
     ergebnis = await _starte(state, "AdaptivePV")
     assert ergebnis is True
     assert state.control.kompressor_ein is True
+
+
+# --- Ausnahme fuer die Mindest-Temperatur-Garantien (20.10.2026) ---
+#
+# Nutzerentscheidung: "der Abendkomfort geht vor". Die Antizipation
+# blockierte die Garantie-Regeln immer: bei ~4,3 K/h Heizrate und 1,0 K
+# freiem Hub rechnet sie 15 min gegen 60 min Mindestlaufzeit.
+# Simulation (Analyse/sim, 14 Tage Dezember): das Abendminimum (20-22 Uhr)
+# stieg dadurch von 36,6 C auf 41,9 C.
+#
+# Die Ausnahme gilt NUR fuer die Garantie-Regeln - die PV-Regeln bleiben
+# geschuetzt, sonst wuerde die Einspeisung nachts starten.
+
+
+@pytest.mark.asyncio
+async def test_garantie_regel_ist_von_der_antizipation_ausgenommen():
+    """Die Mindest-Temperatur-Garantie startet auch bei kurzem Hub."""
+    state = _state(rate_c_h=4.3, t_unten=47.0)   # Hub 1,0 K -> 14 min
+    state.priority_config.sicherheit.start_vorhersage_ausnahme_regeln = [
+        "MinTemp-Abend-Mitte",
+    ]
+    ergebnis = await _starte(state, "MinTemp-Abend-Mitte")
+    assert ergebnis is True
+    assert state.control.kompressor_ein is True
+    assert "Start-Antizipation" not in (state.control.blocking_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_pv_regel_bleibt_von_der_antizipation_gesperrt():
+    """Die Ausnahme darf NICHT auf die PV-Regeln durchschlagen."""
+    state = _state(rate_c_h=20.0, t_unten=45.9)   # Hub 2,1 K -> blockiert
+    state.priority_config.sicherheit.start_vorhersage_ausnahme_regeln = [
+        "MinTemp-Abend-Mitte",
+    ]
+    ergebnis = await _starte(state, "AdaptivePV")
+    assert ergebnis is False
+    assert "Start-Antizipation" in (state.control.blocking_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_ohne_ausnahme_gilt_die_antizipation_auch_fuer_die_garantie():
+    """Ohne Ausnahmeliste bleibt das Verhalten unveraendert."""
+    state = _state(rate_c_h=4.3, t_unten=47.0)
+    ergebnis = await _starte(state, "MinTemp-Abend-Mitte")
+    assert ergebnis is False
+    assert "Start-Antizipation" in (state.control.blocking_reason or "")
+
+
+def test_projektkonfiguration_entscheidet_abendkomfort_vor():
+    """Die Projektkonfiguration muss die Ausnahme aktiviert haben."""
+    import json
+
+    pfad = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "wp_steuerung_parameter.json")
+    with open(pfad, "r", encoding="utf-8") as f:
+        daten = json.load(f)
+    ausnahme = daten["sicherheit"].get("start_vorhersage_ausnahme_regeln", [])
+    assert "MinTemp-Abend-Mitte" in ausnahme, (
+        "Die Abendgarantie braucht die Ausnahme von der Start-Antizipation "
+        "(Nutzerentscheidung 20.10.2026)")

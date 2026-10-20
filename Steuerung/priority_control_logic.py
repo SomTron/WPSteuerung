@@ -2737,8 +2737,29 @@ async def handle_compressor_on(
     # zu fuellen. Sonst entsteht ein Kurzlauf, der die Obergrenze erreicht und
     # in den erzwungenen Laufzeit-Bruch/Luehlphase laeuft.
     _sic_cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+    # Ausnahme fuer die Mindest-Temperatur-Garantien (Nutzerentscheidung
+    # 20.10.2026: "der Abendkomfort geht vor").
+    #
+    # Befund aus der Simulation (Analyse/sim, 14 Tage, Dezember): Die
+    # Antizipation verlangt bei ~4,3 K/h Heizrate und 1,0 K freiem Hub
+    # 15 min, die Mindestlaufzeit der Garantie ist aber 60 min - der Start
+    # wird immer blockiert. Die Abendsgarantie kann dadurch nie laufen,
+    # obwohl der Fuehler unter 42 C faellt. Folge: das Abendminimum
+    # bleibt bei 36,6 C (real gemessen Dezember 2025: 33,8 C um 21 Uhr).
+    #
+    # Die Ausnahme gilt NUR fuer die Garantie-Regeln. Die PV-Regeln
+    # (AdaptivePV, Einspeisung) bleiben geschuetzt: global abgeschaltet
+    # wuerde die Einspeisung nachts starten (2 -> 9 Laeufe im September)
+    # und den Komfort verschlechtern.
+    _ausnahme = getattr(_sic_cfg, "start_vorhersage_ausnahme_regeln", None)
+    _regel_fuer_ausnahme = regel_name or getattr(
+        state.control, "active_rule_name", None)
+    _von_ausnahme_betroffen = bool(
+        _ausnahme and _regel_fuer_ausnahme in _ausnahme
+    )
     if (
         getattr(_sic_cfg, "start_vorhersage_aktiv", True)
+        and not _von_ausnahme_betroffen
         and isinstance(regelfuehler, (int, float))
         and min_laufzeit is not None
     ):

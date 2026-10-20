@@ -415,6 +415,39 @@ Lockerung (nur für die Garantie-Regeln) der sauberere Hebel.
 Reproduzierbar über
 `py -3 Analyse/sim/varianten.py --tage 14 --varianten verbessert zielkonflikt_garantie_22h zielkonflikt_antizipation_aus zielkonflikt_beides --szenarien winter_wenig_pv`.
 
+### Umsetzung: Ausnahme von der Start-Antizipation (20.10.2026)
+
+Nutzerentscheidung: **„der Abendkomfort geht vor"**. Umgesetzt als
+gezielte Ausnahme, nicht als globaler Schalter:
+
+* Config-Feld `sicherheit.start_vorhersage_ausnahme_regeln` (Liste von
+  Regelnamen). Die Projektkonfiguration trägt `MinTemp-Mittag-Mitte` und
+  `MinTemp-Abend-Mitte`.
+* Die Nachtsperre bleibt unverändert (19–8 Uhr) – die Abendgarantie
+  feuert ohnehin um 17:36–18:47 Uhr, ein verlängertes Fenster bis 22 Uhr
+  bringt nachweislich nichts.
+
+| Szenario | Netz vorher → nachher | h mitte<40 °C | min mitte 20–22 h |
+| --- | --- | --- | --- |
+| wenig PV | 9,41 → 10,40 | 184 → 131 | 36,6 → **41,9 °C** |
+| Batterie leer | 9,66 → 10,65 | 184 → 131 | 36,6 → **41,9 °C** |
+| Batterie voll | 9,53 → 10,52 | 184 → 131 | 36,6 → **41,9 °C** |
+| wechselnd | 1,63 → 2,28 | 199 → 154 | 35,2 → **40,5 °C** |
+| ohne PV (Starknebel) | 14,69 → 17,01 | 273 → 148 | 32,7 → **41,4 °C** |
+| September | 0,60 → 0,60 | 103 → 103 | 40,5 → 40,5 °C |
+
+Preis: **+1,0 kWh/Tag** im Winter (≈ 120 kWh/Jahr, rund 36 €/Jahr).
+Der September bleibt unberührt – genau der Zweck der gezielten Ausnahme.
+
+**Nebenbefund (Simulation war strenger als der Betrieb):** Der Harness
+rief `handle_compressor_on` ohne `regel_name` auf, der Produktivcode
+(`main.py`) übergibt ihn. Damit rechnete die Antizipation in der
+Simulation jeden Start gegen die vollen 60 min statt gegen die
+PV-Mindestlaufzeit (10 min). Der Harness übergibt den Gewinner jetzt
+ebenso – die September-Basis verschiebt sich dadurch von 96,5 auf
+103,1 h unter 40 °C. Das ist die Korrektur der Simulation, keine
+Regression im Betrieb.
+
 ### Die Einheiten der Prognose (20.10.2026)
 
 Die Regelung liest die Tagesprognose über `normalize_forecast_wh_qm` und

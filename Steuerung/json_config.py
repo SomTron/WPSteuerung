@@ -87,6 +87,17 @@ class SicherheitConfig(BaseModel):
         default=True,
         description="EIN-Antizipation aktiv (Hub/Rate vs. Mindestlaufzeit)",
     )
+    start_vorhersage_ausnahme_regeln: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Regeln, die von der Start-Antizipation ausgenommen sind. "
+            "Die Mindest-Temperatur-Garantien brauchen das: bei ~4,3 K/h "
+            "Heizrate und 1,0 K freiem Hub rechnet die Antizipation 15 min "
+            "gegen 60 min Mindestlaufzeit - der Start wird immer blockiert "
+            "und die Abendgarantie laeuft nie (Befund 20.10.2026, "
+            "Analyse/sim: Abendminimum 36,6 C statt 41,9 C)."
+        ),
+    )
     start_vorhersage_puffer_min: float = Field(
         default=1.0,
         description="Reserve auf die erwartete Laufzeit (min)",
