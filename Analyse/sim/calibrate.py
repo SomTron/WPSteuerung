@@ -458,32 +458,39 @@ def kalibriere_winter_kpi(zeilen, basis: SpeicherParameter, ziel: dict,
         k = sim.kennzahlen_basis
         zr = sim.zeitreihe
         min_unten = min(r["unten"] for r in zr)
+        min_oben = min(r["oben"] for r in zr)
         return {
             "netz": k["netz_pro_tag_kwh"],
             "wp_h": k["wp_laufzeit_h"] / tage,
             "min_unten": min_unten,
+            "min_oben": min_oben,
         }
 
     best = None
-    for p_w in (1500.0, 1700.0, 1900.0, 2100.0, 2300.0, 2600.0):
-        for v_w in (3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0):
-            kand = basis.kopie()
-            kand.heizleistung_w = p_w
-            kand.verlust_w_k = v_w
-            r = asyncio.run(_bewerte(kand))
-            fehler = (
-                ((r["netz"] - ziel["netz"]) / 1.0) ** 2
-                + ((r["wp_h"] - ziel["wp_h"]) / 1.0) ** 2
-                + ((r["min_unten"] - ziel["min_unten"]) / 3.0) ** 2
-            )
-            if best is None or fehler < best[0]:
-                best = (fehler, kand, r)
+    for p_w in (1900.0, 2100.0, 2300.0):
+        for v_w in (4.5, 5.5, 6.5):
+            for v_oben in (0.05, 0.10, 0.20):
+                kand = basis.kopie()
+                kand.heizleistung_w = p_w
+                kand.verlust_w_k = v_w
+                kand.verlust_oben_anteil = v_oben
+                r = asyncio.run(_bewerte(kand))
+                fehler = (
+                    ((r["netz"] - ziel["netz"]) / 1.0) ** 2
+                    + ((r["wp_h"] - ziel["wp_h"]) / 1.0) ** 2
+                    + ((r["min_unten"] - ziel["min_unten"]) / 3.0) ** 2
+                    + ((r["min_oben"] - ziel["min_oben"]) / 3.0) ** 2
+                )
+                if best is None or fehler < best[0]:
+                    best = (fehler, kand, r)
     fehler, kand, r = best
     print(f"  BEST Fehler={fehler:.3f}  P={kand.heizleistung_w:.0f}W  "
-          f"Verlust={kand.verlust_w_k:.2f}W/K")
+          f"Verlust={kand.verlust_w_k:.2f}W/K  "
+          f"VerlustOben={kand.verlust_oben_anteil:.2f}")
     print(f"    Netz {r['netz']:.2f} kWh/Tag (Ziel {ziel['netz']:.2f})  "
-          f"WP {r['wp_h']:.1f} h/Tag (Ziel {ziel['wp_h']:.1f})  "
-          f"min unten {r['min_unten']:.1f} C (Ziel {ziel['min_unten']:.1f})")
+          f"WP {r['wp_h']:.1f} h/Tag (Ziel {ziel['wp_h']:.1f})")
+    print(f"    min unten {r['min_unten']:.1f} C (Ziel {ziel['min_unten']:.1f})  "
+          f"min oben {r['min_oben']:.1f} C (Ziel {ziel['min_oben']:.1f})")
     return kand, start
 
 
@@ -669,18 +676,21 @@ def main() -> int:
             "netz": 9.4,        # kWh/Tag (Dezember 2025, gemessen)
             "wp_h": 5.2,         # h/Tag (gemessen)
             "min_unten": 13.0,   # C (gemessen)
+            "min_oben": 42.4,    # C (gemessen: der Deckel bleibt warm)
         }
         print("  Zielwerte (Dezember 2025): Netz 9,4 kWh/Tag, WP 5,2 h/Tag, "
-              "min unten 13 C")
+              "min unten 13 C, min oben 42,4 C")
         basis = start.kopie()
-        basis.umgebung_c = 13.0           # Keller (Tiefpunkt des Speichers)
-        basis.konvektion_an_w_k = 3716.0   # Durchmischung beim Heizen
-        basis.konvektion_oben_an_w_k = 3716.0
+        basis.umgebung_c = 13.0           # Keller (unten und mitte)
+        basis.umgebung_oben_c = 20.0      # Aufstellraum (Deckel, oberer Fuehler)
+        basis.konvektion_an_w_k = 100.0    # Durchmischung beim Heizen
+        basis.konvektion_oben_an_w_k = 50.0
         basis.konvektion_aus_w_k = 0.4      # stabile Schichtung im Leerlauf
         basis.konvektion_oben_aus_w_k = 2.0
         basis.einspeisung_anteil_unten = 0.6
         basis.volumen_l = 300.0
-        basis.waerme_verteilt = False
+        basis.waerme_verteilt = True       # der WP-Tauscher durchmischt den Speicher
+        basis.einspeisung_anteil_oben = 0.30
         ergebnis = kalibriere_winter_kpi(zeilen, basis, ziel_kpi)
         if not ergebnis:
             print("Kalibrierung fehlgeschlagen.")

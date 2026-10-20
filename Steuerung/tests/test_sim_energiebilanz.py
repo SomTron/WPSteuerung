@@ -68,6 +68,82 @@ def test_winterparameter_haben_keller_als_umgebung():
     assert daten["verlust_w_k"] > 1.0
 
 
+def test_speicher_verliert_oben_weniger_als_unten():
+    """Der obere Fuehler sitzt am Deckel, nicht im Keller.
+
+    Gemessen im Dezember-Log: ueber Nacht verliert der obene Fuehler
+    1 K (44,6 -> 43,6 C), der untere 17 K (30,6 -> 13,8 C). Mit einer
+    gemeinsamen Umgebung fuer alle Schichten kuehlte der obere Knoten
+    viel zu stark ab - dann loeste der Notfallschutz nachts aus, obwohl
+    das in der Realitaet nie passiert.
+    """
+    from thermal import Speicher, SpeicherParameter
+
+    p = SpeicherParameter(
+        umgebung_c=12.0, umgebung_oben_c=20.0, verlust_oben_anteil=0.05,
+        verlust_w_k=6.5, konvektion_aus_w_k=0.4, konvektion_oben_aus_w_k=2.0,
+    )
+    s = Speicher(p, start_unten=30.0, start_mitte=44.0, start_oben=44.0)
+    for _ in range(12 * 60):        # 12 Stunden Leerlauf
+        s.schritt(60.0, False)
+    assert s.oben.temperatur > 40.0, (
+        f"oben kuehlte auf {s.oben.temperatur:.1f} C ab - der Deckel "
+        "ist nicht der Keller")
+    assert s.unten.temperatur < s.oben.temperatur - 5.0
+
+
+def test_konvektion_ist_numerisch_stabil():
+    """Die Kopplung darf den Speicher nicht ueberhitzen.
+
+    Bei sehr grossen Kopplungskoeffizienten kippte die explizite
+    Integration: der obere Knoten wurde leer gepumpt und der Speicher
+    "ueberhitzte" scheinbar auf 99 C.
+    """
+    from thermal import Speicher, SpeicherParameter
+
+    p = SpeicherParameter(
+        heizleistung_w=2000.0, konvektion_an_w_k=5000.0,
+        konvektion_oben_an_w_k=5000.0, umgebung_c=12.0,
+        verlust_w_k=6.5,
+    )
+    s = Speicher(p, start_unten=12.0, start_mitte=32.0, start_oben=44.0)
+    for _ in range(3 * 60):
+        s.schritt(60.0, True)
+    for schicht in s.schichten:
+        assert schicht.temperatur < 90.0, (
+            f"{schicht.name} auf {schicht.temperatur:.1f} C - "
+            "die Konvektion ist numerisch instabil")
+
+
+def test_legionellenfahrt_beendet_die_simulation_nicht_im_endschuss():
+    """Die Legionellenfahrt muss genau einmal laufen, nicht 281-mal.
+
+    Befund 20.10.2026: die Waerme wurde gleichmaessig auf alle Schichten
+    verteilt. Die obere Schicht erreichte dadurch 65 C, bevor die untere
+    die Zieltemperatur 60 C erreichte - der Ueberhitzungsschutz beendete
+    die Fahrt, und die Regel startete sofort neu (38 Läufe je Tag).
+    """
+    from thermal import Speicher, SpeicherParameter
+
+    p = SpeicherParameter(
+        heizleistung_w=1900.0, konvektion_an_w_k=100.0,
+        konvektion_oben_an_w_k=50.0, umgebung_c=12.0,
+        umgebung_oben_c=20.0, verlust_oben_anteil=0.05, verlust_w_k=6.5,
+        waerme_verteilt=True, einspeisung_anteil_oben=0.30,
+    )
+    s = Speicher(p, start_unten=12.0, start_mitte=32.0, start_oben=44.0)
+    for _ in range(6 * 60):
+        s.schritt(60.0, True)
+    # Die untere Schicht muss die Zieltemperatur erreichen, BEVOR die
+    # obere die Ueberhitzungsgrenze (65 C) erreicht.
+    assert s.unten.temperatur >= 55.0, (
+        f"unten nur auf {s.unten.temperatur:.1f} C - die Fahrt wuerde "
+        "die Zieltemperatur verfehlen")
+    assert s.oben.temperatur < 65.0, (
+        f"oben auf {s.oben.temperatur:.1f} C - die Legionellenfahrt "
+        "wuerde am Ueberhitzungsschutz abbrechen")
+
+
 def test_pv_profile_ist_die_gleichstromseite():
     """Nachts erzeugt die Anlage nichts - das Profil muss 0 W zeigen."""
     for name, profil in umgebung.PV_PROFILE.items():

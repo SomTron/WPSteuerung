@@ -300,9 +300,11 @@ mit den gemessenen Temperaturen (11,9 / 32,0 / 44,2 °C).
 
 | Größe | Messung Dezember 2025 | Simulation (kalibriert) |
 | --- | --- | --- |
-| Netzbezug | 9,4 kWh/Tag | **9,6 kWh/Tag** |
-| WP-Laufzeit | 5,2 h/Tag | 4,7 h/Tag |
+| Netzbezug | 9,4 kWh/Tag | **9,3 kWh/Tag** |
+| WP-Laufzeit | 5,2 h/Tag | 4,6 h/Tag |
 | tiefste Temperatur | 13 °C | 11,9 °C |
+| tiefste Temperatur oben | 42,4 °C | 41,0 °C |
+| Startstunden | 8–22 Uhr, Schwerpunkt 9–13 | 8–14 Uhr |
 
 **Warum der Winter anders kalibriert werden muss:** Der gemessene
 `T_Unten` verhält sich im Winter *nicht* wie ein passiver Speicherknoten –
@@ -322,12 +324,58 @@ zählt: die Simulations-Kennzahlen gegen die gemessenen Werte
 | daraus: Verlustkoeffizient | 3,70 W/K | 4,13 W/K | 2,35 W/K |
 | WP-Nettoleistung (09→15 Uhr) | 829 W | 934 W | 381 W |
 
-**Noch offene Modellgrenze:** Das Nachfahren der einzelnen Zyklen bleibt
-im Winter ungenau (Bias +7,7 K am unteren Fühler) – das ist die
+### Drei Modellbefunde aus der Winterkalibrierung
+
+**1. Der obere Fühler sitzt nicht im Keller.** Über Nacht verliert der
+obere Fühler 1 K (44,6 → 43,6 °C), der untere 17 K (30,6 → 13,8 °C).
+Mit einer gemeinsamen Umgebung für alle Schichten kühlte der obere
+Knoten viel zu stark ab – der Notfallschutz (Prio 110, `oben` < 36 °C)
+löste dann **nachts** aus und die WP startete um 3 Uhr. Real startet sie
+nie nachts. Deshalb hat die obere Schicht jetzt eine eigene Umgebung
+(`umgebung_oben_c` = Aufstellraum) und einen eigenen Verlustanteil
+(`verlust_oben_anteil`).
+
+**2. Die Konvektion sprengte die explizite Integration.** Bei
+k = 3716 W/K und 60-s-Schritt waren 52 kWh je Stunde im Spiel – der
+obere Knoten wurde leer gepumpt, der Speicher „überhitzte" scheinbar
+auf 99 °C. Die Kopplungsterme sind jetzt auf 40 % der Knotenkapazität
+begrenzt.
+
+**3. Die Legionellenfahrt lief 281-mal statt 2-mal.** Die Wärme wurde
+gleichmäßig auf alle Schichten verteilt, dadurch erreichte `oben` die
+65 °C, bevor `unten` die Zieltemperatur 60 °C erreichte – der
+Überhitzungsschutz beendete die Fahrt und die Regel startete sofort
+neu (38 Läufe je Tag). Mit der aus den Daten abgeleiteten Verteilung
+(30 % in die obere Schicht) läuft die Fahrt einmal und endet regulär.
+
+**Verbleibende Modellgrenze:** Das Nachfahren der einzelnen Zyklen bleibt
+im Winter ungenau (Bias +2,3 K am unteren Fühler) – das ist die
 unaufgelöste Wärmebilanz des unteren Knotens. Die Kennzahlen (Energie,
-Laufzeit) treffen die Realität, die Temperaturkurve tut es nicht. Für
-Energieaussagen ist die Kalibrierung belastbar, für Komfortaussagen
+Laufzeit, Startzeiten) treffen die Realität, die Temperaturkurve tut es
 nur als Tendenz.
+
+### Das Ergebnis des PV-Fenster-Vergleichs (20.10.2026)
+
+Mit der kalibrierten Winterbasis (14 Tage je Szenario):
+
+| Szenario | Variante | Netz kWh/Tag | CalcStart-Läufe | PV-Eigenverbr. | h mitte<40 °C |
+| --- | --- | --- | --- | --- | --- |
+| Dezember, wenig PV | mit Fenster | 9,41 | 10 | 62 % | 184 |
+| Dezember, wenig PV | ohne Fenster | 9,45 | 16 | 51 % | 178 |
+| Dezember, wechselnd | mit Fenster | 1,73 | 9 | 36 % | 198 |
+| Dezember, wechselnd | ohne Fenster | 1,90 | 16 | 33 % | 185 |
+
+**Das PV-Fenster verschiebt die Starts – es senkt den Netzbezug kaum.**
+Der Effekt auf den Netzbezug liegt bei 0,04 bis 0,17 kWh/Tag (unter 2 %).
+Deutlicher ist der Wechsel der auslösenden Regel: mit Fenster laufen
+weniger CalcStart-Läufe (10 statt 16) und mehr PV-Regeln (Forecast
+12 statt 0, AdaptivePV 21 statt 15). Die Starts liegen mit Fenster
+später (13–15 Uhr statt 14–15 Uhr).
+
+**Warum der Effekt klein ist:** Im Winter gibt es in 62–69 % der
+Tagesstunden keinen PV-Überschuss. Die PV-Fenster-Regeln haben dann
+nichts, worauf sie reagieren können – das Fenster ist in diesen Stunden
+eine Zeitvorgabe ohne PV-Wirkung.
 
 ### Die Einheiten der Prognose (20.10.2026)
 

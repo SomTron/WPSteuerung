@@ -59,20 +59,38 @@ class SpeicherParameter:
     konvektion_oben_aus_w_k: float = 3.0
     #: Anteil der Leistung, der direkt in die untere Schicht fliesst.
     einspeisung_anteil_unten: float = 1.0
-    #: Waerme der WP gleichmaessig auf alle Schichten verteilen (WP-Waerme-
+    #: Waerme der WP gleichmaessig auf die Schichten VERTEILEN (WP-Waerme-
     #: tauscher durchmischt den Speicher).
     #:
-    #: Gemessen im Dezember-Log: waehrend des Heizens liegen die drei
-    #: Fuehler bei 40,8 / 41,1 / 42,5 C - der Speicher ist praktisch
-    #: gleichmaessig warm. Ohne diese Verteilung bekommen die KLEINEN
-    #: unteren Schichten die volle Leistung und laufen ueber (Modell
-    #: max. 62 C statt real 42 C), weil die Durchmischung im Leerlauf zu
-    #: schwach ist, um die Waerme wieder zu verteilen.
+    #: Gemessen im Januar-Log waehrend des Heizens: unten 11,8 -> 42,4 C,
+    #: mitte 17,4 -> 42,9 C, oben 40,9 -> 43,3 C. Die Waerme geht also
+    #: nach UNTEN und MITTE; die obere Schicht wird nur ueber die
+    #: Konvektion warm. Deshalb bekommen ``unten`` und ``mitte`` die
+    #: Waerme anteilig nach Volumen, die obere Schicht nur ueber
+    #: ``einspeisung_anteil_oben`` (Standard 0).
     waerme_verteilt: bool = False
+    #: Anteil der WP-Leistung, der direkt in die OBERE Schicht fliesst
+    #: (nur wirksam bei ``waerme_verteilt``).
+    einspeisung_anteil_oben: float = 0.0
     #: Temperatur des Kaltwassers beim Zapfen (Grad C).
     kaltwasser_c: float = 10.0
     #: Umgebungstemperatur des Speichers (Grad C).
     umgebung_c: float = 20.0
+    #: Umgebungstemperatur der oberen Schicht (Grad C). None = dieselbe
+    #: wie ``umgebung_c``.
+    #:
+    #: Der obere Fuehler sitzt nicht im Keller, sondern im Aufstellraum: der
+    #: Deckel des Speichers ist die Waermeverlustflaeche, die an die
+    #: Raumluft geht. Der gemessene Winterverlauf zeigt genau das: der
+    #: obere Fuehler verliert ueber Nacht nur 1 K (44,6 -> 43,6 C),
+    #: waehrend der untere 17 K verliert (30,6 -> 13,8 C). Mit einer
+    #: gemeinsamen Umgebung fuer alle Schichten kuehlt der obere Knoten
+    #: viel zu stark ab - dann loest der Notfallschutz nachts aus, obwohl
+    #: das in der Realitaet nie passiert.
+    umgebung_oben_c: Optional[float] = None
+    #: Multiplikator des Waermeverlustkoeffizienten der oberen Schicht.
+    #: Der Deckel ist gut gedammt (Wert < 1 verringert den Verlust).
+    verlust_oben_anteil: float = 1.0
 
     def kopie(self) -> "SpeicherParameter":
         return replace(self)
@@ -130,14 +148,17 @@ class Speicher:
         # --- Waermeeintrag des Heizkreises (Wh) ---
         q_in = p.heizleistung_w * h if kompressor_ein else 0.0
         if p.waerme_verteilt:
-            # Der Waermetauscher der WP durchmischt den Speicher: die
-            # Leistung verteilt sich proportional zu den Schichtvolumen
-            # (gemessen im Dezember-Log: 40,8 / 41,1 / 42,5 C beim
-            # Heizen - also praktisch gleichmaessig warm).
-            gesamt = sum(s.volumen_l for s in self.schichten)
-            dq_unten = q_in * (self.unten.volumen_l / gesamt)
-            dq_mitte = q_in * (self.mitte.volumen_l / gesamt)
-            dq_oben = q_in * (self.oben.volumen_l / gesamt)
+            # Der Waermetauscher der WP sitzt im unteren Bereich: die
+            # Waerme geht nach unten und mitte (anteilig nach Volumen),
+            # die obere Schicht wird nur ueber die Konvektion warm.
+            # Gemessen im Januar-Log: unten 11,8 -> 42,4 C, mitte
+            # 17,4 -> 42,9 C, oben 40,9 -> 43,3 C.
+            anteil_oben = min(max(p.einspeisung_anteil_oben, 0.0), 1.0)
+            dq_oben = q_in * anteil_oben
+            rest = q_in - dq_oben
+            vol_um = self.unten.volumen_l + self.mitte.volumen_l
+            dq_unten = rest * (self.unten.volumen_l / vol_um)
+            dq_mitte = rest * (self.mitte.volumen_l / vol_um)
         else:
             anteil = min(max(p.einspeisung_anteil_unten, 0.0), 1.0)
             dq_unten = q_in * anteil
@@ -145,9 +166,19 @@ class Speicher:
             dq_oben = 0.0
 
         # --- Waermeverluste an die Umgebung (Wh, negativ) ---
+        # Jede Schicht hat ihre eigene Umgebung: unten und mitte stehen
+        # im Keller, oben sitzt der Fuehler am Deckel im Aufstellraum.
         dq_umgebung = 0.0
+        umg_oben = (p.umgebung_oben_c if p.umgebung_oben_c is not None
+                    else p.umgebung_c)
         for s in self.schichten:
-            verlust = p.verlust_w_k * (s.temperatur - p.umgebung_c) * h
+            if s is self.oben:
+                k_verlust = p.verlust_w_k * p.verlust_oben_anteil
+                umgebung = umg_oben
+            else:
+                k_verlust = p.verlust_w_k
+                umgebung = p.umgebung_c
+            verlust = k_verlust * (s.temperatur - umgebung) * h
             s._verlust_wh = verlust
             dq_umgebung += verlust
 
@@ -159,6 +190,22 @@ class Speicher:
 
         q_um = k_um * (self.mitte.temperatur - self.unten.temperatur) * h
         q_mo = k_mo * (self.oben.temperatur - self.mitte.temperatur) * h
+
+        # --- Stabilitaetsgrenze der expliziten Integration ---
+        # Ein Kopplungsterm darf je Zeitschritt hoechstens einen Teil der
+        # Kapazitaet der beteiligten Knoten uebertragen. Sonst kippt die
+        # Rechnung: bei k=3716 W/K und 60-s-Schritt waeren 52 kWh je
+        # Stunde im Spiel - der obere Knoten wird leer gepumpt und der
+        # Speicher "ueberhitzt" scheinbar auf 99 C. Die Grenze haelt das
+        # Modell physikalisch und numerisch stabil.
+        def _begrenze(q, ks):
+            grenze = 0.4 * min(k.kapazitaet_wh_k for k in ks)
+            if abs(q) > grenze:
+                return grenze if q > 0 else -grenze
+            return q
+
+        q_um = _begrenze(q_um, (self.unten, self.mitte))
+        q_mo = _begrenze(q_mo, (self.mitte, self.oben))
 
         # --- Energiebilanz je Knoten (Wh) ---
         e_unten = dq_unten - self.unten._verlust_wh + q_um
