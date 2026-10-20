@@ -210,10 +210,18 @@ class Szenario:
     #: Die thermische Leistung auf den Speicher ist in beiden Monaten
     #: praktisch gleich (1,3 kW im September, 1,6 kW im Dezember), die
     #: elektrische dagegen um den Faktor 4,4 verschieden. Bei gleichem
-    #: COP kann das nicht die WP sein: die Differenz ist die
-    #: **Raumheizlast** im Winter. Deren Waerme geht in die Raeume und
-    #: taucht im Speicher-Temperaturverlauf nicht auf, in der
-    #: elektrischen Last aber sehr wohl.
+    #: Keller kann das kein COP-Effekt sein. WAS die winterliche
+    #: Zusatzlast ist (Raeume, separate Heizung, Maschine mit
+    #: Heizkreis) laesst sich aus dem Log nicht trennen - fuer die
+    #: Regelung ist es aber auch egal:
+    #:
+    #: Entscheidend ist, dass sie den **PV-Ueberschuss aufzehrt**. Gemessen
+    #: (DC-Erzeugung minus Hauslast, 9-16 Uhr): Im Dezember ist in 69 %
+    #: dieser Stunden kein Ueberschuss ueber 500 W vorhanden (Median 0 W),
+    #: im Januar in 62 % (Median 75 W), im September dagegen in 92 %
+    #: (Median 5,6 kW). Die PV-Regeln (Abweichung, CalcStart, Batterie,
+    #: AdaptivePV) gaten aber genau an diesem Ueberschuss - im Winter
+    #: haben sie also meist nichts, worauf sie reagieren koennen.
     #:
     #: Mit dem September-Wert unterschetzte die Simulation den
     #: Winter-Netzbezug um rund 8 kWh/Tag.

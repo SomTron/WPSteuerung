@@ -251,26 +251,45 @@ Modellgrenze – siehe unten.
 der COP einbricht: die WP steht im Keller, dessen Temperatur sich
 zwischen Winter und Sommer kaum unterscheidet. Gemessen:
 
-| | thermisch auf den Speicher | elektrisch | Faktor |
-| --- | --- | --- | --- |
-| September | 1,3 kW | ~0,48 kW | – |
-| Dezember/Januar | 1,6 kW | ~2,1 kW | – |
+| | thermisch auf den Speicher | elektrisch |
+| --- | --- | --- |
+| September | 1,3 kW | ~0,48 kW |
+| Dezember/Januar | 1,6 kW | ~2,1 kW |
 
 Die thermische Leistung ist praktisch gleich, die elektrische um den
-Faktor 4,4 verschieden. Bei gleichem COP kann das nicht die WP sein –
-die Differenz ist die **Raumheizlast** im Winter: Ihre Wärme geht in
-die Räume und taucht im Speicher-Temperaturverlauf **nicht** auf, in der
-elektrischen Last aber sehr wohl. Mit dem September-Wert
-unterschätzte die Simulation den Winter-Netzbezug um rund 8 kWh/Tag.
+Faktor 4,4 verschieden. Bei gleichem Keller kann das kein COP-Effekt
+sein. **Was** die winterliche Zusatzlast ist (Räume, separate Heizung,
+Maschine mit Heizkreis) lässt sich aus dem Log nicht trennen – für die
+Regelung ist es aber auch egal:
 
-Die Werte stammen aus `Analyse/merged_data.csv` (Dezember 2025,
-Januar 2026), dessen Energiebilanz auf 0,1–0,9 % genau aufgeht.
+**Entscheidend ist, dass die Zusatzlast den PV-Überschuss aufzehrt.**
+Gemessen (DC-Erzeugung minus Hauslast, 9–16 Uhr):
 
-**Was daraus folgt:** Für den Winter-Absolutwert braucht die Simulation
-eine **Raumheizlast** (Wärme, die im Winter in die Räume geht und dort
-verbraucht wird). Ohne sie bleibt der Winter-Netzbezug zu niedrig. Für
-die **relativen** Varianten-Aussagen (welche Konfiguration ist besser?)
-ändert das nichts, weil alle Varianten denselben Fehler machen.
+| | Anteil Stunden mit Überschuss > 500 W | Median Überschuss |
+| --- | --- | --- |
+| September | 92 % | 5.592 W |
+| Dezember | 31 % | 0 W |
+| Januar | 38 % | 75 W |
+
+Die PV-Regeln (Abweichung, CalcStart, Batterie, AdaptivePV) gaten
+aber genau an diesem Überschuss. **Im Winter haben sie in 62–69 % der
+Tagesstunden nichts, worauf sie reagieren können** – die PV-Fenster
+sind dann keine Zeitenfenster, sondern Messwerte, die man nicht
+beeinflussen kann.
+
+Mit dem September-Wert für die WP-Leistung unterschätzte die Simulation
+den Winter-Netzbezug um rund 8 kWh/Tag. Die Werte stammen aus
+`Analyse/merged_data.csv` (Dezember 2025, Januar 2026), dessen
+Energiebilanz auf 0,1–0,9 % genau aufgeht.
+
+**Die zweite, größere Modelllücke:** Die Simulation startet den Speicher
+warm (41/42/43,5 °C) und modelliert zu wenig Wärmeverlust. Real steht
+der Speicher im Winter morgens bei **13 °C** – die Nachtsperre verhindert
+das Nachheizen, also muss die WP jeden Morgen von 13 °C auf 42 °C
+heizen (29 K). Die Simulation braucht dafür 2,6 h/Tag, real sind es
+5,2 h/Tag. Deshalb bleibt ihr Winter-Netzbezug um rund 4 kWh/Tag zu
+niedrig. Für die **relativen** Varianten-Aussagen ist das unkritisch –
+alle Varianten machen denselben Fehler.
 
 ### Die Einheiten der Prognose (20.10.2026)
 
