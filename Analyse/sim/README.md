@@ -439,6 +439,39 @@ gezielte Ausnahme, nicht als globaler Schalter:
 Preis: **+1,0 kWh/Tag** im Winter (≈ 120 kWh/Jahr, rund 36 €/Jahr).
 Der September bleibt unberührt – genau der Zweck der gezielten Ausnahme.
 
+### Wie sicher ist das? Sensitivitaet (20.10.2026)
+
+Die Winterparameter sind aus 14 Tagen Median geschaetzt. Deshalb wurde
+geprueft, wie stark die Entscheidung von der Parameterschaetzung abhaengt
+(`py -3 Analyse/sim/sensitivitaet.py`, Szenario `winter_wenig_pv`):
+
+| Parametersatz | Netz ohne | Netz mit | dNetz | Abend ohne | Abend mit |
+| --- | --- | --- | --- | --- | --- |
+| Kalibriert (Referenz) | 9,41 | 10,40 | +0,99 | 36,6 | 41,9 |
+| Verlust +20 % | 10,78 | 11,53 | +0,75 | 34,5 | 38,6 |
+| Verlust -20 % | 8,36 | 8,36 | **+0,00** | 39,1 | 39,1 |
+| Heizleistung +15 % | 8,33 | 9,00 | +0,68 | 37,1 | 38,1 |
+| Heizleistung -15 % | 10,83 | 11,83 | +1,00 | 35,9 | 39,6 |
+| Volumen 250 L | 8,92 | 10,00 | +1,09 | 35,2 | 39,8 |
+| Volumen 360 L | 9,86 | 10,31 | +0,45 | 37,6 | 38,7 |
+| Verlust +20 %, P +15 % | 9,24 | 13,67 | +4,42 | 35,1 | 40,0 |
+| Verlust -20 %, P -15 % | 9,54 | 9,97 | +0,43 | 38,1 | 39,2 |
+
+**Das Ergebnis ist robust in der Richtung, ungenau in der Hoehe.**
+
+* Der Komfortgewinn ist in **jedem** Parametersatz positiv (Abendminimum
+  steigt um 1 bis 5 K). Die Entscheidung "Abendkomfort geht vor" ist
+  damit durch die Kalibrierung nicht widerlegbar.
+* Der **Preis haengt vor allem am Waermeverlust des Speichers** - der
+  unsicherste Parameter. Bei 20 % weniger Verlust ist der Preis **null**:
+  der Speicher haelt die Waerme, die Garantie ist ohne Zusatzheizen
+  erfuellt. Bei 20 % mehr Verlust kostet sie 0,75 kWh/Tag.
+* Der Extremfall (Verlust +20 % **und** P +15 %) ergibt +4,42 kWh/Tag.
+  Dort liegt das System in einem anderen Regime: der Speicher verliert so
+  schnell, dass die Antizipation alles blockiert und die Ausnahme einen
+  Dauerlauf ausloest. Das ist der Fall, in dem die Ausnahme teuer wird -
+  und der einzige, in dem sie mehr als 1,1 kWh/Tag kostet.
+
 **Nebenbefund (Simulation war strenger als der Betrieb):** Der Harness
 rief `handle_compressor_on` ohne `regel_name` auf, der Produktivcode
 (`main.py`) übergibt ihn. Damit rechnete die Antizipation in der
