@@ -236,18 +236,41 @@ Validierung (alle Zyklen ≥ 25 min, Modell minus Messung):
 | --- | --- | --- |
 | PV-Erzeugung September | 58,4 kWh/Tag | 58,3 kWh/Tag |
 | PV-Erzeugung Dezember | 9,5 kWh/Tag (Median) | 6,7 kWh/Tag (Faktor 0,7 = trüber Tag) |
-| WP-Zusatzverbrauch | ~490 W (Median) | 500 W |
+| WP-Leistung beim Heizen | ~480 W (Sept.) / ~2,1 kW (Dez.) | 500 W / 2100 W |
 | Batterie nachts | ~190 W Entladung, ~27 W Netz | 80 % der Deckung |
 | Forecast-Kalibrierung | ~1,0 (Verhältnis Erzeugung/Prognose) | 1,00–1,11 |
-| Netzbezug Dezember | 9,4 kWh/Tag | 1,5 kWh/Tag ⚠ |
+| Netzbezug Dezember | 9,4 kWh/Tag | 5,4 kWh/Tag ⚠ |
 
-⚠ **Größte verbleibende Abweichung:** Der Netzbezug im Winter ist in der
-Simulation rund 8 kWh/Tag zu niedrig. Ursache ist die **Hauslast**, nicht
-das PV: real 18,8 kWh/Tag im Dezember, in der Simulation ~7 kWh/Tag. Der
-Dezember-Log ist dafür nicht verwendbar (80 % Stale-Werte, unplausible
-Hauslast von 2,2 kW bei ausgeschalteter WP). Der September-Log belegt
-dagegen nur 11,1 kWh/Tag Hauslast – die Differenz zum Dezember ist mit
-den vorhandenen Daten nicht auflösbar (siehe „Datenbedarf").
+⚠ **Größte verbleibende Abweichung:** Der Netzbezug im Winter ist noch
+rund 4 kWh/Tag zu niedrig. Ursache ist die **fehlende Raumheizlast**:
+die Simulation kennt nur den Brauchwasserspeicher, nicht die Wärme, die
+im Winter in die Räume geht. Das ist **kein Datenproblem**, sondern eine
+Modellgrenze – siehe unten.
+
+**Die WP-Leistung beim Heizen ist saisonabhängig** – aber nicht, weil
+der COP einbricht: die WP steht im Keller, dessen Temperatur sich
+zwischen Winter und Sommer kaum unterscheidet. Gemessen:
+
+| | thermisch auf den Speicher | elektrisch | Faktor |
+| --- | --- | --- | --- |
+| September | 1,3 kW | ~0,48 kW | – |
+| Dezember/Januar | 1,6 kW | ~2,1 kW | – |
+
+Die thermische Leistung ist praktisch gleich, die elektrische um den
+Faktor 4,4 verschieden. Bei gleichem COP kann das nicht die WP sein –
+die Differenz ist die **Raumheizlast** im Winter: Ihre Wärme geht in
+die Räume und taucht im Speicher-Temperaturverlauf **nicht** auf, in der
+elektrischen Last aber sehr wohl. Mit dem September-Wert
+unterschätzte die Simulation den Winter-Netzbezug um rund 8 kWh/Tag.
+
+Die Werte stammen aus `Analyse/merged_data.csv` (Dezember 2025,
+Januar 2026), dessen Energiebilanz auf 0,1–0,9 % genau aufgeht.
+
+**Was daraus folgt:** Für den Winter-Absolutwert braucht die Simulation
+eine **Raumheizlast** (Wärme, die im Winter in die Räume geht und dort
+verbraucht wird). Ohne sie bleibt der Winter-Netzbezug zu niedrig. Für
+die **relativen** Varianten-Aussagen (welche Konfiguration ist besser?)
+ändert das nichts, weil alle Varianten denselben Fehler machen.
 
 ### Die Einheiten der Prognose (20.10.2026)
 
@@ -265,12 +288,15 @@ ist im Produktivcode behoben.
 
 ## Datenbedarf
 
-Für belastbare Winter-Aussagen fehlen:
+Für belastbare Winter-Aussagen fehlen noch:
 
-1. **Winter-Hauslast ohne WP** (stündlich, je Tag). Der Dezember-Log
-   `Analyse/heizungsdaten.csv` ist dafür unbrauchbar (Stale-Werte). Die
-   Simulation braucht die Hauslast ohne laufende WP, weil die WP als
-   eigener Verbraucher modelliert wird.
+1. **Winter-Speichertemperaturen und WP-Laufzeiten** über mehrere Wochen,
+   um das Speichermodell für den Winter zu kalibrieren. `calibrate.py`
+   arbeitet bisher nur mit September-Daten – dort läuft die WP 2,3 h/Tag
+   (real 4,8 h/Tag), im Winter 5,2 h/Tag. Solange das Speichermodell
+   nicht für den Winter kalibriert ist, ist der **Absolutwert** des
+   Winter-Netzbezugs (und damit der Winter-Komfort) eine Tendenz; die
+   **relativen** Varianten-Aussagen bleiben belastbar.
 2. **Batterieverhalten im Winter** (SOC-Verlauf über Tage). Der
    Nachtentladungsanteil (0,8) ist aus dem September-Log abgeleitet;
    im Winter mit wenig PV und kaltem Speicher kann die Batterie
@@ -279,12 +305,29 @@ Für belastbare Winter-Aussagen fehlen:
    Wintertage. Aktuell bildet die Simulation die Prognose aus dem
    PV-Profil; eine echte Prognose weicht davon ab (Wolken), und genau
    diese Abweichung ist der Gegenstand der CalcStart-Untersuchung.
-4. **Speichertemperaturen im Winter** (`T_Mittig`, `T_Unten`) über
-   mehrere Wochen, um das Speichermodell für den Winter zu kalibrieren.
-   `calibrate.py` arbeitet bisher nur mit September-Daten.
+   Das Stundenprofil wird heute **nicht protokolliert** – es müsste
+   mitgeschrieben werden (siehe unten).
 
-Punkt 1 und 2 sind im Repo **nicht** vorhanden; Punkt 3 liegt nur als
-Tageswert (`sonnen_prognose.csv`) vor, nicht als Stundenprofil.
+**Erledigt:** Die Hauslast ist inzwischen aus den Winterlogs
+gemessen (Basislast nachts ~250 W, Heizlast 2,1–2,5 kW während der
+Heizstunden) – siehe `Analyse/merged_data.csv`, Monate 12 und 01.
+
+### Was zum Mitschreiben fehlt
+
+Für einen vollständigen Winter-Datensatz braucht es die Rohwerte des
+Betriebslogs im Format von `logs/24.9/heizungsdaten.csv`
+(Spalten: `Zeitstempel`, `T_Oben`, `T_Unten`, `T_Mittig`, `T_Boiler`,
+`T_Verd`, `Kompressor`, `ACPower`, `FeedinPower`, `BatPower`, `SOC`,
+`PowerDC1`, `PowerDC2`, `ConsumeEnergy`, `Einschaltpunkt`,
+`Ausschaltpunkt`, `Solarüberschuss`, `Urlaubsmodus`, `PowerSource`,
+`Prognose_Morgen`) – im 14-Sekunden-Raster.
+
+Der Raster ist dabei belanglos, solange er **gleichmäßig** ist: die
+Wechselrichter-Werte werden nur alle ~5 min gemeldet, die restlichen
+Zeilen wiederholen den letzten Wert (das ist kein Datenfehler, sondern
+das Sendeintervall des Geräts – der September-Log hat denselben Anteil
+von 96 %). Entscheidend ist nur, dass die Datei den **ganzen Tag** abdeckt
+(Stunden 0–23 gleichmäßig belegt).
 
 ### Zielkonflikt am Abend (20.10.2026)
 

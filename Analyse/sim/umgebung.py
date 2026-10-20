@@ -194,10 +194,29 @@ class Szenario:
     nacht_entladung_anteil: float = 0.8
     #: Umgebungstemperatur des Speichers (Grad C) - treibt die Verluste.
     umgebung_c: float = 20.0
-    #: Elektrische WP-Leistungsaufnahme (W). Aus dem September-Log: der
-    #: Zusatzverbrauch bei laufender WP betraegt im Median ~488 W gegenueber
-    #: dem Hausverbrauch mit ausgeschalteter WP (Stundenmittel je Stunde).
-    #: Der Wert von 600 W war gerundet; 500 W ist der gemessene.
+    #: Elektrische WP-Leistungsaufnahme (W) WAEHREND DES HEIZENS.
+    #:
+    #: Der Wert ist stark saisonabhaengig - aber NICHT, weil der COP
+    #: einbricht: die WP steht im Keller, dessen Temperatur unterscheidet
+    #: sich zwischen Winter und Sommer kaum. Gemessen (Hauslast
+    #: acpower-feedin, Median je Stunde):
+    #:
+    #: * September (logs/24.9): ~480 W Zusatzverbrauch gegenueber dem
+    #:   Hausverbrauch mit ausgeschalteter WP.
+    #: * Dezember/Januar (Analyse/merged_data.csv): ~2,1-2,5 kW waehrend
+    #:   der Heizstunden (11-16 Uhr). Die Energiebilanz dieser Datei
+    #:   geht auf (Rest 0,1-0,9 % der DC-Erzeugung).
+    #:
+    #: Die thermische Leistung auf den Speicher ist in beiden Monaten
+    #: praktisch gleich (1,3 kW im September, 1,6 kW im Dezember), die
+    #: elektrische dagegen um den Faktor 4,4 verschieden. Bei gleichem
+    #: COP kann das nicht die WP sein: die Differenz ist die
+    #: **Raumheizlast** im Winter. Deren Waerme geht in die Raeume und
+    #: taucht im Speicher-Temperaturverlauf nicht auf, in der
+    #: elektrischen Last aber sehr wohl.
+    #:
+    #: Mit dem September-Wert unterschetzte die Simulation den
+    #: Winter-Netzbezug um rund 8 kWh/Tag.
     wp_leistung_w: float = 500.0
     seed: int = 42
     #: Vorbelegung: der letzte Legionellen-Lauf lag zu Simulationsbeginn
@@ -224,12 +243,14 @@ SZENARIEN: Dict[str, Szenario] = {
         start=date(2026, 9, 8), tage=7, pv_faktor=1.0, pv_streuung=0.12,
         pv_profil="september",
         forecast_wh=5000.0, hauslast_faktor=1.0, umgebung_c=20.0,
+        wp_leistung_w=500.0,
     ),
     "winter_wenig_pv": Szenario(
         name="Dezember, wenig PV (trueb, 700 Wh/m2)",
         start=date(2026, 12, 7), tage=7, pv_faktor=0.7, pv_streuung=0.35,
         pv_profil="dezember",
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
+        wp_leistung_w=2100.0,
     ),
     "winter_batterie_leer": Szenario(
         name=("Dezember, wenig PV, Batterie wird NIE voll "
@@ -238,6 +259,7 @@ SZENARIEN: Dict[str, Szenario] = {
         pv_profil="dezember",
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
         soc_start_prozent=20.0, soc_max_prozent=55.0,
+        wp_leistung_w=2100.0,
     ),
     "winter_batterie_voll": Szenario(
         name=("Dezember, wenig PV, Batterie kurzfristig VOLL "
@@ -247,12 +269,14 @@ SZENARIEN: Dict[str, Szenario] = {
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
         soc_start_prozent=100.0, batterie_kapazitaet_wh=3000.0,
         soc_max_prozent=100.0,
+        wp_leistung_w=2100.0,
     ),
     "winter_ohne_pv": Szenario(
         name="Dezember, kein PV (Starknebel, 120 Wh/m2)",
         start=date(2026, 12, 7), tage=7, pv_faktor=0.0, pv_streuung=0.0,
         pv_profil="dezember",
         forecast_wh=120.0, hauslast_faktor=1.15, umgebung_c=10.0,
+        wp_leistung_w=2100.0,
     ),
     "winter_ohne_pv_lang": Szenario(
         name="Dezember, 5 Wochen ohne PV (bestehender Betrieb)",
@@ -260,11 +284,13 @@ SZENARIEN: Dict[str, Szenario] = {
         pv_profil="dezember",
         forecast_wh=120.0, hauslast_faktor=1.15, umgebung_c=10.0,
         legionellen_vor_tagen=10,
+        wp_leistung_w=2100.0,
     ),
     "winter_misch": Szenario(
         name="Dezember, wechselnd (1600 Wh/m2)",
         start=date(2026, 12, 7), tage=7, pv_faktor=1.6, pv_streuung=0.5,
         pv_profil="dezember",
         forecast_wh=1600.0, hauslast_faktor=1.15, umgebung_c=12.0,
+        wp_leistung_w=2100.0,
     ),
 }
