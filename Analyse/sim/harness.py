@@ -34,7 +34,7 @@ if _HERE not in sys.path:
 
 from thermal import Speicher, SpeicherParameter  # noqa: E402
 from umgebung import (  # noqa: E402
-    SEPTEMBER_PV,
+    PV_PROFILE,
     Batterie,
     BatterieParameter,
     Szenario,
@@ -305,7 +305,8 @@ class Simulation:
         if self.sz.pv_faktor <= 0:
             return 0.0
         stunde = jetzt.hour
-        basis = SEPTEMBER_PV.get(stunde, 0.0) * self.sz.pv_faktor
+        profil = PV_PROFILE.get(self.sz.pv_profil, PV_PROFILE["september"])
+        basis = profil.get(stunde, 0.0) * self.sz.pv_faktor
         if self.sz.pv_streuung > 0 and basis > 0:
             # Wolkenmodulation: stundenweise, aber mit Tagesgang-Versatz,
             # damit die Einspeisung nicht kuenstlich glatt wirkt.
@@ -517,10 +518,18 @@ class Simulation:
         self.state.sensors.t_verd = max(2.0, min(45.0, verd))
 
     def _solar_setzen(self, jetzt: datetime, pv_w: float, einspeisung_w: float,
-                      entladung_w: float, ladung_w: float) -> None:
+                      entladung_w: float, ladung_w: float,
+                      netz_w: float = 0.0) -> None:
         solar = self.state.solar
         solar.acpower = round(pv_w, 1)
-        solar.feedinpower = round(einspeisung_w, 1)
+        # ``feedinpower`` ist in Produktion der NETTO-Wert am Netzpunkt:
+        # positiv = Einspeisung, negativ = Bezug aus dem Netz. Genau diese
+        # Vorzeichen braucht ``classify_energy_source``: ``kein_netzkauf``
+        # wird nur bei ``feedin >= -50 W`` erkannt. Mit einem immer
+        # positiven Einspeisungswert glaubte die Simulation, es werde nie
+        # Strom aus dem Netz bezogen - das Quellen-Gate der Regelung war
+        # damit wirkungslos.
+        solar.feedinpower = round(einspeisung_w - netz_w, 1)
         # Solax-Konvention: batpower > 0 = Ladung, < 0 = Entladung
         # (gegen echte Messreihen geprueft, siehe Steuerung/energy_source.py)
         solar.batpower = round(ladung_w - entladung_w, 1)
@@ -528,17 +537,60 @@ class Simulation:
         solar.battery_charge_watt = round(ladung_w, 1)
         solar.soc = round(self.batterie.soc, 1) if self.batterie else None
         solar.last_api_call = jetzt
-        solar.energy_source = "Netz"
+        # Die Erzeugung kommt von der Gleichstromseite (DC). Der
+        # Wechselstromausgang waere Haus + Netz und taugt nicht als
+        # Erzeugungsnachweis (nachts ~230 W trotz fehlender Sonne).
+        solar.pv_erzeugung = round(pv_w, 1)
         # Forecast: konstant, aber "frisch" (Update wie im Betrieb)
         solar.forecast_today = self.sz.forecast_wh
         solar.forecast_tomorrow = self.sz.forecast_wh_morgen
         solar.forecast_day2 = self.sz.forecast_wh_uebermorgen
-        solar.forecast_hourly_wm2 = {
-            h: SEPTEMBER_PV.get(h, 0.0) * self.sz.pv_faktor * 0.19
-            for h in range(24)
-        }
+        # Stundenprognose in W/m2: die FORM kommt aus dem PV-Tagesprofil,
+        # die HOEHE aus der Tagesprognose des Szenarios. Die Summe ueber
+        # 24 h ergibt damit genau ``forecast_wh`` (Wh/m2) - vorher stand
+        # dort ein frei erfundener Faktor 0.19, der weder zur Tagesprognose
+        # noch zum PV-Fenster passte.
+        profil = PV_PROFILE.get(self.sz.pv_profil, PV_PROFILE["september"])
+        profil_summe = sum(profil.values())
+        if profil_summe > 0:
+            solar.forecast_hourly_wm2 = {
+                h: self.sz.forecast_wh * (v / profil_summe)
+                for h, v in profil.items() if v > 0
+            }
+        else:
+            solar.forecast_hourly_wm2 = {}
         self.state.last_forecast_update = jetzt
         self.state.forecast_stale = False
+        self._quelle_klassifizieren()
+
+    def _quelle_klassifizieren(self) -> None:
+        """Bestimmt die aktuelle Energiequelle wie ``main.update_solar_state``.
+
+        Ohne das bleibt ``state.solar.energy_source`` auf dem Default
+        "Netz" stehen. Die Regelung liest daraus ueber
+        ``_aktuelle_quellenbezeichnung`` den Status und ueber
+        ``_pv_quelle_aktiv`` das 48-Grad-Solarziel - die Simulation
+        entschied also mit einem Quellenbild, das es in Produktion nicht
+        gibt.
+        """
+        from energy_source import classify_energy_source
+
+        solar = self.state.solar
+        cfg = getattr(self.state.priority_config, "batterie", None)
+        status = classify_energy_source(
+            pv_acpower=solar.acpower,
+            feedin_watt=solar.feedinpower,
+            batpower_raw=solar.batpower,
+            soc=solar.soc,
+            solar_stale=False,
+            pv_min_watt=float(getattr(cfg, "pv_einspeisung_min_watt", 50.0)),
+            battery_min_watt=float(getattr(cfg, "min_batterieleistung_watt", 50.0)),
+            soc_min_prozent=float(getattr(cfg, "min_soc_prozent", 90.0)),
+            max_netzkauf_watt=float(getattr(cfg, "max_netzbezug_watt", -50.0)),
+            pv_erzeugung_watt=solar.pv_erzeugung,
+        )
+        solar.energy_source = status.quelle.value
+        self.state.energy_source_detail = status.begruendung
 
     def _sommer_modus(self, jetzt: datetime) -> None:
         """Bewertet Sommer-Modus und Legionellen-Tagesplan (einmal pro Tag).
@@ -708,7 +760,7 @@ class Simulation:
                 entl_w, lad_w = 0.0, 0.0
                 einsp_w, netz_w = max(0.0, saldo), max(0.0, -saldo)
 
-            self._solar_setzen(jetzt, pv_w, einsp_w, entl_w, lad_w)
+            self._solar_setzen(jetzt, pv_w, einsp_w, entl_w, lad_w, netz_w)
             self._sensoren_setzen()
 
             # --- Waermebilanz ---

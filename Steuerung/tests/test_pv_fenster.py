@@ -42,6 +42,28 @@ def test_letzte_stunde_ueber_der_schwelle():
     assert pv_fenster_endstunde(profil, 12.0, 600.0) == (14, pytest.approx(800.0))
 
 
+def test_laufende_stunde_zaehlt_noch_zum_fenster():
+    """Regression (20.10.2026): die LAUFENDE Stunde zaehlt noch mit.
+
+    Um 16:30 ist die Stunde 16 nicht "vergangen" - sie liefert noch PV. Mit
+    dem Filter ``h >= jetzt`` fiel sie weg, das Fenster endete dann eine
+    Stunde zu frueh. Der Start rutschte dadurch hinter das Fensterende
+    und kam aus dem Netz statt aus PV.
+    """
+    # Die LAUFENDE Stunde zaehlt noch mit: um 16:30 liefert Stunde 16
+    # weiterhin PV. Mit dem Filter "h >= jetzt" fiel sie weg, das Fenster
+    # endete dann eine Stunde zu frueh - der Start rutschte hinter das
+    # Fensterende und kam aus dem Netz statt aus PV.
+    assert pv_fenster_endstunde({16: 400.0}, 16.5, 300.0) == (16, pytest.approx(400.0))
+    # Exakt am Stundenbeginn zaehlt die Stunde ebenfalls
+    assert pv_fenster_endstunde({16: 400.0}, 16.0, 300.0) == (16, pytest.approx(400.0))
+    # Abgeschlossene Stunden zaehlen nicht mehr: um 17:00 ist Stunde 16 vorbei
+    assert pv_fenster_endstunde({15: 500.0, 16: 400.0}, 17.0, 300.0) is None
+    # Zukunftsstunden zaehlen natuerlich mit (die Prognose ist Tagesprofil)
+    assert pv_fenster_endstunde({16: 400.0, 17: 450.0}, 16.5, 300.0) == (
+        17, pytest.approx(450.0))
+
+
 def test_kalibrierung_wirkt_auf_das_fenster():
     """fc_ratio (gelernter Forecast-Faktor) verschiebt das Fenster mit."""
     profil = {14: 800.0, 15: 700.0, 16: 320.0}

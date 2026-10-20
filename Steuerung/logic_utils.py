@@ -67,7 +67,12 @@ def pv_fenster_endstunde(hourly_watt, jetzt_h, schwelle_w, fc_ratio=1.0):
             continue
         if not math.isfinite(w):
             continue
-        if h >= jetzt and w >= schwelle:
+        # Die LAUFENDE Stunde zaehlt noch: um 16:30 ist die Stunde 16 nicht
+        # "vergangen". Mit dem Filter "h >= jetzt" fiel das Fenster genau dann
+        # weg, wenn der Spaetest-Start an das Fensterende gezogen werden
+        # sollte - der Start rutschte dadurch hinter das Fensterende und
+        # kam aus dem Netz statt aus PV.
+        if h + 1 > jetzt and w >= schwelle:
             treffer.append((h, w))
     if not treffer:
         return None

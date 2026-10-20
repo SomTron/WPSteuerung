@@ -1,9 +1,19 @@
 """Stromseite der Simulation: PV, Batterie, Hauslast, Netz.
 
-Die PV-Profile des Szenarios ``september`` sind die real gemessenen
-Tagessprofile aus ``logs/24.9``. Die Winterszenarien skalieren das
-Septemberprofil mit einem physikalisch begruendeten Faktor
-(Globalstrahlung Kärnten: September ~5 kWh/m², Dezember ~0.5-1.0 kWh/m²).
+Die PV-Profile sind die real gemessenen Gleichstrom-Profile (powerdc1 +
+powerdc2) aus den Betriebslogs:
+
+* ``SEPTEMBER_PV_DC`` aus ``logs/24.9/heizungsdaten.csv`` (September 2026)
+* ``DEZEMBER_PV_DC`` aus ``Analyse/merged_data.csv`` (Dezember 2025)
+
+Wichtig: Es ist die GLEICHSTROMseite, nicht ``acpower``. ``acpower`` ist der
+Wechselstromausgang des Wechselrichters (Haus + Netz) und liefert nachts
+rund 230 W, obwohl die Sonne nicht scheint. Mit diesem Wert als
+"PV-Erzeugung" haette die Simulation nachts Strom aus dem Nichts und das
+PV-Fenster wuerde nie schliessen.
+
+Die Winterszenarien nutzen das gemessene Dezemberprofil (Tagesspitze ~2 kW
+statt ~8 kW im September) statt eines skalierten Septemberprofils.
 """
 from __future__ import annotations
 
@@ -11,32 +21,44 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Dict, Optional
 
-#: Real gemessene September-PV-Erzeugung (W je Stunde), aus logs/24.9.
-SEPTEMBER_PV: Dict[int, float] = {
-    0: 229, 1: 220, 2: 215, 3: 225, 4: 216, 5: 205, 6: 234, 7: 240,
-    8: 516, 9: 1227, 10: 3708, 11: 5576, 12: 6256, 13: 6735, 14: 6480,
-    15: 6131, 16: 4864, 17: 3027, 18: 1416, 19: 488, 20: 359, 21: 341,
-    22: 337, 23: 271,
+#: Real gemessene September-PV-ERZEUGUNG (Gleichstromseite, Median je
+#: Stunde, W), aus logs/24.9/heizungsdaten.csv. Nachts 0 W - die Sonne
+#: scheint nicht.
+SEPTEMBER_PV_DC: Dict[int, float] = {
+    0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 251, 8: 1375,
+    9: 3010, 10: 5302, 11: 7164, 12: 8018, 13: 8095, 14: 7972,
+    15: 7548, 16: 5572, 17: 3470, 18: 569, 19: 0, 20: 0, 21: 0,
+    22: 0, 23: 0,
 }
 
-#: Real gemessene September-Einspeisung (W je Stunde) bei ausgeschalteter WP.
-SEPTEMBER_FEEDIN: Dict[int, float] = {
-    0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: -7, 6: -16, 7: -3, 8: -1,
-    9: 597, 10: 2976, 11: 4686, 12: 5267, 13: 6006, 14: 6004, 15: 5694,
-    16: 4400, 17: 2553, 18: 781, 19: 3, 20: 0, 21: 0, 22: 0, 23: 0,
+#: Real gemessene Dezember-PV-Erzeugung (Gleichstromseite, Median je
+#: Stunde, W), aus Analyse/merged_data.csv. Kuerzerer Tag, flacherer
+#: Verlauf, rund ein Sechstel der September-Erzeugung.
+DEZEMBER_PV_DC: Dict[int, float] = {
+    0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 189,
+    9: 741, 10: 1698, 11: 2066, 12: 1928, 13: 2002, 14: 653,
+    15: 221, 16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 21: 0, 22: 0,
+    23: 0,
+}
+
+#: Verfuegbare Tagesprofile je Szenario.
+PV_PROFILE: Dict[str, Dict[int, float]] = {
+    "september": SEPTEMBER_PV_DC,
+    "dezember": DEZEMBER_PV_DC,
 }
 
 #: Real gemessene Tagesprognose im September (Wh/m²).
 SEPTEMBER_FORECAST_WH = 5000.0
 
-#: Hauslast bei ausgeschalteter WP, stuendlich gemessen (Median aus
-#: logs/24.9, Kompressor AUS, 148745 Samples). Nachts konstant ~200-330 W,
-#: morgens und abends Koch-/Badspitzen. Diese Werte bestimmen, wann die
-#: PV den Hausverbrauch deckt - und damit das Entladefenster der Batterie.
+#: Hauslast bei ausgeschalteter WP (Median je Stunde aus logs/24.9,
+#: Kompressor AUS): hausverbrauch = acpower - feedinpower. Nachts konstant
+#: ~200-240 W, tagsueber ~200-300 W, am spaeten Abend die
+#: Koch-/Badspitze. Diese Werte bestimmen, wann die PV den Hausverbrauch
+#: deckt - und damit das Entladefenster der Batterie.
 HAUSLAST_W: Dict[int, float] = {
-    0: 229, 1: 195, 2: 196, 3: 233, 4: 194, 5: 194, 6: 234, 7: 218,
-    8: 262, 9: 274, 10: 300, 11: 320, 12: 340, 13: 330, 14: 320,
-    15: 310, 16: 330, 17: 500, 18: 1120, 19: 329, 20: 297, 21: 314,
+    0: 229, 1: 195, 2: 196, 3: 233, 4: 194, 5: 195, 6: 235, 7: 218,
+    8: 262, 9: 274, 10: 302, 11: 254, 12: 254, 13: 285, 14: 208,
+    15: 200, 16: 226, 17: 233, 18: 235, 19: 329, 20: 297, 21: 314,
     22: 317, 23: 252,
 }
 
@@ -56,11 +78,12 @@ class BatterieParameter:
     max_entladung_w: float = 2500.0
     soc_min_prozent: float = 12.0
     soc_max_prozent: float = 100.0
-    #: Nachts ist die Batterie im Realbetrieb passiv (Log 24.9: bat ~ 0 W
-    #: von 19-7 Uhr, das Haus laeuft dann aus dem Netz). Ohne diesen Anteil
-    #: wuerde das Modell die Batterie nachts leerziehen und den
-    #: Batterie-Heizpfad der Regelung voellig unmoeglich machen.
-    nacht_entladung_anteil: float = 0.0
+    #: Anteil des Nachtdefizits, den die Batterie deckt; der Rest kommt aus
+    #: dem Netz. Gemessen im September-Log (Median je Stunde): die Batterie
+    #: entlaedt nachts rund 190 W bei ~230 W Hauslast, das Netz liefert nur
+    #: ~27 W. Der Anteil liegt damit bei ~0.8 - mit 0.0 (= kein Anteil)
+    #: ueberschaetzt die Simulation den Netzbezug nachts um rund 5 kWh/Tag.
+    nacht_entladung_anteil: float = 0.8
     #: Ab dieser PV-Leistung arbeitet der Wechselrichter im Eigenverbrauchs-
     #: betrieb und nutzt die Batterie. Kalibriert am September-Log: die
     #: Entladung tritt nur in den PV-Schultern 8-9 und 18-19 Uhr auf
@@ -78,7 +101,12 @@ class Batterie:
     * PV-Ueberschuss laedt die Batterie, der Rest wird eingespeist.
     * Reicht die PV nicht fuer Haus + WP, deckt die Batterie das Defizit -
       aber nur solange PV vorhanden ist (Eigenverbrauch).
-    * Nachts bleibt die Batterie stehen; das Haus laeuft aus dem Netz.
+    * Nachts entlaedt die Batterie anteilig (ca. 80 %), der Rest kommt
+      aus dem Netz.
+
+    Die Bilanz ist geschlossen: was die PV hergibt, wird geladen,
+    eingespeist, von der Batterie geliefert oder aus dem Netz bezogen -
+    nichts geht verloren und nichts entsteht.
     """
 
     def __init__(self, parameter: Optional[BatterieParameter] = None):
@@ -101,19 +129,23 @@ class Batterie:
             return 0.0, ladung_w, einspeisung, 0.0
 
         fehlend = -saldo
-        # Nachts (ohne PV) entlaedt die Batterie nur anteilig - das Haus
-        # laeuft sonst wie im echten Betrieb ueberwiegend aus dem Netz.
+        # Nachts (ohne PV) entlaedt die Batterie nur anteilig - der Rest
+        # kommt aus dem Netz. Wichtig: der Anteil bezieht sich auf das
+        # ENTLADEN, nicht auf den Netzbezug. Vorher wurde der Netzanteil
+        # reduziert und die Batterie gar nicht entladen - so ging
+        # nachts Energie verloren (das Defizit war weder gedeckt noch
+        # bezogen).
         if pv_w < p.pv_schwelle_w:
-            fehlend_netz = fehlend * (1.0 - p.nacht_entladung_anteil)
-            entl_budget = 0.0
+            entl_budget = fehlend * p.nacht_entladung_anteil
         else:
-            fehlend_netz = fehlend
             entl_budget = fehlend
         verfuegbar_wh = max(0.0, (self.soc - p.soc_min_prozent) / 100.0 * p.kapazitaet_wh)
         entladen_wh = min(min(p.max_entladung_w, entl_budget) * dt_h, verfuegbar_wh / p.eta)
         self.soc = max(p.soc_min_prozent, self.soc - entladen_wh / p.kapazitaet_wh * 100.0)
         entladung_w = entladen_wh / dt_h
-        rest = max(0.0, fehlend_netz - entladung_w)
+        # Der Rest des Defizits kommt aus dem Netz: Energie geht weder
+        # verloren noch entsteht mehr.
+        rest = max(0.0, fehlend - entladung_w)
         return entladung_w, 0.0, 0.0, rest
 
     @property
@@ -128,8 +160,11 @@ class Szenario:
     name: str
     start: date
     tage: int
-    #: PV-Skalierung gegenueber dem Septemberprofil (1.0 = Original).
+    #: PV-Skalierung gegenueber dem gewaehlten Tagesprofil (1.0 = Original).
     pv_faktor: float = 1.0
+    #: Name des gemessenen PV-Tagesprofils (siehe ``PV_PROFILE``):
+    #: "september" oder "dezember".
+    pv_profil: str = "september"
     #: Staerke der zufaelligen Wolkenmodulation (0 = aus).
     pv_streuung: float = 0.0
     #: Tagesprognose heute/morgen/uebermorgen in Wh/m².
@@ -145,12 +180,16 @@ class Szenario:
     batterie_kapazitaet_wh: float = 10000.0
     #: SOC-Obergrenze, die im Szenario nie erreicht wird ("nie voll").
     soc_max_prozent: float = 100.0
-    #: Anteil des Nachtdefizits, den die Batterie deckt (Realbetrieb: 0).
-    nacht_entladung_anteil: float = 0.0
+    #: Anteil des Nachtdefizits, den die Batterie deckt (Realbetrieb: ~0.8,
+    #: gemessen im September-Log). Der Rest kommt aus dem Netz.
+    nacht_entladung_anteil: float = 0.8
     #: Umgebungstemperatur des Speichers (Grad C) - treibt die Verluste.
     umgebung_c: float = 20.0
-    #: Elektrische WP-Leistungsaufnahme (W).
-    wp_leistung_w: float = 600.0
+    #: Elektrische WP-Leistungsaufnahme (W). Aus dem September-Log: der
+    #: Zusatzverbrauch bei laufender WP betraegt im Median ~488 W gegenueber
+    #: dem Hausverbrauch mit ausgeschalteter WP (Stundenmittel je Stunde).
+    #: Der Wert von 600 W war gerundet; 500 W ist der gemessene.
+    wp_leistung_w: float = 500.0
     seed: int = 42
     #: Vorbelegung: der letzte Legionellen-Lauf lag zu Simulationsbeginn
     #: so viele Tage zurueck (simuliert einen bestehenden Betrieb).
@@ -164,28 +203,38 @@ class Szenario:
 
 
 #: Vordefinierte Szenarien
+#:
+#: Die PV-Erzeugung kommt aus den gemessenen Gleichstromprofilen
+#: (``PV_PROFILE``). ``pv_faktor`` skaliert das jeweilige Profil:
+#: der Dezember-Median (9498 Wh/Tag) entspricht ~950 Wh/m² bei 10 m².
+#: "wenig PV" ist deshalb ein klarer Wetter-Tag mit weniger Strahlung
+#: (Faktor 0.7), nicht ein skaliertes Septemberprofil.
 SZENARIEN: Dict[str, Szenario] = {
     "september": Szenario(
         name="September (PV-reich, echte Profile)",
         start=date(2026, 9, 8), tage=7, pv_faktor=1.0, pv_streuung=0.12,
+        pv_profil="september",
         forecast_wh=5000.0, hauslast_faktor=1.0, umgebung_c=20.0,
     ),
     "winter_wenig_pv": Szenario(
         name="Dezember, wenig PV (trueb, 700 Wh/m2)",
-        start=date(2026, 12, 7), tage=7, pv_faktor=0.13, pv_streuung=0.35,
+        start=date(2026, 12, 7), tage=7, pv_faktor=0.7, pv_streuung=0.35,
+        pv_profil="dezember",
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
     ),
     "winter_batterie_leer": Szenario(
         name=("Dezember, wenig PV, Batterie wird NIE voll "
               "(Deckel 55 %, Start 20 %)"),
-        start=date(2026, 12, 7), tage=7, pv_faktor=0.13, pv_streuung=0.35,
+        start=date(2026, 12, 7), tage=7, pv_faktor=0.7, pv_streuung=0.35,
+        pv_profil="dezember",
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
         soc_start_prozent=20.0, soc_max_prozent=55.0,
     ),
     "winter_batterie_voll": Szenario(
         name=("Dezember, wenig PV, Batterie kurzfristig VOLL "
               "(100 %, Kapazitaet klein)"),
-        start=date(2026, 12, 7), tage=7, pv_faktor=0.13, pv_streuung=0.35,
+        start=date(2026, 12, 7), tage=7, pv_faktor=0.7, pv_streuung=0.35,
+        pv_profil="dezember",
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
         soc_start_prozent=100.0, batterie_kapazitaet_wh=3000.0,
         soc_max_prozent=100.0,
@@ -193,17 +242,20 @@ SZENARIEN: Dict[str, Szenario] = {
     "winter_ohne_pv": Szenario(
         name="Dezember, kein PV (Starknebel, 120 Wh/m2)",
         start=date(2026, 12, 7), tage=7, pv_faktor=0.0, pv_streuung=0.0,
+        pv_profil="dezember",
         forecast_wh=120.0, hauslast_faktor=1.15, umgebung_c=10.0,
     ),
     "winter_ohne_pv_lang": Szenario(
         name="Dezember, 5 Wochen ohne PV (bestehender Betrieb)",
         start=date(2026, 12, 1), tage=35, pv_faktor=0.0, pv_streuung=0.0,
+        pv_profil="dezember",
         forecast_wh=120.0, hauslast_faktor=1.15, umgebung_c=10.0,
         legionellen_vor_tagen=10,
     ),
     "winter_misch": Szenario(
         name="Dezember, wechselnd (1600 Wh/m2)",
-        start=date(2026, 12, 7), tage=7, pv_faktor=0.22, pv_streuung=0.5,
+        start=date(2026, 12, 7), tage=7, pv_faktor=1.6, pv_streuung=0.5,
+        pv_profil="dezember",
         forecast_wh=1600.0, hauslast_faktor=1.15, umgebung_c=12.0,
     ),
 }

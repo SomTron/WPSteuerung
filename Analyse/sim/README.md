@@ -118,13 +118,42 @@ kein Regelungsfehler.
 
 | Name | Beschreibung |
 | --- | --- |
-| `september` | PV-reich, echte Stundenprofile aus `logs/24.9` (~50 kWh/Tag) |
-| `winter_wenig_pv` | Dezember, trüb, 700 Wh/m² (~6 kWh/Tag) |
+| `september` | PV-reich, echte DC-Profile aus `logs/24.9` (58,3 kWh/Tag, Median) |
+| `winter_wenig_pv` | Dezember, trüb, 700 Wh/m² (~6,7 kWh/Tag) |
 | `winter_ohne_pv` | Dezember, Starknebel, 120 Wh/m², kein PV |
 | `winter_misch` | Dezember, wechselnd, 1600 Wh/m² |
 | `winter_ohne_pv_lang` | 5 Wochen ohne PV (bestehender Betrieb) |
 | `winter_batterie_leer` | wenig PV, **Batterie wird nie voll** (SOC-Deckel 55 %, Start 20 %) |
 | `winter_batterie_voll` | wenig PV, **Batterie kurzfristig voll** (Start 100 %, 3 kWh) |
+
+### Die PV-Profile (20.10.2026 korrigiert)
+
+Die PV-Erzeugung kommt aus den **Gleichstromseiten** der Betriebslogs
+(`powerdc1 + powerdc2`), nicht aus `acpower`:
+
+| Profil | Quelle | Summe/Tag | Spitze |
+| --- | --- | --- | --- |
+| `september` | `logs/24.9/heizungsdaten.csv` (Median je Stunde) | 58,3 kWh | 8,1 kW (13 Uhr) |
+| `dezember` | `Analyse/merged_data.csv` (Median je Stunde) | 9,5 kWh | 2,0 kW (13 Uhr) |
+
+`acpower` ist der Wechselstromausgang des Wechselrichters (Haus + Netz) und
+liefert nachts rund 230 W, obwohl die Sonne nicht scheint. Mit diesem Wert
+als „PV-Erzeugung" hätte die Simulation nachts Strom aus dem Nichts
+erzeugt, das PV-Fenster nie geschlossen und die Tagesprognose zu keinem
+Profil gepasst.
+
+Die Stundenprognose wird aus der **Form** des Profils und der **Höhe**
+der Szenario-Tagesprognose gebildet; ihre Summe über 24 h ergibt damit
+exakt `forecast_wh`. Die Quellenlage (`feedinpower`) wird wie im Betrieb
+geführt: negativ bei Netzbezug – nur so erkennt das Quellen-Gate der
+Regelung („kein Netzkauf") einen Netzbezug.
+
+**Offene Lücke:** Der Dezember-Log `Analyse/heizungsdaten.csv` hat 80 %
+unveränderte Folgewertzeilen (Stale-Werte) und liefert tagsüber eine
+unplausible Hauslast (2,2 kW bei ausgeschalteter WP). Für die
+Hauslast-Kalibrierung wird deshalb weiterhin das September-Profil mit
+Faktor 1,15 verwendet. Belastbare Winter-Hauslastdaten fehlen (siehe
+„Datenbedarf" unten).
 
 ### Die beiden Batterie-Szenarien
 
@@ -194,7 +223,50 @@ Validierung (alle Zyklen ≥ 25 min, Modell minus Messung):
 * **Kein Wärmekreislauf**: simuliert wird ausschließlich Brauchwasser.
 * COP ist konstant; ein temperaturabhängiger COP wäre genauer, ändert an den
   relativen Verbesserungen aber nichts.
-* PV ist ein skaliertes Septemberprofil, kein synthetischer Sonnenstand.
+* PV ist ein **gemessenes** Profil (Gleichstromseite, Median je Stunde),
+  kein synthetischer Sonnenstand. Für Tage mit wechselnder Bewölkung
+  addiert die Simulation ein Streuungsmodell auf.
 * Aussagen sind **relativ**: Der Vergleich Basis ↔ Variante läuft mit
   identischem Zufalls-Seed und ist damit belastbar; absolute kWh-Zahlen
   haben die Genauigkeit des Modells (±1–2 K Temperatur, wenige Prozent Energie).
+
+## Validierung gegen die Betriebsdaten (20.10.2026)
+
+| Größe | Messung | Simulation |
+| --- | --- | --- |
+| PV-Erzeugung September | 58,4 kWh/Tag | 58,3 kWh/Tag |
+| PV-Erzeugung Dezember | 9,5 kWh/Tag (Median) | 6,7 kWh/Tag (Faktor 0,7 = trüber Tag) |
+| WP-Zusatzverbrauch | ~490 W (Median) | 500 W |
+| Batterie nachts | ~190 W Entladung, ~27 W Netz | 80 % der Deckung |
+| Netzbezug Dezember | 9,4 kWh/Tag | 1,5 kWh/Tag ⚠ |
+
+⚠ **Größte verbleibende Abweichung:** Der Netzbezug im Winter ist in der
+Simulation rund 8 kWh/Tag zu niedrig. Ursache ist die **Hauslast**, nicht
+das PV: real 18,8 kWh/Tag im Dezember, in der Simulation ~7 kWh/Tag. Der
+Dezember-Log ist dafür nicht verwendbar (80 % Stale-Werte, unplausible
+Hauslast von 2,2 kW bei ausgeschalteter WP). Der September-Log belegt
+dagegen nur 11,1 kWh/Tag Hauslast – die Differenz zum Dezember ist mit
+den vorhandenen Daten nicht auflösbar (siehe „Datenbedarf").
+
+## Datenbedarf
+
+Für belastbare Winter-Aussagen fehlen:
+
+1. **Winter-Hauslast ohne WP** (stündlich, je Tag). Der Dezember-Log
+   `Analyse/heizungsdaten.csv` ist dafür unbrauchbar (Stale-Werte). Die
+   Simulation braucht die Hauslast ohne laufende WP, weil die WP als
+   eigener Verbraucher modelliert wird.
+2. **Batterieverhalten im Winter** (SOC-Verlauf über Tage). Der
+   Nachtentladungsanteil (0,8) ist aus dem September-Log abgeleitet;
+   im Winter mit wenig PV und kaltem Speicher kann die Batterie
+   durchaus tagsüber entladen.
+3. **Reale Prognose-Stundenwerte** (`forecast_hourly_wm2`) für
+   Wintertage. Aktuell bildet die Simulation die Prognose aus dem
+   PV-Profil; eine echte Prognose weicht davon ab (Wolken), und genau
+   diese Abweichung ist der Gegenstand der CalcStart-Untersuchung.
+4. **Speichertemperaturen im Winter** (`T_Mittig`, `T_Unten`) über
+   mehrere Wochen, um das Speichermodell für den Winter zu kalibrieren.
+   `calibrate.py` arbeitet bisher nur mit September-Daten.
+
+Punkt 1 und 2 sind im Repo **nicht** vorhanden; Punkt 3 liegt nur als
+Tageswert (`sonnen_prognose.csv`) vor, nicht als Stundenprofil.
