@@ -100,6 +100,58 @@ def _calcstart_pv(pcl, _le_mod):
     original = pcl._ist_pv_gesteuerter_lauf
     pcl._ist_pv_gesteuerter_lauf = lambda name: original(name) or name == "CalcStart"
     return lambda: setattr(pcl, "_ist_pv_gesteuerter_lauf", original)
+def _calcstart_pv(pcl, _le_mod):
+    """CalcStart zaehlt als quellengesteuerter Lauf (10 statt 60 min)."""
+    original = pcl._ist_pv_gesteuerter_lauf
+    pcl._ist_pv_gesteuerter_lauf = lambda name: original(name) or name == "CalcStart"
+    return lambda: setattr(pcl, "_ist_pv_gesteuerter_lauf", original)
+
+
+#: Sonnenuntergang (Stunde, lokale Zeit) naeherungsweise fuer den Standort
+#: (ca. 52,5 Grad Nord). Das Modell hat KEIN Sonnenmodell - die PV-Profile
+#: sind skalierte Septemberprofile (siehe README) -, deshalb diese Tabelle.
+SONNENUNTERGANG_H = {
+    1: 16.5, 2: 17.5, 3: 18.4, 4: 19.8, 5: 20.9, 6: 21.4,
+    7: 21.1, 8: 20.3, 9: 19.3, 10: 18.2, 11: 16.8, 12: 16.4,
+}
+
+
+def _spaetstart_su(pcl, _le_mod):
+    """Spätest-Start nur bis (Sonnenuntergang - Reserve) aufschieben.
+
+    Frage (Nutzer 18.10.2026): Wird mit CalcStart so lange gewartet, dass der
+    Start im Winter nach Sonnenuntergang faellt - also ohne PV? Der
+    Spätest-Start greift, sobald der freie Puffer unter `spaetstart_puffer_h`
+    (0,5 h) faellt. Dieser Kandidat verkleinert den Puffer auf
+    `Zielzeit - (Sonnenuntergang - Reserve)`, wenn das kleiner ist: der
+    "letzte Moment" liegt dann noch im Tageslicht. Der Puffer wird nur
+    ausgetauscht, wenn die Grenze wirklich frueher greift (Kopie der Config,
+    kein Eingriff ins Original).
+    """
+    original = pcl.bewerte_alle_regeln
+    reserve_h = 0.5
+
+    def begrenzt(*args, **kw):
+        if args:                       # Positional aufgerufen: unveraendert
+            return original(*args, **kw)
+        config = kw.get("config")
+        now = kw.get("now")
+        if config is not None and now is not None:
+            su = SONNENUNTERGANG_H.get(now.month, 18.0) - reserve_h
+            ziel = kw.get("learned_target_hour")
+            if ziel is None:
+                ziel = float(config.calculated_start.target_uhr)
+            grenze = max(float(ziel) - su, 0.0)
+            if grenze < config.calculated_start.spaetstart_puffer_h:
+                kopie = config.model_copy(deep=True)
+                kopie.calculated_start.spaetstart_puffer_h = round(grenze, 3)
+                kw = dict(kw)
+                kw["config"] = kopie
+        return original(**kw)
+
+    pcl.bewerte_alle_regeln = begrenzt
+    return lambda: setattr(pcl, "bewerte_alle_regeln", original)
+
 
 
 KANDIDATEN: Dict[str, tuple] = {
@@ -110,6 +162,11 @@ KANDIDATEN: Dict[str, tuple] = {
                     [_rate_cap_12], {}),
     "calcstart_pv": ("CalcStart als quellengesteuerter Lauf (10 min)",
                      [_calcstart_pv], {}),
+    "spaetstart_su": ("Spaetest-Start hoechstens bis Sonnenuntergang - 0,5 h",
+                      [_spaetstart_su], {}),
+    "spaetstart_su_nf": ("wie spaetstart_su, zusaetzlich Netzfallback erlaubt",
+                         [_spaetstart_su],
+                         {"calculated_start": {"netz_fallback_erlaubt": True}}),
     "beides": ("rate_cap + calcstart_pv", [_rate_cap, _calcstart_pv], {}),
     "antizipation_aus": ("Start-Antizipation komplett abgeschaltet (Grenzwert)",
                          [], {"sicherheit": {"start_vorhersage_aktiv": False}}),
@@ -130,7 +187,44 @@ KPI_ZEILEN: List[tuple] = [
     ("stunden_unten_unter_35", "h unten<35", "{}"),
     ("min_mitte_global", "min mitte", "{:.1f}"),
     ("boiler_max_ereignisse", "Boiler-Max", "{}"),
+    # Direktmass fuer die Frage "Startet die WP nach Sonnenuntergang?":
+    # Netzenergie aller Laeufe, die erst nach der Sonnenuntergangs-Stunde
+    # begonnen haben (Tabelle SONNENUNTERGANG_H).
+    ("wp_netz_nach_su_kwh", "Netz n. SU kWh", "{:.1f}"),
+    ("wp_nach_su_prozent", "Anteil n. SU %", "{:.0f}"),
 ]
+
+
+def kpi_start_nach_sonnenuntergang(sim) -> dict:
+    """WP-Energie der Laeufe, die nach Sonnenuntergang begonnen haben.
+
+    Antwort auf die Frage, ob der Spaetest-Start im Winter aus dem
+    Tageslicht faellt: gezielt die Netzkilowattstunden dieser Laeufe (und ihr
+    Anteil an der Energie dieser Laeufe). Bei Sonnenuntergang ist die
+    PV-Erzeugung im Modell null - Netzenergie dort ist also "verlorene PV".
+    """
+    netz_wh = pv_wh = 0.0
+    je_regel: Dict[str, float] = {}
+    for z in sim.zyklen:
+        start = getattr(z, "start", None)
+        stunde = getattr(start, "hour", None)
+        monat = getattr(start, "month", None)
+        if stunde is None or monat is None:
+            continue
+        if stunde + getattr(start, "minute", 0) / 60.0 >= SONNENUNTERGANG_H.get(monat, 18.0):
+            netz_w = float(getattr(z, "netz_wh", 0.0) or 0.0)
+            netz_wh += netz_w
+            pv_wh += float(getattr(z, "pv_wh", 0.0) or 0.0)
+            # Welche Regel startet die Laeufe nach Sonnenuntergang? Das
+            # entscheidet, WO ein PV-Fenster-Gate hingehoert.
+            name = str(getattr(z, "regel", None) or "-")
+            je_regel[name] = je_regel.get(name, 0.0) + netz_w / 1000.0
+    gesamt = netz_wh + pv_wh
+    return {
+        "wp_netz_nach_su_kwh": round(netz_wh / 1000.0, 3),
+        "wp_nach_su_prozent": (netz_wh / gesamt * 100.0) if gesamt > 1 else 0.0,
+        "_nach_su_regeln": {k: round(v, 3) for k, v in je_regel.items()},
+    }
 
 
 def kennzahlen_erweitert(sim) -> dict:
@@ -144,6 +238,7 @@ def kennzahlen_erweitert(sim) -> dict:
         name = z.regel or "-"
         zaehler[name] = zaehler.get(name, 0) + 1
     aus["laeufe_je_regel"] = dict(sorted(zaehler.items(), key=lambda kv: -kv[1]))
+    aus.update(kpi_start_nach_sonnenuntergang(sim))
     return aus
 
 
@@ -202,6 +297,12 @@ async def main_async(args) -> int:
         laeufe = basis.get("laeufe_je_regel") or {}
         print("  Laeufe je ausloesender Regel (Basis): "
               + ", ".join(f"{n}={c}" for n, c in laeufe.items()))
+        su_regeln = basis.get("_nach_su_regeln") or {}
+        if su_regeln:
+            print("  Laeufe nach Sonnenuntergang je Regel (Netz-kWh): "
+                  + ", ".join(f"{n}={v:.1f}"
+                              for n, v in sorted(su_regeln.items(),
+                                                 key=lambda kv: -kv[1])))
         print()
         for vname in varianten:
             if vname == "basis":

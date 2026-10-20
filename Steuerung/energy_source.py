@@ -205,6 +205,7 @@ def classify_energy_source(
     soc_min_prozent: float = 90.0,
     max_netzkauf_watt: float = -50.0,
     pv_erzeugung_watt: object = None,
+    pv_erlaubt: bool = True,
 ) -> EnergiequellenStatus:
     """Klassifiziert PV > Batterie > Netz anhand aktueller und valider Werte.
 
@@ -220,6 +221,13 @@ def classify_energy_source(
     Für direkte Rule-Unit-Tests bleibt ``feedin_watt`` als PV-Signal-Fallback
     erhalten, wenn kein separates ``pv_acpower`` angegeben wurde. Produktiv
     liefert ``determine_mode_and_setpoints`` beide Messungen aus dem State.
+
+    ``pv_erlaubt=False`` (Befund 18.10.2026): Ausserhalb des PV-Fensters
+    - also nach der letzten Prognose-Stunde mit nennenswerter Erwartung -
+    zaehlt die Momentanmessung der PV NICHT mehr als Quelle. Im Daemmerlicht
+    meldet die DC-Seite noch 50-400 W, waehrend ein 600-W-Lauf den Rest aus
+    dem Netz zieht; zugelassen bleibt dann nur die Batterie (SOC voll, kein
+    Netzkauf). Damit ist die Quelle das, was den Lauf wirklich traegt.
     """
     pv = _finite(pv_acpower)
     feedin = _finite(feedin_watt)
@@ -268,12 +276,14 @@ def classify_energy_source(
         pv if pv is not None else feedin
     )
     pv_ok = (
-        pv_signal is not None
+        pv_erlaubt
+        and pv_signal is not None
         and pv_signal >= pv_threshold
         and kein_netzkauf
     )
     ueberschuss_ok = (
-        ueberschuss is not None
+        pv_erlaubt
+        and ueberschuss is not None
         and ueberschuss >= pv_threshold
         and kein_netzkauf
     )
@@ -317,17 +327,22 @@ def classify_energy_source(
             (
                 f"Batterie {discharge:.0f}W >= {battery_threshold:.0f}W, "
                 f"SOC {soc_value:.0f}% >= {soc_threshold:.0f}%, kein Netzkauf"
+                + ("" if pv_erlaubt else " (ausserhalb des PV-Fensters)")
             ),
         )
 
     pv_text = "n/a" if pv_signal is None else f"{pv_signal:.0f}W"
     batt_text = "n/a" if discharge is None else f"{discharge:.0f}W"
     soc_text = "n/a" if soc_value is None else f"{soc_value:.0f}%"
+    fenster_txt = (
+        "" if pv_erlaubt
+        else " (ausserhalb des PV-Fensters zaehlt PV nicht als Quelle)"
+    )
     return result(
         Energiequelle.NETZ,
         False,
         (
-            f"keine erneuerbare Quelle: PV-Erzeugung {pv_text}<{pv_threshold:.0f}W, "
+            f"keine erneuerbare Quelle{fenster_txt}: PV-Erzeugung {pv_text}<{pv_threshold:.0f}W, "
             f"Batterie {batt_text}/{soc_text}<{battery_threshold:.0f}W/"
             f"{soc_threshold:.0f}% oder Netzkauf"
         ),

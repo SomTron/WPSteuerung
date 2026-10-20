@@ -23,7 +23,7 @@ from constants import (
     SOLAR_DATA_STALE_THRESHOLD_MIN,
 )
 from collections import deque
-from logic_utils import check_log_throttle, normalize_forecast_wh_qm
+from logic_utils import check_log_throttle, normalize_forecast_wh_qm, pv_fenster_endstunde
 from legionellen_plan import clear_plan
 from safety_logic import handle_critical_compressor_error
 from json_config import WPSteuerungConfig
@@ -611,6 +611,56 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     except (TypeError, ValueError):
         pass  # ungueltige Lernwerte: Regel-Engine faengt das selbst ab
 
+    # PV-Fenster (Nutzerfrage 18.10.2026): "Sollte nicht nach dem
+    # Sonnenuntergang geregelt werden, sondern nach dem PV-Forecast?" - Ja,
+    # und die stuendliche Prognose liegt hier bereits vor. Darin steckt der
+    # Sonnenuntergang automatisch, zusaetzlich die Bewoelkung. Das Fenster
+    # steuert zwei Dinge: (a) die Journal-Messzeile/Zaehler und (b) das
+    # Quellen-Gate - ausserhalb zaehlt die PV-Momentanmessung nicht mehr,
+    # dort traegt nur die Batterie (Befund 18.10.2026: 93-100 % der Laeufe
+    # nach Sonnenuntergang kamen aus dem Netz).
+    fc_forecast_cfg = getattr(effektive_config, "forecast", None)
+    pv_fenster_aktiv = bool(getattr(fc_forecast_cfg, "pv_fenster_aktiv", True))
+    pv_fenster_min_w = float(
+        getattr(fc_forecast_cfg, "pv_fenster_min_w", 300.0) or 300.0
+    )
+    pv_fenster_reserve_h = (
+        float(getattr(fc_forecast_cfg, "pv_fenster_reserve_min", 30.0) or 0.0) / 60.0
+    )
+    jetzt_stunde = now_local.hour + now_local.minute / 60.0
+    fenster = pv_fenster_endstunde(
+        hourly_forecast_watt, jetzt_stunde, pv_fenster_min_w, fc_ratio
+    )
+    pv_fenster_stunde = fenster[0] if fenster else None
+    try:
+        state.control.pv_fenster_stunde = pv_fenster_stunde
+        state.control.pv_fenster_watt = fenster[1] if fenster else None
+        state.control.pv_fenster_aktiv = pv_fenster_aktiv
+        state.control.pv_fenster_ausserhalb = bool(
+            pv_fenster_aktiv and pv_fenster_stunde is None
+        )
+    except AttributeError:
+        pass
+    if check_log_throttle(state, "log_pv_fenster", interval_minutes=15):
+        if hourly_forecast_watt is None:
+            logging.info(
+                "PV-Fenster: keine Stundenprognose verfuegbar - Gate inaktiv"
+            )
+        elif pv_fenster_stunde is None:
+            logging.info(
+                f"PV-Fenster: heute keine Stunde mehr >= {pv_fenster_min_w:.0f}W "
+                f"(kalibriert x{fc_ratio:.2f}, jetzt {jetzt_stunde:.2f}h) "
+                f"-> ausserhalb; PV zaehlt nicht mehr als Quelle"
+            )
+        else:
+            start_bis = float(pv_fenster_stunde) + 1.0 - pv_fenster_reserve_h
+            logging.info(
+                f"PV-Fenster: letzte Stunde >= {pv_fenster_min_w:.0f}W = "
+                f"{int(pv_fenster_stunde):02d}:00 "
+                f"({fenster[1]:.0f}W kalibriert, jetzt {jetzt_stunde:.2f}h) "
+                f"-> Start bis {int(start_bis):02d}:{int((start_bis % 1) * 60):02d}"
+            )
+
     gewinner, alle_ergebnisse = bewerte_alle_regeln(
         config=effektive_config,
         temp_dict=temp_dict,
@@ -634,6 +684,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         solar_stale=_solar_daten_veraltet(state),
         learned_heating_rate_unten=gelernte_rate_unten,
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
+        pv_fenster_stunde=pv_fenster_stunde,
+        pv_fenster_aktiv=pv_fenster_aktiv,
+        pv_fenster_reserve_h=pv_fenster_reserve_h,
         learned_target_hour=gelernte_zielzeit,
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profil,
@@ -2902,6 +2955,22 @@ async def handle_compressor_on(
                     f"Eingeschaltet um {now}. Grund: Regel-Einschalt {regel_txt} "
                     f"(Regelfuehler={regelfuehler}, Ausschaltgrenze={ausschaltpunkt})"
                 )
+                # Messung (Nutzerfrage 18.10.2026): Wie oft startet die WP
+                # ausserhalb des PV-Fensters? Im Modell kamen 93-100 % dieser
+                # Laeufe aus dem Netz - mit dieser Zeile sehen wir es am echten
+                # Objekt, ohne das Verhalten zu bewerten.
+                if getattr(state.control, "pv_fenster_ausserhalb", False):
+                    try:
+                        state.control.starts_ausserhalb_pv_fenster = int(
+                            getattr(state.control, "starts_ausserhalb_pv_fenster", 0)
+                        ) + 1
+                    except (TypeError, ValueError):
+                        state.control.starts_ausserhalb_pv_fenster = 1
+                    logging.info(
+                        f"Start ausserhalb des PV-Fensters (cycle={_zyklus_id(state)}, "
+                        f"bisher {state.control.starts_ausserhalb_pv_fenster}x): "
+                        f"Regel {regel_txt}, Quelle {pending_source or 'unbekannt'}"
+                    )
                 return True
 
         # Blocking-Reason setzen wenn Bedingungen nicht erfuellt

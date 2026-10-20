@@ -31,6 +31,49 @@ def forecast_kwh_m2_to_wh_m2(value):
     return wert * 1000.0
 
 
+def pv_fenster_endstunde(hourly_watt, jetzt_h, schwelle_w, fc_ratio=1.0):
+    """Letzte Stunde mit erwarteter PV >= Schwelle (heute, ab jetzt).
+
+    Nutzerwunsch 18.10.2026: Statt einer Sonnenuntergangs-Tabelle wird das
+    **PV-Fenster aus der stuendlichen Prognose** bestimmt. Darin steckt der
+    Sonnenuntergang automatisch - zusaetzlich aber die Bewoelkung: an einem
+    trueben Nachmittag ist der Sonnenuntergang irrelevant, weil vorher schon
+    keine nennenswerte Strahlung mehr erwartet wird.
+
+    ``hourly_watt`` ist die stuendliche Erwartung in Watt
+    ({Stunde: Watt}, aus ``state.solar.forecast_hourly_wm2`` x Modulflaeche),
+    ``fc_ratio`` die gelernte Kalibrierung (dieselbe wie bei der Tagessumme).
+    Rueckgabe: ``(stunde, erwartete_watt)`` der LETZTEN Stunde ab ``jetzt_h``
+    ueber der Schwelle, sonst ``None`` (kein PV-Fenster mehr heute).
+    """
+    if not isinstance(hourly_watt, dict):
+        return None
+    try:
+        schwelle = float(schwelle_w)
+        jetzt = float(jetzt_h)
+        faktor = float(fc_ratio) if fc_ratio else 1.0
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(schwelle) or schwelle < 0:
+        return None
+    if not math.isfinite(faktor) or faktor <= 0:
+        faktor = 1.0
+    treffer = []
+    for stunde, watt in hourly_watt.items():
+        try:
+            h = int(stunde)
+            w = float(watt) * faktor
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(w):
+            continue
+        if h >= jetzt and w >= schwelle:
+            treffer.append((h, w))
+    if not treffer:
+        return None
+    return max(treffer, key=lambda paar: paar[0])
+
+
 def normalize_forecast_wh_qm(value, value_unit="kwh_m2"):
     """Normalisiert einen Forecast anhand seiner expliziten Einheit.
 

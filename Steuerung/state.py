@@ -108,6 +108,16 @@ class ControlState:
         self._rate_confidence: float = 0.0
         self._last_start_anticipation: dict = {}
         self._legionellen_completion_pending: bool = False
+        # PV-Fenster (Nutzerfrage 18.10.2026): Werte aus der stuendlichen
+        # Prognose, gespiegelt von `determine_mode_and_setpoints`. Ausserhalb
+        # (`pv_fenster_ausserhalb`) zaehlt die PV-Momentanmessung nicht mehr
+        # als Quelle; `starts_ausserhalb_pv_fenster` zaehlt die Starts dort
+        # (Journal-Messung, ohne das Verhalten zu bewerten).
+        self.pv_fenster_stunde = None
+        self.pv_fenster_watt = None
+        self.pv_fenster_aktiv = True
+        self.pv_fenster_ausserhalb = False
+        self.starts_ausserhalb_pv_fenster = 0
         self._legionellen_verify_checks: deque = deque(maxlen=3)
         self.alle_ergebnisse: list = []  # Ergebnisse aller Regeln aus der letzten Bewertung
         # Explizite Neustartsperre (z.B. nach Kompressor-Verifizierungsfehler).

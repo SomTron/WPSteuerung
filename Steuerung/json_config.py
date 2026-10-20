@@ -630,6 +630,37 @@ class ForecastConfig(BaseModel):
         description="True = Vorheizen notfalls auch mit Netzstrom (altes Verhalten)",
     )
 
+    # ── PV-Fenster (Nutzerfrage 18.10.2026) ───────────────────────────────
+    # "Sollte nicht nach dem Sonnenuntergang geregelt werden, sondern nach dem
+    # PV-Forecast? Wenn der fuer den spaeten Nachmittag wenig Einstrahlung
+    # vorhersagt, ist der Sonnenuntergang irrelevant - in dem waere er ja
+    # automatisch enthalten." Richtig: das Fenster kommt aus der STUENDLICHEN
+    # Prognose (state.solar.forecast_hourly_wm2 x Modulflaeche, kalibriert mit
+    # dem gelernten fc_ratio). Darin steckt der Sonnenuntergang automatisch,
+    # zusaetzlich aber die Bewoelkung.
+    pv_fenster_aktiv: bool = Field(
+        default=True,
+        description=(
+            "Ausserhalb des PV-Fensters (letzte Prognose-Stunde >= "
+            "pv_fenster_min_w) zaehlt die PV-Momentanmessung nicht mehr als "
+            "Quelle - dann heizt nur noch die Batterie"
+        ),
+    )
+    pv_fenster_min_w: float = Field(
+        default=300.0,
+        description=(
+            "Ab dieser erwarteten PV-Leistung (kalibrierte Stundenprognose, W) "
+            "gilt eine Stunde als PV-Fenster"
+        ),
+    )
+    pv_fenster_reserve_min: float = Field(
+        default=30.0,
+        description=(
+            "Vorlauf vor dem Ende des PV-Fensters, bis zu dem Spaetest- und "
+            "Schichtungs-Starts noch als PV-gedeckt gelten (min)"
+        ),
+    )
+
 
     @model_validator(mode="after")
     def _plausibel(self):

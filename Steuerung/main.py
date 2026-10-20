@@ -1951,6 +1951,12 @@ async def log_system_state(state):
             f"Einspeis={_fmt_w(getattr(state.solar, 'feedinpower', None))} | "
             f"SOC={_fmt_soc(getattr(state.solar, 'soc', None))} | "
             f"Alter={alter_txt}{stale_flag}"
+            # PV-Fenster (Nutzerfrage 18.10.2026): ausserhalb zaehlt die
+            # PV-Momentanmessung nicht mehr als Quelle - das gehoert sichtbar
+            # in die Statuszeile, sonst wirkt der wartende Zustand wie eine
+            # Stoerung.
+            + (" | kein PV-Fenster" if getattr(
+                state.control, "pv_fenster_ausserhalb", False) else "")
         )
         if state.control.blocking_reason:
             # "Boiler bereits heiss" ist ein Normalzustand und wird deshalb
