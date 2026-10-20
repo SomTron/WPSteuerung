@@ -128,13 +128,29 @@ VARIANTEN: Dict[str, dict] = {
             "abweichung": {"quelle_warten_min_forecast_wh_qm": 1500.0},
         },
     },
-    "notfall_42_kalt_unwetter_hyst": {
-        "beschreibung": "wie vor, aber Abweichung mit 2.5K Hysterese",
+    # --- Zielkonflikt Abendkomfort (20.10.2026) ---
+    # Die Abendgarantie (Abend-Mitte) endet mit der Nachtsperre (19 Uhr),
+    # also genau vor dem Duschen. Der eigentliche Blocker ist aber die
+    # Start-Antizipation: sie verlangt, dass der freie Hub bis zum
+    # Ausschaltpunkt die Mindestlaufzeit rechtfertigt - bei 4,3 K/h und
+    # 1,0 K Hub sind das 15 min gegen 60 min Mindestlaufzeit.
+    "zielkonflikt_garantie_22h": {
+        "beschreibung": "Abendgarantie darf die Nachtsperre ueberschreiben",
         "aenderungen": {
-            "notfallschutz": {"ausschalten_bei_c": 42.0,
-                              "temperaturfuehler": "alle"},
-            "abweichung": {"quelle_warten_min_forecast_wh_qm": 1500.0,
-                           "einschalten_bei_abweichung_k": 2.5},
+            "mindest_temp": {"__eintraege__": {"Abend-Mitte": {
+                "nachtsperre_ueberschreiben": True}}},
+        },
+    },
+    "zielkonflikt_antizipation_aus": {
+        "beschreibung": "Start-Antizipation global abgeschaltet",
+        "aenderungen": {"sicherheit": {"start_vorhersage_aktiv": False}},
+    },
+    "zielkonflikt_beides": {
+        "beschreibung": "Abendgarantie bis 22h UND Antizipation aus",
+        "aenderungen": {
+            "mindest_temp": {"__eintraege__": {"Abend-Mitte": {
+                "nachtsperre_ueberschreiben": True}}},
+            "sicherheit": {"start_vorhersage_aktiv": False},
         },
     },
 }

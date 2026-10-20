@@ -202,20 +202,25 @@ selbst* endet vor dem Punkt, an dem sie gebraucht wird.
 
 **Konsequenz für die Simulation:** Der Konflikt ist eine
 **Konfigurationsfrage, keine Logikfrage** – aber er hat **zwei**
-Voraussetzungen, die beide erfüllt sein müssen:
+Voraussetzungen, die beide erfüllt sein müssen.
 
-| Variante | Netz kWh/Tag | h mitte < 40 °C | min mitte | Zyklen |
+**Nachgerechnet auf der kalibrierten Winterbasis (20.10.2026, 14 Tage,
+`Analyse/sim`, `winter_wenig_pv`):**
+
+| Variante | Netz kWh/Tag | h mitte < 40 °C | min mitte 20–22 h | Zyklen |
 | --- | --- | --- | --- | --- |
-| Basis | 1,54 | 113,9 | 35,3 | 24 |
-| nur `nachtsperre_ueberschreiben: true` | 1,54 | **113,9** | 35,3 | 24 |
-| nur Antizipation aus | 1,56 | 81,4 | 35,3 | 27 |
-| **beides** | 1,60 | **45,1** | 35,3 | 30 |
+| Basis | 9,41 | 184,1 | 36,6 | 40 |
+| nur `nachtsperre_ueberschreiben: true` | 9,41 | 184,1 | 36,6 | 40 |
+| nur Antizipation aus | 10,40 | **131,0** | **41,9** | 52 |
+| **beides** | 10,40 | **131,0** | **41,9** | 52 |
 
 1. **Die Abendgarantie allein bringt nichts.** Sie schaltet nur ein, wenn
    der Fühler bereits **unter** 42 °C liegt. Im Fenster 17–19 Uhr meldet
    sie „Garantie erfüllt" – der Fühler fällt erst **nach** 19 Uhr unter
    42 °C, und dann ist die Regel stumm. Das erklärt auch, warum die
    Regel im Log „ein=True" meldet, ohne dass ein Lauf entsteht.
+   *Nachgewiesen im Modell:* Die Regel feuert ohnehin um **17:36–18:47
+   Uhr** – mit verlängertem Fenster bis 22 Uhr ändert sich nichts.
 2. **Der eigentliche Blocker ist die Start-Antizipation.** Sie verlangt,
    dass der freie Hub bis zum Ausschaltpunkt die Mindestlaufzeit
    rechtfertigt. Bei einer Heizrate von ~4,3 K/h (unten) und einem
@@ -225,15 +230,38 @@ Voraussetzungen, die beide erfüllt sein müssen:
    Mindestlaufzeit"). Das war der Hauptsperrgrund (4,2 h „Min. Pause"
    und ~7 h Antizipation über 14 Tage).
 
+**Was die Lockerung kostet – und was sie bringt (alle Winterszenarien):**
+
+| Szenario | Netz vorher → nachher | h mitte < 40 °C | min mitte 20–22 h |
+| --- | --- | --- | --- |
+| wenig PV | 9,41 → 10,40 kWh/Tag | 184 → 131 | 36,6 → 41,9 °C |
+| Batterie leer | 9,66 → 10,65 kWh/Tag | 184 → 131 | 36,6 → 41,9 °C |
+| Batterie voll | 9,53 → 10,52 kWh/Tag | 184 → 131 | 36,6 → 41,9 °C |
+| wechselnd | 1,73 → 2,28 kWh/Tag | 198 → 154 | 35,5 → 40,5 °C |
+| ohne PV (Starknebel) | 14,69 → 17,01 kWh/Tag | 273 → 148 | 32,7 → 41,4 °C |
+
+Der Preis liegt bei **+1,0 kWh/Tag** im normalen Winter (+10 % Netzbezug,
+WP-Anteil am Netz 56 % → 62 %). Der Nutzen: das **Abendminimum steigt
+um 5,3 K auf 41,9 °C** – das ist der Zielwert der Garantie (42 °C).
+
+**Wichtige Nebenwirkung einer globalen Abschaltung:** Im PV-reichen
+September ersetzt die Antizipationslockerung die AdaptivePV-Läufe durch
+Einspeisung-Läufe (2 → 9), die **nachts** starten. Das verschlechtert
+den Komfort (96,5 → 103,1 h unter 40 °C). Nur in der **Kombination** mit
+der Abendgarantie ist der September besser (67,3 h). Deshalb:
+
 **Optionen (Nutzerentscheidung):**
-1. `nachtsperre_ueberschreiben: true` für `Abend-Mitte` **und** die
-   Start-Antizipation für Garantie-Regeln entschärfen (z. B. eigene
-   Mindestlaufzeit für Netz-Läufe der Abendgarantie). Erst beides
-   zusammen bringt den Effekt (45,1 statt 113,9 h unter 40 °C) – der
-   Preis sind 0,06 kWh/Tag mehr Netzbezug.
-2. `nachtsperre_start` später setzen (z. B. 22 Uhr). Deckt den
+1. **Gezielt** die Start-Antizipation für die Garantie-Regeln
+   (MinTemp-*) entschärfen, global aber **anlassen**. Damit bleibt der
+   PV-Schutz der AdaptivePV-/Einspeisung-Läufe erhalten und die
+   Garantie bekommt ihre 60-Minuten-Läufe. Preis nach Messung:
+   +1,0 kWh/Tag im Winter.
+2. `nachtsperre_ueberschreiben: true` für `Abend-Mitte` **und** die
+   Start-Antizipation global abschalten. Bringt im Winter denselben
+   Effekt, kostet aber die Nebenwirkung im September.
+3. `nachtsperre_start` später setzen (z. B. 22 Uhr). Deckt den
    Duschbereich, greift aber später.
-3. Vorheiz-Ziel anheben (heute 42 °C): Mit 45–48 °C wäre um 21 Uhr
+4. Vorheiz-Ziel anheben (heute 42 °C): Mit 45–48 °C wäre um 21 Uhr
    Reserve vorhanden. Preis: derselbe wie Option 1, aber verteilt auf die
    Nachmittagsstunden, in denen das PV-Fenster noch offen ist.
 

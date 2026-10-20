@@ -377,6 +377,44 @@ Tagesstunden keinen PV-Überschuss. Die PV-Fenster-Regeln haben dann
 nichts, worauf sie reagieren können – das Fenster ist in diesen Stunden
 eine Zeitvorgabe ohne PV-Wirkung.
 
+### Der Zielkonflikt: Abendkomfort gegen Netzstrom (20.10.2026)
+
+Die Abendgarantie (`Abend-Mitte`, 17–22 Uhr) endet mit der Nachtsperre
+(19 Uhr) – genau vor dem Duschen. Nachgerechnet auf der kalibrierten
+Winterbasis, 14 Tage:
+
+| Variante | Netz kWh/Tag | h mitte<40 °C | min mitte 20–22 h | Zyklen |
+| --- | --- | --- | --- | --- |
+| Basis | 9,41 | 184,1 | 36,6 | 40 |
+| nur Abendgarantie bis 22 h | 9,41 | 184,1 | 36,6 | 40 |
+| nur Antizipation aus | 10,40 | **131,0** | **41,9** | 52 |
+| beides | 10,40 | **131,0** | **41,9** | 52 |
+
+**Die Abendgarantie allein bringt nichts** – sie feuert ohnehin um
+17:36–18:47 Uhr, ein verlängertes Fenster bis 22 Uhr ändert nichts.
+**Der eigentliche Hebel ist die Start-Antizipation**: sie verlangt, dass
+der freie Hub bis zum Ausschaltpunkt die Mindestlaufzeit rechtfertigt
+(bei 4,3 K/h und 1,0 K Hub: 15 min gegen 60 min Mindestlaufzeit).
+
+Preis und Nutzen in allen Winterszenarien:
+
+| Szenario | Netz vorher → nachher | h mitte<40 °C | min mitte 20–22 h |
+| --- | --- | --- | --- |
+| wenig PV | 9,41 → 10,40 | 184 → 131 | 36,6 → 41,9 °C |
+| Batterie leer | 9,66 → 10,65 | 184 → 131 | 36,6 → 41,9 °C |
+| Batterie voll | 9,53 → 10,52 | 184 → 131 | 36,6 → 41,9 °C |
+| wechselnd | 1,73 → 2,28 | 198 → 154 | 35,5 → 40,5 °C |
+| ohne PV (Starknebel) | 14,69 → 17,01 | 273 → 148 | 32,7 → 41,4 °C |
+
+**Nebenwirkung einer globalen Abschaltung:** Im PV-reichen September
+ersetzen die gelockerten Starts die AdaptivePV-Läufe durch
+Einspeisung-Läufe (2 → 9), die nachts starten – das verschlechtert den
+Komfort (96,5 → 103,1 h unter 40 °C). Deshalb ist die gezielte
+Lockerung (nur für die Garantie-Regeln) der sauberere Hebel.
+
+Reproduzierbar über
+`py -3 Analyse/sim/varianten.py --tage 14 --varianten verbessert zielkonflikt_garantie_22h zielkonflikt_antizipation_aus zielkonflikt_beides --szenarien winter_wenig_pv`.
+
 ### Die Einheiten der Prognose (20.10.2026)
 
 Die Regelung liest die Tagesprognose über `normalize_forecast_wh_qm` und

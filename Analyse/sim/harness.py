@@ -317,14 +317,39 @@ class Simulation:
         ``{"abweichung": {"netz_notfall_offset_k": 4.0}}``. Die Aenderung
         betrifft nur diese Simulationsinstanz - die Projektdatei bleibt
         unberuehrt.
+
+        Sonderfall ``__eintraege__``: Some Konfigurationen bestehen aus
+        einer Liste gleichartiger Eintraege (``mindest_temp.eintraege``).
+        Darauf wirkt ein Sektions-Patch sonst nicht. Die Schreibweise ist
+        dann::
+
+            {"mindest_temp": {"__eintraege__": {"Abend-Mitte": {
+                "nachtsperre_ueberschreiben": True}}}}
         """
         for sektion, werte in self.config_patch.items():
             ziel = getattr(self.priority_config, sektion, None)
             if ziel is None:
                 continue
             for name, wert in werte.items():
-                if hasattr(ziel, name):
+                if name == "__eintraege__":
+                    self._patch_eintraege(ziel, wert)
+                elif hasattr(ziel, name):
                     setattr(ziel, name, wert)
+
+    @staticmethod
+    def _patch_eintraege(ziel, spec: dict) -> None:
+        """Patcht einzelne Listen-Eintraege (nach ``name``) einer Sektion."""
+        eintraege = getattr(ziel, "eintraege", None)
+        if not eintraege:
+            return
+        by_name = {getattr(e, "name", None): e for e in eintraege}
+        for eintrag_name, felder in spec.items():
+            eintrag = by_name.get(eintrag_name)
+            if eintrag is None:
+                continue
+            for feld, wert in felder.items():
+                if hasattr(eintrag, feld):
+                    setattr(eintrag, feld, wert)
 
     # ------------------------------------------------------------------
     # PV-Erzeugung

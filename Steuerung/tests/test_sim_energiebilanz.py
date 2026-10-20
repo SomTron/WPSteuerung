@@ -68,6 +68,39 @@ def test_winterparameter_haben_keller_als_umgebung():
     assert daten["verlust_w_k"] > 1.0
 
 
+def test_varianten_koennen_listen_eintraege_patchen():
+    """Die Zielkonflikt-Varianten muessen die MinTemp-Eintraege erreichen.
+
+    ``mindest_temp.eintraege`` ist eine Liste; ein Sektions-Patch
+    erreicht sie nicht. Ohne den Sonderfall ``__eintraege__`` waere die
+    Abendgarantie-Variante wirkungslos - und der Zielkonflikt waere
+    in der Simulation nicht reproduzierbar.
+    """
+    from harness import Simulation
+
+    sz = umgebung.SZENARIEN["winter_wenig_pv"]
+    sz = type(sz)(**{**sz.__dict__, "tage": 1})
+    sim = Simulation(sz, parameter=None, lernpfad=None,
+                     config_patch={
+                         "mindest_temp": {"__eintraege__": {"Abend-Mitte": {
+                             "nachtsperre_ueberschreiben": True}}},
+                         "sicherheit": {"start_vorhersage_aktiv": False},
+                     })
+    eintraege = {e.name: e for e in sim.priority_config.mindest_temp.eintraege}
+    assert eintraege["Abend-Mitte"].nachtsperre_ueberschreiben is True
+    assert sim.priority_config.sicherheit.start_vorhersage_aktiv is False
+
+
+def test_zielkonflikt_varianten_sind_vorhanden():
+    """Die drei Zielkonflikt-Varianten muessen existieren."""
+    from varianten import VARIANTEN
+
+    for name in ("zielkonflikt_garantie_22h",
+                 "zielkonflikt_antizipation_aus",
+                 "zielkonflikt_beides"):
+        assert name in VARIANTEN, f"Variante {name} fehlt"
+
+
 def test_speicher_verliert_oben_weniger_als_unten():
     """Der obere Fuehler sitzt am Deckel, nicht im Keller.
 
