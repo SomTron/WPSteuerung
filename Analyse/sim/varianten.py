@@ -60,6 +60,11 @@ VARIANTEN: Dict[str, dict] = {
         "aenderungen": {},
     },
 
+    "ohne_pv_fenster": {
+        "beschreibung": "wie verbessert, aber PV-Fenster fuer CalcStart AUS",
+        "aenderungen": {"forecast": {"pv_fenster_aktiv": False}},
+    },
+
     "netz_offset_6": {
         "beschreibung": "Netz-Notfall der Abweichung bei 36C statt 30C",
         "aenderungen": {"abweichung": {"netz_notfall_offset_k": 6.0}},

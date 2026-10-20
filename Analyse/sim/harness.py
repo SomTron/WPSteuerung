@@ -498,7 +498,12 @@ class Simulation:
     def _sensoren_setzen(self) -> None:
         s = self.speicher
         self.state.sensors.t_unten = round(s.unten.temperatur, 3)
-        self.state.sensors.t_mitte = round(s.mitte.temperatur, 3)
+        # Die Steuerung liest `t_mittig`. Bis 20.10.2026 wurde hier nur
+        # `t_mitte` gesetzt: der mittlere Fuehler war in der Simulation immer
+        # None, CalcStart meldete tagsueber "Sensoren nicht verfuegbar" und
+        # konnte nie gewinnen. `t_mitte` bleibt als Alias fuer die Zeitreihe.
+        self.state.sensors.t_mittig = round(s.mitte.temperatur, 3)
+        self.state.sensors.t_mitte = self.state.sensors.t_mittig
         self.state.sensors.t_oben = round(s.oben.temperatur, 3)
         self.state.sensors.t_boiler = self.state.sensors.t_oben
         # Verdampfer: faellt bei Heizbetrieb, erholt sich im Leerlauf
