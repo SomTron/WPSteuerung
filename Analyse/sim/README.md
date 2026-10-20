@@ -238,6 +238,7 @@ Validierung (alle Zyklen ≥ 25 min, Modell minus Messung):
 | PV-Erzeugung Dezember | 9,5 kWh/Tag (Median) | 6,7 kWh/Tag (Faktor 0,7 = trüber Tag) |
 | WP-Zusatzverbrauch | ~490 W (Median) | 500 W |
 | Batterie nachts | ~190 W Entladung, ~27 W Netz | 80 % der Deckung |
+| Forecast-Kalibrierung | ~1,0 (Verhältnis Erzeugung/Prognose) | 1,00–1,11 |
 | Netzbezug Dezember | 9,4 kWh/Tag | 1,5 kWh/Tag ⚠ |
 
 ⚠ **Größte verbleibende Abweichung:** Der Netzbezug im Winter ist in der
@@ -247,6 +248,20 @@ Dezember-Log ist dafür nicht verwendbar (80 % Stale-Werte, unplausible
 Hauslast von 2,2 kW bei ausgeschalteter WP). Der September-Log belegt
 dagegen nur 11,1 kWh/Tag Hauslast – die Differenz zum Dezember ist mit
 den vorhandenen Daten nicht auflösbar (siehe „Datenbedarf").
+
+### Die Einheiten der Prognose (20.10.2026)
+
+Die Regelung liest die Tagesprognose über `normalize_forecast_wh_qm` und
+erwartet – wie Open-Meteo – **kWh/m²**. Ein Szenario definiert sie in
+Wh/m²; der Harness rechnet um. Ohne diese Umrechnung las die Regelung
+700 Wh/m² als 700 kWh/m²: die Prognose war um den Faktor 1000 zu
+pessimistisch, das PV-Fenster schloss nie und die Forecast-Kalibrierung
+klemmte am unteren Wert (0,3).
+
+Zusätzlich gab `priority_control_logic` der Lernengine `pv_erzeugung_watt`
+**nie** weiter. Die Engine zählte damit den Wechselstromausgang
+(Haus + Netz) statt der Erzeugung – nachts ~230 W statt 0 W. Auch das
+ist im Produktivcode behoben.
 
 ## Datenbedarf
 

@@ -539,8 +539,20 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             temp_dict=temp_dict,
             compressor_is_on=state.control.kompressor_ein,
             feedin_watt=pv_leistung,
-            # Die Kalibrierung braucht die ERZEUGTE Energie, nicht den Export.
+            # Die Kalibrierung braucht die ERZEUGTE Energie, nicht den Export
+            # und nicht den Wechselstromausgang. `pv_acpower` ist Haus + Netz
+            # (nachts ~250 W trotz fehlender Sonne); die Erzeugung steht in
+            # `state.solar.pv_erzeugung` (powerdc1 + powerdc2).
+            #
+            # Befund 20.10.2026: `pv_erzeugung_watt` wurde hier NIE
+            # uebergeben. Die Lernengine fiel deshalb auf `pv_acpower`
+            # zurueck und zaehlte den Hausverbrauch als Erzeugung. Der
+            # Quotient blieb dauerhaft zu klein (im Winter 0,3 - also am
+            # unteren Klemmwert) und die Prognose wurde systematisch
+            # pessimistisch bewertet: das PV-Fenster endete zu frueh und
+            # die Regel wartete vergeblich auf PV.
             pv_acpower_watt=getattr(state.solar, "acpower", None),
+            pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
             soc=getattr(state.solar, "soc", None),
             forecast_today_wh_qm=forecast_today_wh,
             forecast_hourly_wh=hourly_forecast_watt,

@@ -541,15 +541,28 @@ class Simulation:
         # Wechselstromausgang waere Haus + Netz und taugt nicht als
         # Erzeugungsnachweis (nachts ~230 W trotz fehlender Sonne).
         solar.pv_erzeugung = round(pv_w, 1)
-        # Forecast: konstant, aber "frisch" (Update wie im Betrieb)
-        solar.forecast_today = self.sz.forecast_wh
-        solar.forecast_tomorrow = self.sz.forecast_wh_morgen
-        solar.forecast_day2 = self.sz.forecast_wh_uebermorgen
+        # Forecast: konstant, aber "frisch" (Update wie im Betrieb).
+        #
+        # EINHEIT: Die Regelung liest die Tagesprognose ueber
+        # ``normalize_forecast_wh_qm`` und erwartet - wie Open-Meteo -
+        # kWh/m². Das Szenario definiert sie in Wh/m², also wird hier
+        # umgerechnet. Ohne diese Umrechnung interpretierte die Regelung
+        # 700 Wh/m² als 700 kWh/m²: die Prognose war um den Faktor 1000
+        # zu pessimistisch, das PV-Fenster schloss nie und die
+        # Forecast-Kalibrierung klemmte am unteren Wert (0,3).
+        solar.forecast_today = self.sz.forecast_wh / 1000.0
+        solar.forecast_tomorrow = self.sz.forecast_wh_morgen / 1000.0
+        solar.forecast_day2 = self.sz.forecast_wh_uebermorgen / 1000.0
         # Stundenprognose in W/m2: die FORM kommt aus dem PV-Tagesprofil,
         # die HOEHE aus der Tagesprognose des Szenarios. Die Summe ueber
         # 24 h ergibt damit genau ``forecast_wh`` (Wh/m2) - vorher stand
         # dort ein frei erfundener Faktor 0.19, der weder zur Tagesprognose
         # noch zum PV-Fenster passte.
+        #
+        # Die Regelung erwartet W/m2 (Open-Meteo liefert die Strahlung
+        # direkt als W/m2 und multipliziert mit der Arrayflaeche auf Watt).
+        # ``forecast_wh`` ist in Wh/m2, die Stundenwerte sind W/m2 je
+        # Stunde - die Summe der Stundenwerte * 1 h ergibt daher Wh/m2.
         profil = PV_PROFILE.get(self.sz.pv_profil, PV_PROFILE["september"])
         profil_summe = sum(profil.values())
         if profil_summe > 0:

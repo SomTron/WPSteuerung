@@ -168,6 +168,15 @@ class Szenario:
     #: Staerke der zufaelligen Wolkenmodulation (0 = aus).
     pv_streuung: float = 0.0
     #: Tagesprognose heute/morgen/uebermorgen in Wh/m².
+    #:
+    #: ACHTUNG Einheit: Die Regelung liest die Prognose ueber
+    #: ``normalize_forecast_wh_qm`` und erwartet - wie Open-Meteo - kWh/m².
+    #: ``state.solar.forecast_today`` muss deshalb in kWh/m² gesetzt
+    #: werden (siehe ``Harness._solar_setzen``). Sonst interpretiert die
+    #: Regelung 700 Wh/m² als 700 kWh/m² und rechnet mit dem Faktor 1000
+    #: falsch: die Prognose wirkt dann um drei Größenordnungen zu
+    #: pessimistisch, das PV-Fenster schließt nie und die
+    #: Forecast-Kalibrierung klemmt am unteren Wert.
     forecast_wh: float = SEPTEMBER_FORECAST_WH
     forecast_wh_morgen: Optional[float] = None
     forecast_wh_uebermorgen: Optional[float] = None
