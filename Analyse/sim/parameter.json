@@ -7,6 +7,7 @@
   "konvektion_aus_w_k": 12.0,
   "konvektion_oben_aus_w_k": 3.0,
   "einspeisung_anteil_unten": 0.22528000000000006,
+  "waerme_verteilt": false,
   "kaltwasser_c": 10.0,
   "umgebung_c": 20.0
 }

@@ -230,6 +230,18 @@ class Szenario:
     #: Vorbelegung: der letzte Legionellen-Lauf lag zu Simulationsbeginn
     #: so viele Tage zurueck (simuliert einen bestehenden Betrieb).
     legionellen_vor_tagen: int = 0
+    #: Parameterdatei des Speichermodells (relativ zu Analyse/sim).
+    #: None = die Standardparameter (September). Der Winter hat eigene
+    #: Parameter (``parameter_winter.json``), weil sich das Verhalten des
+    #: Speichers im Winter grundlegend unterscheidet: er steht uebernacht
+    #: bei ~12 C statt bei ~24 C.
+    parameter_datei: Optional[str] = None
+    #: Starttemperaturen des Speichers zu Simulationsbeginn. None = die
+    #: September-Werte 41/42/43,5 C. Im Winter beginnt der Speicher kalt
+    #: (gemessen Dezember 2025: 11,9 / 32,0 / 44,2 C).
+    start_unten_c: Optional[float] = None
+    start_mitte_c: Optional[float] = None
+    start_oben_c: Optional[float] = None
 
     def __post_init__(self):
         if self.forecast_wh_morgen is None:
@@ -259,6 +271,8 @@ SZENARIEN: Dict[str, Szenario] = {
         pv_profil="dezember",
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
         wp_leistung_w=2100.0,
+        parameter_datei="parameter_winter.json",
+        start_unten_c=11.9, start_mitte_c=32.0, start_oben_c=44.2,
     ),
     "winter_batterie_leer": Szenario(
         name=("Dezember, wenig PV, Batterie wird NIE voll "
@@ -268,6 +282,8 @@ SZENARIEN: Dict[str, Szenario] = {
         forecast_wh=700.0, hauslast_faktor=1.15, umgebung_c=12.0,
         soc_start_prozent=20.0, soc_max_prozent=55.0,
         wp_leistung_w=2100.0,
+        parameter_datei="parameter_winter.json",
+        start_unten_c=11.9, start_mitte_c=32.0, start_oben_c=44.2,
     ),
     "winter_batterie_voll": Szenario(
         name=("Dezember, wenig PV, Batterie kurzfristig VOLL "
@@ -278,6 +294,8 @@ SZENARIEN: Dict[str, Szenario] = {
         soc_start_prozent=100.0, batterie_kapazitaet_wh=3000.0,
         soc_max_prozent=100.0,
         wp_leistung_w=2100.0,
+        parameter_datei="parameter_winter.json",
+        start_unten_c=11.9, start_mitte_c=32.0, start_oben_c=44.2,
     ),
     "winter_ohne_pv": Szenario(
         name="Dezember, kein PV (Starknebel, 120 Wh/m2)",
@@ -285,6 +303,8 @@ SZENARIEN: Dict[str, Szenario] = {
         pv_profil="dezember",
         forecast_wh=120.0, hauslast_faktor=1.15, umgebung_c=10.0,
         wp_leistung_w=2100.0,
+        parameter_datei="parameter_winter.json",
+        start_unten_c=11.9, start_mitte_c=32.0, start_oben_c=44.2,
     ),
     "winter_ohne_pv_lang": Szenario(
         name="Dezember, 5 Wochen ohne PV (bestehender Betrieb)",
@@ -293,6 +313,8 @@ SZENARIEN: Dict[str, Szenario] = {
         forecast_wh=120.0, hauslast_faktor=1.15, umgebung_c=10.0,
         legionellen_vor_tagen=10,
         wp_leistung_w=2100.0,
+        parameter_datei="parameter_winter.json",
+        start_unten_c=11.9, start_mitte_c=32.0, start_oben_c=44.2,
     ),
     "winter_misch": Szenario(
         name="Dezember, wechselnd (1600 Wh/m2)",
@@ -300,5 +322,7 @@ SZENARIEN: Dict[str, Szenario] = {
         pv_profil="dezember",
         forecast_wh=1600.0, hauslast_faktor=1.15, umgebung_c=12.0,
         wp_leistung_w=2100.0,
+        parameter_datei="parameter_winter.json",
+        start_unten_c=11.9, start_mitte_c=32.0, start_oben_c=44.2,
     ),
 }

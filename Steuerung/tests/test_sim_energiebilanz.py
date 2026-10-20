@@ -33,6 +33,41 @@ for pfad in (SIM, STEUERUNG):
 import umgebung  # noqa: E402
 
 
+def test_winterszenarien_laden_ihre_eigenen_parameter():
+    """Die Winterszenarien duerfen nicht die September-Parameter nehmen.
+
+    Der Speicher verhaelt sich im Winter grundlegend anders (er steht
+    uebernacht bei ~12 C statt bei ~24 C). Ohne eigene Parameter und
+    ohne die gemessenen Starttemperaturen liegt der simulierte
+    Winter-Netzbezug um mehrere kWh/Tag daneben.
+    """
+    for name, szenario in umgebung.SZENARIEN.items():
+        if not name.startswith("winter"):
+            continue
+        assert szenario.parameter_datei == "parameter_winter.json", (
+            f"{name}: kein Winter-Parametersatz")
+        pfad = os.path.join(SIM, szenario.parameter_datei)
+        assert os.path.exists(pfad), f"{name}: {pfad} fehlt"
+        assert szenario.start_unten_c is not None, f"{name}: kein Startwert"
+        # Der Speicher startet kalt - nicht bei 41 C wie im September.
+        assert szenario.start_unten_c < 25.0, (
+            f"{name}: Starttemperatur unten {szenario.start_unten_c} C "
+            "ist zu warm fuer den Winter")
+
+
+def test_winterparameter_haben_keller_als_umgebung():
+    """Der Keller ist die Umgebung des Speichers (Tiefpunkt ~12 C)."""
+    import json
+
+    pfad = os.path.join(SIM, "parameter_winter.json")
+    with open(pfad, "r", encoding="utf-8") as f:
+        daten = json.load(f)
+    assert 8.0 <= daten["umgebung_c"] <= 16.0, (
+        f"umgebung_c={daten['umgebung_c']} passt nicht zum Keller")
+    assert daten["heizleistung_w"] > 1000.0
+    assert daten["verlust_w_k"] > 1.0
+
+
 def test_pv_profile_ist_die_gleichstromseite():
     """Nachts erzeugt die Anlage nichts - das Profil muss 0 W zeigen."""
     for name, profil in umgebung.PV_PROFILE.items():

@@ -59,6 +59,16 @@ class SpeicherParameter:
     konvektion_oben_aus_w_k: float = 3.0
     #: Anteil der Leistung, der direkt in die untere Schicht fliesst.
     einspeisung_anteil_unten: float = 1.0
+    #: Waerme der WP gleichmaessig auf alle Schichten verteilen (WP-Waerme-
+    #: tauscher durchmischt den Speicher).
+    #:
+    #: Gemessen im Dezember-Log: waehrend des Heizens liegen die drei
+    #: Fuehler bei 40,8 / 41,1 / 42,5 C - der Speicher ist praktisch
+    #: gleichmaessig warm. Ohne diese Verteilung bekommen die KLEINEN
+    #: unteren Schichten die volle Leistung und laufen ueber (Modell
+    #: max. 62 C statt real 42 C), weil die Durchmischung im Leerlauf zu
+    #: schwach ist, um die Waerme wieder zu verteilen.
+    waerme_verteilt: bool = False
     #: Temperatur des Kaltwassers beim Zapfen (Grad C).
     kaltwasser_c: float = 10.0
     #: Umgebungstemperatur des Speichers (Grad C).
@@ -119,9 +129,20 @@ class Speicher:
 
         # --- Waermeeintrag des Heizkreises (Wh) ---
         q_in = p.heizleistung_w * h if kompressor_ein else 0.0
-        anteil = min(max(p.einspeisung_anteil_unten, 0.0), 1.0)
-        dq_unten = q_in * anteil
-        dq_mitte = q_in * (1.0 - anteil)
+        if p.waerme_verteilt:
+            # Der Waermetauscher der WP durchmischt den Speicher: die
+            # Leistung verteilt sich proportional zu den Schichtvolumen
+            # (gemessen im Dezember-Log: 40,8 / 41,1 / 42,5 C beim
+            # Heizen - also praktisch gleichmaessig warm).
+            gesamt = sum(s.volumen_l for s in self.schichten)
+            dq_unten = q_in * (self.unten.volumen_l / gesamt)
+            dq_mitte = q_in * (self.mitte.volumen_l / gesamt)
+            dq_oben = q_in * (self.oben.volumen_l / gesamt)
+        else:
+            anteil = min(max(p.einspeisung_anteil_unten, 0.0), 1.0)
+            dq_unten = q_in * anteil
+            dq_mitte = q_in * (1.0 - anteil)
+            dq_oben = 0.0
 
         # --- Waermeverluste an die Umgebung (Wh, negativ) ---
         dq_umgebung = 0.0
@@ -142,7 +163,7 @@ class Speicher:
         # --- Energiebilanz je Knoten (Wh) ---
         e_unten = dq_unten - self.unten._verlust_wh + q_um
         e_mitte = dq_mitte - self.mitte._verlust_wh - q_um + q_mo
-        e_oben = -self.oben._verlust_wh - q_mo
+        e_oben = dq_oben - self.oben._verlust_wh - q_mo
 
         self.unten.temperatur += e_unten / self.unten.kapazitaet_wh_k
         self.mitte.temperatur += e_mitte / self.mitte.kapazitaet_wh_k

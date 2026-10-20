@@ -239,13 +239,12 @@ Validierung (alle Zyklen ≥ 25 min, Modell minus Messung):
 | WP-Leistung beim Heizen | ~480 W (Sept.) / ~2,1 kW (Dez.) | 500 W / 2100 W |
 | Batterie nachts | ~190 W Entladung, ~27 W Netz | 80 % der Deckung |
 | Forecast-Kalibrierung | ~1,0 (Verhältnis Erzeugung/Prognose) | 1,00–1,11 |
-| Netzbezug Dezember | 9,4 kWh/Tag | 5,4 kWh/Tag ⚠ |
+| Netzbezug Dezember | 9,4 kWh/Tag | 9,6 kWh/Tag ✅ |
 
-⚠ **Größte verbleibende Abweichung:** Der Netzbezug im Winter ist noch
-rund 4 kWh/Tag zu niedrig. Ursache ist die **fehlende Raumheizlast**:
-die Simulation kennt nur den Brauchwasserspeicher, nicht die Wärme, die
-im Winter in die Räume geht. Das ist **kein Datenproblem**, sondern eine
-Modellgrenze – siehe unten.
+✅ **Der Winter-Netzbezug stimmt** – nach der Winterkalibrierung (siehe
+unten). Die frühere Abweichung von 4 kWh/Tag kam daher, dass die
+Simulation den Speicher warm startete (41 °C) statt mit den gemessenen
+11,9 °C und zu wenig Wärmeverlust modellierte.
 
 **Die WP-Leistung beim Heizen ist saisonabhängig** – aber nicht, weil
 der COP einbricht: die WP steht im Keller, dessen Temperatur sich
@@ -290,6 +289,45 @@ heizen (29 K). Die Simulation braucht dafür 2,6 h/Tag, real sind es
 5,2 h/Tag. Deshalb bleibt ihr Winter-Netzbezug um rund 4 kWh/Tag zu
 niedrig. Für die **relativen** Varianten-Aussagen ist das unkritisch –
 alle Varianten machen denselben Fehler.
+
+### Die Winterkalibrierung (20.10.2026)
+
+Die Lücke oben ist inzwischen geschlossen. `calibrate.py winter` kalibriert
+das Speichermodell auf den Winterdaten (`Analyse/merged_data.csv`,
+Dezember 2025 + Januar 2026) und schreibt `parameter_winter.json`.
+Die Winterszenarien laden diese Datei über `parameter_datei` und starten
+mit den gemessenen Temperaturen (11,9 / 32,0 / 44,2 °C).
+
+| Größe | Messung Dezember 2025 | Simulation (kalibriert) |
+| --- | --- | --- |
+| Netzbezug | 9,4 kWh/Tag | **9,6 kWh/Tag** |
+| WP-Laufzeit | 5,2 h/Tag | 4,7 h/Tag |
+| tiefste Temperatur | 13 °C | 11,9 °C |
+
+**Warum der Winter anders kalibriert werden muss:** Der gemessene
+`T_Unten` verhält sich im Winter *nicht* wie ein passiver Speicherknoten –
+er fällt nach dem Abschalten der WP in etwa einer Stunde um 10–15 K,
+während `T_Mitte` und `T_Oben` warm bleiben. Diese Bilanz ist mit einem
+Speichermodell nicht schließbar: das Volumen, das den unteren Knoten auf
+13 °C abkühlen lässt, müsste den oberen Knoten mitheizen. Der Fit über
+die Raten bleibt deshalb bei ≥ 7 K Fehler, bei allen Parametersätzen.
+
+Kalibriert wird deshalb nicht auf Raten, sondern auf das, was am Ende
+zählt: die Simulations-Kennzahlen gegen die gemessenen Werte
+(`kalibriere_winter_kpi`). Analytisch aus den Daten abgeleitet:
+
+| Größe | Dezember | Januar | September (Kontrolle) |
+| --- | --- | --- | --- |
+| Wärmeverlust des Speichers (18→06 Uhr) | 301 W | 339 W | 244 W |
+| daraus: Verlustkoeffizient | 3,70 W/K | 4,13 W/K | 2,35 W/K |
+| WP-Nettoleistung (09→15 Uhr) | 829 W | 934 W | 381 W |
+
+**Noch offene Modellgrenze:** Das Nachfahren der einzelnen Zyklen bleibt
+im Winter ungenau (Bias +7,7 K am unteren Fühler) – das ist die
+unaufgelöste Wärmebilanz des unteren Knotens. Die Kennzahlen (Energie,
+Laufzeit) treffen die Realität, die Temperaturkurve tut es nicht. Für
+Energieaussagen ist die Kalibrierung belastbar, für Komfortaussagen
+nur als Tendenz.
 
 ### Die Einheiten der Prognose (20.10.2026)
 

@@ -13,6 +13,7 @@ Speichermodell bzw. dem Szenario.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import random
@@ -211,9 +212,21 @@ class Simulation:
         self.rnd = random.Random(seed if seed is not None else szenario.seed)
         self.pcl, self.le_mod, self.entscheidungs_log, self.legionellen_plan = lade_steuerung()
 
-        p = parameter or SpeicherParameter()
+        p = parameter
+        if self.sz.parameter_datei:
+            # Das Szenario bestimmt die Parameter (z. B. Winter-Parameter
+            # statt der September-Parameter) - sie haben Vorrang vor dem
+            # uebergebenen Parameter.
+            p = self._parameter_laden(self.sz.parameter_datei)
+        if p is None:
+            p = SpeicherParameter()
         p.umgebung_c = szenario.umgebung_c
-        self.speicher = Speicher(p, 41.0, 42.0, 43.5)
+        self.speicher = Speicher(
+            p,
+            41.0 if szenario.start_unten_c is None else szenario.start_unten_c,
+            42.0 if szenario.start_mitte_c is None else szenario.start_mitte_c,
+            43.5 if szenario.start_oben_c is None else szenario.start_oben_c,
+        )
         self.batterie = Batterie(
             BatterieParameter(
                 kapazitaet_wh=szenario.batterie_kapazitaet_wh,
@@ -280,6 +293,22 @@ class Simulation:
         self.boiler_max_ereignisse = 0
         self.legionellen_fertig = False
         self.waerme_zapf_wh = 0.0
+
+    def _parameter_laden(self, datei: str) -> Optional[SpeicherParameter]:
+        """Laedt die Speicherparameter aus einer JSON-Datei (Analyse/sim)."""
+        pfad = datei if os.path.isabs(datei) else os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), datei)
+        if not os.path.exists(pfad):
+            return None
+        try:
+            with open(pfad, "r", encoding="utf-8") as f:
+                daten = json.load(f)
+        except (OSError, ValueError):
+            return None
+        felder = set(SpeicherParameter.__dataclass_fields__)
+        return SpeicherParameter(
+            **{k: v for k, v in daten.items() if k in felder}
+        )
 
     def _wende_config_an(self) -> None:
         """Wendet ``config_patch`` auf die geladene Fachkonfiguration an.
