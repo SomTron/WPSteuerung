@@ -172,6 +172,74 @@ Konfiguration: `mindest_temp.{aktiv, prioritaet, eintraege[].{name, temperaturfu
 min_temp_c, start_uhr, ende_uhr, hysterese_k, fenster_aus_lernen,
 nachtsperre_ueberschreiben}}`
 
+#### Zielkonflikt: die Abendgarantie endet genau vor dem Duschen (20.10.2026)
+
+Die Abend-Garantie (`Abend-Mitte`, 17–22 Uhr, `nachtsperre_ueberschreiben: false`)
+soll „vor dem Duschen warm" sichern. Sie endet aber mit der Nachtsperre
+(19 Uhr). Damit ist das wirksame Garantiefenster **nur 17–19 Uhr** – die
+Stunden 20–22 Uhr, in denen die Temperatur am tiefsten ist, sind nicht
+gedeckt.
+
+**Messung im Betriebslog (Dezember 2025, `Analyse/heizungsdaten.csv`,
+Median je Stunde):**
+
+| Stunde | `T_Mittig` | Anteil < 42 °C |
+| --- | --- | --- |
+| 17 | 44,7 °C | 11 % |
+| 19 | 44,4 °C | 24 % |
+| 20 | 42,3 °C | 47 % |
+| 21 | 36,8 °C | 78 % |
+| 22 | 33,7 °C | 90 % |
+
+An **19 von 22 Tagen** lag `T_Mittig` am Abend unter 42 °C. Der Einbruch
+beginnt um 20 Uhr – genau eine Stunde nach dem Ende der Garantie.
+
+Die Heizkurve zeigt die Ursache: Der Boiler wird tagsüber auf 42–45 °C
+geheizt (10–14 Uhr), hält bis 19 Uhr und kühlt dann **ohne Nachheizung**
+auf 13 °C (`T_Unten`) bzw. 33 °C (`T_Mittig`) ab. Die Nachtsperre wirkt
+so, wie sie soll (kein Nacht-Heizen ohne PV) – aber die *Abendgarantie
+selbst* endet vor dem Punkt, an dem sie gebraucht wird.
+
+**Konsequenz für die Simulation:** Der Konflikt ist eine
+**Konfigurationsfrage, keine Logikfrage** – aber er hat **zwei**
+Voraussetzungen, die beide erfüllt sein müssen:
+
+| Variante | Netz kWh/Tag | h mitte < 40 °C | min mitte | Zyklen |
+| --- | --- | --- | --- | --- |
+| Basis | 1,54 | 113,9 | 35,3 | 24 |
+| nur `nachtsperre_ueberschreiben: true` | 1,54 | **113,9** | 35,3 | 24 |
+| nur Antizipation aus | 1,56 | 81,4 | 35,3 | 27 |
+| **beides** | 1,60 | **45,1** | 35,3 | 30 |
+
+1. **Die Abendgarantie allein bringt nichts.** Sie schaltet nur ein, wenn
+   der Fühler bereits **unter** 42 °C liegt. Im Fenster 17–19 Uhr meldet
+   sie „Garantie erfüllt" – der Fühler fällt erst **nach** 19 Uhr unter
+   42 °C, und dann ist die Regel stumm. Das erklärt auch, warum die
+   Regel im Log „ein=True" meldet, ohne dass ein Lauf entsteht.
+2. **Der eigentliche Blocker ist die Start-Antizipation.** Sie verlangt,
+   dass der freie Hub bis zum Ausschaltpunkt die Mindestlaufzeit
+   rechtfertigt. Bei einer Heizrate von ~4,3 K/h (unten) und einem
+   Obergrenzen-Hub von 1,0 K rechnet sie 15 min – die Mindestlaufzeit
+   ist aber 60 min. Der Start wird blockiert (gemessen: „Start-
+   Antizipation: hub zur Obergrenze nur 1.0K … 15min < 60min
+   Mindestlaufzeit"). Das war der Hauptsperrgrund (4,2 h „Min. Pause"
+   und ~7 h Antizipation über 14 Tage).
+
+**Optionen (Nutzerentscheidung):**
+1. `nachtsperre_ueberschreiben: true` für `Abend-Mitte` **und** die
+   Start-Antizipation für Garantie-Regeln entschärfen (z. B. eigene
+   Mindestlaufzeit für Netz-Läufe der Abendgarantie). Erst beides
+   zusammen bringt den Effekt (45,1 statt 113,9 h unter 40 °C) – der
+   Preis sind 0,06 kWh/Tag mehr Netzbezug.
+2. `nachtsperre_start` später setzen (z. B. 22 Uhr). Deckt den
+   Duschbereich, greift aber später.
+3. Vorheiz-Ziel anheben (heute 42 °C): Mit 45–48 °C wäre um 21 Uhr
+   Reserve vorhanden. Preis: derselbe wie Option 1, aber verteilt auf die
+   Nachmittagsstunden, in denen das PV-Fenster noch offen ist.
+
+Die Simulation kann die Optionen quantifizieren; die Entscheidung ist
+eine Abwägung zwischen Duschkomfort und Netzstrom.
+
 ### 3.6 Komfort — Prio 60
 
 **Derzeit `aktiv=false`.** Den Komfort-Boden decken die MinTemp-Garantien

@@ -285,3 +285,33 @@ Für belastbare Winter-Aussagen fehlen:
 
 Punkt 1 und 2 sind im Repo **nicht** vorhanden; Punkt 3 liegt nur als
 Tageswert (`sonnen_prognose.csv`) vor, nicht als Stundenprofil.
+
+### Zielkonflikt am Abend (20.10.2026)
+
+Die Analyse des Abendverlaufs (welche Regel heizt wann) hat zwei
+unabhängige Blocker gefunden:
+
+1. **Die Abendgarantie endet zu früh.** `MinTemp-Abend-Mitte` (17–22 Uhr)
+   hat `nachtsperre_ueberschrieben: false` – die Garantie gilt nur bis
+   zum Nachtsperren-Beginn (19 Uhr). Im echten Dezember-Log fällt
+   `T_Mittig` von 44,4 °C (19 Uhr) auf 33,7 °C (22 Uhr); an 19 von 22
+   Tagen lag der Fühler abends unter 42 °C.
+2. **Die Start-Antizipation blockiert den Start.** Sie rechnet den
+   freien Hub bis zum Ausschaltpunkt gegen die Mindestlaufzeit: bei
+   ~4,3 K/h und 1,0 K Hub sind das 15 min gegenüber 60 min
+   Mindestlaufzeit – der Start wird nicht freigegeben.
+
+**Die Wirkung beider Faktoren (Simulation, 14 Tage, wenig PV):**
+
+| Variante | Netz kWh/Tag | h mitte < 40 °C | Zyklen |
+| --- | --- | --- | --- |
+| Basis | 1,54 | 113,9 | 24 |
+| nur Abendgarantie bis 22 h | 1,54 | 113,9 | 24 |
+| nur Antizipation aus | 1,56 | 81,4 | 27 |
+| **beides** | 1,60 | **45,1** | 30 |
+
+Die Abendgarantie allein bewirkt **nichts**, weil sie nur einschaltet,
+wenn der Fühler bereits unter 42 °C liegt – und das passiert erst nach
+19 Uhr, wo sie stumm ist. Der volle Effekt braucht beides. Die
+Entscheidung (Duschkomfort gegen Netzstrom) ist eine Nutzerfrage; Details
+im `REGELWERK.md`, Abschnitt 3.5.
