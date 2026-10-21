@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 import re
 
+import pytest
+
 MODULE_PATH = Path(__file__).resolve().parents[2] / "Updater" / "manager_status.py"
 UPDATER_DIR = MODULE_PATH.parent
 SPEC = importlib.util.spec_from_file_location("manager_status", MODULE_PATH)
@@ -459,3 +461,73 @@ def test_menueintrraege_22_23_stehen_im_hauptmenue_nicht_im_untermenue():
         assert not any(z.startswith('printf "23)') for z in untermenue), (
             f"Option 23 erscheint im Untermenue vor Zeile {idx}"
         )
+
+
+# --- Banner-Version: abgeleitet statt hardcodiert ----------------------
+
+
+def _menu_text():
+    return (UPDATER_DIR / "wp-manager-menu.sh").read_text(encoding="utf-8")
+
+
+def test_banner_version_ist_abgeleitet_nicht_hardcodiert():
+    """REGRESSION: das Banner zeigte v1.16, der Code war schon v1.17.
+
+    Genau dieser Drift ist zweimal passiert (siehe Changelog im Menue). Eine
+    feste Version im Banner kann nicht mehr nachlaufen - sie wird aus dem
+    Changelog-Kopf abgeleitet.
+    """
+    text = _menu_text()
+    assert "Manager v1." not in text, (
+        "die Version steht noch fest im Banner - sie kann nicht nachlaufen"
+    )
+    assert "MANAGER_VERSION" in text, "die Version muss abgeleitet werden"
+
+
+def test_abgeleitete_version_ist_die_hoechste_changelog_version():
+    """Die abgeleitete Version muss der hoechsten v1.x-Zeile im Changelog
+    entsprechen - und natuerlich sortiert (v1.9 vor v1.10)."""
+    import re
+    import shutil
+    import subprocess
+
+    text = _menu_text()
+    versionen = re.findall(r"^# (v1\.\d+)", text, re.M)
+    assert versionen, "im Changelog steht keine v1.x-Zeile"
+    erwartet = max(set(versionen), key=lambda v: tuple(int(t) for t in v[1:].split(".")))
+
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("keine POSIX-Shell verfuegbar")
+    # Dieselbe Pipeline, die das Menue benutzt.
+    res = subprocess.run(
+        [
+            sh, "-c",
+            "grep -oE '^# v1\\.[0-9]+' \"$1\" | grep -oE 'v1\\.[0-9]+' "
+            "| sort -V | tail -1",
+            "sh", str(UPDATER_DIR / "wp-manager-menu.sh"),
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    abgeleitet = res.stdout.strip()
+    assert abgeleitet == erwartet, (
+        f"die Shell-Logik liefert {abgeleitet!r}, erwartet {erwartet!r}"
+    )
+
+
+def test_nicht_interaktiver_deploy_wird_unterstuetzt():
+    """`wps --deploy` soll den Deploy ohne Menue ausfuehren.
+
+    Damit laesst sich die Anlage von unterwegs aktualisieren:
+    ssh patrik@raspberrypiz2 wps --deploy
+    """
+    text = _menu_text()
+    assert "--deploy)" in text, "das Menue behandelt '--deploy' nicht"
+    assert "rpi-deploy.sh" in text, "der Deploy wird nicht aufgerufen"
+    # Und der Wrapper reicht das Argument durch (er leitet alles Unbekannte
+    # an den Launcher weiter).
+    wrapper = (UPDATER_DIR / "wps").read_text(encoding="utf-8")
+    assert 'exec sh "$LAUNCHER" "$@"' in wrapper, (
+        "der Wrapper muss alle Argumente an den Launcher durchreichen"
+    )
+    assert "--deploy" in wrapper, "der Wrapper nennt '--deploy' nicht in der Hilfe"

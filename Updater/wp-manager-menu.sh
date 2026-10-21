@@ -51,6 +51,13 @@ REPO_ROOT="${WPS_MANAGER_REPO_ROOT:-$(dirname "$SCRIPT_DIR")}"
 MANAGER_REPO=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)
 [ -n "$MANAGER_REPO" ] || MANAGER_REPO="$REPO_ROOT"
 TARGET_DIR="$REPO_ROOT/Steuerung"
+# Version aus dem Changelog-Kopf dieser Datei ableiten (hoechste v1.x-Zeile).
+# Vorher stand die Version fest im Banner - und lief dabei nach: der Code
+# war schon v1.17, das Banner zeigte v1.16. Genau das ist zweimal
+# passiert (siehe Changelog). Abgeleitet kann sie nicht mehr driften.
+MANAGER_VERSION=$(grep -oE '^# v1\.[0-9]+' "$SCRIPT_DIR/wp-manager-menu.sh" 2>/dev/null \
+    | grep -oE 'v1\.[0-9]+' | sort -V | tail -1)
+[ -n "$MANAGER_VERSION" ] || MANAGER_VERSION="v1.0"
 # Log-/CSV-Pfade: produktiv unter /var/log/wps, CSV direkt im Steuerungs-CWD.
 LOG_FILE="${WPS_LOG_FILE:-/var/log/wps/heizungssteuerung.log}"
 ERROR_LOG_FILE="${WPS_ERROR_LOG_FILE:-/var/log/wps/error.log}"
@@ -521,6 +528,24 @@ if [ ! -d "$TARGET_DIR" ]; then
     printf "${RED}Error: $TARGET_DIR not found!${NC}\n"
     exit 1
 fi
+
+# Nicht-interaktiver Aufruf: "wps --deploy" fuehrt nur das Deploy aus
+# und beendet sich. Damit laesst sich die Anlage von unterwegs aktualisieren:
+#     ssh patrik@raspberrypiz2 wps --deploy
+# Ohne diesen Weg muesste man sich per SSH einloggen und im Menue blaettern.
+case "${1:-}" in
+    --deploy)
+        printf "${CYAN}=== Deploy (nicht-interaktiv) ===${NC}\n"
+        WPS_DEPLOY_NO_RELOAD=1 sh "$SCRIPT_DIR/rpi-deploy.sh"
+        deploy_rc=$?
+        if [ "$deploy_rc" -eq 0 ]; then
+            printf "${GREEN}✓ Deploy abgeschlossen.${NC}\n"
+        else
+            printf "${RED}✗ Deploy fehlgeschlagen (Exitcode %s).${NC}\n" "$deploy_rc"
+        fi
+        exit "$deploy_rc"
+        ;;
+esac
 
 
 # Log-Abfrage-Hilfsfunktionen
@@ -1371,7 +1396,7 @@ while true; do
     # unguarded 'clear' stand hier frueher: fehlt das Kommando auf dem Pi,
     # schrieb es eine Fehlermeldung und blieb wirkungslos.
     printf "${BLUE}=========================================================${NC}\n"
-    printf "${BLUE}               WPSteuerung Manager v1.16                 ${NC}\n"
+    printf "${BLUE}               WPSteuerung Manager %-21s${NC}\n" "$MANAGER_VERSION"
     printf "${BLUE}=========================================================${NC}\n"
     printf "Target:   %s\n" "$TARGET_DIR"
     printf "Manager:  %s (Menue: %s)\n" "$MANAGER_REPO" "$SCRIPT_DIR/wp-manager-menu.sh"

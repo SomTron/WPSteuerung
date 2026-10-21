@@ -154,6 +154,7 @@ Der **`cd` ist überflüssig** – der Launcher findet sein Verzeichnis selbst
 ~/WPSteuerung/Updater/wps          # aus jedem Verzeichnis
 wps                                # einmalig in die PATH gelegt
 ssh patrik@raspberrypiz2 wps        # auch remote
+wps --deploy                       # nur deployen, ohne Menü
 ```
 
 **Einmalig einrichten** (dann geht `wps` überall, auch aus
@@ -174,6 +175,17 @@ nicht direkt das Menü. Der Launcher prüft die Menü-Syntax und fällt auf die
 letzte funktionierende Kopie zurück (`wps --downgrade` startet sie direkt).
 Ein kaputtes Menü-Update nimmt so nicht auch noch den einzigen Startweg
 mit.
+
+**`wps --deploy`** führt nur das Deploy aus und beendet sich – ohne Menü.
+Damit lässt sich die Anlage von unterwegs aktualisieren:
+
+```bash
+ssh patrik@raspberrypiz2 wps --deploy
+```
+
+Die Version im Banner wird aus dem Changelog-Kopf des Menüs abgeleitet –
+sie kann also nicht mehr hinterherlaufen (was bei der fest eingetragenen
+Version zweimal passiert ist: Code v1.17, Banner v1.16).
 
 ---
 

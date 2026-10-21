@@ -62,6 +62,7 @@ case "${1:-}" in
     -h|--hilfe|--help)
         cat <<EOF
 WP-Manager starten:          wps
+Nur deployen (nicht-interaktiv):  wps --deploy
 Letzte gute Kopie starten:   wps --downgrade
 
 Einmalig in die PATH legen (damit "wps" ueberall geht):
