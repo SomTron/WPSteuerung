@@ -376,6 +376,46 @@ async def test_control_ohne_set_kompressor_liefert_503():
 # ------------------------------------------------------------- Fehlerhistorie
 
 
+def test_vendor_bibliotheken_werden_ausgeliefert():
+    """Chart.js + Zoom-Plugin kommen lokal aus dem Repo.
+
+    Vorher lagen beide als blockierende Skripte im <head> auf einem CDN.
+    Ein blockierendes Skript haelt den HTML-Parser an: ist das CDN nicht
+    erreichbar, bleibt die Seite komplett leer und laedt erst beim 2.
+    Versuch (HTTP-Cache). Deshalb liegen die Dateien jetzt unter
+    webapp/vendor/ und werden direkt ausgeliefert.
+    """
+    erwartet = {
+        "/vendor/chart.umd.min.js": ("serve_chart_js", "application/javascript"),
+        "/vendor/chartjs-plugin-zoom.min.js": (
+            "serve_chart_zoom_js", "application/javascript",
+        ),
+    }
+    vorhanden = {getattr(route, "path", ""): route for route in api.app.routes}
+    for pfad, (name, mime) in erwartet.items():
+        assert pfad in vorhanden, f"{pfad} fehlt"
+        route = vorhanden[pfad]
+        assert {"GET", "HEAD"} <= set(route.methods), (
+            f"{pfad} erlaubt nur {sorted(route.methods)}"
+        )
+        endpoints = _endpunkte_fuer(pfad)
+        assert [getattr(e, "__name__", "?") for e in endpoints] == [name]
+        antwort = endpoints[0]()
+        assert antwort.media_type == mime
+        assert os.path.isfile(antwort.path), f"{pfad} verweist auf eine fehlende Datei"
+
+
+def test_vendor_pfade_sind_vom_rate_limit_ausgenommen():
+    """Ein 429 auf die Chart-Dateien wuerde den Chart erneut killen."""
+    from api import RateLimitMiddleware
+
+    middleware = RateLimitMiddleware(app=api.app, limiter=api.app.state.limiter)
+    assert middleware._get_limit_for_path(
+        "/vendor/chart.umd.min.js") == api._APP_SHELL_LIMIT
+    assert middleware._get_limit_for_path(
+        "/vendor/chartjs-plugin-zoom.min.js") == api._APP_SHELL_LIMIT
+
+
 FEHLERLOG = """\
 2026-09-25 12:00:01 +0200 INFO - Steuerung laeuft
 2026-09-25 12:01:02 +0200 WARNING - Solar-Daten veraltet | STALE

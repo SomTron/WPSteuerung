@@ -318,6 +318,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Installation ab (17.10.2026).
         if path in _APP_SHELL_PATHS or path.startswith("/static/"):
             return _APP_SHELL_LIMIT
+        # Lokale Fremd-Bibliotheken (Chart.js, Zoom-Plugin): gehoeren zur
+        # App-Huelle. Ein 429 wuerde den Chart erneut killen - und die
+        # WebApp waere genau deshalb unvollstaendig.
+        if path.startswith("/vendor/"):
+            return _APP_SHELL_LIMIT
         if path.startswith("/config/export"):
             return 30  # 30/min fuer Export (VOR /config pruefen!)
         if path.startswith("/control") or path.startswith("/command") or path.startswith("/config"):
@@ -422,6 +427,48 @@ def serve_icon_192():
 def serve_icon_512():
     """PWA-Icon 512x512."""
     return _serve_app_shell("icon-512.png")
+
+
+# --- Lokale Fremd-Bibliotheken (Chart.js + Zoom-Plugin) --------------------
+#
+# index.html laedt Chart.js und das Zoom-Plugin ueber "vendor/..." aus dem
+# eigenen Repo statt vom CDN. Grund: ein blockierendes <script src="https://
+# cdn..."> im <head> haelt den HTML-Parser an, bis die Antwort da ist. Ist das
+# CDN langsam oder gar nicht erreichbar (Pi im WLAN ohne Internet, gesperrtes
+# Netz, captive portal), bleibt die Seite komplett LEER - kein <div id="app">,
+# kein Skeleton, kein JavaScript. Beim zweiten Versuch liegt die Datei im
+# HTTP-Cache und es funktioniert: genau das Symptom "laedt erst beim 2. Anlauf".
+#
+# Die Dateien liegen daher im Repo und werden direkt ausgeliefert. Beide
+# Endpunkte sind bewusst GET/HEAD (wie die restliche Huelle) und werden
+# NICHT ins Rate-Limit gezaehlt - ein 429 wuerde den Chart erneut killen.
+_VENDOR_FILES = {
+    "chart.umd.min.js": "application/javascript",
+    "chartjs-plugin-zoom.min.js": "application/javascript",
+}
+_vendor_dir = os.path.join(_webapp_dir, "vendor")
+
+
+def _serve_vendor(filename: str):
+    """Liefert eine vendorte Bibliothek aus webapp/vendor/ aus."""
+    if filename not in _VENDOR_FILES:
+        raise HTTPException(status_code=404, detail=f"{filename} not found")
+    path = os.path.join(_vendor_dir, filename)
+    if os.path.isfile(path):
+        return FileResponse(path, media_type=_VENDOR_FILES[filename])
+    raise HTTPException(status_code=404, detail=f"{filename} not found")
+
+
+@app.api_route("/vendor/chart.umd.min.js", methods=["GET", "HEAD"])
+def serve_chart_js():
+    """Chart.js lokal - ohne CDN-Abhaengigkeit."""
+    return _serve_vendor("chart.umd.min.js")
+
+
+@app.api_route("/vendor/chartjs-plugin-zoom.min.js", methods=["GET", "HEAD"])
+def serve_chart_zoom_js():
+    """chartjs-plugin-zoom lokal - ohne CDN-Abhaengigkeit."""
+    return _serve_vendor("chartjs-plugin-zoom.min.js")
 
 # Global state references. /status liest nur aus dem Snapshot; Schreib-/Config-
 # Routen behalten den echten Main-Loop-State fuer die Queue.

@@ -368,3 +368,115 @@ def test_manifest_icons_existieren():
     for icon in manifest["icons"]:
         assert (WEBAPP / icon["src"]).is_file(), f"Icon {icon['src']} fehlt"
 
+
+# --- Regression: Die WebApp blieb beim 1. Anlauf leer --------------------
+#
+# Beobachtet: Die WebApp lud "teilweise erst beim 2. Anlauf oder gar
+# nicht". Ursache war ein blockierendes <script src="https://cdn..."> im
+# <head>: der HTML-Parser wartet auf die CDN-Antwort, bevor er die Seite
+# ueberhaupt aufbaut. Ist das CDN langsam oder nicht erreichbar (Pi im WLAN
+# ohne Internet, gesperrtes Netz, captive portal), bleibt die Seite komplett
+# LEER - kein <div id="app">, kein Skeleton, kein JavaScript. Beim zweiten
+# Versuch liegt die Datei im HTTP-Cache und es funktioniert.
+#
+# Nachgewiesen im Headless-Browser: mit 20 s langsamem CDN war das Dokument
+# nach 9 s 774 Bytes lang und enthielt weder #app noch ein Skeleton.
+def test_keine_blockierenden_cdn_skripte_im_head():
+    """Chart.js/Zoom kommen lokal; kein blockierender CDN-Request im head."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    head = html.split("</head>", 1)[0]
+
+    # Nur echte Tags pruefen, nicht den erlaeuternden Kommentar.
+    tags = re.findall(r"<script[^>]*\bsrc\s*=[^>]*>", head)
+    for tag in tags:
+        assert "cdn." not in tag, (
+            f"Das Skript {tag} laedt vom CDN. Ein blockierendes Skript im "
+            "<head> haelt den HTML-Parser an: ist das CDN langsam oder nicht "
+            "erreichbar, bleibt die Seite komplett leer und laedt erst beim "
+            "2. Versuch (HTTP-Cache). Chart.js liegt jetzt lokal unter "
+            "webapp/vendor/."
+        )
+        assert "defer" in tag, (
+            f"Das Skript {tag} blockiert den HTML-Parser. 'defer' ist Pflicht."
+        )
+
+    assert "https://cdn.jsdelivr.net" not in html, (
+        "Die WebApp darf keine CDN-Abhaengigkeit mehr haben"
+    )
+
+
+def test_chart_bibliothek_liegt_lokal_vor():
+    """Die lokalen Vendor-Dateien muessen im Repo liegen und referenziert sein."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    for datei in ("chart.umd.min.js", "chartjs-plugin-zoom.min.js"):
+        assert (WEBAPP / "vendor" / datei).is_file(), (
+            f"webapp/vendor/{datei} fehlt - ohne die Datei gibt es keinen Chart"
+        )
+        assert f"vendor/{datei}" in html, (
+            f"index.html laedt {datei} nicht lokal ein"
+        )
+
+
+def test_fonts_blockieren_den_aufbau_nicht():
+    """Das Font-Stylesheet darf den Erstaufbau nicht blockieren."""
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    head = html.split("</head>", 1)[0]
+    # <noscript> gilt nur ohne JavaScript - dort blockiert nichts.
+    head = re.sub(r"<noscript>.*?</noscript>", "", head, flags=re.DOTALL)
+    # Nur echte Stylesheet-Links, nicht die preconnect-Vorabverbindungen.
+    tags = re.findall(r"<link[^>]*rel=[\"']stylesheet[\"'][^>]*>", head, re.DOTALL)
+    for tag in tags:
+        if "fonts.googleapis" in tag:
+            assert 'media="print"' in tag, (
+                "Ein synchrones Font-Stylesheet blockiert den Erstaufbau. "
+                "Ohne Internet bleibt die Seite weiss. Erwartet wird das "
+                "Muster media=\"print\" onload=\"this.media='all'\"."
+            )
+
+
+def test_status_polling_plant_sich_auch_offline_neu():
+    """Regression: Das Status-Polling stoppte, sobald navigator.onLine false war.
+
+    navigator.onLine ist false, sobald das Geraet kein Internet hat - die
+    WebApp laeuft aber ueber Tailscale/Cloudflare oder das lokale WLAN
+    trotzdem erreichbar. Ohne Neuplanung war die Schleife fuer immer tot:
+    die Anzeige blieb beim letzten Stand stehen und aktualisierte sich nie
+    wieder (die Verbindung wurde trotzdem als "verbunden" gemeldet).
+    """
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    start = html.index("function startStatusPolling")
+    # Block bis zum naechsten "function " auf Zeilenanfang.
+    rest = html[start + 10:]
+    m = re.search(r"\n\s*function\s+\w+\s*\(", rest)
+    block = rest[: m.start()] if m else rest
+    assert "!navigator.onLine" in block
+    assert "statusPollTimer = window.setTimeout(() => startStatusPolling(), delay)" in block, (
+        "startStatusPolling muss sich nach dem Offline-Zweig neu planen, "
+        "sonst stirbt die Schleife endgueltig"
+    )
+
+
+def test_update_values_bricht_bei_fehlendem_element_nicht_ab():
+    """Kein ungeschuetzter Element-Zugriff in updateValues().
+
+    Ein TypeError auf null (Element fehlt: alter Cache, umbenannte id, nicht
+    gerendertes Card) wuerde den Rest von updateValues abbrechen - die
+    Anzeige bliebe halb aktualisiert, waehrend die Verbindung "verbunden"
+    gemeldet wurde.
+    """
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    start = html.index("function updateValues()")
+    end = html.index("function renderApp()", start)
+    block = html[start:end]
+
+    # const x = document.getElementById('id');  ->  x.something
+    treffer = re.findall(
+        r"const\s+(\w+)\s*=\s*document\.getElementById\([^)]*\)\s*;\s*\n\s*\1\.",
+        block,
+    )
+    assert not treffer, (
+        "Ungeschuetzte Element-Zugriffe in updateValues() - ein TypeError auf "
+        f"null bricht die Aktualisierung ab: {treffer}"
+    )
+
+

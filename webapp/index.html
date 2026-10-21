@@ -12,9 +12,41 @@
     <link rel="manifest" href="manifest.json">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <!--
+        Font: bewusst NICHT render-blockierend. Ein synchroner Request auf
+        fonts.googleapis.com haelt den Erstaufbau zurueck, solange der Request
+        laeuft - ohne Internet bleibt die Seite dann komplett weiss. Mit
+        media="print" laedt der Browser das Stylesheet im Hintergrund und
+        schaltet es danach auf "all" (Standard-Muster fuer nicht-blockierende
+        CSS). Das Layout nutzt ohnehin die System-Schrift als Fallback.
+    -->
+    <link rel="stylesheet" media="print" onload="this.media='all'"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+    <noscript>
+        <link rel="stylesheet"
+              href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+    </noscript>
+    <!--
+        Chart.js + Zoom-Plugin: LOKAL aus dem eigenen Repo, nicht vom CDN.
+
+        Vorher lagen beide als blockierende Skript-Tags im <head> und
+        zeigten auf cdn.jsdelivr.net. Ein blockierendes Skript im <head>
+        haelt den HTML-Parser an - der Browser baut die Seite erst weiter,
+        wenn die Antwort da ist. Liegt das CDN langsam oder gar nicht
+        erreichbar (Pi im WLAN ohne Internet, gesperrtes Netz, captive
+        portal), bleibt die Seite deshalb LEER: kein div#app, kein
+        Skeleton, kein JavaScript. Beim zweiten Versuch liegt die Datei dann
+        im HTTP-Cache und es funktioniert - genau das Symptom "laedt erst
+        beim 2. Anlauf".
+
+        Mit "defer" blockiert das Skript den Parser nicht mehr, und mit der
+        lokalen Kopie gibt es die Abhaengigkeit vom CDN gar nicht mehr.
+        Fehlt die Datei (Deploy ohne vendor/), greift der vorhandene
+        Fallback in createChart() und meldet "Chart-Bibliothek nicht
+        geladen".
+    -->
+    <script src="vendor/chart.umd.min.js" defer></script>
+    <script src="vendor/chartjs-plugin-zoom.min.js" defer></script>
     <style>
         * {
             margin: 0;
@@ -1555,37 +1587,34 @@
         }
 
         function updateAnalysisCard(errorText = '') {
-            const card = document.getElementById('analysis-quality-card');
-            const status = document.getElementById('analysis-quality-status');
-            const generated = document.getElementById('analysis-quality-generated');
-            const summary = document.getElementById('analysis-quality-summary');
-            const scenarios = document.getElementById('analysis-quality-scenarios');
-            const revision = document.getElementById('analysis-quality-revision');
-            if (!card || !status) return;
+            // setText statt direktem Zugriff: fehlt eines der Elemente, waere
+            // der direkte Zugriff ein TypeError auf null - und der wuerde die
+            // Aktualisierung der Karte abbrechen.
+            if (!document.getElementById('analysis-quality-card')) return;
             if (errorText) {
-                status.textContent = 'Nicht verfügbar';
-                generated.textContent = errorText;
-                summary.textContent = NO_DATA;
-                scenarios.textContent = NO_DATA;
-                revision.textContent = NO_DATA;
+                setText('analysis-quality-status', 'Nicht verfügbar');
+                setText('analysis-quality-generated', errorText);
+                setText('analysis-quality-summary', NO_DATA);
+                setText('analysis-quality-scenarios', NO_DATA);
+                setText('analysis-quality-revision', NO_DATA);
                 return;
             }
             if (!analysisData) {
-                status.textContent = 'Noch kein Bericht';
-                generated.textContent = NO_DATA;
-                summary.textContent = NO_DATA;
-                scenarios.textContent = NO_DATA;
-                revision.textContent = NO_DATA;
+                setText('analysis-quality-status', 'Noch kein Bericht');
+                setText('analysis-quality-generated', NO_DATA);
+                setText('analysis-quality-summary', NO_DATA);
+                setText('analysis-quality-scenarios', NO_DATA);
+                setText('analysis-quality-revision', NO_DATA);
                 return;
             }
             const report = analysisData;
             const sum = report.summary || {};
-            status.textContent = report.status === 'ok' ? 'OK' : 'Eingeschränkt';
-            generated.textContent = report.generated_at || NO_DATA;
-            summary.textContent = `${sum.cycles ?? 0} Zyklen · ${sum.decisions ?? 0} Entscheidungen · ${sum.invalid_rows ?? 0} ungültige Zeilen`;
+            setText('analysis-quality-status', report.status === 'ok' ? 'OK' : 'Eingeschränkt');
+            setText('analysis-quality-generated', report.generated_at || NO_DATA);
+            setText('analysis-quality-summary', `${sum.cycles ?? 0} Zyklen · ${sum.decisions ?? 0} Entscheidungen · ${sum.invalid_rows ?? 0} ungültige Zeilen`);
             const scenario = report.scenarios || {};
-            scenarios.textContent = Object.entries(scenario).map(([k, v]) => `${k}: ${v}`).join(' · ') || 'Keine Szenarien erkannt';
-            revision.textContent = report.git_revision || 'unbekannt';
+            setText('analysis-quality-scenarios', Object.entries(scenario).map(([k, v]) => `${k}: ${v}`).join(' · ') || 'Keine Szenarien erkannt');
+            setText('analysis-quality-revision', report.git_revision || 'unbekannt');
         }
 
         function showOfflineState(online = navigator.onLine) {
@@ -2007,12 +2036,17 @@
             const { compressor, mode } = statusData;
             const isRunning = compressor.status === 'EIN';
             const hComp = document.getElementById('header-compressor');
-            hComp.textContent = isRunning ? 'Kompressor EIN' : 'Kompressor AUS';
-            hComp.className = 'status-badge badge-compressor' + (isRunning ? '' : ' off');
+            if (hComp) {
+                hComp.textContent = isRunning ? 'Kompressor EIN' : 'Kompressor AUS';
+                hComp.className = 'status-badge badge-compressor' + (isRunning ? '' : ' off');
+            }
             const hNight = document.getElementById('header-nightsperre');
-            hNight.style.display = mode.nightsperre_active ? '' : 'none';
+            if (hNight) hNight.style.display = mode.nightsperre_active ? '' : 'none';
             const hRule = document.getElementById('header-rule');
-            if (mode.active_rule) { hRule.textContent = mode.active_rule; hRule.style.display = ''; } else { hRule.style.display = 'none'; }
+            if (hRule) {
+                if (mode.active_rule) { hRule.textContent = mode.active_rule; hRule.style.display = ''; }
+                else { hRule.style.display = 'none'; }
+            }
         }
 
         function updateQuickStatus() {
@@ -2112,9 +2146,13 @@
             const isRunning = compressor.status === 'EIN';
 
             // Kompressor
-            const cs = document.getElementById('compressor-status');
-            cs.className = 'badge ' + (isRunning ? 'badge-success' : 'badge-danger');
-            cs.textContent = isRunning ? 'AKTIV' : 'AUS';
+            // setClass/setText statt direktem Zugriff: fehlt ein Element
+            // (alter Cache, umbenannte id, nicht gerendertes Card), waere der
+            // direkte Zugriff ein TypeError auf null - und der wuerde den Rest
+            // von updateValues abbrechen. Genau so blieb die Anzeige
+            // unvollstaendig, waehrend die Verbindung "verbunden" blieb.
+            setClass('compressor-status', 'badge ' + (isRunning ? 'badge-success' : 'badge-danger'));
+            setText('compressor-status', isRunning ? 'AKTIV' : 'AUS');
             setText('runtime-today', compressor.runtime_today);
             const rcr = document.getElementById('runtime-current-row');
             if (isRunning) {
@@ -2134,10 +2172,10 @@
                     setText('runtime-current', compressor.runtime_current);
                 }
             } else if (rcr) { rcr.remove(); }
+            setClass('compressor-btn', 'btn ' + (isRunning ? 'btn-danger' : 'btn-primary'));
+            setText('compressor-btn', isRunning ? 'Ausschalten' : 'Einschalten');
             const btn = document.getElementById('compressor-btn');
-            btn.className = 'btn ' + (isRunning ? 'btn-danger' : 'btn-primary');
-            btn.textContent = isRunning ? 'Ausschalten' : 'Einschalten';
-            btn.onclick = function() { sendControl(isRunning ? 'force_off' : 'force_on'); };
+            if (btn) btn.onclick = function() { sendControl(isRunning ? 'force_off' : 'force_on'); };
 
             // Not-Aus: Ausloesen OH Rueckfrage - im Ernstfall darf keine
             // Bestaetigung den Kompressor weiterlaufen lassen. Das Aufheben
@@ -2203,11 +2241,11 @@
             const bkKind = mode.blocking_kind
                 || (bk === 'boiler_bereits_warm' ? 'info' : 'alarm');
             if (mode.blocking_reason) {
-                rd.textContent = mode.blocking_reason;
-                rd.className = bkKind === 'info' ? 'badge badge-info' : 'badge badge-warning';
+                setText('rule-decision', mode.blocking_reason);
+                setClass('rule-decision', bkKind === 'info' ? 'badge badge-info' : 'badge badge-warning');
             }
-            else if (mode.soll_einschalten) { rd.textContent = 'EINSCHALTEN empfohlen'; rd.className = 'badge badge-success'; }
-            else { rd.textContent = 'AUS - kein Bedarf'; rd.className = 'badge badge-danger'; }
+            else if (mode.soll_einschalten) { setText('rule-decision', 'EINSCHALTEN empfohlen'); setClass('rule-decision', 'badge badge-success'); }
+            else { setText('rule-decision', 'AUS - kein Bedarf'); setClass('rule-decision', 'badge badge-danger'); }
 
                         // Prioritaeten-Regeln aktualisieren (sortiert nach Prioritaet)
             if (priority && priority.regeln) {
@@ -2297,10 +2335,9 @@
                         ' (' + (lrn.target_hour_samples ?? 0) + ' Zapfungen)';
                 }
                 const fw = lrn.learned_evening_window;
-                const lfEl = document.getElementById('learn-fenster');
-                lfEl.textContent = (fw && fw.length === 2)
+                setText('learn-fenster', (fw && fw.length === 2)
                     ? fw[0].toFixed(1).replace('.', ',') + ' - ' + fw[1].toFixed(1).replace('.', ',') + ' Uhr'
-                    : 'noch nicht gelernt (<4 Zapfungen)';
+                    : 'noch nicht gelernt (<4 Zapfungen)');
                 [['winter', 'learn-rate-winter'], ['transition', 'learn-rate-transition'], ['summer', 'learn-rate-summer']].forEach(function(p) {
                     const hr = (lrn.heat_rates || {})[p[0]] || {};
                     setText(p[1], (hr.avg != null ? Number(hr.avg).toFixed(2) + ' °C/h' : NO_DATA) +
@@ -2634,16 +2671,16 @@
             if (lgInfo && lg) {
                 if (lg.aktiv) {
                     lgInfo.textContent = '🔄 aktiv (Ziel ' + (lg.target_temp_c ?? '60') + '°C)';
-                    lgDetail.textContent = 'Legionellenfahrt laeuft gerade';
+                    setText('legionellen-detail', 'Legionellenfahrt laeuft gerade');
                 } else if (lg.planned_day) {
                     lgInfo.textContent = '⏰ geplant: ' + lg.planned_day + ' ' + (lg.planned_time || '');
-                    lgDetail.textContent = lg.planned_reason ? ('Start am besten Forecast-Tag · ' + lg.planned_reason) : '';
+                    setText('legionellen-detail', lg.planned_reason ? ('Start am besten Forecast-Tag · ' + lg.planned_reason) : '');
                 } else if (lg.last_done) {
                     lgInfo.textContent = '✓ erledigt: ' + lg.last_done;
-                    lgDetail.textContent = 'Diese Woche abgeschlossen';
+                    setText('legionellen-detail', 'Diese Woche abgeschlossen');
                 } else {
                     lgInfo.textContent = '— keine Planung';
-                    lgDetail.textContent = '';
+                    setText('legionellen-detail', '');
                 }
             }
 
@@ -3165,6 +3202,14 @@
             window.clearTimeout(statusPollTimer);
             if (document.hidden || !navigator.onLine) {
                 showOfflineState(navigator.onLine);
+                // WICHTIG: hier NEU PLANEN und nicht einfach returnen.
+                // navigator.onLine ist false, sobald das Geraet kein Internet
+                // hat - die WebApp laeuft aber ueber Tailscale/Cloudflare
+                // oder das lokale WLAN sehr wohl erreichbar. Ohne Neuplanung
+                // stirbt die Schleife hier endgueltig: die Anzeige bleibt beim
+                // letzten Stand stehen und aktualisiert sich nie wieder.
+                // (startAnalysisPolling verhielt sich schon richtig.)
+                statusPollTimer = window.setTimeout(() => startStatusPolling(), delay);
                 return;
             }
             // try/finally ist hier Pflicht, nicht Kosmetik. Ein Fehler in

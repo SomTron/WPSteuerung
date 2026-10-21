@@ -3,8 +3,19 @@
  * - cachel nur die statische App-Hülle
  * - /status, /history und Steuernachrichten bleiben immer live im Netz
  */
-const CACHE_NAME = 'wp-webapp-shell-v5';
-const APP_SHELL = ['./', './index.html', './manifest.json'];
+const CACHE_NAME = 'wp-webapp-shell-v6';
+const APP_SHELL = [
+    './',
+    './index.html',
+    './manifest.json',
+    // Chart.js + Zoom-Plugin liegen lokal im Repo (webapp/vendor/). Sie
+    // gehoeren zur Huelle: ohne sie fehlt der Temperaturverlauf, und ein
+    // zweiter Netzversuch waere noetig - genau das Symptom "laedt erst beim
+    // 2. Anlauf". Die Pfade muessen relativ bleiben, damit sie unter
+    // demselben Scope wie die Seite liegen.
+    './vendor/chart.umd.min.js',
+    './vendor/chartjs-plugin-zoom.min.js',
+];
 
 // Ein einzelnes fehlendes Asset hat frueher die KOMPLETTE Installation
 // gesprengt: cache.addAll() ist alles-oder-nichts und lehnt mit TypeError ab,
@@ -63,6 +74,27 @@ self.addEventListener('fetch', event => {
                     return response;
                 })
                 .catch(() => caches.match(event.request))
+        );
+        return;
+    }
+
+    // Vendor-Bibliotheken (Chart.js, Zoom-Plugin): cache-first. Die Dateien
+    // liegen lokal im Repo und aendern sich nur mit dem Deployment - dafuer
+    // sorgt der Cache-Name. Ohne diesen Zweig waeren sie offline nicht
+    // verfuegbar und der Temperaturverlauf fehlte.
+    if (url.pathname.startsWith('/vendor/')) {
+        event.respondWith(
+            caches.match(event.request).then(cached => {
+                if (cached) return cached;
+                return fetch(event.request).then(response => {
+                    if (response && response.ok) {
+                        const copy = response.clone();
+                        caches.open(CACHE_NAME)
+                            .then(cache => cache.put(event.request, copy));
+                    }
+                    return response;
+                });
+            })
         );
     }
 });
