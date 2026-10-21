@@ -404,6 +404,22 @@ class TestLegionellenUeberhitzungCheckSafety:
             legionellen_aktiv=True,
             control=SimpleNamespace(blocking_reason=None,
                                     kompressor_ein=kompressor_ein),
+            # Der Verdampfer-Schutz ist seit dem BUGFIX vom 21.10.2026 wieder
+            # aktiv (vorher seit dem 02.09.2026 tot). Der Test braucht daher
+            # eine vollstaendige Config und einen Verdampferwert oberhalb
+            # der Eisfrei-Grenze (6 C) - sonst blockiert der Verdampfer und
+            # der Test prueft nicht mehr das Ueberhitzungsverhalten.
+            config=SimpleNamespace(Heizungssteuerung=SimpleNamespace(
+                VERDAMPFERTEMPERATUR=6.0,
+                VERDAMPFER_RESTART_TEMP=9.0,
+                SICHERHEITS_TEMP=58.0,
+            )),
+            sensors=SimpleNamespace(t_oben=45.0, t_unten=35.0,
+                                     t_mittig=40.0, t_verd=15.0,
+                                     t_boiler=45.0),
+            verdampfer_blocked=False,
+            verdampfer_shutdowns=[],
+            legionellen_temp_override=None,
         )
 
     @pytest.mark.asyncio
@@ -415,7 +431,7 @@ class TestLegionellenUeberhitzungCheckSafety:
         state = self._safety_state(kompressor_ein=False)
         setter = AsyncMock(return_value=None)
         erg = await pcl.check_safety_limits(
-            None, state, t_oben=62.0, t_unten=40.0, t_mittig=50.0, t_verd=5.0,
+            None, state, t_oben=62.0, t_unten=40.0, t_mittig=50.0, t_verd=15.0,
             set_kompressor_status_func=setter,
         )
         assert erg is True
@@ -428,7 +444,7 @@ class TestLegionellenUeberhitzungCheckSafety:
         state = self._safety_state(kompressor_ein=True)
         setter = AsyncMock(return_value=None)
         await pcl.check_safety_limits(
-            None, state, t_oben=66.0, t_unten=40.0, t_mittig=50.0, t_verd=5.0,
+            None, state, t_oben=66.0, t_unten=40.0, t_mittig=50.0, t_verd=15.0,
             set_kompressor_status_func=setter,
         )
         assert "UEBERHITZUNG" in state.control.blocking_reason

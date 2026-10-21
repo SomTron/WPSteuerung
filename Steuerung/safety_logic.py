@@ -83,27 +83,31 @@ async def check_for_sensor_errors(session, state, t_boiler_oben, t_boiler_unten,
     state._last_sensor_error_log = None
     return True
 
-async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_verd, set_kompressor_status_func: Callable):
-    """Sicherheitsabschaltung und Sensorprüfung."""
-    state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd = t_oben, t_unten, t_mittig, t_verd
-    state.sensors.t_boiler = t_oben if t_oben is not None else ((t_mittig if t_mittig is not None else t_unten))
-    
-    if not await check_for_sensor_errors(session, state, t_oben, t_unten, t_mittig):
-        state.control.ausschluss_grund = "Sensorfehler"
-        state.control.blocking_reason = "Sensor-Fehler"
-        if state.control.kompressor_ein:
-            await set_kompressor_status_func(
-                state, False, force=True, end_grund="sensorfehler"
-            )
-        return False
+def ermittle_sicherheitstemperatur(state) -> float:
+    """Die eine Ueberhitzungsschwelle fuer alle Schutzpfade.
 
-    safety_temp = None
+    Normalfall: `sicherheit.ueberhitzung_c` (Default 58 C).
+    Waehrend einer aktiven Legionellenfahrt: `legionellen_max_temp_c`
+    (Default 65 C), damit die Prophylaxe (Ziel 60/65 C) nicht vom
+    Ueberhitzungsschutz abgebrochen wird. Beruecksichtigt sowohl
+    `legionellen_aktiv` als auch `legionellen_temp_override` (robust gegen
+    Mocks/Neustart-Zustaende).
+
+    Diese Funktion ist die WIRKLICH verantwortliche Quelle der Wahrheit.
+    Vorher berechneten `check_sensors_and_safety` (hier) und
+    `_effektive_ueberhitzung_schwelle` (priority_control_logic) die Schwelle
+    unabhaengig voneinander - mit unterschiedlichen Ergebnissen im
+    Legionellen-Nachlauf. Das ist jetzt zentral.
+
+    Wichtig: Der Nachlauf-/Abkuehlphase-Bypass (der Boiler bleibt nach der
+    Prophylaxe bewusst heiss, bis er wieder abgekuehlt ist) sitzt in
+    `_effektive_ueberhitzung_schwelle` in priority_control_logic. Dieses
+    Modul importiert priority_control_logic NICHT (das waere ein
+    Circular-Import) - deshalb kann der Bypass hier nicht nachgebaut
+    werden. Stattdessen ruft `check_safety_limits` (priority_control_logic)
+    die Schwelle selbst und reicht sie hier ueber `schwelle_override` ein.
+    """
     if hasattr(state, 'priority_config') and getattr(state.priority_config, 'sicherheit', None):
-        # Waehrend einer aktiven Legionellenfahrt wird die Sicherheitsschwelle
-        # dynamisch auf legionellen_max_temp_c angehoben, damit die Prophylaxe
-        # (Ziel 60/65C) nicht vom Ueberhitzungsschutz abgebrochen wird.
-        # Prueft sowohl legionellen_aktiv als auch legionellen_temp_override
-        # (robust gegen Mocks/Neustart-Zustaende).
         legionellen_betrieb = (
             getattr(state, 'legionellen_aktiv', False) is True
             or getattr(state, 'legionellen_temp_override', None) is not None
@@ -113,41 +117,46 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
                 getattr(state.priority_config, 'legionellen', None),
                 'legionellen_max_temp_c', None,
             )
-            if isinstance(lle_val, (int, float)) and float(lle_val) > 40.0:
-                safety_temp = float(lle_val)
-        if safety_temp is None:
-            val = getattr(state.priority_config.sicherheit, 'ueberhitzung_c', None)
-            # Nur echte numerische Werte (int/float) akzeptieren, keine Mocks/MagicMocks
-            if isinstance(val, (int, float)):
-                try:
-                    candidate = float(val)
-                    if candidate > 40.0:  # Plausibilitätscheck: Sicherheitstemp muss > 40°C sein
-                        safety_temp = candidate
-                except (TypeError, ValueError):
-                    pass
-            
-    if safety_temp is None:
-        val = getattr(getattr(state, 'config', None), 'Heizungssteuerung', None)
-        if val is not None:
-            raw_temp = getattr(val, 'SICHERHEITS_TEMP', 58.0)
+            if isinstance(lle_val, (int, float)) and not isinstance(lle_val, bool):
+                if float(lle_val) > 40.0:
+                    return float(lle_val)
+        val = getattr(state.priority_config.sicherheit, 'ueberhitzung_c', None)
+        # Nur echte numerische Werte (int/float) akzeptieren, keine Mocks/MagicMocks
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
             try:
-                safety_temp = float(raw_temp) if isinstance(raw_temp, (int, float)) else 58.0
-                if not (40.0 < safety_temp < 150.0):
-                    safety_temp = 58.0
+                candidate = float(val)
+                if candidate > 40.0:  # Plausibilitaetscheck: Sicherheitstemp muss > 40 C sein
+                    return candidate
             except (TypeError, ValueError):
+                pass
+
+    val = getattr(getattr(state, 'config', None), 'Heizungssteuerung', None)
+    if val is not None:
+        raw_temp = getattr(val, 'SICHERHEITS_TEMP', 58.0)
+        try:
+            safety_temp = float(raw_temp) if isinstance(raw_temp, (int, float)) else 58.0
+            if not (40.0 < safety_temp < 150.0):
                 safety_temp = 58.0
-        else:
-            safety_temp = 58.0
+            return safety_temp
+        except (TypeError, ValueError):
+            return 58.0
+    return 58.0
 
-    if (t_oben is not None and t_oben >= safety_temp) or (t_unten is not None and t_unten >= safety_temp):
-        state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
-        state.control.blocking_reason = f"Sicherheitstemp (>= {safety_temp}°C)"
-        if state.control.kompressor_ein:
-            await set_kompressor_status_func(
-                state, False, force=True, end_grund="uebertemperatur"
-            )
-        return False
 
+async def check_verdampfer_schutz(state, t_verd, set_kompressor_status_func: Callable) -> bool:
+    """Verdampfer-Schutz: gueltige Temperatur + Eisfrei-Hysterese.
+
+    Ein vereister Verdampfer kann den Kompressor mechanisch zerstoeren
+    (Druckstoesse, Kolbenbruch). Dieser Schutz ist deshalb ein harter
+    Eingriff: der Kompressor wird abgeschaltet, bis der Verdampfer wieder
+    oberhalb der Restart-Temperatur liegt.
+
+    BUGFIX (Befund 21.10.2026): Aus `check_sensors_and_safety` herausgelost.
+    Der gesamte Schutzpfad war seit dem 02.09.2026 tot (der Aufruf in
+    main.py war geloescht worden) - die Funktion selbst war vorhanden, wurde
+    aber nie mehr ausgefuehrt. Durch das Herausloesten ist der Verdampfer-
+    Schutz als eigener, testbarer Schritt sichtbar.
+    """
     if not is_valid_temperature(t_verd, min_temp=TEMP_VERD_MIN_VALID, max_temp=TEMP_VERD_MAX_VALID):
         state.control.ausschluss_grund = "Verdampfertemperatur ungültig"
         state.control.blocking_reason = "Verdampfer ungültig"
@@ -156,15 +165,33 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
                 state, False, force=True, end_grund="verdampfer_ungueltig"
             )
         return False
-    
-    verd_limit = state.config.Heizungssteuerung.VERDAMPFERTEMPERATUR
-    restart_temp = state.config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP
-    
+
+    # Schwellen aus der INI-Konfiguration. Robust gegen MagicMock/Partial-
+    # States: ein nicht-numerischer Wert wuerde beim Vergleich `t_verd <
+    # verd_limit` mit TypeError abbrechen und den ganzen Schutzpfad
+    # unbrauchbar machen. Ohne brauchbaren Wert gilt der Default (6 C
+    # Eisfrei-Grenze, 9 C Restart) - so wie in config_manager.py.
+    verd_limit = 6.0
+    restart_temp = 9.0
+    try:
+        roh_limit = state.config.Heizungssteuerung.VERDAMPFERTEMPERATUR
+        if isinstance(roh_limit, (int, float)) and not isinstance(roh_limit, bool):
+            verd_limit = float(roh_limit)
+        roh_restart = state.config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP
+        if isinstance(roh_restart, (int, float)) and not isinstance(roh_restart, bool):
+            restart_temp = float(roh_restart)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    # Der Restart-Wert muss ueber der Eisfrei-Grenze liegen, sonst wuerde
+    # die Hysterese nie enden (dauerhaftes Blockieren).
+    if restart_temp <= verd_limit:
+        restart_temp = verd_limit + 3.0
+
     # Logic for evaporator hysteresis
     already_blocked = getattr(state, 'verdampfer_blocked', False)
     too_cold = t_verd < verd_limit
     recovering = already_blocked and t_verd < restart_temp
-    
+
     if too_cold or recovering:
         state.verdampfer_blocked = True
         # Verdampfer-Abschaltung tracken (nur bei erstem Blockieren pro Zyklus)
@@ -186,15 +213,63 @@ async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_
         else:
             state.control.ausschluss_grund = f"Verdampfertemperatur zu niedrig ({t_verd:.1f} Grad < {verd_limit} Grad)"
             state.control.blocking_reason = f"Verdampfer zu kalt ({t_verd:.1f}°C < {verd_limit}°C)"
-        
+
         if state.control.kompressor_ein:
             await set_kompressor_status_func(
                 state, False, force=True, end_grund="verdampfer_zu_kalt"
             )
         return False
-    
+
     state.verdampfer_blocked = False
     return True
+
+
+async def check_sensors_and_safety(session, state, t_oben, t_unten, t_mittig, t_verd, set_kompressor_status_func: Callable, schwelle_override: float = None):
+    """Sicherheitsabschaltung und Sensorprüfung.
+
+    BUGFIX (Befund 21.10.2026): Diese Funktion war seit dem 02.09.2026
+    (Commit 51540d3) TOT - sie wurde nirgends mehr aufgerufen. Dadurch waren
+    drei Schutzabschaltungen ausser Betrieb:
+      * der Verdampfer-Eisfrei-Schutz (Hardware-Risiko: ein vereister
+        Verdampfer kann den Kompressor mechanisch zerstoeren),
+      * die Sensorfehler-Sperre (abgerissener DS18B20),
+      * die Ubertemperaturpruefung am unteren Fuehler.
+
+    Ursache: Der Aufruf in main.py wurde geloescht in der Annahme,
+    `priority_control_logic.check_safety_limits` delegiere bereits hierher.
+    Das tat es nicht. Die Delegation existiert jetzt wieder (siehe dort),
+    und `check_safety_limits` ist der EINZIGE Einstieg fuer den Hauptloop.
+    """
+    state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd = t_oben, t_unten, t_mittig, t_verd
+    state.sensors.t_boiler = t_oben if t_oben is not None else ((t_mittig if t_mittig is not None else t_unten))
+    
+    if not await check_for_sensor_errors(session, state, t_oben, t_unten, t_mittig):
+        state.control.ausschluss_grund = "Sensorfehler"
+        state.control.blocking_reason = "Sensor-Fehler"
+        if state.control.kompressor_ein:
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="sensorfehler"
+            )
+        return False
+
+    # `schwelle_override` kommt von `check_safety_limits` und traegt den
+    # Nachlauf-/Abkuehlphase-Bypass der Legionellenfahrt (dort ist der
+    # Aufrufkontext richtig). Ohne Override gilt die eigene Berechnung.
+    if isinstance(schwelle_override, (int, float)) and not isinstance(schwelle_override, bool):
+        safety_temp = float(schwelle_override)
+    else:
+        safety_temp = ermittle_sicherheitstemperatur(state)
+
+    if (t_oben is not None and t_oben >= safety_temp) or (t_unten is not None and t_unten >= safety_temp):
+        state.control.ausschluss_grund = f"Übertemperatur (>= {safety_temp} Grad)"
+        state.control.blocking_reason = f"Sicherheitstemp (>= {safety_temp}°C)"
+        if state.control.kompressor_ein:
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="uebertemperatur"
+            )
+        return False
+
+    return await check_verdampfer_schutz(state, t_verd, set_kompressor_status_func)
 
 async def verify_compressor_running(state, session, current_t_verd, current_t_unten, verification_delay_minutes=COMPRESSOR_VERIFICATION_DELAY_MIN):
     """Verifiziert den Lauf des Kompressors über Temperaturänderungen."""

@@ -144,13 +144,19 @@ class TestCheckSafetyLimits:
         
         state = mock_state_with_config
         state.control.kompressor_ein = True
+        # Der Verdampfer muss oberhalb der Eisfrei-Grenze liegen
+        # (VERDAMPFERTEMPERATUR = 6 C), sonst blockiert der
+        # Verdampfer-Schutz - das ist seit dem BUGFIX vom 21.10.2026
+        # wieder aktiv (vorher war er seit dem 02.09.2026 tot).
+        state.config.Heizungssteuerung.VERDAMPFERTEMPERATUR = 6.0
+        state.config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP = 9.0
         
         mock_set_kompressor = AsyncMock(return_value=True)
         
         # Normale Temperatur
         result = await pcl.check_safety_limits(
             None, state, t_oben=45.0, t_unten=35.0, 
-            t_mittig=40.0, t_verd=5.0, 
+            t_mittig=40.0, t_verd=15.0, 
             set_kompressor_status_func=mock_set_kompressor
         )
         
@@ -165,6 +171,10 @@ class TestCheckSafetyLimits:
         
         state = mock_state_with_config
         state.control.kompressor_ein = True
+        # Verdampfer oberhalb der Eisfrei-Grenze (6 C) - der Verdampfer-
+        # Schutz ist seit dem BUGFIX vom 21.10.2026 wieder aktiv.
+        state.config.Heizungssteuerung.VERDAMPFERTEMPERATUR = 6.0
+        state.config.Heizungssteuerung.VERDAMPFER_RESTART_TEMP = 9.0
         
         mock_set_kompressor = AsyncMock(return_value=True)
         
@@ -172,7 +182,7 @@ class TestCheckSafetyLimits:
         with caplog.at_level(logging.WARNING):
             result = await pcl.check_safety_limits(
                 None, state, t_oben=50.0, t_unten=35.0, 
-                t_mittig=40.0, t_verd=5.0, 
+                t_mittig=40.0, t_verd=15.0, 
                 set_kompressor_status_func=mock_set_kompressor
             )
         

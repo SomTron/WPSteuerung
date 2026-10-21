@@ -25,7 +25,11 @@ from constants import (
 from collections import deque
 from logic_utils import check_log_throttle, normalize_forecast_wh_qm, pv_fenster_endstunde
 from legionellen_plan import clear_plan
-from safety_logic import handle_critical_compressor_error
+from safety_logic import (
+    check_for_sensor_errors,
+    check_verdampfer_schutz,
+    handle_critical_compressor_error,
+)
 from json_config import WPSteuerungConfig
 from priority_control import (
     RegelErgebnis,
@@ -3082,30 +3086,78 @@ async def check_safety_limits(
 ):
     """
     Erweiterte Sicherheitspruefungen basierend auf der JSON-Config.
-    Prueft nur Ueberhitzung.
 
-    Das harte Boiler-Maximum (max_temp_c am Bezugsfuehler boiler_max_fuehler,
-    Standard unten) wird separat in handle_compressor_off/-on erzwungen und
-    bricht dort die Mindestlaufzeit. Hier bleibt es bei der Warnung fuer
-    t_oben: Die obere Schichtung darf das Limit naturgemaeÃƒÆ’Ã…Â¸ uebersteigen,
-    solange der Bezugsfuehler darunter liegt.
+    Einziger Sicherheits-Einstieg des Hauptloops. Hier laufen SIE alle
+    Schutzabschaltungen zusammen:
+
+    1. Sensorpruefung (oben/unten/mittig): ungueltige Werte (NaN, Inf,
+       -127 C eines abgerissenen DS18B20, Ausserhalb des plausiblen
+       Bereichs) blockieren das Einschalten.
+    2. Ueberhitzungsschutz am oberen UND am unteren Fuehler.
+    3. Verdampfer-Schutz: ungueltige Verdampfertemperatur sowie der
+       Eisfrei-Schutz mit Hysterese (ein vereister Verdampfer kann den
+       Kompressor mechanisch zerstoeren).
+    4. Max-Temperatur-Warnung (KEIN Abschalten, nur sichtbar).
+
+    BUGFIX (Befund 21.10.2026): Der Aufruf von `check_sensors_and_safety`
+    wurde am 02.09.2026 (Commit 51540d3, "redundante Safety-Pruefung
+    entfernt") geloescht - in der Annahme, `check_safety_limits` delegiere
+    bereits intern. Das tat es NICHT: `check_sensors_and_safety` wurde
+    nirgends mehr aufgerufen. Damit waren drei Schutzabschaltungen seit
+    dem 02.09.2026 tot:
+      * der Verdampfer-Eisfrei-Schutz (Hardware-Risiko!),
+      * die Sensorfehler-Sperre (abgerissener Fühler),
+      * die Ubertemperaturpruefung am unteren Fuehler.
+
+    Der Kommentar in main.py behauptete die Delegation - jetzt stimmt er.
     """
-    cfg = state.priority_config.sicherheit
-
-    # 1. Ueberhitzungsschutz (einzige harte Abschaltung). Waehrend einer
-    #    Legionellenfahrt dynamisch auf legionellen_max_temp_c angehoben,
-    #    damit der Schutz die Prophylaxe nicht abbricht.
+    # Die Ueberhitzungsschwelle wird HIER berechnet und durchgereicht:
+    # `_effektive_ueberhitzung_schwelle` kennt den Nachlauf-/Abkuehlphase-
+    # Bypass der Legionellenfahrt (der Boiler bleibt nach der Prophylaxe
+    # bewusst heiss). Die Berechnung in safety_logic kann das nicht
+    # kennen (Circular-Import) - deshalb der Override.
     ueberhitz = _effektive_ueberhitzung_schwelle(state)
-    if t_oben is not None and t_oben >= ueberhitz:
+
+    # Schritt 1: Sensorpruefung. Ein ungueltiger Messwert (NaN, -127 C eines
+    # abgerissenen DS18B20) heisst "keine Aussage moeglich" - dann darf
+    # weder geheizt noch ein laufender Zyklus fortgesetzt werden.
+    if not await check_for_sensor_errors(session, state, t_oben, t_unten, t_mittig):
+        state.control.ausschluss_grund = "Sensorfehler"
+        state.control.blocking_reason = "Sensor-Fehler"
+        if state.control.kompressor_ein:
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="sensorfehler"
+            )
+        return False
+
+    # Schritt 2: Ueberhitzungsschutz (Ausschalten). Waehrend einer
+    # Legionellenfahrt dynamisch auf legionellen_max_temp_c angehoben,
+    # damit der Schutz die Prophylaxe nicht abbricht.
+    if (
+        (t_oben is not None and t_oben >= ueberhitz)
+        or (t_unten is not None and t_unten >= ueberhitz)
+    ):
         state.control.blocking_reason = (
-            f"UEBERHITZUNG ({t_oben:.1f}C >= {ueberhitz:.1f}C)"
+            f"UEBERHITZUNG ({max(v for v in (t_oben, t_unten) if v is not None):.1f}C >= {ueberhitz:.1f}C)"
+        )
+        state.control.ausschluss_grund = (
+            f"Übertemperatur (>= {ueberhitz:.1f} Grad)"
         )
         if state.control.kompressor_ein:
-            logging.critical(f"UEBERHITZUNG: {t_oben:.1f}C - Sofort-Abschaltung!")
+            logging.critical(
+                f"UEBERHITZUNG: {max(v for v in (t_oben, t_unten) if v is not None):.1f}C - Sofort-Abschaltung!"
+            )
             await set_kompressor_status_func(state, False, force=True)
         return False
 
-    # 2. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
+    # Schritt 3: Verdampfer-Schutz (Eisfrei + Gueltigkeit). Ein vereister
+    # Verdampfer kann den Kompressor mechanisch zerstoeren.
+    if not await check_verdampfer_schutz(state, t_verd, set_kompressor_status_func):
+        return False
+
+    cfg = state.priority_config.sicherheit
+
+    # 4. Max-Temperatur nur als Warnung (kein Abschalten, Schwellwert: max_temp_c + 2)
     # Während Legionellenbetrieb auf 65°C erhöhen, dann bis Temp um 1°C unter normal gefallen
     # (49°C wenn normal 50°C) auf 65°C belassen, danach normale Grenzwerte
     normal_max_temp_warn = cfg.max_temp_c + 2.0  # Normal 50°C

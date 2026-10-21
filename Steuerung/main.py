@@ -1667,8 +1667,16 @@ async def run_logic_step(session, state, learning_engine=None, befehle=None):
             pcl.setze_neustartsperre(state, minuten=10)
 
     # 3. Sensoren & Safety (Sicherheits-Check)
-    # Hinweis: pcl.check_safety_limits delegiert intern bereits an
-    # safety_logic.check_sensors_and_safety â€“ ein zweiter Aufruf waere redundant.
+    # `pcl.check_safety_limits` bündelt ALLE Schutzabschaltungen: Sensor-
+    # pruefung, Ueberhitzung (oben + unten) und den Verdampfer-Eisfrei-Schutz.
+    # Ein zweiter Aufruf waere redundant.
+    #
+    # BUGFIX (Befund 21.10.2026): Der Kommentar behauptete hier seit dem
+    # 02.09.2026 eine Delegation an `safety_logic.check_sensors_and_safety` -
+    # die es nicht gab. `check_safety_limits` rief die Schutzfunktion nie auf,
+    # wodurch Verdampfer-Eisfrei-Schutz, Sensorfehler-Sperre und die
+    # Ubertemperaturpruefung am unteren Fuehler tot waren. Die Delegation
+    # existiert jetzt wieder (in check_safety_limits).
     if await pcl.check_safety_limits(session, state, state.sensors.t_oben, state.sensors.t_unten, state.sensors.t_mittig, state.sensors.t_verd, set_kompressor_status):
         if manual_force_on:
             state.control.requested_rule_name = "API force_on"
