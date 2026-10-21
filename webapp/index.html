@@ -1218,6 +1218,10 @@
             if (versionBadge) versionBadge.textContent = 'v' + APP_VERSION;
         });
         const STATUS_TIMEOUT_MS = 8000;
+        // 7-Tage-Fenster liest bis zu 100.000 CSV-Zeilen - auf dem Pi
+        // ueber eine langsame SD-Karte kann das dauern. 20 s sind grosszuegig,
+        // aber endlich: danach bricht der Request ab, statt endlos zu haengen.
+        const HISTORY_TIMEOUT_MS = 20000;
         // Optionaler Schreibschutz. Den Key einmalig im Browser hinterlegen:
         // localStorage.setItem('wp_api_key', 'DEIN_KEY');
         const NO_DATA = '—';
@@ -1311,6 +1315,7 @@
         const MAX_DATA_POINTS = 120;
         let currentHistoryHours = 24;
         let isLoadingHistory = false;
+        let historyAbortController = null;
         let statusRequestActive = false;
         let statusAbortController = null;
         let healthRequestActive = false;
@@ -1691,7 +1696,14 @@
         }
 
                 async function loadHistory(hours) {
-            if (isLoadingHistory) return;
+            // Kein Return bei laufendem Request: der Nutzer koennte sonst
+            // kein anderes Zeitfenster waehlen, waehrend die Historie laedt.
+            // Stattdessen wird der laufende Request verworfen und der neue
+            // gewinnt - das ist die erwartete Bedienung.
+            if (historyAbortController) {
+                historyAbortController.abort();
+                historyAbortController = null;
+            }
             isLoadingHistory = true;
             currentHistoryHours = hours;
 
@@ -1706,9 +1718,23 @@
                 chart = null;
             }
 
+            const controller = new AbortController();
+            historyAbortController = controller;
+            // timeoutId ausserhalb des try deklarieren: der finally-Block
+            // muss ihn auch dann erreichen, wenn der Request vor dem
+            // setTimeout scheitert (z.B. bei einem Abbruch durch den
+            // Nutzer). Sonst wirft der finally-Block selbst.
+            let timeoutId = null;
             try {
+                // Ohne Timeout haengt der Request auf einem ausgelasteten Pi
+                // endlos: die Historie bliebe leer und der Spinner drehte
+                // unbegrenzt. 20 s reichen auf dem Pi fuer 100.000
+                // CSV-Zeilen (7-Tage-Fenster) bei normaler, aber langsamer
+                // SD-Karte.
+                timeoutId = setTimeout(() => controller.abort(), HISTORY_TIMEOUT_MS);
                 const response = await fetch(`${API_BASE}/history?hours=${hours}&v=${Date.now()}`, {
                     cache: 'no-store',
+                    signal: controller.signal,
                     headers: apiHeaders()
                 });
                 if (!response.ok) {
@@ -1815,11 +1841,19 @@
                 updateSollwertLabel();
                 highlightActiveSensor();
             } catch (error) {
-                console.error('Fehler beim Laden der Historie:', error);
-                // Fallback: leeren Chart erstellen falls API fehlschlaegt
-                if (!chart) createChart();
+                // Ein abgebrochener Request ist kein Fehler: der Nutzer hat
+                // ein anderes Zeitfenster gewaehlt, dessen Request laeuft
+                // bereits. Da darf kein leerer Chart den gerade geladenen
+                // ueberschreiben.
+                if (error.name !== 'AbortError') {
+                    console.error('Fehler beim Laden der Historie:', error);
+                    // Fallback: leeren Chart erstellen falls API fehlschlaegt
+                    if (!chart) createChart();
+                }
             } finally {
+                clearTimeout(timeoutId);
                 isLoadingHistory = false;
+                if (historyAbortController === controller) historyAbortController = null;
             }
         }
 

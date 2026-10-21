@@ -480,3 +480,65 @@ def test_update_values_bricht_bei_fehlendem_element_nicht_ab():
     )
 
 
+def test_service_worker_cacht_keine_fehlerseiten():
+    """Regression: Eine 429/503-Antwort vergiftete die Offline-Huelle.
+
+    Im HTML-Zweig des Service Workers landete JEDE Antwort im Cache - auch
+    eine 429 (Rate-Limit) oder ein 503 ("System not initialized"). Nach
+    einem einzigen Fehlversuch lieferte der Browser dann die Fehlerseite
+    statt der WebApp. Nachgewiesen im Headless-Browser: der Cache-Eintrag
+    fuer "/" hatte Status 429 und den Inhalt der Fehlerseite.
+    """
+    worker = (WEBAPP / "service-worker.js").read_text(encoding="utf-8")
+    html_zweig = worker.split("url.pathname === '/manifest.json'")[1]
+    html_zweig = html_zweig.split("return;")[0]
+    assert "response.ok" in html_zweig, (
+        "Der Service Worker darf nur erfolgreiche Antworten cachen - "
+        "sonst wird die Offline-Huelle durch eine 429/503 vergiftet"
+    )
+
+
+def test_history_request_hat_timeout_und_abbruch():
+    """Regression: Ein haengender /history-Request blockierte die WebApp.
+
+    loadHistory() hatte weder Timeout noch Abort. Ein Request, der auf dem
+    Pi haengt (100.000 CSV-Zeilen im 7-Tage-Fenster bei langsamer
+    SD-Karte), liess den Chart dauerhaft leer. Und solange ein Request
+    lief, blockierte `if (isLoadingHistory) return;` jede weitere
+    Auswahl - der Nutzer konnte das Zeitfenster nicht mehr wechseln.
+    """
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "const HISTORY_TIMEOUT_MS = 20000" in html
+    start = html.index("async function loadHistory(hours)")
+    # Block bis zum naechsten Top-Level-Funktionsaufruf. loadHistory
+    # enthaelt verschachtelte Funktionsaufrufe (forEach/map), deshalb
+    # zaehlt die Klammerbilanz, nicht die naechste "function ".
+    depth = 0
+    ende = None
+    for i in range(start, len(html)):
+        if html[i] == "{":
+            depth += 1
+        elif html[i] == "}":
+            depth -= 1
+            if depth == 0:
+                ende = i
+                break
+    assert ende, "loadHistory nicht gefunden"
+    block = html[start:ende]
+
+    assert "signal: controller.signal" in block, (
+        "loadHistory muss den Request abbrechen koennen"
+    )
+    assert "historyAbortController.abort()" in block, (
+        "Ein neuer Aufruf muss den laufenden Request abbrechen"
+    )
+    assert "if (isLoadingHistory) return;" not in block, (
+        "isLoadingHistory darf keinen weiteren Aufruf blockieren - der "
+        "Nutzer muss jederzeit das Zeitfenster wechseln koennen"
+    )
+    assert "error.name !== 'AbortError'" in block, (
+        "Ein abgebrochener Request ist kein Fehler und darf keinen leeren "
+        "Chart erzeugen"
+    )
+
+

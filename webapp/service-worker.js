@@ -64,13 +64,22 @@ self.addEventListener('fetch', event => {
     if (url.pathname === '/' || url.pathname.endsWith('.html') ||
         url.pathname === '/manifest.json') {
         // HTML/Manifest bevorzugt frisch vom Server laden. Bei Offline-Betrieb
-        // dient der letzte bekannte App-Stand als Rückfallebene.
+        // dient der letzte bekannte App-Stand als Rueckfallebene.
         event.respondWith(
             fetch(event.request, { cache: 'no-store' })
                 .then(response => {
-                    const copy = response.clone();
-                    caches.open(CACHE_NAME)
-                        .then(cache => cache.put(event.request, copy));
+                    // NUR erfolgreiche Antworten cachen. Vorher landete jede
+                    // Antwort im Cache - auch eine 429 (Rate-Limit) oder ein
+                    // 503 ("System not initialized"). Damit war die
+                    // Offline-Huelle nach einem einzigen Fehlversuch
+                    // vergiftet: der Browser lieferte danach die
+                    // Fehlerseite statt der WebApp. Nachgewiesen im
+                    // Headless-Browser: cacheStatus 429 statt 200.
+                    if (response && response.ok) {
+                        const copy = response.clone();
+                        caches.open(CACHE_NAME)
+                            .then(cache => cache.put(event.request, copy));
+                    }
                     return response;
                 })
                 .catch(() => caches.match(event.request))
