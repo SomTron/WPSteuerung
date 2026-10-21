@@ -285,6 +285,10 @@ class LearningEngine:
         self._pending_zu_frueh: List[Dict] = []   # nur im RAM: {"ende": iso, "verpasste_wh": Wh}
         self._day_surplus_wh: float = 0.0
         self._day_pv_wh: float = 0.0
+        # BUGFIX (21.10.2026): Tagesbilanz des echten Hausverbrauchs
+        # (Wechselrichterbilanz: acpower - feedin - batPower).
+        self._day_haus_wh: float = 0.0
+        self._day_mess_secs: float = 0.0
         self._surplus_tag: str = ""
         self._kalibriert_datum: str = ""
         self._last_update_time: Optional[datetime] = None
@@ -341,7 +345,15 @@ class LearningEngine:
                     forecast_ratio_samples=raw.get("forecast_ratio_samples", 0),
                     forecast_hourly_deviations=raw.get("forecast_hourly_deviations", {}),
                     surplus_by_hour=raw.get("surplus_by_hour", {}),
-    tages_haushalt=list(raw.get("tages_haushalt", []) or []),
+    # BUGFIX (21.10.2026): Alte Eintraege OHNE das Feld "saison"
+    # wurden mit der fehlerhaften Formel "Erzeugung - Einspeisung"
+    # berechnet (nur der Sonnentag, ohne Nachtverbrauch). Sie werden
+    # verworfen - sonst wuerden sie die Auswahl mit falschen Werten
+    # verfaelschen.
+    tages_haushalt=[
+        dict(e) for e in (raw.get("tages_haushalt", []) or [])
+        if isinstance(e, dict) and e.get("saison")
+    ],
                     config=LearningConfig(**raw.get("config", {})),
                 )
         except Exception as e:
@@ -578,6 +590,34 @@ class LearningEngine:
             return 1.0
         return self.data.forecast_ratio
 
+    @staticmethod
+    def _saison_von_datum(tag: str) -> str:
+        """Jahreszeit aus einem ISO-Datum ("2026-01-15").
+
+        BUGFIX (21.10.2026): Der Hausverbrauch haengt nicht nur vom
+        Wochentag ab, sondern auch von der Jahreszeit (Heizung, mehr
+        Licht, mehr Kochen). Ohne Saisontrennung vermischte der Median
+        Sommer (400 W/Tag) und Winter (1500 W/Tag) zu einem
+        unbrauchbaren Zwischenwert (gemessen: 5200 Wh statt 9600
+        bzw. 36000 Wh).
+
+        Geteilt wird nach meteorologischen Jahreszeiten:
+        Winter (12,1,2), Fruehling (3,4,5), Sommer (6,7,8), Herbst (9,10,11)
+        """
+        try:
+            monat = int(str(tag)[5:7])
+        except (ValueError, TypeError, IndexError):
+            return "unbekannt"
+        if monat in (12, 1, 2):
+            return "winter"
+        if monat in (3, 4, 5):
+            return "fruehling"
+        if monat in (6, 7, 8):
+            return "sommer"
+        if monat in (9, 10, 11):
+            return "herbst"
+        return "unbekannt"
+
     def get_haushaltsprofil_je_tag(self, tage: int = 28) -> Dict[str, float]:
         """Tages-Haushaltsbilanz: {Wochentag: geschätzter Verbrauch in Wh}.
 
@@ -612,6 +652,7 @@ class LearningEngine:
         """
         min_tage_pro_wochentag = 2
         werte: Dict[str, list] = {}
+        werte_saison: Dict[str, list] = {}
         for eintrag in self.data.tages_haushalt:
             try:
                 ts = self._parse_ts(eintrag.get("ts"))
@@ -627,30 +668,60 @@ class LearningEngine:
             # Wochentag 0=Mo..6=So
             key = str(ts.weekday())
             werte.setdefault(key, []).append(float(verbrauch))
+            # Zusaetzlich je Wochentag+SAISON. Der Hausverbrauch haengt
+            # stark von der Jahreszeit ab (Heizung, Licht, Kochen).
+            # Ohne diese Trennung vermischte der Median Sommer und
+            # Winter zu einem unbrauchbaren Zwischenwert.
+            saison = eintrag.get("saison") or self._saison_von_datum(
+                eintrag.get("ts", ""))
+            werte_saison.setdefault(f"{key}-{saison}", []).append(
+                float(verbrauch))
 
-        profil: Dict[str, float] = {}
-        for key, liste in werte.items():
-            if len(liste) < min_tage_pro_wochentag:
-                continue
+        def _median(liste: list) -> float:
             # Median statt Mittelwert: ein einzelner Ausreißer-Tag (Party,
             # Waschmaschine) soll den Plan nicht verschieben.
             liste = sorted(liste)
             mitte = len(liste) // 2
             if len(liste) % 2:
-                median = liste[mitte]
-            else:
-                median = (liste[mitte - 1] + liste[mitte]) / 2.0
-            profil[key] = round(median, 1)
+                return liste[mitte]
+            return (liste[mitte - 1] + liste[mitte]) / 2.0
+
+        profil: Dict[str, float] = {}
+        for key, liste in werte.items():
+            if len(liste) < min_tage_pro_wochentag:
+                continue
+            profil[key] = round(_median(liste), 1)
+        # Saison-Werte zusaetzlich (Schluessel "wd-saison")
+        for key, liste in werte_saison.items():
+            if len(liste) < min_tage_pro_wochentag:
+                continue
+            profil[key] = round(_median(liste), 1)
         return profil
 
-    def get_haushaltsverbrauch_fuer_wochentag(self, wochentag: int) -> Optional[float]:
+    def get_haushaltsverbrauch_fuer_wochentag(self, wochentag: int,
+                                             datum: Optional[str] = None
+                                             ) -> Optional[float]:
         """Geschaetzter Haushaltsverbrauch fuer einen Wochentag (in Wh).
 
         None, wenn fuer diesen Wochentag noch keine brauchbare Messung
         vorliegt - dann darf der Plan nicht darauf gestuetzt werden.
+
+        BUGFIX (21.10.2026): Der Verbrauch haengt auch von der
+        Jahreszeit ab. Deshalb wird zuerst der wochentags- UND
+        saisonbezogene Wert gesucht (Schluessel "wd-saison"), und
+        nur wenn der fehlt, auf den reinen Wochentagswert zurueckgefallen.
+        Ein Sommerwert fuer einen Wintertag waere eine Falschaussage
+        (gemessen: 9600 Wh/Tag im Sommer gegen 36000 Wh/Tag im
+        Winter bei identischem Wochentag).
         """
         profil = self.get_haushaltsprofil_je_tag()
-        wert = profil.get(str(int(wochentag)))
+        wd = str(int(wochentag))
+        if datum:
+            saison = self._saison_von_datum(datum)
+            wert = profil.get(f"{wd}-{saison}")
+            if wert is not None:
+                return float(wert)
+        wert = profil.get(wd)
         if wert is None:
             return None
         return float(wert)
@@ -719,15 +790,45 @@ class LearningEngine:
         """Stundensurplus-Profil {stunde: watt} oder None (noch unbrauchbar).
 
         Eine Stunde gilt als brauchbar ab n>=5 Samples; das Profil als
-        Ganzes ab 4 brauchbaren Stunden (Tageslicht-Luecken erlaubt)."""
-        nutzbar = {}
+        Ganzes ab 4 brauchbaren Stunden (Tageslicht-Luecken erlaubt).
+
+        BUGFIX (21.10.2026): Die Buckets sind jetzt tag+stunden-basiert
+        ("2026-10-05-08"). Davor war der Key nur die Stunde, wodurch
+        sich die Tage im EWMA vermischten (gemessen: Stunde 8 nach zwei
+        Tagen 545,7 W statt 900 W - die WebApp-Anzeige war um Stunden
+        verschoben).
+
+        Fuer die Anzeige wird je Stunde der MITTELWERT der letzten
+        Tage genommen: ein einzelner Tag (Regen, Party) soll das Profil
+        nicht verschieben. Ohne das ist die Anzeige der letzte Tag -
+        und der kann voellig untypisch sein.
+        """
+        # Buckets nach Stunde sammeln (Tag+Stunde -> Wert).
+        #
+        # Wichtig: Die Mindestzahl Samples (n>=5) wird ueber ALLE Tage
+        # einer Stunde geprueft, nicht je Tag. Im 10-Minuten-Takt
+        # fallen nur ~3 Samples auf die volle Stunde (die restlichen
+        # laufen in die Folgestunde), ein einzelner Tag erreicht also
+        # nie n>=5 - der Buckettest wuerde das Profil nie freigeben.
+        je_stunde = {}
         for key, e in self.data.surplus_by_hour.items():
             try:
-                stunde = int(key)
+                # Schluessel-Format: "YYYY-MM-DD-HH"
+                stunde = int(str(key).rsplit("-", 1)[-1])
             except (TypeError, ValueError):
                 continue
-            if e.get("n", 0) >= 5:
-                nutzbar[stunde] = float(e["avg"])
+            je_stunde.setdefault(stunde, []).append(e)
+        nutzbar = {}
+        for stunde, eintraege in je_stunde.items():
+            # Die letzten 7 Tage dieses Buckets (neueste zuerst gespeichert)
+            eintraege = eintraege[-7:]
+            n_gesamt = sum(int(e.get("n", 0)) for e in eintraege)
+            if n_gesamt < 5:
+                continue
+            # Mittel der Tageswerte (jeder Tag zaehlt gleich - ein Tag
+            # mit mehr Samples soll nicht staerker wiegen)
+            werte = [float(e["avg"]) for e in eintraege]
+            nutzbar[stunde] = round(sum(werte) / len(werte), 1)
         return nutzbar if len(nutzbar) >= 4 else None
 
     def get_quellen_statistik(self) -> Dict:
@@ -770,6 +871,18 @@ class LearningEngine:
             "forecast_ratio": self.get_forecast_ratio(),
             "forecast_ratio_samples": self.data.forecast_ratio_samples,
             "forecast_hourly_deviations": self.get_forecast_hourly_deviations(),
+            # BUGFIX (21.10.2026): Die Tages-Haushaltsbilanz fuer die
+            # WebApp. Ausgewiesen wird sie je Wochentag (Median der
+            # gemessenen Tage) - damit ist sichtbar, OB und WIE der
+            # Hausverbrauch vom Wochentag abhaengt. Das ist die
+            # Grundlage der Legionellen-Tageswahl (bester UEBERSCHUSS
+            # statt hoechste Prognose).
+            "haushalt_je_wochentag": self.get_haushaltsprofil_je_tag(),
+            "haushalt_tage_erfasst": len(self.data.tages_haushalt),
+            # Die aktuelle Jahreszeit - damit die WebApp die
+            # saisonbezogenen Werte ("wd-saison") zuordnen kann.
+            "saison": self._saison_von_datum(
+                datetime.now().strftime("%Y-%m-%d")),
             "quellen": self.get_quellen_statistik(),
             "surplus_stunden": sorted(self.get_surplus_profile().keys())
                 if self.get_surplus_profile() else [],
@@ -801,6 +914,7 @@ class LearningEngine:
         legionellen_end_time: Optional[datetime] = None,
         forecast_hourly_wh: Optional[Dict[int, float]] = None,
         pv_array_size_qm: Optional[float] = None,
+        hausverbrauch_watt: Optional[float] = None,
     ):
         """
         Wird jeden Regelzyklus aufgerufen.
@@ -844,6 +958,14 @@ class LearningEngine:
             self._surplus_tag = heute
             self._day_surplus_wh = 0.0
             self._day_pv_wh = 0.0
+            # BUGFIX (21.10.2026): Tagesbilanz des HAUSVERBRAUCHS. Die
+            # Differenz Erzeugung - Einspeisung erfasst nur, was am Tag
+            # mit Sonne floss; der Nachtverbrauch (Haus + Batterie) fehlte
+            # komplett (gemessen: 5200 statt 9600 Wh/Tag). Deshalb wird der
+            # echte Hausverbrauch aus der Wechselrichterbilanz akkumuliert:
+            #   hausverbrauch = acpower - feedin - batPower
+            self._day_haus_wh = 0.0
+            self._day_mess_secs = 0.0
         if feedin_watt is not None and dt_secs > 0:
             self._day_surplus_wh += max(feedin_watt, 0.0) * dt_secs / 3600.0
         # Die Kalibrierung braucht die ERZEUGTE Energie, nicht die
@@ -872,6 +994,11 @@ class LearningEngine:
         )
         if erzeugung_w is not None and dt_secs > 0:
             self._day_pv_wh += max(erzeugung_w, 0.0) * dt_secs / 3600.0
+
+        # Tagesbilanz des echten Hausverbrauchs (inkl. Nacht und Batterie)
+        if hausverbrauch_watt is not None and hausverbrauch_watt >= 0:
+            self._day_haus_wh += hausverbrauch_watt * dt_secs / 3600.0
+            self._day_mess_secs += dt_secs
         # Wichtig: Der Aufrufer liefert die HEUTE-Prognose bereits in Wh/m2
         # (priority_control_logic normalisiert dort mit kwh_m2). Deshalb hier
         # NUR die Gueltigkeit pruefen, nicht noch einmal umrechnen - eine
@@ -906,8 +1033,18 @@ class LearningEngine:
         # Stundensurplus-Profil: Nur bei AUSgeschaltetem Kompressor sampeln,
         # sonst verfaelscht die WP-Leistung das Haushaltsmuster. Persistenz
         # opportunistisch ueber die _save()-Aufrufe der anderen Events.
+        #
+        # BUGFIX (21.10.2026): Der Key war nur die STUNDE ("8"). Beim
+        # Tageswechsel wurde der Zaehler zurueckgesetzt, die
+        # Stundenbuckets aber NICHT - der Bucket "8" enthielt danach einen
+        # EWMA aus dem Vortag und dem heutigen Tag. Gemessen: der Wert
+        # fuer Stunde 8 war nach zwei Tagen 545,7 W statt 900 W, und die
+        # Anzeige in der WebApp war um Stunden verschoben.
+        #
+        # Der Key enthaelt jetzt den TAG: "2026-10-05-08". Damit ist der
+        # Bucket wirklich "die Einspeisung am 05.10. um 8 Uhr".
         if feedin_watt is not None and not compressor_is_on:
-            key = str(now.hour)
+            key = f"{heute}-{now.hour:02d}"
             alt_e = self.data.surplus_by_hour.get(
                 key, {"avg": float(feedin_watt), "n": 0})
             alpha_surplus = self.data.config.surplus_ewma_alpha
@@ -1012,19 +1149,29 @@ class LearningEngine:
         waere die Bilanz nur ein Ausschnitt des Tages und wuerde den
         Verbrauch unterschaetzen.
         """
-        if self._day_pv_wh <= 0:
-            # Keine Erzeugung gemessen - der Tag taugt nicht zur Bilanz.
+        # BUGFIX (21.10.2026): Der Hausverbrauch wird direkt aus der
+        # Wechselrichterbilanz akkumuliert
+        #   hausverbrauch = acpower - feedin - batPower
+        # (inkl. Nachtverbrauch und Batterie). Die frueher genutzte
+        # Differenz Erzeugung - Einspeisung erfasste nur den
+        # Sonnentag: gemessen 5200 statt 9600 Wh/Tag, weil die
+        # naechtlichen 4400 Wh fehlten.
+        #
+        # Reicht der Tag nicht fuer eine Bilanz, wird er verworfen
+        # (lieber keine Zahl als eine falsche).
+        if self._day_haus_wh <= 0:
+            # Kein Hausverbrauch gemessen - der Tag taugt nicht.
             return
-        verbrauch = self._day_pv_wh - self._day_surplus_wh
-        if verbrauch < 0:
-            # Mehr eingespeist als erzeugt: die Batterie hat entladen.
-            # Der Verbrauch laesst sich daraus NICHT ableiten (die
-            # Batterieenergie fehlt in der Bilanz) - der Tag wird
-            # verworfen statt geraten.
+        if self._day_mess_secs < 300:
+            # Weniger als 5 Minuten Messdauer: die Bilanz waere nur
+            # ein Ausschnitt des Tages und wuerde den Verbrauch
+            # unterschaetzen.
             return
+        verbrauch = self._day_haus_wh
         self.data.tages_haushalt.append({
             "ts": tag,
             "verbrauch_wh": round(verbrauch, 1),
+            "saison": self._saison_von_datum(tag),
         })
         # Historie begrenzen (die Medianberechnung nutzt die letzten
         # Wochen; aeltere Eintraege bringen nichts).

@@ -2501,6 +2501,53 @@
                         const spWrap = document.getElementById('surplus-bars');
             if (spWrap) {
                 const prof = statusData.learning && statusData.learning.surplus_profil || {};
+                // Tages-Haushaltsbilanz je Wochentag (BUGFIX 21.10.2026).
+                (() => {
+                    const hw = document.getElementById('haushalt-wochentage');
+                    if (!hw) return;
+                    const lrnD = statusData.learning || {};
+                    const profil = lrnD.haushalt_je_wochentag || {};
+                    const namen = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+                    const saison = lrnD.saison || '';
+                    // Schluessel entweder "wd" oder "wd-saison".
+                    const teile = [];
+                    const nurWochentag = [];
+                    for (const [k, w] of Object.entries(profil)) {
+                        const teileKey = String(k).split('-');
+                        const wd = Number(teileKey[0]);
+                        const sais = teileKey.length > 1 ? teileKey[1] : '';
+                        const eintrag = { nm: namen[wd] || k, w: Number(w) || 0, sais: sais };
+                        teile.push(eintrag);
+                        if (!sais) nurWochentag.push(eintrag);
+                    }
+                    const n = lrnD.haushalt_tage_erfasst || 0;
+                    if (!teile.length) {
+                        hw.innerHTML = '<span style="color:var(--text-secondary)">Haushalt je Wochentag: noch keine Daten'
+                            + (n ? ' (' + n + ' Tage erfasst, braucht 2 je Wochentag und Saison)' : ' (sammelt ab dem naechsten Tag)') + '</span>';
+                        return;
+                    }
+                    // Bevorzugt die Werte der aktuellen Saison zeigen.
+                    const aktuell = teile.filter(x => x.sais === saison);
+                    const gezeigt = aktuell.length ? aktuell : nurWochentag;
+                    const hinweis = aktuell.length
+                        ? 'Haushalt je Wochentag (' + saison + ', Tagesbilanz, Median):'
+                        : 'Haushalt je Wochentag (Tagesbilanz, Median) - noch keine Werte fuer ' + saison + ':';
+                    const maxW = Math.max(1, ...gezeigt.map(x => x.w));
+                    hw.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:3px">' + hinweis + '</div>'
+                        + '<div style="display:flex;gap:4px;align-items:flex-end;height:34px">'
+                        + gezeigt.map(x => {
+                            const h = Math.max(4, Math.round(x.w / maxW * 30));
+                            return '<div style="flex:1;text-align:center">'
+                                + '<div title="' + x.nm + ' (' + (x.sais || 'alle') + '): ' + Math.round(x.w) + ' Wh" style="height:' + h
+                                + 'px;background:var(--accent,#3b82f6);border-radius:2px"></div>'
+                                + '<div style="font-size:0.65rem;color:var(--text-secondary)">' + x.nm + '</div>'
+                                + '</div>';
+                        }).join('')
+                        + '</div>'
+                        + (aktuell.length === 0 && nurWochentag.length
+                            ? '<div style="font-size:0.65rem;color:var(--text-secondary);margin-top:3px">Zeigt die Werte ohne Saisontrennung.</div>'
+                            : '');
+                })();
                 const stunden = Object.keys(prof).map(Number).sort((a, b) => a - b);
                 if (!stunden.length) {
                     spWrap.innerHTML = '<div style="font-size:0.75rem;color:var(--text-secondary)">Noch nicht gelernt - sammelt stuendliche Netzeinspeisung (braucht einige Tage Betrieb).</div>';
@@ -2755,6 +2802,21 @@
             setText('energy-forecast-today', fmtForecast(energy.forecast_today));
             setText('energy-forecast-tomorrow', fmtForecast(energy.forecast_tomorrow));
             setText('energy-forecast-day2', fmtForecast(energy.forecast_day2));
+            // Wochenendprognose (Fr/Sa/So) fuer die Legionellenwahl.
+            (() => {
+                const el = document.getElementById('energy-forecast-wochenende');
+                if (!el) return;
+                const tage = energy.forecast_tage_wh_m2 || {};
+                const namen = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+                const teile = Object.entries(tage).map(([d, w]) => {
+                    const dt = new Date(d + 'T12:00:00');
+                    return { nm: namen[dt.getDay()], w: Number(w) || 0 };
+                }).filter(x => x.nm === 'Fr' || x.nm === 'Sa' || x.nm === 'So')
+                  .sort((a, b) => a.nm.localeCompare(b.nm));
+                el.textContent = teile.length
+                    ? teile.map(x => x.nm + ' ' + Math.round(x.w)).join(' / ') + ' Wh'
+                    : NO_DATA;
+            })();
 
             // System
             setText('system-update', system.last_update || NO_DATA);
@@ -3002,6 +3064,11 @@
                         <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : NO_DATA}</span></div>
                         <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : NO_DATA}</span></div>
                         <div class="info-row"><span class="info-label">Prognose Uebermorgen</span><span class="info-value" id="energy-forecast-day2">${energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : NO_DATA}</span></div>
+<!-- Wochenendprognose (BUGFIX 21.10.2026): die Tagesprognose der kommenden
+     Tage. Sie entscheidet, welcher der drei Tage Freitag/Samstag/Sonntag
+     fuer die Legionellenprophylaxe gewaehlt wird - nach UEBERSCHUSS
+     (Prognose minus Hausverbrauch), nicht nach roher Prognose. -->
+<div class="info-row" title="Tagesprognose der kommenden Tage. Die Legionellenplanung waehlt daraus den Tag mit dem groessten Ueberschuss (Prognose minus Hausverbrauch)."><span class="info-label">Wochenendprognose</span><span class="info-value" id="energy-forecast-wochenende">${(() => { const t = energy.forecast_tage_wh_m2 || {}; const namen = ['So','Mo','Di','Mi','Do','Fr','Sa']; const teile = Object.entries(t).map(([d,w]) => { const dt = new Date(d + 'T12:00:00'); const nm = namen[dt.getDay()]; return nm + ' ' + Math.round(w); }).filter(x => /^(Fr|Sa|So) /.test(x)); return teile.length ? teile.join(' / ') + ' Wh' : NO_DATA; })()}</span></div>
                     </div>
 
                     <!-- Letzte Entscheidungen -->
@@ -3064,6 +3131,12 @@
                             <div class="card-title">&Uuml;berschuss-Profil (gelernt)</div>
                         </div>
                         <div id="surplus-bars" style="margin:6px 0"></div>
+                        <!-- BUGFIX (21.10.2026): Tages-Haushaltsbilanz je
+                             Wochentag. Das Profil oben (stuendliche
+                             Netzeinspeisung) unterscheidet KEINE Wochentage
+                             und ist kein Tagesprofil - die Legionellenwahl
+                             stuetzt sich deshalb auf diese Bilanz. -->
+                        <div id="haushalt-wochentage" style="margin:8px 0;font-size:0.8rem"></div>
                         <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">Netzeinspeisung je Stunde (bei ausgeschalteter WP = Haushaltsmuster). Rote Balken sind Tiefstunden (&lt;250 W, z.&nbsp;B. Kochen) - sie verfr&uuml;hen den CalcStart-Sp&auml;test-Start.</div>
                     </div>
 

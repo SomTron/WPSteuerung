@@ -561,6 +561,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             forecast_today_wh_qm=forecast_today_wh,
             forecast_hourly_wh=hourly_forecast_watt,
             pv_array_size_qm=pv_flaeche,
+            # BUGFIX (21.10.2026): Der echte Hausverbrauch fuer die
+            # Tagesbilanz. Ohne ihn berechnete die Lernengine den
+            # Tagesverbrauch als "Erzeugung minus Einspeisung" - das
+            # erfasst nur den Sonnentag; die naechtlichen ~4400 Wh
+            # fehlten (gemessen: 5200 statt 9600 Wh/Tag).
+            hausverbrauch_watt=getattr(state.solar, "hausverbrauch", None),
         )
         gelernte_rate_unten = learning_engine.get_learned_heating_rate(
             now_local.month, "unten"

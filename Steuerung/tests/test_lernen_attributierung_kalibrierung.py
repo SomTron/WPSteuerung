@@ -48,7 +48,14 @@ class TestTagesHaushaltsbilanz:
         eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
         eng.data.config.pv_array_size_qm = 10.0
         tag = datetime(2026, 10, 19, 8, 0)
-        # Ein Tag: 5000 Wh erzeugt, 3000 Wh eingespeist -> 2000 Wh Verbrauch
+        # BUGFIX (21.10.2026): Die Tagesbilanz nutzt den ECHTEN
+        # Hausverbrauch aus der Wechselrichterbilanz
+        # (acpower - feedin - batPower), nicht mehr die Differenz
+        # "Erzeugung - Einspeisung". Letztere erfasste nur den
+        # Sonnentag - die naechtlichen ~4400 Wh fehlten komplett
+        # (gemessen: 5200 statt 9600 Wh/Tag).
+        # Der Hausverbrauch liegt hier bei 2000 W ueber 12 Stunden
+        # = 24000 Wh.
         for h in range(8, 20):
             for k in range(6):
                 t = tag + timedelta(hours=h - 8, minutes=k * 10)
@@ -58,6 +65,7 @@ class TestTagesHaushaltsbilanz:
                     pv_erzeugung_watt=5000.0 / 72, soc=50.0,
                     forecast_today_wh_qm=2500.0, forecast_hourly_wh=None,
                     pv_array_size_qm=10.0,
+                    hausverbrauch_watt=2000.0,
                 )
         # Der Folgetag triggert die Bilanzierung des Vortags.
         eng.update(
@@ -72,13 +80,17 @@ class TestTagesHaushaltsbilanz:
         # Der Verbrauch ist die Differenz aus erzeugter und eingespeister
         # Energie. Die Bilanz misst die Zeit zwischen den Samples
         # (dt_secs) - der Absolutwert haengt daher vom Sample-Takt ab.
-        # Geprueft wird das VERHAELTNIS: 5000 Wh erzeugt, 3000 Wh
-        # eingespeist -> 40 % der Erzeugung sind Verbrauch.
+        #
+        # BUGFIX (21.10.2026): Die Bilanz misst jetzt den ECHTEN
+        # Hausverbrauch (2000 W ueber 12 h), nicht mehr
+        # "Erzeugung - Einspeisung". Letzteres erfasste nur den
+        # Sonnentag - die naechtlichen Stunden fehlten komplett.
         assert eintrag["verbrauch_wh"] > 0
-        erzeugt_wh = 5000.0 / 72 * 71 * 600 / 3600
-        erwartet = (5000.0 - 3000.0) / 72 * 71 * 600 / 3600
+        # 2000 W ueber 71 Intervalle a 600 s
+        erwartet = 2000.0 * 71 * 600 / 3600
         assert eintrag["verbrauch_wh"] == pytest.approx(erwartet, rel=0.05)
-        assert eintrag["verbrauch_wh"] < erzeugt_wh
+        # Die Saison wird mit erfasst (Oktober -> Herbst)
+        assert eintrag["saison"] == "herbst"
 
     def test_profil_trennt_wochentage(self, tmp_path):
         """Der Median je Wochentag - ein Ausreisser-Tag verschiebt den

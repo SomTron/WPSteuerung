@@ -861,7 +861,12 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         # `kein_netzkauf` in classify_energy_source.
         state.solar.consumeenergy = state.solar.last_api_data.get("consumeenergy")
         # Aus der Wechselrichterbilanz abgeleitet (siehe energy_source.py):
-        #   Hausverbrauch = acpower - feedinpower - batPower
+        #   Hausverbrauch = acpower - feedinpower
+        # Die Batterie gehoert NICHT hinein: sie steht zwischen DC- und
+        # AC-Seite und aendert am AC-Ausgang nichts. Bis September stand
+        # hier ein "- batPower" - das Ergebnis war dann nachts negativ
+        # und wurde auf 0 begrenzt (im Betriebslog des 03.10. durchgehend
+        # haus=0).
         # Der API-Zaehler `consumeenergy` ist KEINE Leistung, sondern ein
         # Fortlaufzaehler (Wechselabstand ~232 min im Betriebslog) und taugt
         # nicht fuer die Regelung. Die Ableitung dagegen schon.
@@ -1329,8 +1334,14 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                     except (TypeError, ValueError):
                                         fc = 1.0
 
-                            def _ueberschuss_wh(tag, prognose_wh_m2):
-                                """Nutzbare Energie fuer die Prophylaxe an einem Tag."""
+                            def _ueberschuss_wh(tag, prognose_wh_m2, datum=None):
+                                """Nutzbare Energie fuer die Prophylaxe an einem Tag.
+                            
+                                BUGFIX (21.10.2026): Das Datum des geplanten Tages wird
+                                mitgegeben. Der Hausverbrauch haengt auch von der Jahreszeit
+                                ab; ohne das Datum nutzte die Lernengine einen Sommerwert
+                                fuer einen Wintertag (gemessen: 9600 statt 36000 Wh/Tag).
+                                """
                                 erzeugung_wh = prognose_wh_m2 * flaeche_qm * fc
                                 verbrauch_wh = None
                                 if lern_engine is not None:
@@ -1341,8 +1352,14 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                     )
                                     if callable(_getter):
                                         try:
-                                            verbrauch_wh = _getter(tag)
-                                        except (TypeError, ValueError):
+                                            verbrauch_wh = _getter(tag, datum)
+                                        except TypeError:
+                                            # Aeltere Lernengine ohne Datumsparameter
+                                            try:
+                                                verbrauch_wh = _getter(tag)
+                                            except (TypeError, ValueError):
+                                                verbrauch_wh = None
+                                        except ValueError:
                                             verbrauch_wh = None
                                 if verbrauch_wh is None:
                                     # Keine Haushaltsdaten: die rohe
@@ -1354,7 +1371,7 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                             for (_datum, tag, prognose) in kandidaten:
                                 if tag not in tages_prognose:
                                     continue
-                                ueberschuss, verbrauch = _ueberschuss_wh(tag, prognose)
+                                ueberschuss, verbrauch = _ueberschuss_wh(tag, prognose, _datum)
                                 kandidaten_ueberschuss[tag] = (ueberschuss, verbrauch)
 
                             # Auswahl nach ERREICHBARKE, nicht nach
