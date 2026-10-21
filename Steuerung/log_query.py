@@ -11,6 +11,8 @@ import re
 from datetime import datetime
 from typing import Optional, List, Tuple
 
+from log_files import generationen, tail_ueber_alle
+
 # Regex zum Erkennen des Zeitstempels am Zeilenanfang
 # Format: "2026-08-08 16:24:33 +0200"
 TS_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ")
@@ -89,43 +91,64 @@ def query_logs(
     # Ziel: aus einem Zeitbereich die letzten X Zeilen finden
     max_lines = min(lines, 500)
 
-    # Wenn after gesetzt: binäre Suche nach der Startposition
-    # Sonst: tail von hinten
-    start_pos = None
-    if after is not None:
-        start_pos = _binary_search_ts(log_path, after)
+    # WICHTIG: Das Log rotiert. Die Historie liegt in mehreren Dateien
+    # (heizungssteuerung.log.2026-10-19, .2026-10-20, ...). Es wurde
+    # bisher NUR die aktive Datei gelesen - nach einer Rotation sah man
+    # deshalb nur noch den kleinen neuen Rest und die aeltere Historie
+    # war unsichtbar, obwohl sie auf der Platte lag. Deshalb werden jetzt
+    # alle Generationen in zeitlicher Reihenfolge durchsucht.
+    dateien = generationen(log_path)
+    meta["generationen"] = [os.path.basename(d) for d in dateien]
 
-    # Jetzt die Datei ab start_pos lesen (oder ab 0)
     result = []
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        if start_pos is not None:
-            f.seek(start_pos)
-            # _binary_search_ts liefert immer eine Position am Zeilenanfang,
-            # daher KEIN f.readline() – das wuerde die erste passende Zeile
-            # verschlucken (Bug #1, siehe wp-manager v1.7).
+    for datei in dateien:
+        if len(result) >= max_lines:
+            break
+        if not os.path.exists(datei):
+            continue
 
-        for line in f:
-            line_ts = _parse_ts(line)
+        # Wenn after gesetzt: binäre Suche nach der Startposition
+        # (je Datei, da jede Generation fuer sich sortiert ist).
+        start_pos = None
+        if after is not None:
+            start_pos = _binary_search_ts(datei, after)
 
-            # Vor Filter: wenn before gesetzt, nur Zeilen VOR before
-            if before is not None and line_ts is not None and line_ts >= before:
-                break
+        with open(datei, "r", encoding="utf-8", errors="replace") as f:
+            if start_pos is not None:
+                f.seek(start_pos)
+                # _binary_search_ts liefert immer eine Position am Zeilenanfang,
+                # daher KEIN f.readline() – das wuerde die erste passende Zeile
+                # verschlucken (Bug #1, siehe wp-manager v1.7).
 
-            # Nach Filter: wenn after gesetzt, nur Zeilen NACH oder AB after
-            if after is not None and line_ts is not None and line_ts < after:
-                continue
+            for line in f:
+                line_ts = _parse_ts(line)
 
-            # Level-Filter
-            if level is not None:
-                level_match = LEVEL_PATTERN.search(line)
-                if not level_match or level_match.group(1) != level.upper():
+                # Vor Filter: wenn before gesetzt, nur Zeilen VOR before
+                if before is not None and line_ts is not None and line_ts >= before:
+                    # Alle folgenden Generationen sind juenger - fertig.
+                    return _abschluss(result, meta, max_lines)
+
+                # Nach Filter: wenn after gesetzt, nur Zeilen NACH oder AB after
+                if after is not None and line_ts is not None and line_ts < after:
                     continue
 
-            result.append(line)
-            if len(result) >= max_lines:
-                break
+                # Level-Filter
+                if level is not None:
+                    level_match = LEVEL_PATTERN.search(line)
+                    if not level_match or level_match.group(1) != level.upper():
+                        continue
 
-    # Metadaten sammeln
+                result.append(line)
+                if len(result) >= max_lines:
+                    break
+
+    return _abschluss(result, meta, max_lines)
+
+
+def _abschluss(result: list, meta: dict, max_lines: int):
+    """Metadaten sammeln und Ergebnis kuerzen."""
+    if len(result) > max_lines:
+        result = result[:max_lines]
     meta["total_found"] = len(result)
 
     # Start/End-Timestamp aus den gefundenen Zeilen
@@ -189,7 +212,11 @@ def tail_log(
     lines: int = 50,
     log_path: Optional[str] = None,
 ) -> Tuple[List[str], dict]:
-    """Gibt die letzten X Zeilen des Logs zurueck (effizient)."""
+    """Gibt die letzten X Zeilen des Logs zurueck (effizient).
+
+    Liest ueber ALLE rotierten Generationen hinweg - sonst waeren nach
+    einer Rotation nur die Zeilen der aktiven (winzigen) Datei sichtbar.
+    """
     if log_path is None:
         log_path = _find_default_log_path()
 
@@ -202,43 +229,17 @@ def tail_log(
     if not meta["log_exists"]:
         return [], meta
 
-    result = []
-    with open(log_path, "rb") as f:
-        try:
-            f.seek(0, 2)  # ans Ende
-            file_size = f.tell()
-            block_size = 4096
-            buffer = b""
+    dateien = generationen(log_path)
+    meta["generationen"] = [os.path.basename(d) for d in dateien]
 
-            while len(result) < lines and file_size > 0:
-                read_size = min(block_size, file_size)
-                file_size -= read_size
-                f.seek(file_size)
-                chunk = f.read(read_size)
-                buffer = chunk + buffer
-
-                # Zeilen extrahieren (letzte lines Stueck)
-                lines_in_buf = buffer.split(b"\n")
-                # Der abschliessende Zeilenumbruch erzeugt ein leeres
-                # Element am Ende. Es muss VOR dem Abschneiden entfernt
-                # werden - sonst nimmt `[-lines:]` einen Platzhalter mit und
-                # es kommt konsequent eine Zeile zu wenig zurueck
-                # (lines=1 lieferte 0 Zeilen).
-                if lines_in_buf and lines_in_buf[-1] == b"":
-                    lines_in_buf = lines_in_buf[:-1]
-                if len(lines_in_buf) >= lines:
-                    result = lines_in_buf[-lines:]
-                    break
-                result = lines_in_buf
-
-            # Letzte leere Zeile entfernen
-            if result and result[-1] == b"":
-                result = result[:-1]
-
-            result = [l.decode("utf-8", errors="replace") + "\n" for l in result]
-
-        except Exception:
-            pass
+    # Die Zeilen werden mit abschliessendem Zeilenumbruch geliefert - so
+    # wie es die fruehere Implementierung tat. Die CLI gibt sie mit
+    # `print(line, end="")` aus; ohne Umbruch stuenden alle Zeilen in
+    # einer einzigen.
+    # \r wird entfernt: die Dateien koennen unter Windows (\r\n) oder auf
+    # dem Pi (\n) geschrieben worden sein - die Ausgabe soll einheitlich
+    # sein und der Vergleich in Tests soll nicht am Zeilenende scheitern.
+    result = [z.rstrip("\r\n") + "\n" for z in tail_ueber_alle(log_path, lines)]
 
     meta["total_found"] = len(result)
     return result, meta

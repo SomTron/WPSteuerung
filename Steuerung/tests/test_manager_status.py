@@ -270,13 +270,18 @@ def test_menue_zeichnet_sich_beim_zurueckkehren_neu():
 
 
 def test_live_logs_kehren_zum_menue_zurueck():
-    """Option 1 (tail -f) braucht eine Rueckkehr-Pause - sonst scrollt die
-    Ausgabe ohne Halt durch und der Benutzer verliert den Kontext."""
+    """Option 1 (tail) braucht eine Rueckkehr-Pause - sonst scrollt die
+    Ausgabe ohne Halt durch und der Benutzer verliert den Kontext.
+
+    `tail -F` (follow by name) statt `-f`: das Log rotiert taeglich und wird
+    dabei umbenannt. `-f` haelt an der alten Datei fest und zeigte nach der
+    Rotation nichts mehr an.
+    """
     manager, _ = _updater_scripts()
     # Anker: Zeilenumbruch + 8 Leerzeichen = Hauptmenue. Ohne den Umbruch
     # wuerde auch das Analyse-Untermenue (12 Leerzeichen) treffen.
     option1 = _hauptmenue_block(manager, "1)")
-    assert "tail -n 20 -f" in option1
+    assert "tail -n 20 -F" in option1
     assert "wait_for_key" in option1
 
 

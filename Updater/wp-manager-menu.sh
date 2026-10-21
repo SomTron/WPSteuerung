@@ -1440,7 +1440,11 @@ WPMODI
                 printf "${RED}Logdatei nicht gefunden: %s${NC}\n" "$LOG_FILE"
             else
                 printf "${YELLOW}Live-Logs (letzte 20 Zeilen) – Beenden mit Strg+C${NC}\n\n"
-                tail -n 20 -f "$LOG_FILE"
+                # -F (follow by name) statt -f: bei der Rotation wird die Datei
+                # umbenannt. "tail -f" haelt an der alten Datei fest und
+                # zeigte danach nichts mehr an; "-F" oeffnet die Datei nach
+                # der Rotation neu.
+                tail -n 20 -F "$LOG_FILE"
             fi
             # Ohne dieses wait_for_key sprang das Menue nach dem tail direkt
             # weiter - die Ausgabe wurde ohne Pause weggescrollt.
@@ -1450,7 +1454,11 @@ WPMODI
             if [ -f "$LOG_FILE" ]; then
                 frage_zeilen "${CYAN}Wie viele Logzeilen anzeigen? (Enter = 200):${NC} " 200
                 printf -- "${CYAN}--- Letzte %s Zeilen: %s ---${NC}\n" "$ZEILEN_ANTWORT" "$LOG_FILE"
-                tail -n "$ZEILEN_ANTWORT" "$LOG_FILE" | zeige
+                # Ueber log_query.py statt "tail": das Log rotiert taeglich, und
+                # "tail" wuerde nur die aktive (winzige) Datei zeigen. Die
+                # Historie der Vortage gaenge verloren.
+                python3 "$TARGET_DIR/log_query.py" --tail --lines "$ZEILEN_ANTWORT" \
+                    --log-path "$LOG_FILE" 2>&1 | zeige
             else
                 printf "${RED}Logdatei nicht gefunden: %s${NC}\n" "$LOG_FILE"
             fi
@@ -1460,7 +1468,10 @@ WPMODI
             if [ -f "$ERROR_LOG_FILE" ] && [ -s "$ERROR_LOG_FILE" ]; then
                 frage_zeilen "${CYAN}Wie viele Error-Log-Zeilen anzeigen? (Enter = 200):${NC} " 200
                 printf -- "${CYAN}--- Letzte %s Fehlerzeilen: %s ---${NC}\n" "$ZEILEN_ANTWORT" "$ERROR_LOG_FILE"
-                tail -n "$ZEILEN_ANTWORT" "$ERROR_LOG_FILE" | zeige
+                # Auch hier ueber log_query.py: das Error-Log rotiert ebenfalls,
+                # und "tail" wuerde die aelteren Fehlertage unterschlagen.
+                python3 "$TARGET_DIR/log_query.py" --tail --lines "$ZEILEN_ANTWORT" \
+                    --log-path "$ERROR_LOG_FILE" 2>&1 | zeige
             elif [ -f "$ERROR_LOG_FILE" ]; then
                 printf "${GREEN}error.log ist leer – keine Fehler!${NC}\n"
             else

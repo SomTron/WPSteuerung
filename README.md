@@ -65,6 +65,34 @@ python3 Analyse/log_analyse.py
 
 ---
 
+## 📁 Betriebslog & Rotation
+
+Das Betriebslog liegt auf dem Pi unter `/var/log/wps` (log2ram-tmpfs, 128 MB).
+Es wird **tagesbasiert rotiert** - der Tag steht direkt im Dateinamen:
+
+```
+/var/log/wps/heizungssteuerung.log              # aktueller Tag (aktiv)
+/var/log/wps/heizungssteuerung.log.2026-10-19   # Log vom 19.10.
+/var/log/wps/heizungssteuerung.log.2026-10-20   # Log vom 20.10.
+```
+
+Warum nicht die übliche `.1`/`.2`-Nummerierung: die Zahlen sagen nichts über
+den Zeitraum aus – man muss raten, welcher Tag in welcher Datei steht. Mit dem
+Datum im Namen ist der Log eines bestimmten Tages direkt auffindbar. Zusätzlich
+rotiert die Datei auch mitten im Tag, wenn sie 25 MB überschreitet (dann
+`…2026-10-20.2`).
+
+**Alle Leser ziehen die Generationen zusammen.** Manager-Option 11/12
+(„Query Logs by Time/Duration"), die Fehlerhistorie der WebApp und das
+Fehlerlog im Menü lesen über alle Generationen hinweg – nach einer Rotation
+bleibt die Historie also sichtbar.
+
+Begrenzung: 14 Tage Historie **und** ein Gesamtbudget von 60 MB (15 MB für
+`error.log`). Das Byte-Budget ist auf dem Pi entscheidend, weil
+`/var/log/wps` im RAM liegt.
+
+---
+
 ## 📂 Projektstruktur
 
 Das Projekt ist in funktionale Bereiche unterteilt:

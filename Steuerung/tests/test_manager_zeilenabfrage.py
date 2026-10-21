@@ -64,10 +64,18 @@ def test_option_2_und_3_fragten_eigenstaendig_nach_anzahl():
         in text
     )
     # Beide Optionen nutzen die variable Anzahl, nicht mehr ein festes 200.
-    assert 'tail -n "$ZEILEN_ANTWORT" "$LOG_FILE"' in text
-    assert 'tail -n "$ZEILEN_ANTWORT" "$ERROR_LOG_FILE"' in text
+    # Die Anzeige laeuft ueber log_query.py --tail statt ueber "tail": das Log
+    # rotiert taeglich, und "tail" wuerde nur die aktive (winzige) Datei
+    # zeigen - die Historie der Vortage gaenge verloren.
+    assert '--tail --lines "$ZEILEN_ANTWORT"' in text
+    assert '--log-path "$LOG_FILE"' in text
+    assert '--log-path "$ERROR_LOG_FILE"' in text
     assert 'tail -n 200 "$LOG_FILE"' not in text
     assert 'tail -n 200 "$ERROR_LOG_FILE"' not in text
+    # Kein blosses "tail" auf das Log mehr - es muss der generationen-
+    # uebergreifende Leser sein.
+    assert 'tail -n "$ZEILEN_ANTWORT" "$LOG_FILE"' not in text
+    assert 'tail -n "$ZEILEN_ANTWORT" "$ERROR_LOG_FILE"' not in text
 
 
 def test_alle_zeilenabfragen_nutzen_dieselbe_hilfsfunktion():

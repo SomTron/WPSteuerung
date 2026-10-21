@@ -40,6 +40,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from utils import HEIZUNGSDATEN_CSV, to_naive
+from log_files import tail_bytes_ueber_alle
 from clock import now_for
 from logic_utils import forecast_kwh_m2_to_wh_m2
 from status_snapshot import build_status_snapshot
@@ -609,22 +610,19 @@ def _parse_fehlerzeilen(text: str) -> list:
 
 
 def _read_error_tail(max_bytes: int = ERROR_TAIL_BYTES) -> list:
-    """Liest den Tail des Fehlerlogs robust - auch waehrend des Schreibens."""
+    """Liest den Tail des Fehlerlogs robust - auch waehrend des Schreibens.
+
+    Liest ueber ALLE rotierten Generationen hinweg (error.log.2026-10-19,
+    .2026-10-20, ...). Bisher wurde nur die aktive Datei gelesen - nach
+    einer Rotation verschwanden die aelteren Fehler aus der Anzeige, obwohl
+    sie auf der Platte lagen.
+    """
     try:
-        groesse = os.path.getsize(ERROR_LOG_DATEI)
+        if not os.path.exists(ERROR_LOG_DATEI):
+            return []
     except OSError:
         return []
-    try:
-        with open(
-            ERROR_LOG_DATEI, "rb"
-        ) as handle:
-            if groesse > max_bytes:
-                handle.seek(groesse - max_bytes)
-                handle.readline()  # angebrochene erste Zeile verwerfen
-            daten = handle.read()
-    except OSError:
-        return []
-    text = daten.decode("utf-8", errors="replace")
+    text = tail_bytes_ueber_alle(ERROR_LOG_DATEI, max_bytes)
     return _parse_fehlerzeilen(text)
 
 
