@@ -11,13 +11,13 @@ Bei rotierenden Daten geht dabei die Historie verloren:
   * entscheidungs_log.jsonl - die Generationen .old.1 ... .old.7 daneben
   * learning_data.json     - Sicherungskopien daneben
 
-Dieses Modul kennt den vollstaendigen Bestand und kann ihn als tar.gz
+Dieses Modul kennt den vollstaendigen Bestand und kann ihn als ZIP
 buendeln. Es wird sowohl vom Manager (Upload) als auch von der WebApp
 (Anzeige) genutzt, damit beide denselben Bestand sehen.
 
 Aufruf als Skript:
     python3 datenbestand.py --art log --pfad /var/log/wps/heizungssteuerung.log
-    python3 datenbestand.py --art log --pfad ... --tar-out /tmp/x.tar.gz
+    python3 datenbestand.py --art log --pfad ... --tar-out /tmp/x.zip
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import argparse
 import os
 import re
 import sys
-import tarfile
+import zipfile
 from typing import List
 
 from log_files import generationen
@@ -188,7 +188,20 @@ ART_ORDNER = {
 def als_archiv(
     art: str, pfad: str, ziel: str, suchverzeichnisse: List[str] = None
 ) -> List[str]:
-    """Buendelt den Bestand als tar.gz nach `ziel`. Gibt die Dateiliste zurueck.
+    """Buendelt den Bestand als ZIP nach `ziel`. Gibt die Dateiliste zurueck.
+
+    Warum ZIP statt tar.gz oder gzip:
+      * Die Groesse ist praktisch identisch. Gemessen an 202 MB echter
+        Logdaten: ZIP 10,17 MB, tar.gz 10,16 MB, cat|gzip 10,16 MB -
+        also unter 0,02 % Differenz. Alle drei benutzen dieselbe
+        Kompression (deflate/zlib), es ist nur der Container.
+      * cat|gzip waere ein reiner Datenstrom: die Dateigrenzen und damit
+        die Dateinamen gingen verloren. Bei 14 Log-Generationen laesst sich
+        dann nicht mehr sagen, welcher Tag in welchem Abschnitt steht.
+      * ZIP laesst sich auf Windows per Doppelklick entpacken (tar.gz
+        braucht dort 7-Zip, unter Windows 11 geht es ueber tar), auf Linux
+        mit unzip. Der Empfaenger der Daten soll sie ohne Werkzeug
+        aufmachen koennen.
 
     Im Archiv liegt jede Datei unter "<art>/<Elternordner>/<Dateiname>". So
     bleiben die Namen erkennbar UND gleichnamige Dateien aus verschiedenen
@@ -198,11 +211,13 @@ def als_archiv(
     if not dateien:
         raise FileNotFoundError(f"Keine Dateien fuer '{art}' unter {pfad!r} gefunden")
     ordner = ART_ORDNER.get(art, art)
-    with tarfile.open(ziel, "w:gz") as tar:
+    with zipfile.ZipFile(
+        ziel, "w", zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as zf:
         for voll in dateien:
             eltern = os.path.basename(os.path.dirname(os.path.abspath(voll))) or "root"
             eltern = eltern.replace(" ", "_")
-            tar.add(voll, arcname=f"{ordner}/{eltern}/{os.path.basename(voll)}")
+            zf.write(voll, arcname=f"{ordner}/{eltern}/{os.path.basename(voll)}")
     return dateien
 
 
@@ -216,7 +231,7 @@ def main(argv=None) -> int:
     parser.add_argument("--suchverzeichnis", action="append", default=[],
                         help="Zusatzverzeichnis (mehrfach moeglich)")
     parser.add_argument("--tar-out", default="",
-                        help="Schreibt den Bestand als tar.gz in diese Datei")
+                        help="Schreibt den Bestand als ZIP in diese Datei")
     args = parser.parse_args(argv)
 
     try:

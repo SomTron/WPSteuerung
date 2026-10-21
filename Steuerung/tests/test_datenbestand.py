@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
-import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -151,15 +151,19 @@ def test_archiv_enthaelt_den_gesamten_bestand(tmp_path):
     log.write_text("aktuell\n", encoding="utf-8")
     (tmp_path / "heizungssteuerung.log.2026-10-19").write_text("gestern\n", encoding="utf-8")
 
-    ziel = tmp_path / "out.tar.gz"
+    ziel = tmp_path / "out.zip"
     dateien = als_archiv("log", str(log), str(ziel))
 
     assert len(dateien) == 2
     assert ziel.exists()
-    with tarfile.open(ziel, "r:gz") as tar:
-        namen = tar.getnames()
+    with zipfile.ZipFile(ziel) as zf:
+        namen = zf.namelist()
     assert len(namen) == 2
     assert all(n.startswith("log/") for n in namen)
+    # Der Inhalt muss unbeschaedigt sein - sonst waere der Upload nutzlos.
+    with zipfile.ZipFile(ziel) as zf:
+        inhalte = [zf.read(n).decode("utf-8").strip() for n in namen]
+    assert sorted(inhalte) == ["aktuell", "gestern"]
 
 
 def test_archiv_kollidiert_nicht_bei_gleichnamigen_dateien(tmp_path):
@@ -171,17 +175,17 @@ def test_archiv_kollidiert_nicht_bei_gleichnamigen_dateien(tmp_path):
     (logs / "analyse_a" / "zyklen.csv").write_text("a\n", encoding="utf-8")
     (logs / "analyse_b" / "zyklen.csv").write_text("b\n", encoding="utf-8")
 
-    ziel = tmp_path / "out.tar.gz"
+    ziel = tmp_path / "out.zip"
     als_archiv("zyklen", "", str(ziel), [str(logs)])
 
-    with tarfile.open(ziel, "r:gz") as tar:
-        namen = tar.getnames()
+    with zipfile.ZipFile(ziel) as zf:
+        namen = zf.namelist()
     assert len(namen) == 2
     assert len(set(namen)) == 2, "zwei Eintraege mit gleichem Namen"
 
 
 def test_archiv_meldet_fehler_bei_leerem_bestand(tmp_path):
-    ziel = tmp_path / "out.tar.gz"
+    ziel = tmp_path / "out.zip"
     with pytest.raises(FileNotFoundError):
         als_archiv("log", str(tmp_path / "gibt_es_nicht.log"), str(ziel))
 

@@ -94,7 +94,7 @@ Begrenzung: 14 Tage Historie **und** ein Gesamtbudget von 60 MB (15 MB für
 ### Uploads (WP-Manager 9/14/16/18/21)
 
 Die Upload-Optionen laden **nicht** nur die aktive Datei hoch, sondern den
-**vollständigen Datenbestand** als `tar.gz`:
+**vollständigen Datenbestand** als ZIP:
 
 | Option | Inhalt des Archivs |
 |---|---|

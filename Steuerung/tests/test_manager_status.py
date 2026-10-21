@@ -206,7 +206,7 @@ def test_upload_optionen_nehmen_den_vollstaendigen_datenbestand():
       * learning_data.json       - Sicherungskopien .korrupt-...
 
     Deshalb laufen die Optionen 9/14/16/18/21 jetzt ueber upload_bestand,
-    das den Bestand als tar.gz buendelt.
+    das den Bestand als ZIP buendelt.
     """
     manager, _ = _updater_scripts()
 
@@ -226,6 +226,10 @@ def test_upload_optionen_nehmen_den_vollstaendigen_datenbestand():
     assert 'upload_bestand jsonl "$ENT_LOG_FILE"' in manager
     assert 'upload_bestand lern "$LEARNING_JSON"' in manager
     assert "datenbestand.py" in manager
+    # ZIP statt tar.gz: auf Windows per Doppelklick entpackbar und genauso
+    # klein (beide nutzen dieselbe deflate-Kompression).
+    assert 'archiv="$temp_dir/${label}.zip"' in manager
+    assert '"${label}.tar.gz"' not in manager
 
 
 def test_upload_bestaetigung_bleibt_auch_beim_archiv():

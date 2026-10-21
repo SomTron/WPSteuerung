@@ -358,7 +358,7 @@ verify_service_action() {
 # Einheitlicher, bewusst bestaetigungspflichtiger Catbox-Upload. Originaldaten
 # werden nur in ein privates temporaeres Verzeichnis kopiert und danach geloescht.
 #
-# upload_fertig() bekommt eine fertige Datei (z. B. ein tar.gz). Der restliche
+# upload_fertig() bekommt eine fertige Datei (z. B. ein ZIP). Der restliche
 # Teil (Groessengrenze, Rueckfrage, curl) ist fuer Einzeldatei und Datenbestand
 # identisch - deshalb steckt er in dieser einen Funktion.
 upload_fertig() {
@@ -474,7 +474,9 @@ upload_bestand() {
         return 1
     }
     trap 'rm -rf "$temp_dir"' 0 1 2 3 15
-    archiv="$temp_dir/${label}.tar.gz"
+    # ZIP statt tar.gz: laesst sich auf Windows per Doppelklick entpacken
+    # und ist genauso klein (gleiche deflate-Kompression).
+    archiv="$temp_dir/${label}.zip"
     # Suchverzeichnisse ueber die Umgebung uebergeben: Newline als Trenner
     # erlaubt Leerzeichen im Pfad (z. B. "csv log") ohne Quote-Hackerei.
     suchverz=""
@@ -490,7 +492,7 @@ upload_bestand() {
         return 1
     fi
     printf "${CYAN}Enthaltene Dateien: %s${NC}\n" "$anzahl"
-    upload_fertig "$archiv" "$label (vollstaendiger Datenbestand)" "${label}.tar.gz"
+    upload_fertig "$archiv" "$label (vollstaendiger Datenbestand)" "${label}.zip"
     upload_rc=$?
     rm -rf "$temp_dir"
     return $upload_rc
