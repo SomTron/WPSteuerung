@@ -22,11 +22,12 @@ Aufruf als Skript:
 from __future__ import annotations
 
 import argparse
+import gzip
 import os
 import re
 import sys
 import zipfile
-from typing import List
+from typing import List, Optional
 
 from log_files import generationen
 
@@ -185,10 +186,100 @@ ART_ORDNER = {
 }
 
 
-def als_archiv(
-    art: str, pfad: str, ziel: str, suchverzeichnisse: List[str] = None
-) -> List[str]:
-    """Buendelt den Bestand als ZIP nach `ziel`. Gibt die Dateiliste zurueck.
+def _roh_groesse(datei: str) -> int:
+    try:
+        return os.path.getsize(datei)
+    except OSError:
+        return 0
+
+
+def _menschen_bytes(bytes_wert: int) -> str:
+    """Formatiert Bytes lesbar: 0 B, 512 KB, 12,5 MB, 1,3 GB."""
+    wert = float(bytes_wert)
+    for einheit, faktor in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+        if wert >= faktor:
+            return f"{wert / faktor:.1f} {einheit}"
+    return f"{int(wert)} B"
+
+
+def kompressionsfaktor(dateien: List[str], stichprobe_bytes: int = 256 * 1024) -> float:
+    """Schaetzt, wie stark die Daten komprimieren.
+
+    Wird gebraucht, um zu entscheiden, wie viele Rohdaten in ein Archiv
+    passen. Ohne diese Schaetzung waere jede Abschaetzung eine
+    Ratesache: 1 MB Log komprimiert auf ~100 KB, 1 MB JSON auf ~40 KB,
+    aber 1 MB Zufallsdaten gar nicht.
+
+    Gemessen wird an der groessten verfuegbaren Datei - die schaechste
+    Datei bestimmt, wie schnell das Archiv wächst.
+    """
+    kandidaten = [d for d in dateien if _roh_groesse(d) > 0]
+    if not kandidaten:
+        return 4.0
+    groesste = max(kandidaten, key=_roh_groesse)
+    try:
+        with open(groesste, "rb") as f:
+            probe = f.read(stichprobe_bytes)
+    except OSError:
+        return 4.0
+    if len(probe) < 1024:
+        return 4.0
+    komprimiert = len(gzip.compress(probe, 9))
+    if komprimiert <= 0:
+        return 4.0
+    return max(1.0, len(probe) / komprimiert)
+
+
+def nach_budget(dateien: List[str], budget: Optional[int]) -> tuple:
+    """Beschnittet den Bestand auf ein Rohdaten-Budget.
+
+    Die AELTESTEN Dateien fallen weg - so bleibt derjuengste Zeitraum
+    erhalten. Zurueck: (behalten, weggelassen).
+
+    Warum das noetig ist: nicht jeder Datenbestand waechst begrenzt.
+    Die Log-Rotation hat ein Byte-Budget, die CSV-Monatsarchive
+    (heizungsdaten_YYYY-MM.csv, ~17 MB pro Monat) dagegen nicht - die
+    sammeln sich unbegrenzt an. Ohne Beschnitt waere der Upload irgendwann
+    zu gross und wuerde abgelehnt - mit Beschnitt laedt er immer, und der
+    Nutzer sieht, dass aeltere Daten weggelassen wurden.
+    """
+    if not budget or budget <= 0:
+        return list(dateien), []
+    behalten: List[str] = []
+    weggelassen: List[str] = []
+    summe = 0
+    # `dateien` kommt chronologisch (aelteste zuerst). Von hinten her
+    # fuellen: so bleiben die juengsten Daten erhalten.
+    for datei in reversed(dateien):
+        groesse = _roh_groesse(datei)
+        if summe + groesse > budget:
+            weggelassen.append(datei)
+            continue
+        behalten.append(datei)
+        summe += groesse
+    behalten.reverse()
+    weggelassen.reverse()
+    return behalten, weggelassen
+
+
+def als_archive(
+    art: str,
+    pfad: str,
+    ziel_verzeichnis: str,
+    label: str,
+    suchverzeichnisse: List[str] = None,
+    max_bytes: Optional[int] = None,
+    budget: Optional[int] = None,
+) -> dict:
+    """Buendelt den Bestand als ZIP-Archive. Gibt eine Zusammenfassung zurueck.
+
+    max_bytes: harte Grenze je Archiv. Waehrend des Baus gemessen - der
+        Umbau bricht ab, sobald ein Archiv die Grenze ueberschreitet, und
+        macht ein neues auf (geteilter Upload). Ohne diese Ueberwachung
+        entstuende erst ein riesiges Temp-Archiv, das man nachher
+        wegwerfen muesste.
+    budget: Rohdaten-Budget fuer den Bestand. Die aeltesten Dateien
+        werden weggelassen, bis die Summe passt.
 
     Warum ZIP statt tar.gz oder gzip:
       * Die Groesse ist praktisch identisch. Gemessen an 202 MB echter
@@ -210,15 +301,79 @@ def als_archiv(
     dateien = bestand(art, pfad, suchverzeichnisse)
     if not dateien:
         raise FileNotFoundError(f"Keine Dateien fuer '{art}' unter {pfad!r} gefunden")
+
+    weggelassen: List[str] = []
+    if budget:
+        dateien, weggelassen = nach_budget(dateien, budget)
+
     ordner = ART_ORDNER.get(art, art)
-    with zipfile.ZipFile(
-        ziel, "w", zipfile.ZIP_DEFLATED, compresslevel=9
-    ) as zf:
+    os.makedirs(ziel_verzeichnis, exist_ok=True)
+
+    # Wie viele Rohdaten passen in ein Archiv? Das haengt vom Kompressions-
+    # faktor ab, der gemessen wird (Log ~10, JSON ~20, Zufallsdaten ~1).
+    # 0,9 als Sicherheitsabschlag: das fertige Archiv soll mit Reserve
+    # unter dem Limit bleiben, nicht genau darauf.
+    roh_limit = None
+    if max_bytes:
+        faktor = kompressionsfaktor(dateien)
+        roh_limit = int(max_bytes * faktor * 0.9)
+
+    archive: List[str] = []
+    eingepackt: List[str] = []
+    aktuell = None
+    zf = None
+    roh_aktuell = 0
+
+    def _archiv_schliessen() -> None:
+        nonlocal zf, aktuell, roh_aktuell
+        if zf is not None:
+            zf.close()
+            archive.append(aktuell)
+            zf = None
+            aktuell = None
+            roh_aktuell = 0
+
+    try:
         for voll in dateien:
+            groesse = _roh_groesse(voll)
+            # Passt die Datei noch in das aktuelle Archiv? Entscheidend ist
+            # die ROH-Groesse, denn die bestimmt ueber den gemessenen
+            # Kompressionsfaktor die Archivgroesse.
+            if roh_limit is not None and zf is not None:
+                if roh_aktuell + groesse > roh_limit:
+                    _archiv_schliessen()
+            if zf is None:
+                # Jedes Archiv endet auf .zip - auch die Teile. Sonst laesst
+                # sich der Download nicht per Doppelklick entpacken.
+                basis = os.path.join(ziel_verzeichnis, f"{label}.zip")
+                aktuell = basis if not archive else os.path.join(
+                    ziel_verzeichnis, f"{label}-{len(archive) + 1}.zip"
+                )
+                zf = zipfile.ZipFile(
+                    aktuell, "w", zipfile.ZIP_DEFLATED, compresslevel=9
+                )
             eltern = os.path.basename(os.path.dirname(os.path.abspath(voll))) or "root"
             eltern = eltern.replace(" ", "_")
             zf.write(voll, arcname=f"{ordner}/{eltern}/{os.path.basename(voll)}")
-    return dateien
+            eingepackt.append(voll)
+            roh_aktuell += groesse
+            # Echte Groesse pruefen: schlecht komprimierbare Daten
+            # koennten das Limit trotz der Schaetzung reissen.
+            if max_bytes and _roh_groesse(aktuell) > max_bytes:
+                raise ValueError(
+                    f"Archiv ueberschreitet das Limit "
+                    f"({_roh_groesse(aktuell)} > {max_bytes} Bytes)"
+                )
+    finally:
+        _archiv_schliessen()
+
+    return {
+        "archive": archive,
+        "dateien": eingepackt,
+        "weggelassen": weggelassen,
+        "roh_bytes": sum(_roh_groesse(d) for d in eingepackt),
+        "archiv_bytes": sum(_roh_groesse(a) for a in archive),
+    }
 
 
 def main(argv=None) -> int:
@@ -230,16 +385,41 @@ def main(argv=None) -> int:
     parser.add_argument("--pfad", default="", help="Pfad der aktiven Datei")
     parser.add_argument("--suchverzeichnis", action="append", default=[],
                         help="Zusatzverzeichnis (mehrfach moeglich)")
-    parser.add_argument("--tar-out", default="",
-                        help="Schreibt den Bestand als ZIP in diese Datei")
+    parser.add_argument("--out-dir", default="",
+                        help="Verzeichnis fuer die erzeugten Archive")
+    parser.add_argument("--label", default="datenbestand",
+                        help="Basisname der Archive")
+    parser.add_argument("--max-bytes", type=int, default=0,
+                        help="Harte Grenze je Archiv in Bytes (0 = keine)")
+    parser.add_argument("--budget", type=int, default=0,
+                        help="Rohdaten-Budget in Bytes (0 = unbeschnitten)")
     args = parser.parse_args(argv)
 
     try:
-        if args.tar_out:
-            dateien = als_archiv(args.art, args.pfad, args.tar_out,
-                                 args.suchverzeichnis)
-            # Auf stdout nur die Kurzinfo, damit der Manager sie auswerten kann.
-            print(f"{len(dateien)} Dateien")
+        if args.out_dir:
+            ergebnis = als_archive(
+                args.art, args.pfad, args.out_dir, args.label,
+                args.suchverzeichnis,
+                max_bytes=args.max_bytes or None,
+                budget=args.budget or None,
+            )
+            # stdout: die erzeugten Archive, eine pro Zeile.
+            for pfad in ergebnis["archive"]:
+                print(pfad)
+            # stderr: die Zusammenfassung fuer den Manager.
+            info = (
+                f"{len(ergebnis['dateien'])} Dateien, "
+                f"{_menschen_bytes(ergebnis['roh_bytes'])} roh, "
+                f"{_menschen_bytes(ergebnis['archiv_bytes'])} komprimiert"
+            )
+            if ergebnis["weggelassen"]:
+                info += (
+                    f" | {len(ergebnis['weggelassen'])} Dateien weggelassen "
+                    f"(Budget)"
+                )
+            if len(ergebnis["archive"]) > 1:
+                info += f" | auf {len(ergebnis['archive'])} Archive verteilt"
+            print(info, file=sys.stderr)
         else:
             for voll in bestand(args.art, args.pfad, args.suchverzeichnis):
                 print(voll)

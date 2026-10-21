@@ -25,13 +25,14 @@ if str(STEUERUNG) not in sys.path:
     sys.path.insert(0, str(STEUERUNG))
 
 from datenbestand import (  # noqa: E402
-    als_archiv,
+    als_archive,
     bestand,
     bestand_csv,
     bestand_jsonl,
     bestand_lerndaten,
     bestand_log,
     bestand_zyklen,
+    nach_budget,
 )
 
 
@@ -151,17 +152,19 @@ def test_archiv_enthaelt_den_gesamten_bestand(tmp_path):
     log.write_text("aktuell\n", encoding="utf-8")
     (tmp_path / "heizungssteuerung.log.2026-10-19").write_text("gestern\n", encoding="utf-8")
 
-    ziel = tmp_path / "out.zip"
-    dateien = als_archiv("log", str(log), str(ziel))
+    ziel = tmp_path / "out"
+    ergebnis = als_archive("log", str(log), str(ziel), "heizungssteuerung")
 
-    assert len(dateien) == 2
-    assert ziel.exists()
-    with zipfile.ZipFile(ziel) as zf:
+    assert len(ergebnis["dateien"]) == 2
+    assert len(ergebnis["archive"]) == 1
+    archiv = ergebnis["archive"][0]
+    assert archiv.endswith("heizungssteuerung.zip")
+    with zipfile.ZipFile(archiv) as zf:
         namen = zf.namelist()
     assert len(namen) == 2
     assert all(n.startswith("log/") for n in namen)
     # Der Inhalt muss unbeschaedigt sein - sonst waere der Upload nutzlos.
-    with zipfile.ZipFile(ziel) as zf:
+    with zipfile.ZipFile(archiv) as zf:
         inhalte = [zf.read(n).decode("utf-8").strip() for n in namen]
     assert sorted(inhalte) == ["aktuell", "gestern"]
 
@@ -175,19 +178,118 @@ def test_archiv_kollidiert_nicht_bei_gleichnamigen_dateien(tmp_path):
     (logs / "analyse_a" / "zyklen.csv").write_text("a\n", encoding="utf-8")
     (logs / "analyse_b" / "zyklen.csv").write_text("b\n", encoding="utf-8")
 
-    ziel = tmp_path / "out.zip"
-    als_archiv("zyklen", "", str(ziel), [str(logs)])
+    ergebnis = als_archive("zyklen", "", str(tmp_path), "zyklen", [str(logs)])
 
-    with zipfile.ZipFile(ziel) as zf:
+    with zipfile.ZipFile(ergebnis["archive"][0]) as zf:
         namen = zf.namelist()
     assert len(namen) == 2
     assert len(set(namen)) == 2, "zwei Eintraege mit gleichem Namen"
 
 
 def test_archiv_meldet_fehler_bei_leerem_bestand(tmp_path):
-    ziel = tmp_path / "out.zip"
     with pytest.raises(FileNotFoundError):
-        als_archiv("log", str(tmp_path / "gibt_es_nicht.log"), str(ziel))
+        als_archive("log", str(tmp_path / "gibt_es_nicht.log"),
+                    str(tmp_path), "heizungssteuerung")
+
+
+# ------------------------------------------------- Groessensteuerung
+
+
+def test_budget_behaelt_die_juengsten_dateien(tmp_path):
+    """REGRESSION: ohne Budget waechst der Bestand unbegrenzt.
+
+    Die CSV-Monatsarchive (~17 MB/Monat) werden nie geloescht. Ohne
+    Beschnitt waere der Upload irgendwann zu gross und wuerde abgelehnt.
+    """
+    dateien = []
+    for i in range(5):
+        p = tmp_path / f"heizungsdaten_2026-0{i + 1}.csv"
+        p.write_text("x" * 1000, encoding="utf-8")
+        dateien.append(str(p))
+
+    behalten, weggelassen = nach_budget(dateien, budget=2500)
+
+    assert len(behalten) == 2, "das Budget greift nicht"
+    assert len(weggelassen) == 3
+    # Die juengsten (hinten in der Liste) muessen erhalten bleiben.
+    assert behalten[-1] == dateien[-1]
+    assert dateien[0] in weggelassen, "die aelteste Datei muss fallen"
+
+
+def test_budget_ohne_wert_aendert_nichts(tmp_path):
+    dateien = []
+    for i in range(3):
+        p = tmp_path / f"d{i}.csv"
+        p.write_text("x", encoding="utf-8")
+        dateien.append(str(p))
+    behalten, weggelassen = nach_budget(dateien, budget=0)
+    assert behalten == dateien
+    assert weggelassen == []
+
+
+def test_archiv_meldet_weggelassene_dateien(tmp_path):
+    log = tmp_path / "heizungssteuerung.log"
+    log.write_text("a" * 5000, encoding="utf-8")
+    (tmp_path / "heizungssteuerung.log.2026-10-19").write_text("b" * 5000, encoding="utf-8")
+
+    ergebnis = als_archive("log", str(log), str(tmp_path), "heizungssteuerung",
+                            budget=6000)
+
+    assert len(ergebnis["weggelassen"]) == 1
+    assert len(ergebnis["dateien"]) == 1
+    assert ergebnis["roh_bytes"] <= 6000
+
+
+def test_grosse_bestand_wird_auf_mehrere_archive_verteilt(tmp_path):
+    """REGRESSION: ein einzelnes riesiges Archiv wurde gebaut und erst
+    DANACH abgelehnt - auf dem Pi waere das ein 1-GB-Temp-File.
+
+    Jetzt wird waehrend des Baus umgeschaltet: jedes Archiv bleibt unter
+    dem Limit und ist fuer sich ein gueltiges ZIP.
+    """
+    log = tmp_path / "heizungssteuerung.log"
+    log.write_bytes(b"aktuell\n")
+    for i in range(8):
+        # Zufallsbytes: die komprimieren praktisch nicht. Sonst waere die
+        # Datei zu klein und das Archiv wuerde gar nicht wachsen.
+        (tmp_path / f"heizungssteuerung.log.2026-10-{i + 1:02d}").write_bytes(
+            os.urandom(4000)
+        )
+
+    ergebnis = als_archive("log", str(log), str(tmp_path), "heizungssteuerung",
+                            max_bytes=12000)
+
+    assert len(ergebnis["archive"]) > 1, "der Bestand wurde nicht geteilt"
+    # Jedes Archiv muss unter dem Limit bleiben.
+    for archiv in ergebnis["archive"]:
+        assert os.path.getsize(archiv) <= 12000
+        # Und als ZIP benannt bleiben - sonst laesst sich der Download
+        # nicht per Doppelklick entpacken.
+        assert archiv.endswith(".zip")
+        with zipfile.ZipFile(archiv) as zf:
+            assert zf.testzip() is None, "das Archiv ist kaputt"
+    # Und alle Dateien muessen irgendwo drin sein.
+    eingepackt = []
+    for archiv in ergebnis["archive"]:
+        with zipfile.ZipFile(archiv) as zf:
+            eingepackt.extend(zf.namelist())
+    assert len(eingepackt) == 9
+
+
+def test_archiv_bleibt_klein_bei_gut_komprimierbaren_daten(tmp_path):
+    """Gegenprobe: bei Log-Text (Faktor ~10) darf NICHT unnoetig in viele
+    Archive aufgeteilt werden - das wuerde viele URLs erzeugen."""
+    log = tmp_path / "heizungssteuerung.log"
+    log.write_text("x" * 4000 + "\n", encoding="utf-8")
+    for i in range(8):
+        (tmp_path / f"heizungssteuerung.log.2026-10-{i + 1:02d}").write_text(
+            "y" * 4000 + "\n", encoding="utf-8"
+        )
+
+    ergebnis = als_archive("log", str(log), str(tmp_path), "heizungssteuerung",
+                            max_bytes=12000)
+
+    assert len(ergebnis["archive"]) == 1, "es wurde unnoetig aufgeteilt"
 
 
 # ----------------------------------------------------------------- Dispatch

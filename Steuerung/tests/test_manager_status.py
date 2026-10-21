@@ -228,8 +228,16 @@ def test_upload_optionen_nehmen_den_vollstaendigen_datenbestand():
     assert "datenbestand.py" in manager
     # ZIP statt tar.gz: auf Windows per Doppelklick entpackbar und genauso
     # klein (beide nutzen dieselbe deflate-Kompression).
-    assert 'archiv="$temp_dir/${label}.zip"' in manager
+    assert "--out-dir" in manager
+    assert "--label" in manager
     assert '"${label}.tar.gz"' not in manager
+    # Die Groessensteuerung muss durchgereicht werden - sonst waere die
+    # Grenze nur eine Pruefung NACH dem Bau des Archivs.
+    assert '--max-bytes "$max_bytes"' in manager
+    assert '--budget "$budget"' in manager
+    assert "WPS_UPLOAD_BUDGET_BYTES" in manager
+    # Geteilte Uploads: mehrere Archive, jedes einzeln hochladen.
+    assert 'while IFS= read -r archiv' in manager
 
 
 def test_upload_bestaetigung_bleibt_auch_beim_archiv():

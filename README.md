@@ -109,6 +109,29 @@ Upload der aktiven Datei liefert nach der Tagesrotation praktisch nur den
 laufenden Tag. Die Datei-Auswahl liegt in `Steuerung/datenbestand.py` und
 ist damit für Anzeige und Upload dieselbe.
 
+#### Größensteuerung
+
+Catbox nimmt max. 200 MB pro Upload (`WPS_UPLOAD_MAX_BYTES`). Damit das
+Limit nie gerissen wird, arbeiten **drei** Mechanismen zusammen:
+
+1. **Budget** (`WPS_UPLOAD_BUDGET_BYTES`, Standard 4 × Limit): Der Bestand
+   wird auf dieses Rohdaten-Budget beschnitten – die **ältesten** Dateien
+   fallen weg, der jüngste Zeitraum bleibt erhalten. Nötig, weil nicht alle
+   Bestände begrenzt wachsen: die CSV-Monatsarchive (~17 MB/Monat) und die
+   `zyklen.csv` aus den Analyse-Läufen sammeln sich unbegrenzt an.
+2. **Messung während des Baus**: Wie viele Rohdaten in ein Archiv passen,
+   hängt vom Kompressionsfaktor ab – der wird an der größten Datei
+   **gemessen** (Log ≈ 10, JSON ≈ 20, Binärdaten ≈ 1). Wird das Limit
+   erreicht, geht die nächste Datei in ein neues Archiv.
+3. **Geteilte Uploads**: Es entstehen mehrere Archive
+   (`heizungssteuerung.zip`, `heizungssteuerung-2.zip`, …), die einzeln
+   bestätigt und hochgeladen werden. Jedes ist für sich ein gültiges ZIP
+   und per Doppelklick zu entpacken.
+
+Die Größenprüfung läuft **vor und während** des Archivbaus – nicht erst
+danach. Sonst entstünde auf dem Pi erst ein riesiges Temp-Archiv, das man
+nachher wegwerfen müsste.
+
 > ⚠️ Die Daten landen **öffentlich** auf catbox.moe und sind ohne Login
 > abrufbar. Der Upload bleibt daher bestätigungspflichtig.
 

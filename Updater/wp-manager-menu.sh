@@ -469,14 +469,18 @@ upload_bestand() {
         printf "${RED}✗ Upload des Datenbestands benoetigt python3.${NC}\n"
         return 1
     fi
+    max_bytes="${WPS_UPLOAD_MAX_BYTES:-209715200}"
+    # Rohdaten-Budget: so viele Rohdaten duerfen in den Bestand, damit
+    # das Archiv sicher unter dem Upload-Limit bleibt. Log- und CSV-Text
+    # komprimiert gut (Faktor 8-10), JSON noch besser; der Faktor 4 ist
+    # konservativ. Uebersteigt der Bestand das Budget, fallen die
+    # AELTESTEN Dateien weg - der juengste Zeitraum bleibt erhalten.
+    budget="${WPS_UPLOAD_BUDGET_BYTES:-$((max_bytes * 4))}"
     temp_dir=$(mktemp -d 2>/dev/null) || {
         printf "${RED}✗ Temporaeres Verzeichnis konnte nicht erstellt werden.${NC}\n"
         return 1
     }
     trap 'rm -rf "$temp_dir"' 0 1 2 3 15
-    # ZIP statt tar.gz: laesst sich auf Windows per Doppelklick entpacken
-    # und ist genauso klein (gleiche deflate-Kompression).
-    archiv="$temp_dir/${label}.zip"
     # Suchverzeichnisse ueber die Umgebung uebergeben: Newline als Trenner
     # erlaubt Leerzeichen im Pfad (z. B. "csv log") ohne Quote-Hackerei.
     suchverz=""
@@ -484,16 +488,27 @@ upload_bestand() {
         suchverz="${suchverz}${_dir}
 "
     done
-    anzahl=$(WPS_SUCHVERZ="$suchverz" python3 "$TARGET_DIR/datenbestand.py" \
-        --art "$art" --pfad "$pfad" --tar-out "$archiv" 2>/dev/null)
-    if [ -z "$anzahl" ] || [ ! -s "$archiv" ]; then
+    # stdout (die Archive) in eine Datei, stderr (die Zusammenfassung) in
+    # eine Variable: so kann der Manager beides getrennt verwenden.
+    info=$(WPS_SUCHVERZ="$suchverz" python3 "$TARGET_DIR/datenbestand.py" \
+        --art "$art" --pfad "$pfad" --out-dir "$temp_dir" --label "$label" \
+        --max-bytes "$max_bytes" --budget "$budget" \
+        2>&1 1>"$temp_dir/archivee.txt")
+    if [ -z "$info" ] || [ ! -s "$temp_dir/archivee.txt" ]; then
         rm -rf "$temp_dir"
         printf "${RED}✗ Datenbestand konnte nicht zusammengestellt werden.${NC}\n"
+        [ -n "$info" ] && printf "${RED}  %s${NC}\n" "$info"
         return 1
     fi
-    printf "${CYAN}Enthaltene Dateien: %s${NC}\n" "$anzahl"
-    upload_fertig "$archiv" "$label (vollstaendiger Datenbestand)" "${label}.zip"
-    upload_rc=$?
+    printf "${CYAN}Datenbestand: %s${NC}\n" "$info"
+    # Mehrere Archive (geteilte Uploads): jedes einzeln bestaetigen und
+    # hochladen. Jedes Archiv ist fuer sich ein gueltiges ZIP.
+    upload_rc=0
+    while IFS= read -r archiv; do
+        [ -n "$archiv" ] || continue
+        upload_fertig "$archiv" "$label (Datenbestand)" "$(basename "$archiv")"
+        [ "$?" -eq 0 ] || { upload_rc=1; break; }
+    done < "$temp_dir/archivee.txt"
     rm -rf "$temp_dir"
     return $upload_rc
 }
