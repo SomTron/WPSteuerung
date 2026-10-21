@@ -204,6 +204,38 @@ def test_tail_bytes_ueber_alle_ist_chronologisch(tmp_path):
     assert text.index("EINS") < text.index("ZWEI")
 
 
+def test_tail_log_sieht_die_generation_ohne_aktive_datei(tmp_path):
+    """REGRESSION: die Historie war unsichtbar, wenn die aktive Datei fehlt.
+
+    Die aktive Logdatei entsteht erst beim ersten Eintrag des Tages. Fehlt
+    sie, liegen die Daten von gestern aber in der Generation - mit der
+    alten Pruefung ("aktive Datei existiert?") waren sie weg.
+    """
+    log = tmp_path / "heizungssteuerung.log"
+    (tmp_path / "heizungssteuerung.log.2026-10-20").write_text(
+        "2026-10-20 09:00:00 +0200 INFO - GESTERN\n", encoding="utf-8"
+    )
+
+    zeilen, meta = tail_log(lines=10, log_path=str(log))
+
+    assert len(zeilen) == 1, "die Historie fehlt"
+    assert "GESTERN" in zeilen[0]
+    assert meta["log_exists"] is True
+
+
+def test_query_logs_sieht_die_generation_ohne_aktive_datei(tmp_path):
+    log = tmp_path / "heizungssteuerung.log"
+    (tmp_path / "heizungssteuerung.log.2026-10-20").write_text(
+        "2026-10-20 09:00:00 +0200 INFO - GESTERN\n", encoding="utf-8"
+    )
+
+    zeilen, meta = query_logs(lines=10, log_path=str(log))
+
+    assert len(zeilen) == 1
+    assert "GESTERN" in zeilen[0]
+    assert meta["log_exists"] is True
+
+
 # ------------------------------------------------------- Tagesrotation
 
 

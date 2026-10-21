@@ -15,8 +15,22 @@ import csv
 import json
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+
+# Die Log-Dateien rotieren tagesbasiert (heizungssteuerung.log.2026-10-19,
+# .2026-10-20, ...). Fuer die Analyse muss der GESAMTE Bestand gelesen
+# werden, sonst sieht der Auto-Analyse-Lauf auf dem Pi nur noch den
+# laufenden Tag. Die gemeinsame Logik liegt in Steuerung/log_files.py -
+# derselbe, die auch die WebApp und der Manager benutzen.
+_STEUERUNG_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Steuerung"
+)
+if _STEUERUNG_DIR not in sys.path:
+    sys.path.insert(0, _STEUERUNG_DIR)
+from log_files import generationen  # noqa: E402
+
 try:
     from analysis_core import (
         build_cycle_quality,
@@ -197,6 +211,35 @@ def _cycle_csv_as_parsed(cycle_path):
     return parsed_cycles, quality
 
 
+def log_generationen(pfad):
+    """Alle Log-Dateien dieses Bestands, aelteste zuerst.
+
+    Enthaelt die aktive Datei und alle rotierten Generationen
+    (heizungssteuerung.log.2026-10-19, ...). Faellt auf die aktive Datei
+    zurueck, wenn keine Generationen erkannt werden (z. B. eine
+    hochgeladene Einzeldatei aus logs/).
+    """
+    if not pfad:
+        return []
+    dateien = generationen(pfad)
+    if dateien:
+        return dateien
+    return [pfad] if os.path.exists(pfad) else []
+
+
+def log_zeilen(pfad):
+    """Liefert die Zeilen ALLER Generationen in chronologischer Reihenfolge.
+
+    Der Parser-Zustand (Regel-Block, offener Kompressorzyklus) laeuft so
+    ueber die Dateigrenzen hinweg weiter - ein Zyklus, der um Mitternacht
+    beginnt, wird nicht zerrissen.
+    """
+    for datei in log_generationen(pfad):
+        with open(datei, "r", encoding="utf-8", errors="replace") as f:
+            for roh in f:
+                yield roh
+
+
 def parse_log(pfad):
     """Parst das Log und liefert strukturierte Daten fuer die Analyse."""
     pv_kontext, soc_kontext, feedin_kontext = [None], [None], [None]
@@ -232,218 +275,219 @@ def parse_log(pfad):
         snapshots.append(block)
         block = None
 
-    with open(pfad, "r", encoding="utf-8", errors="replace") as f:
-        for roh in f:
-            stats["zeilen_gesamt"] += 1
-            line = norm(roh.rstrip("\n"))
+    # Ueber alle Generationen hinweg lesen (aelteste zuerst) - der
+    # Parser-Zustand laeuft dabei ueber die Dateigrenzen weiter.
+    for roh in log_zeilen(pfad):
+        stats["zeilen_gesamt"] += 1
+        line = norm(roh.rstrip("\n"))
 
-            # Regel-Detailzeilen (ohne Zeitstempel) direkt dem Block zuordnen
-            if block is not None:
-                rm = RE_RULE.match(line)
-                if rm:
-                    block["regeln"].append({
-                        "prio": int(rm.group(1)),
-                        "verdict": rm.group(2),
-                        "name": rm.group(3),
-                        "aktiv": rm.group(4) is None,
-                        "grund": rm.group(5),
-                    })
-                    continue
-
-            m = RE_LINE.match(line)
-            if not m:
-                continue
-            ts = parse_ts(f"{m.group(1)} {m.group(2)}")
-            level = m.group(3)
-            msg = m.group(4)
-            stats["zeilen_erkannt"] += 1
-            stats["level_" + level] += 1
-
-            # Versionsmarker: Startzeile nennt die GitHub-Revision des Standes
-            if git_version is None and "GitHub-Rev:" in msg:
-                m_gv = re.search(r"GitHub-Rev:\s*(.*)", msg)
-                if m_gv:
-                    git_version = m_gv.group(1).strip()
-
-            if msg.startswith("Regel-Bewertung"):
-                _finalisiere_block()
-                block = {
-                    "ts": ts, "level": level, "regeln": [],
-                    "sensoren": dict(last_sensoren), "sensoren_ts": last_sensors_ts,
-                    "status_ein": None, "regel": None, "modus": None, "blocking": None,
-                    "pv_w": None, "soc": None, "feedin_w": None,
-                    "forecast_morgen_whqm": None, "soll_c": None,
-                }
-                continue
-
-            s = RE_SENSOR.search(msg)
-            if s:
-                last_sensoren = {
-                    "oben": float(s.group(1)), "mittig": float(s.group(2)),
-                    "unten": float(s.group(3)), "verd": float(s.group(4)),
-                }
-                last_sensors_ts = ts
-                if block is not None:
-                    block["sensoren"] = dict(last_sensoren)
-                    block["sensoren_ts"] = ts
-                continue
-
-            st = RE_STATUS.search(msg)
-            if st:
-                ein = st.group(1) == "EIN"
-                regel = modus = blocking = None
-                for part in (st.group(2) or "").split("|"):
-                    part = part.strip()
-                    if part.startswith("EP=") or part.startswith("AP="):
-                        continue
-                    if part.startswith("Blocking:"):
-                        blocking = part[len("Blocking:"):].strip()
-                    elif part.startswith("Regel:"):
-                        regel = part[len("Regel:"):].strip()
-                    elif part.startswith("Modus:"):
-                        modus = part[len("Modus:"):].strip()
-                if block is not None:
-                    block["status_ein"] = ein
-                    block["regel"] = regel
-                    block["modus"] = modus
-                    block["blocking"] = blocking
-                continue
-
-            # ---- Kompressor-Zyklen ----
-            if RE_COMP_EIN.match(msg):
-                if offener_zyklus is None:
-                    mvf = RE_COMP_EIN_VERIF.search(msg)
-                    offener_zyklus = {
-                        "start_ts": ts, "start_regel": None, "source_at_start": None,
-                        "start_t_verd": None,
-                        "start_t_unten": None, "start_t_mittig": None, "start_t_oben": None,
-                        "end_ts": None, "dauer_min": None,
-                        "end_grund": None, "end_regel": None,
-                        "end_sensoren": None, "max_unten": None, "max_mittig": None,
-                        "max_oben": None, "quelle": None,
-                    }
-                    if mvf:
-                        offener_zyklus["start_t_verd"] = float(mvf.group(1))
-                        offener_zyklus["start_t_unten"] = float(mvf.group(2))
-                    else:
-                        # Fallback: aeltere Log-Stellen ohne t_verd/t_unten -> Sensor-Snapshot
-                        offener_zyklus["start_t_verd"] = last_sensoren.get("verd")
-                        offener_zyklus["start_t_unten"] = last_sensoren.get("unten")
-                    # Die 'Kompressor EIN'-Zeile kennt nur Verd/Unten. Mittig/Oben
-                    # zum Zyklusstart aus dem letzten Sensoren-Snapshot uebernehmen.
-                    offener_zyklus["start_t_mittig"] = last_sensoren.get("mittig")
-                    offener_zyklus["start_t_oben"] = last_sensoren.get("oben")
-                    for zts, zregel in reversed(ereignisse):
-                        if zts <= ts and zregel[0] in ("CYCLE_START_WE", "WECHSEL"):
-                            offener_zyklus["start_regel"] = zregel[1]
-                            break
-                    source, source_quality = classify_source({
-                        "start_regel": offener_zyklus.get("start_regel"),
-                        "feedin_w": feedin_kontext[0],
-                    })
-                    offener_zyklus["source_at_start"] = source
-                    offener_zyklus["source_quality"] = source_quality
-                continue
-
-            if "Kompressor AUS" in msg and "Laufzeit:" in msg:
-                mm = RE_COMP_AUS.search(msg)
-                if offener_zyklus is not None and mm is not None:
-                    offener_zyklus["end_ts"] = ts
-                    d = int(mm.group(1)) * 60 + int(mm.group(2)) + int(float(mm.group(3))) / 60.0
-                    offener_zyklus["dauer_min"] = round(d, 1)
-                    offener_zyklus["end_sensoren"] = dict(last_sensoren)
-                    code_match = RE_REASON_CODE.search(msg)
-                    if code_match:
-                        end_grund = code_match.group(1).lower()
-                        end_quality = "direct"
-                    else:
-                        end_grund = None
-                        end_quality = "legacy_text"
-                    if end_grund is None and "BOILERMAX AUS" in msg:
-                        end_grund = "boiler_max"
-                    ra = RE_REGEL_AUS.search(msg)
-                    if end_grund is None and ra:
-                        end_grund = "regel_aus"
-                    if end_grund is None and "Keine Regel aktiv" in msg:
-                        end_grund = "keine_regel"
-                    if end_grund is None:
-                        for hts, hmsg in reversed(letzte_zeilen):
-                            if hts >= ts - timedelta(seconds=120) and hts <= ts:
-                                if "BOILERMAX AUS" in hmsg:
-                                    end_grund = "boiler_max"
-                                elif "Legionellenprophylaxe ABGEBROCHEN" in hmsg:
-                                    end_grund = "legionellen_timeout"
-                                elif "Kompressor-Verifizierung fehlgeschlagen" in hmsg:
-                                    end_grund = "verifizierung_fehler"
-                                elif RE_REGEL_AUS.search(hmsg):
-                                    end_grund = "regel_aus"
-                                if end_grund:
-                                    break
-                    if end_grund is None:
-                        for zts, (code, name, _, _) in reversed(ereignisse):
-                            if zts >= ts - timedelta(seconds=120) and zts <= ts \
-                                    and code in ("CYCLE_END_WE", "WECHSEL"):
-                                end_grund = "keine_regel" if name == "Keine Regel aktiv" \
-                                    else "wechsel:" + name
-                                break
-                    offener_zyklus["end_grund"] = end_grund or "unbekannt"
-                    offener_zyklus["reason_code"] = end_grund if end_quality == "direct" else ""
-                    offener_zyklus["end_grund_quality"] = (
-                        "missing" if not end_grund or end_grund == "unbekannt" else end_quality
-                    )
-                    zyklen.append(offener_zyklus)
-                    offener_zyklus = None
-                continue
-
-            w = RE_WECHSEL.search(msg)
-            if w:
-                code = ("CYCLE_START_WE" if w.group(2) == "EIN"
-                        else "CYCLE_END_WE" if w.group(2) == "AUS" else "WECHSEL")
-                ereignisse.append((ts, (code, w.group(1), None, None)))
-                continue
-
-            lm = RE_LEARN.search(msg)
-            if lm:
-                gelernter_zyklus.append({
-                    "ts": ts, "dauer_min": int(lm.group(1)),
-                    "unten_start": float(lm.group(2)), "unten_end": float(lm.group(3)),
-                    "rate": float(lm.group(4)),
+        # Regel-Detailzeilen (ohne Zeitstempel) direkt dem Block zuordnen
+        if block is not None:
+            rm = RE_RULE.match(line)
+            if rm:
+                block["regeln"].append({
+                    "prio": int(rm.group(1)),
+                    "verdict": rm.group(2),
+                    "name": rm.group(3),
+                    "aktiv": rm.group(4) is None,
+                    "grund": rm.group(5),
                 })
                 continue
 
-            fm = RE_FORECAST.search(msg)
-            if fm:
-                tag = ts.strftime("%Y-%m-%d")
-                if tag not in forecast_pro_tag:  # erste Prognose des Tages behalten
-                    forecast_pro_tag[tag] = {
-                        "today": float(fm.group(1)), "tomorrow": float(fm.group(2)), "ts": ts,
-                    }
-                ereignisse.append((ts, ("FORECAST", tag,
-                                        f"{fm.group(1)}/{fm.group(2)}", None)))
-                continue
+        m = RE_LINE.match(line)
+        if not m:
+            continue
+        ts = parse_ts(f"{m.group(1)} {m.group(2)}")
+        level = m.group(3)
+        msg = m.group(4)
+        stats["zeilen_erkannt"] += 1
+        stats["level_" + level] += 1
 
-            if level in ("WARNING", "ERROR", "CRITICAL"):
-                code = _code_klassifiziere(msg)
-                ereignisse.append((ts, (code, level, msg[:300], None)))
-                stats[code] += 1
-                if code == "WARN_BOILERMAX":
-                    # BOILERMAX-Warnung kommt unmittelbar NACH der AUS-Zeile:
-                    # letzten beendeten Zyklus nachtraeglich als boiler_max markieren
-                    for z in reversed(zyklen):
-                        if z.get("end_ts") and abs((z["end_ts"] - ts).total_seconds()) <= 60 \
-                                and z["end_grund"] in (None, "unbekannt"):
-                            z["end_grund"] = "boiler_max"
+        # Versionsmarker: Startzeile nennt die GitHub-Revision des Standes
+        if git_version is None and "GitHub-Rev:" in msg:
+            m_gv = re.search(r"GitHub-Rev:\s*(.*)", msg)
+            if m_gv:
+                git_version = m_gv.group(1).strip()
+
+        if msg.startswith("Regel-Bewertung"):
+            _finalisiere_block()
+            block = {
+                "ts": ts, "level": level, "regeln": [],
+                "sensoren": dict(last_sensoren), "sensoren_ts": last_sensors_ts,
+                "status_ein": None, "regel": None, "modus": None, "blocking": None,
+                "pv_w": None, "soc": None, "feedin_w": None,
+                "forecast_morgen_whqm": None, "soll_c": None,
+            }
+            continue
+
+        s = RE_SENSOR.search(msg)
+        if s:
+            last_sensoren = {
+                "oben": float(s.group(1)), "mittig": float(s.group(2)),
+                "unten": float(s.group(3)), "verd": float(s.group(4)),
+            }
+            last_sensors_ts = ts
+            if block is not None:
+                block["sensoren"] = dict(last_sensoren)
+                block["sensoren_ts"] = ts
+            continue
+
+        st = RE_STATUS.search(msg)
+        if st:
+            ein = st.group(1) == "EIN"
+            regel = modus = blocking = None
+            for part in (st.group(2) or "").split("|"):
+                part = part.strip()
+                if part.startswith("EP=") or part.startswith("AP="):
+                    continue
+                if part.startswith("Blocking:"):
+                    blocking = part[len("Blocking:"):].strip()
+                elif part.startswith("Regel:"):
+                    regel = part[len("Regel:"):].strip()
+                elif part.startswith("Modus:"):
+                    modus = part[len("Modus:"):].strip()
+            if block is not None:
+                block["status_ein"] = ein
+                block["regel"] = regel
+                block["modus"] = modus
+                block["blocking"] = blocking
+            continue
+
+        # ---- Kompressor-Zyklen ----
+        if RE_COMP_EIN.match(msg):
+            if offener_zyklus is None:
+                mvf = RE_COMP_EIN_VERIF.search(msg)
+                offener_zyklus = {
+                    "start_ts": ts, "start_regel": None, "source_at_start": None,
+                    "start_t_verd": None,
+                    "start_t_unten": None, "start_t_mittig": None, "start_t_oben": None,
+                    "end_ts": None, "dauer_min": None,
+                    "end_grund": None, "end_regel": None,
+                    "end_sensoren": None, "max_unten": None, "max_mittig": None,
+                    "max_oben": None, "quelle": None,
+                }
+                if mvf:
+                    offener_zyklus["start_t_verd"] = float(mvf.group(1))
+                    offener_zyklus["start_t_unten"] = float(mvf.group(2))
+                else:
+                    # Fallback: aeltere Log-Stellen ohne t_verd/t_unten -> Sensor-Snapshot
+                    offener_zyklus["start_t_verd"] = last_sensoren.get("verd")
+                    offener_zyklus["start_t_unten"] = last_sensoren.get("unten")
+                # Die 'Kompressor EIN'-Zeile kennt nur Verd/Unten. Mittig/Oben
+                # zum Zyklusstart aus dem letzten Sensoren-Snapshot uebernehmen.
+                offener_zyklus["start_t_mittig"] = last_sensoren.get("mittig")
+                offener_zyklus["start_t_oben"] = last_sensoren.get("oben")
+                for zts, zregel in reversed(ereignisse):
+                    if zts <= ts and zregel[0] in ("CYCLE_START_WE", "WECHSEL"):
+                        offener_zyklus["start_regel"] = zregel[1]
+                        break
+                source, source_quality = classify_source({
+                    "start_regel": offener_zyklus.get("start_regel"),
+                    "feedin_w": feedin_kontext[0],
+                })
+                offener_zyklus["source_at_start"] = source
+                offener_zyklus["source_quality"] = source_quality
+            continue
+
+        if "Kompressor AUS" in msg and "Laufzeit:" in msg:
+            mm = RE_COMP_AUS.search(msg)
+            if offener_zyklus is not None and mm is not None:
+                offener_zyklus["end_ts"] = ts
+                d = int(mm.group(1)) * 60 + int(mm.group(2)) + int(float(mm.group(3))) / 60.0
+                offener_zyklus["dauer_min"] = round(d, 1)
+                offener_zyklus["end_sensoren"] = dict(last_sensoren)
+                code_match = RE_REASON_CODE.search(msg)
+                if code_match:
+                    end_grund = code_match.group(1).lower()
+                    end_quality = "direct"
+                else:
+                    end_grund = None
+                    end_quality = "legacy_text"
+                if end_grund is None and "BOILERMAX AUS" in msg:
+                    end_grund = "boiler_max"
+                ra = RE_REGEL_AUS.search(msg)
+                if end_grund is None and ra:
+                    end_grund = "regel_aus"
+                if end_grund is None and "Keine Regel aktiv" in msg:
+                    end_grund = "keine_regel"
+                if end_grund is None:
+                    for hts, hmsg in reversed(letzte_zeilen):
+                        if hts >= ts - timedelta(seconds=120) and hts <= ts:
+                            if "BOILERMAX AUS" in hmsg:
+                                end_grund = "boiler_max"
+                            elif "Legionellenprophylaxe ABGEBROCHEN" in hmsg:
+                                end_grund = "legionellen_timeout"
+                            elif "Kompressor-Verifizierung fehlgeschlagen" in hmsg:
+                                end_grund = "verifizierung_fehler"
+                            elif RE_REGEL_AUS.search(hmsg):
+                                end_grund = "regel_aus"
+                            if end_grund:
+                                break
+                if end_grund is None:
+                    for zts, (code, name, _, _) in reversed(ereignisse):
+                        if zts >= ts - timedelta(seconds=120) and zts <= ts \
+                                and code in ("CYCLE_END_WE", "WECHSEL"):
+                            end_grund = "keine_regel" if name == "Keine Regel aktiv" \
+                                else "wechsel:" + name
                             break
-                if level in ("WARNING", "ERROR"):
-                    letzte_zeilen.append((ts, msg))
-                    if len(letzte_zeilen) > 40:
-                        letzte_zeilen.pop(0)
-                continue
+                offener_zyklus["end_grund"] = end_grund or "unbekannt"
+                offener_zyklus["reason_code"] = end_grund if end_quality == "direct" else ""
+                offener_zyklus["end_grund_quality"] = (
+                    "missing" if not end_grund or end_grund == "unbekannt" else end_quality
+                )
+                zyklen.append(offener_zyklus)
+                offener_zyklus = None
+            continue
 
-            if level in ("INFO", "WARNING"):
+        w = RE_WECHSEL.search(msg)
+        if w:
+            code = ("CYCLE_START_WE" if w.group(2) == "EIN"
+                    else "CYCLE_END_WE" if w.group(2) == "AUS" else "WECHSEL")
+            ereignisse.append((ts, (code, w.group(1), None, None)))
+            continue
+
+        lm = RE_LEARN.search(msg)
+        if lm:
+            gelernter_zyklus.append({
+                "ts": ts, "dauer_min": int(lm.group(1)),
+                "unten_start": float(lm.group(2)), "unten_end": float(lm.group(3)),
+                "rate": float(lm.group(4)),
+            })
+            continue
+
+        fm = RE_FORECAST.search(msg)
+        if fm:
+            tag = ts.strftime("%Y-%m-%d")
+            if tag not in forecast_pro_tag:  # erste Prognose des Tages behalten
+                forecast_pro_tag[tag] = {
+                    "today": float(fm.group(1)), "tomorrow": float(fm.group(2)), "ts": ts,
+                }
+            ereignisse.append((ts, ("FORECAST", tag,
+                                    f"{fm.group(1)}/{fm.group(2)}", None)))
+            continue
+
+        if level in ("WARNING", "ERROR", "CRITICAL"):
+            code = _code_klassifiziere(msg)
+            ereignisse.append((ts, (code, level, msg[:300], None)))
+            stats[code] += 1
+            if code == "WARN_BOILERMAX":
+                # BOILERMAX-Warnung kommt unmittelbar NACH der AUS-Zeile:
+                # letzten beendeten Zyklus nachtraeglich als boiler_max markieren
+                for z in reversed(zyklen):
+                    if z.get("end_ts") and abs((z["end_ts"] - ts).total_seconds()) <= 60 \
+                            and z["end_grund"] in (None, "unbekannt"):
+                        z["end_grund"] = "boiler_max"
+                        break
+            if level in ("WARNING", "ERROR"):
                 letzte_zeilen.append((ts, msg))
                 if len(letzte_zeilen) > 40:
                     letzte_zeilen.pop(0)
+            continue
+
+        if level in ("INFO", "WARNING"):
+            letzte_zeilen.append((ts, msg))
+            if len(letzte_zeilen) > 40:
+                letzte_zeilen.pop(0)
 
     _finalisiere_block()
     stats["zyklen"] = len(zyklen)
@@ -762,6 +806,9 @@ def erzeuge_bericht(parsed, out, outdir, stats_roh):
     ap = l.append
     ap("# Verbesserter Log-Analysereport\n")
     ap(f"**Quelle:** `{os.path.basename(LOG_PFAD)}`  ")
+    _anz_quellen = len(log_generationen(LOG_PFAD))
+    if _anz_quellen > 1:
+        ap(f"**Gelesene Log-Dateien:** {_anz_quellen} (aktive + Rotationen)  ")
     if parsed.get("git_version"):
         ap(f"**Git-Version (Start):** `{parsed['git_version']}`  ")
     ap(f"**Ausgabe:** `{outdir}`\n")
@@ -939,11 +986,18 @@ def main(argv=None):
     LOG_PFAD = args.log
     AUSGABE_DIR = args.out
 
-    print(f"Parsee {LOG_PFAD} ...")
-    if not os.path.exists(LOG_PFAD):
+    print(f"Parse {LOG_PFAD} ...")
+    # Es wird der GESAMTE Bestand gelesen (aktive Datei + Generationen).
+    # Die Existenzpruefung darf sich deshalb nicht auf die aktive Datei
+    # besraenken: fehlt sie (heute noch kein Eintrag), liegen die Daten
+    # von gestern trotzdem in den Generationen.
+    dateien = log_generationen(LOG_PFAD)
+    if not dateien:
         print(f"FEHLER: Logdatei nicht gefunden: {LOG_PFAD}")
         print("Hinweis: --log <pfad> angeben (z. B. /var/log/wps/heizungssteuerung.log)")
         return 1
+    if len(dateien) > 1:
+        print(f"  {len(dateien)} Log-Dateien (aktive + Generationen)")
 
     parsed = parse_log(LOG_PFAD)
     cycle_path = args.cycles

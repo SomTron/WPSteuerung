@@ -40,7 +40,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from utils import HEIZUNGSDATEN_CSV, to_naive
-from log_files import tail_bytes_ueber_alle
+from log_files import generationen, tail_bytes_ueber_alle
 from clock import now_for
 from logic_utils import forecast_kwh_m2_to_wh_m2
 from status_snapshot import build_status_snapshot
@@ -616,11 +616,18 @@ def _read_error_tail(max_bytes: int = ERROR_TAIL_BYTES) -> list:
     .2026-10-20, ...). Bisher wurde nur die aktive Datei gelesen - nach
     einer Rotation verschwanden die aelteren Fehler aus der Anzeige, obwohl
     sie auf der Platte lagen.
+
+    Wichtig: Es wird NICHT nur die Existenz der aktiven Datei geprueft.
+    Die aktive Datei entsteht erst beim ersten Fehler des Tages - fehlt
+    sie, weil heute noch nichts passiert ist, liegen die Fehler von
+    gestern aber trotzdem in der Generation. Mit der alten Pruefung waren
+    die dann unsichtbar.
     """
     try:
-        if not os.path.exists(ERROR_LOG_DATEI):
-            return []
+        dateien = generationen(ERROR_LOG_DATEI)
     except OSError:
+        return []
+    if not dateien:
         return []
     text = tail_bytes_ueber_alle(ERROR_LOG_DATEI, max_bytes)
     return _parse_fehlerzeilen(text)

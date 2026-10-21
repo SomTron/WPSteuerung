@@ -71,9 +71,14 @@ def query_logs(
     if log_path is None:
         log_path = _find_default_log_path()
 
+    # `log_exists` heisst: es gibt ueberhaupt Logdaten. Das kann auch
+    # WAHR sein, wenn die aktive Datei fehlt (heute noch kein Eintrag),
+    # aber die rotierten Generationen liegen. Sonst waeren die Daten von
+    # gestern unsichtbar, sobald heute noch nichts geschrieben wurde.
+    dateien = generationen(log_path)
     meta = {
         "log_path": log_path,
-        "log_exists": os.path.exists(log_path),
+        "log_exists": bool(dateien),
         "total_found": 0,
         "matched_lines": 0,
         "start_ts": None,
@@ -87,6 +92,9 @@ def query_logs(
     if not meta["log_exists"]:
         return [], meta
 
+    dateien = generationen(log_path)
+    meta["generationen"] = [os.path.basename(d) for d in dateien]
+
     # Datei von hinten lesen (tail-Ansatz) fuer Effizienz
     # Ziel: aus einem Zeitbereich die letzten X Zeilen finden
     max_lines = min(lines, 500)
@@ -97,8 +105,6 @@ def query_logs(
     # deshalb nur noch den kleinen neuen Rest und die aeltere Historie
     # war unsichtbar, obwohl sie auf der Platte lag. Deshalb werden jetzt
     # alle Generationen in zeitlicher Reihenfolge durchsucht.
-    dateien = generationen(log_path)
-    meta["generationen"] = [os.path.basename(d) for d in dateien]
 
     result = []
     for datei in dateien:
@@ -220,16 +226,19 @@ def tail_log(
     if log_path is None:
         log_path = _find_default_log_path()
 
+    # `log_exists` heisst: es gibt ueberhaupt Logdaten. Das kann auch
+    # WAHR sein, wenn die aktive Datei fehlt (heute noch kein Eintrag),
+    # aber die rotierten Generationen liegen.
+    dateien = generationen(log_path)
     meta = {
         "log_path": log_path,
-        "log_exists": os.path.exists(log_path),
+        "log_exists": bool(dateien),
         "total_found": 0,
     }
 
     if not meta["log_exists"]:
         return [], meta
 
-    dateien = generationen(log_path)
     meta["generationen"] = [os.path.basename(d) for d in dateien]
 
     # Die Zeilen werden mit abschliessendem Zeilenumbruch geliefert - so

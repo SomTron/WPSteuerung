@@ -1333,8 +1333,14 @@ while true; do
     fi
 
     # ---- 24-h-Diagnose: bewusst Journal statt lebenslanger error.log-Zeilen ----
+    # Die Log-Groesse wird ueber ALLE Dateien des Bestands summiert: das Log
+    # rotiert taeglich, die aktive Datei enthaelt nur noch den laufenden Tag.
+    # Ohne die Summe wuerde der Header "12K" anzeigen, obwohl 60 MB im
+    # Archiv liegen.
     LOG_SIZE=""
-    [ -f "$LOG_FILE" ] && LOG_SIZE=$(du -h "$LOG_FILE" 2>/dev/null | cut -f1)
+    if [ -f "$LOG_FILE" ]; then
+        LOG_SIZE=$(du -ch "$LOG_FILE" "$LOG_FILE".* 2>/dev/null | tail -n 1 | cut -f1)
+    fi
     RECENT_ERROR_COUNT="n/a"
     LAST_ERR=""
     if command -v journalctl >/dev/null 2>&1; then
@@ -1462,7 +1468,7 @@ WPMODI
         printf "Sensor:     ${RED}%s Defekt-Verdacht in 24 h${NC}\n" "$RECENT_SENSOR_WARN_COUNT"
         [ -n "$LAST_SENSOR_WARN" ] && printf "  ${RED}-> %s${NC}\n" "$LAST_SENSOR_WARN"
     fi
-    [ -n "$LOG_SIZE" ] && printf "Log:        heizungssteuerung.log (%s)\n" "$LOG_SIZE"
+    [ -n "$LOG_SIZE" ] && printf "Log:        heizungssteuerung.log + Rotationen (%s gesamt)\n" "$LOG_SIZE"
     printf -- "${BLUE}---------------------------------------------------------${NC}\n\n"
 
     printf "1) 📜   Live-Logs (tail -f, Strg+C zurück zum Menü)\n"

@@ -487,6 +487,45 @@ def test_fehler_historie_ueberlebt_fehlende_datei(tmp_path, monkeypatch):
     assert daten["letzter_fehler"] is None
 
 
+def test_fehler_historie_sieht_die_generationen_ohne_aktive_datei(tmp_path, monkeypatch):
+    """REGRESSION: die Fehler von gestern waren unsichtbar.
+
+    Die aktive error.log entsteht erst beim ersten Fehler des Tages. Fehlt
+    sie (heute noch nichts passiert), liegen die Fehler von gestern aber
+    in der Generation. Die alte Pruefung auf die Existenz der aktiven
+    Datei hat sie dann ausgeblendet - die WebApp zeigte "keine Fehler".
+    """
+    log = tmp_path / "error.log"
+    (tmp_path / "error.log.2026-10-20").write_text(
+        "2026-10-20 09:00:00 +0200 ERROR - Gestern passiert\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(log))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    daten = api.fehler_historie(limit=10, nur_ab_warnung=False)
+
+    assert daten["anzahl"] == 1, "der Fehler aus der Generation fehlt"
+    assert "Gestern passiert" in daten["eintraege"][0]["message"]
+
+
+def test_fehler_historie_liest_aktive_und_generation(tmp_path, monkeypatch):
+    """Beide Quellen muessen in der Anzeige landen."""
+    log = tmp_path / "error.log"
+    log.write_text("2026-10-21 09:00:00 +0200 ERROR - Heute\n", encoding="utf-8")
+    (tmp_path / "error.log.2026-10-20").write_text(
+        "2026-10-20 09:00:00 +0200 ERROR - Gestern\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(api, "ERROR_LOG_DATEI", str(log))
+    monkeypatch.setattr(api, "_ERROR_CACHE", {"zeit": None, "eintraege": None})
+
+    daten = api.fehler_historie(limit=10, nur_ab_warnung=False)
+
+    assert daten["anzahl"] == 2
+    nachrichten = [e["message"] for e in daten["eintraege"]]
+    assert any("Heute" in m for m in nachrichten)
+    assert any("Gestern" in m for m in nachrichten)
+
+
 def test_fehler_historie_ignoriert_infolgezeilen(tmp_path, monkeypatch):
     """INFO-Zeilen sind keine Fehler und stoeren die 24-h-Anzeige nicht."""
     zeilen = "".join(

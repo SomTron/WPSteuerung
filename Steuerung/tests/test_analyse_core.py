@@ -165,6 +165,58 @@ def test_logparser_erkennt_aktuellen_abschluss_und_stabilen_code(tmp_path):
     assert parsed["quality"]["unknown_end_grund"] == 0
 
 
+def test_logparser_liest_alle_generationen(tmp_path):
+    """REGRESSION: die Auto-Analyse sah nur noch den laufenden Tag.
+
+    Das Betriebslog rotiert taeglich (heizungssteuerung.log.2026-10-19,
+    ...). Der Auto-Analyse-Timer auf dem Pi liest /var/log/wps/
+    heizungssteuerung.log - ohne die Generationen zu beruecksichtigen,
+    waere der analysierte Zeitraum auf einen Tag zusammengefallen.
+    """
+    import log_analyse
+
+    log = tmp_path / "heizungssteuerung.log"
+    (tmp_path / "heizungssteuerung.log.2026-10-19").write_text(
+        "2026-10-19 10:00:00 +0200 INFO - Kompressor EIN (cycle=1) - "
+        "Verifizierung gestartet (t_verd=15.0, t_unten=40.0)\n"
+        "2026-10-19 10:05:00 +0200 INFO - Kompressor AUS (cycle=1) - "
+        "Laufzeit: 0:05:00.000 reason=boiler_max\n",
+        encoding="utf-8",
+    )
+    log.write_text(
+        "2026-10-20 10:00:00 +0200 INFO - Kompressor EIN (cycle=2) - "
+        "Verifizierung gestartet (t_verd=15.0, t_unten=40.0)\n"
+        "2026-10-20 10:05:00 +0200 INFO - Kompressor AUS (cycle=2) - "
+        "Laufzeit: 0:05:00.000 reason=boiler_max\n",
+        encoding="utf-8",
+    )
+
+    parsed = log_analyse.parse_log(str(log))
+
+    # Beide Tage muessen ausgewertet werden, nicht nur der laufende.
+    assert len(parsed["zyklen"]) == 2, "eine Generation fehlt in der Analyse"
+    assert len(log_analyse.log_generationen(str(log))) == 2
+
+
+def test_logparser_ueberlebt_fehlende_aktive_datei(tmp_path):
+    """Nur die Generation vorhanden (heute noch kein Eintrag) - die
+    Analyse darf nicht abbrechen, sondern muss die Generation lesen."""
+    import log_analyse
+
+    log = tmp_path / "heizungssteuerung.log"
+    (tmp_path / "heizungssteuerung.log.2026-10-19").write_text(
+        "2026-10-19 10:00:00 +0200 INFO - Kompressor EIN (cycle=1) - "
+        "Verifizierung gestartet (t_verd=15.0, t_unten=40.0)\n"
+        "2026-10-19 10:05:00 +0200 INFO - Kompressor AUS (cycle=1) - "
+        "Laufzeit: 0:05:00.000 reason=boiler_max\n",
+        encoding="utf-8",
+    )
+
+    parsed = log_analyse.parse_log(str(log))
+
+    assert len(parsed["zyklen"]) == 1
+
+
 def test_decision_diagnostics_und_qualitaetsbericht_werden_ausgewertet(tmp_path):
     path = tmp_path / "entscheidungs_log.jsonl"
     path.write_text(
