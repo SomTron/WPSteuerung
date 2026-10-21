@@ -606,3 +606,72 @@ def test_header_zeigt_den_ssh_key_status():
     assert "ssh-add -l" in text, "der Key-Status wird nicht geprueft"
     assert "Deploy moeglich" in text, "die Meldung nennt keine Abhilfe"
     assert "ssh-add ~/.ssh/id_ed25519" in text, "die Abhilfe fehlt"
+
+
+# --- SSH-Agent: der Key muss ohne Handgriff funktionieren --------------
+
+
+def test_ssh_agent_hilfe_existiert_und_wird_eingebunden():
+    """REGRESSION: "ssh-add" scheiterte mit "Could not open a connection
+    to your authentication agent".
+
+    Auf dem Pi laeuft der ssh-agent nach einem Reboot nicht - er wird
+    nur beim Login per 'eval $(ssh-agent -s)' gestartet. Ohne ihn
+    scheitert JEDER Deploy an "Permission denied (publickey)", auch wenn
+    der Key auf der Platte liegt.
+
+    Der Manager startet den Agent deshalb selbst und laedt den Key nach.
+    """
+    hilfe = UPDATER_DIR / "ssh_agent.sh"
+    assert hilfe.exists(), "Updater/ssh_agent.sh fehlt"
+    with open(hilfe, encoding="utf-8") as f:
+        inhalt = f.read()
+    assert "sorge_fuer_ssh_agent" in inhalt, "die Hilfsfunktion fehlt"
+    assert "ssh-agent -s" in inhalt, "der Agent wird nicht gestartet"
+    assert "ssh-add" in inhalt, "der Key wird nicht geladen"
+
+    # Beide Wege muessen die Hilfe einbinden: Menue und direkter Deploy.
+    assert 'ssh_agent.sh' in _menu_text(), "das Menue bindet die Hilfe nicht ein"
+    assert 'ssh_agent.sh' in _deploy_text(), "rpi-deploy.sh bindet die Hilfe nicht ein"
+
+
+def test_ssh_agent_startet_den_agent_und_laedt_den_key(tmp_path):
+    """Der Funktionstest: ohne Agent wird einer gestartet und der Key
+    nachgeladen. Genau der Ablauf, der auf dem Pi fehlschlug."""
+    import shutil
+    import subprocess
+
+    sh = shutil.which("sh")
+    keygen = shutil.which("ssh-keygen")
+    if sh is None or keygen is None:
+        pytest.skip("sh oder ssh-keygen nicht verfuegbar")
+    hilfe = UPDATER_DIR / "ssh_agent.sh"
+    # Ein Key OHNE Passphrase - die Passphrase kann hier nicht interaktiv
+    # eingegeben werden, das Verhalten ist aber ansonsten identisch.
+    key = tmp_path / "id_ed25519"
+    subprocess.run(
+        [keygen, "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+        capture_output=True, timeout=60,
+    )
+    if not key.exists():
+        pytest.skip("ssh-keygen konnte keinen Key erzeugen")
+
+    skript = (
+        f'. "{hilfe}"\n'
+        f'export WPS_SSH_KEY="{key}"\n'
+        'unset SSH_AUTH_SOCK\n'
+        'if sorge_fuer_ssh_agent; then echo "ERGEBNIS:OK"; else echo "ERGEBNIS:FEHLER"; fi\n'
+        'ssh-add -l 2>/dev/null | grep -c . | sed "s/^/KEYS:/"\n'
+    )
+    res = subprocess.run(
+        [sh, "-c", skript], capture_output=True, text=True, timeout=60
+    )
+    ausgabe = res.stdout
+    assert "ERGEBNIS:OK" in ausgabe, (
+        f"der Agent wurde nicht gestartet / der Key nicht geladen: {ausgabe} {res.stderr[:200]}"
+    )
+    anzahl = 0
+    for zeile in ausgabe.splitlines():
+        if zeile.startswith("KEYS:"):
+            anzahl = int(zeile.split(":", 1)[1].strip() or 0)
+    assert anzahl >= 1, f"kein Key im Agent: {ausgabe}"

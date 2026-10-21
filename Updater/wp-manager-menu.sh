@@ -524,6 +524,15 @@ preflight
 trap menu_abbruch INT
 trap menu_beenden TERM
 
+# SSH-Key sicherstellen, BEVOR der Header den Status anzeigt. Ohne
+# laufenden ssh-agent (nach einem Reboot) faellt jeder Deploy mit
+# "Permission denied (publickey)" aus. Der Key wird hier einmal geladen -
+# die Passphrase fragt ssh-add dabei selbst ab.
+if [ -f "$SCRIPT_DIR/ssh_agent.sh" ]; then
+    . "$SCRIPT_DIR/ssh_agent.sh"
+    sorge_fuer_ssh_agent >/dev/null 2>&1 || true
+fi
+
 if [ ! -d "$TARGET_DIR" ]; then
     printf "${RED}Error: $TARGET_DIR not found!${NC}\n"
     exit 1
@@ -1322,17 +1331,12 @@ while true; do
     ANALYSIS_NEXT=$(systemctl list-timers wp-analyse.timer --all --no-pager --no-legend 2>/dev/null | awk 'NR==1 {print $1 " " $2 " " $3}')
     [ -z "$ANALYSIS_NEXT" ] && ANALYSIS_NEXT="kein Lauf geplant"
 
-    # SSH-Key-Status fuer GitHub. Nach einem Reboot ist der ssh-agent weg
-    # (er laeuft nicht als Dienst mit) - der Key wird dann nicht mehr
-    # angeboten und jeder Deploy scheitert an "Permission denied
-    # (publickey)". Das sieht man hier VOR dem Deploy statt erst in der
-    # Fehlermeldung. Die Pruefung selbst ist billig (ssh-add -l).
+    # SSH-Key-Status: nach einem Reboot ist der ssh-agent weg, der Key wird
+    # nicht mehr angeboten und JEDER Deploy scheitert an
+    # "Permission denied (publickey)". Das sieht man hier sofort, statt
+    # es erst im Deploy-Fehler zu erfahren.
     SSH_KEY_STATE=""
-    _ssh_keys=$(ssh-add -l 2>/dev/null | grep -c . 2>/dev/null || echo 0)
-    case "$_ssh_keys" in
-        ''|*[!0-9]*) _ssh_keys=0 ;;
-    esac
-    if [ "$_ssh_keys" -gt 0 ]; then
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && ssh-add -l >/dev/null 2>&1; then
         SSH_KEY_STATE="${GREEN}✓ SSH-Key geladen${NC} (Deploy moeglich)"
     else
         SSH_KEY_STATE="${RED}✗ kein SSH-Key - Deploy schlaegt fehl${NC} (ssh-add ~/.ssh/id_ed25519)"

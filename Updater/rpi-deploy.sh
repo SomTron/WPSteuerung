@@ -17,6 +17,15 @@ SERVICE_NAME="wpsteuerung"
 
 # Absoluter Pfad zu diesem Skript (fuer Neustart nach cd)
 SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")
+SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
+
+# SSH-Key sicherstellen. Ohne laufenden ssh-agent (nach einem Reboot) wird
+# der Key nicht angeboten und JEDER 'git fetch' scheitert an
+# "Permission denied (publickey)" - auch wenn die Datei vorhanden ist.
+# Das Menue macht das ebenfalls; hier hilft es beim direkten Aufruf.
+if [ -f "$SCRIPT_DIR/ssh_agent.sh" ]; then
+    . "$SCRIPT_DIR/ssh_agent.sh"
+fi
 
 # Hilfsfunktion fuer farbigen Output (POSIX-konform)
 # Verwendung: color_print $COLOR "Nachricht"

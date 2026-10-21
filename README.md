@@ -187,6 +187,33 @@ Die Version im Banner wird aus dem Changelog-Kopf des Menüs abgeleitet –
 sie kann also nicht mehr hinterherlaufen (was bei der fest eingetragenen
 Version zweimal passiert ist: Code v1.17, Banner v1.16).
 
+### SSH-Key und Deploy
+
+Nach einem Reboot läuft auf dem Pi **kein `ssh-agent`** – er wird nur beim
+Login per `eval $(ssh-agent -s)` gestartet. Ohne ihn scheitert `ssh-add`
+mit *„Could not open a connection to your authentication agent"* und
+**jeder** Deploy mit *„Permission denied (publickey)"* – auch wenn die
+Key-Datei vorhanden ist.
+
+Der Manager startet den Agent deshalb selbst und lädt den Key nach
+(`Updater/ssh_agent.sh`, verwendet von Menü **und** `rpi-deploy.sh`). Im
+Header steht der Status:
+
+```
+GitHub:  ✓ SSH-Key geladen (Deploy möglich)
+GitHub:  ✗ kein SSH-Key - Deploy schlägt fehl (ssh-add ~/.ssh/id_ed25519)
+```
+
+Dauerhaft für alle SSH-Sitzungen (in `~/.bashrc` des Pi):
+
+```bash
+if [ -z "$SSH_AUTH_SOCK" ]; then eval "$(ssh-agent -s)" >/dev/null; fi
+```
+
+Meldet der Deploy *„Permission denied (publickey)"*, ist das **kein
+Netzproblem** – der Key fehlt im Agent. Das Netz wird getrennt geprüft
+(Timeout, DNS, „Connection refused").
+
 ---
 
 ## 💾 SD-Karten-Health & Neustart-Schutz
