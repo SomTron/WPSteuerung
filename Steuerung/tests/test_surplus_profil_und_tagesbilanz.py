@@ -228,6 +228,101 @@ class TestAutoLearningWirkt:
         assert "0.7h" in ohne.grund, ohne.grund
 
 
+class TestWochentagsUndSaisonTrennung:
+    """BUGFIX (21.10.2026): Der Hausverbrauch unterscheidet sich stark
+    nach Wochentag (Berufstag vs. Wochenende) und Jahreszeit. Ohne
+    Trennung mittelt das Profil ueber alles - gemessen: 6,7 h Heizzeit
+    statt 2,9 h (Werktag) bzw. 0,7 h (Wochenende).
+    """
+
+    @staticmethod
+    def _lern_4_wochen(eng):
+        """4 Wochen: Werktag 12-14 Uhr 1800 W, Wochenende 400 W."""
+        for woche in range(4):
+            for tag_idx in range(7):
+                tag = datetime(2026, 10, 5, 0, 0) + timedelta(
+                    days=woche * 7 + tag_idx)
+                wochenende = tag.weekday() >= 5
+                for h in range(24):
+                    w = 400.0 if wochenende else (
+                        1800.0 if 11 <= h <= 13 else 400.0)
+                    for k in range(6):
+                        _schritt(eng, tag + timedelta(hours=h, minutes=10 * k),
+                                 hausverbrauch=w, stundenprofil=True)
+
+    def test_profil_trennt_wochentage(self, tmp_path):
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        self._lern_4_wochen(eng)
+        gesamt = eng.get_surplus_profile()
+        montag = eng.get_surplus_profile(wochentag=0)
+        samstag = eng.get_surplus_profile(wochentag=5)
+        assert montag[12] == pytest.approx(1800.0, abs=1.0)
+        assert samstag[12] == pytest.approx(400.0, abs=1.0)
+        # Das Gesamtprofil liegt dazwischen
+        assert gesamt[12] < montag[12]
+        assert gesamt[12] > samstag[12]
+
+    def test_profil_trennt_saisonen(self, tmp_path):
+        """Juli (sommer) 400 W, Januar (winter) 1600 W."""
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        for start, wert in ((datetime(2026, 7, 1, 0, 0), 400.0),
+                            (datetime(2026, 1, 5, 0, 0), 1600.0)):
+            for d in range(10):
+                tag = start + timedelta(days=d)
+                for h in range(24):
+                    for k in range(6):
+                        _schritt(eng, tag + timedelta(hours=h, minutes=10 * k),
+                                 hausverbrauch=wert, stundenprofil=True)
+        sommer = eng.get_surplus_profile(saison="sommer")
+        winter = eng.get_surplus_profile(saison="winter")
+        assert sommer[12] == pytest.approx(400.0, abs=1.0)
+        assert winter[12] == pytest.approx(1600.0, abs=1.0)
+
+    def test_zu_wenig_daten_fallen_auf_gesamtprofil_zurueck(self, tmp_path):
+        """Lieber ein Mittelwert als gar kein Profil."""
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        self._lern_4_wochen(eng)
+        # Dienstag gibt es in den 4 Wochen mehrfach - aber z.B. ein
+        # Wochentag, der noch nie vorkam, muss zurueckfallen.
+        profil = eng.get_surplus_profile(wochentag=0)
+        assert profil is not None
+        assert len(profil) >= 4
+
+    def test_wochentag_wirkt_auf_den_calcstart(self, tmp_path):
+        """Der CalcStart muss das passende Tagesprofil verwenden."""
+        from priority_control import evaluate_calculated_start
+        from json_config import WPSteuerungConfig
+        cfg = WPSteuerungConfig()
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        self._lern_4_wochen(eng)
+
+        def _calc(wochentag):
+            prof = eng.get_surplus_profile(wochentag=wochentag)
+            return evaluate_calculated_start(
+                cfg.calculated_start,
+                {"unten": 40.0, "oben": 45.0, "mittig": 42.0},
+                now_hour=8, now_minute=0, forecast_wh_qm=1500.0,
+                feedin_watt=300.0, soc=40.0, pv_acpower=300.0,
+                solar_stale=False, pv_fenster_stunde=10.0,
+                pv_fenster_aktiv=True, surplus_profile=prof,
+            )
+        montag = _calc(0)
+        samstag = _calc(5)
+        assert "Mittagstief" in montag.grund, montag.grund
+        assert "Mittagstief" not in samstag.grund, samstag.grund
+        assert "2.9h" in montag.grund, montag.grund
+        assert "0.7h" in samstag.grund, samstag.grund
+
+    def test_saison_von_datum(self):
+        from logic_utils import saison_von_datum
+        assert saison_von_datum("2026-01-15") == "winter"
+        assert saison_von_datum("2026-04-01") == "fruehling"
+        assert saison_von_datum("2026-07-15") == "sommer"
+        assert saison_von_datum("2026-10-21") == "herbst"
+        assert saison_von_datum(datetime(2026, 7, 15)) == "sommer"
+        assert saison_von_datum("kaputt") == "unbekannt"
+
+
 class TestTagesbilanzEchterHausverbrauch:
     """Die Bilanz muss den echten Hausverbrauch messen, nicht PV-Export."""
 

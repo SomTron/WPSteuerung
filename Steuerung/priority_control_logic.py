@@ -23,7 +23,12 @@ from constants import (
     SOLAR_DATA_STALE_THRESHOLD_MIN,
 )
 from collections import deque
-from logic_utils import check_log_throttle, normalize_forecast_wh_qm, pv_fenster_endstunde
+from logic_utils import (
+    check_log_throttle,
+    normalize_forecast_wh_qm,
+    pv_fenster_endstunde,
+    saison_von_datum,
+)
 from legionellen_plan import clear_plan
 from safety_logic import (
     check_for_sensor_errors,
@@ -588,10 +593,38 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         _ratio_getter = getattr(learning_engine, "get_forecast_ratio", None)
         fc_ratio = _ratio_getter() if callable(_ratio_getter) else 1.0
         _profil_getter = getattr(learning_engine, "get_surplus_profile_with_forecast", None)
-        surplus_profil = _profil_getter(
-            forecast_today_wh_qm=forecast_today_wh,
-            forecast_hourly_wh=hourly_forecast_watt,
-        ) if callable(_profil_getter) else None
+        # BUGFIX (21.10.2026): Das Profil wird fuer den Wochentag und die
+        # Jahreszeit des ZIELTAGES geholt, nicht als Mittel ueber alle
+        # Tage. Der Hausverbrauch unterscheidet sich stark (gemessen:
+        # Werktag 1800 W gegen Wochenende 400 W in derselben Stunde).
+        # Ohne Trennung rechnete der CalcStart 6,7 h Heizzeit statt
+        # 2,9 h (Werktag) bzw. 0,7 h (Wochenende).
+        _profil_kw = {}
+        _ziel_datum = planned_date if isinstance(planned_date, date) else now_local.date()
+        _wd_getter = getattr(learning_engine, "get_surplus_profile", None)
+        if callable(_wd_getter):
+            try:
+                _profil_kw = {
+                    "wochentag": _ziel_datum.weekday(),
+                    "saison": saison_von_datum(_ziel_datum),
+                }
+            except (TypeError, ValueError):
+                _profil_kw = {}
+        if callable(_profil_getter):
+            try:
+                surplus_profil = _profil_getter(
+                    forecast_today_wh_qm=forecast_today_wh,
+                    forecast_hourly_wh=hourly_forecast_watt,
+                    **_profil_kw,
+                )
+            except TypeError:
+                # Aeltere Lernengine ohne die neuen Parameter
+                surplus_profil = _profil_getter(
+                    forecast_today_wh_qm=forecast_today_wh,
+                    forecast_hourly_wh=hourly_forecast_watt,
+                )
+        else:
+            surplus_profil = None
         _usage_getter = getattr(learning_engine, "get_recent_usage_events", None)
         # Fenster aus der Config statt Magic Number 2. Zusaetzlich filtert
         # get_recent_usage_events() bereits kompensierte Zapfungen heraus

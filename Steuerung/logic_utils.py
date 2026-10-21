@@ -100,6 +100,37 @@ def normalize_forecast_wh_qm(value, value_unit="kwh_m2"):
     return forecast_kwh_m2_to_wh_m2(value)
 
 
+def saison_von_datum(datum) -> str:
+    """Jahreszeit aus einem Datum ("2026-10-21") oder date-Objekt.
+
+    BUGFIX (21.10.2026): Der Hausverbrauch haengt stark von der
+    Jahreszeit ab (Heizung, Licht, Kochen). Das gelernte Profil wird
+    deshalb nach Wochentag UND Jahreszeit gefiltert.
+
+    Geteilt wird nach meteorologischen Jahreszeiten:
+    Winter (12,1,2), Fruehling (3,4,5), Sommer (6,7,8), Herbst (9,10,11)
+
+    Returns: "winter" | "fruehling" | "sommer" | "herbst" | "unbekannt"
+    """
+    monat = None
+    if isinstance(datum, (datetime, date)):
+        monat = datum.month
+    else:
+        try:
+            monat = int(str(datum)[5:7])
+        except (ValueError, TypeError, IndexError):
+            monat = None
+    if monat in (12, 1, 2):
+        return "winter"
+    if monat in (3, 4, 5):
+        return "fruehling"
+    if monat in (6, 7, 8):
+        return "sommer"
+    if monat in (9, 10, 11):
+        return "herbst"
+    return "unbekannt"
+
+
 def check_log_throttle(state, attribute_name: str, interval_minutes: float = 5.0) -> bool:
     """Prüft, ob eine Log-Nachricht gesendet werden soll (Throttling)."""
     last_time = getattr(state, attribute_name, None)

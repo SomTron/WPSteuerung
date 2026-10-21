@@ -15,6 +15,7 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass, field, asdict
 
 from utils import to_naive
+from logic_utils import saison_von_datum
 
 
 LEARNING_DATA_FILE = "learning_data.json"
@@ -604,19 +605,7 @@ class LearningEngine:
         Geteilt wird nach meteorologischen Jahreszeiten:
         Winter (12,1,2), Fruehling (3,4,5), Sommer (6,7,8), Herbst (9,10,11)
         """
-        try:
-            monat = int(str(tag)[5:7])
-        except (ValueError, TypeError, IndexError):
-            return "unbekannt"
-        if monat in (12, 1, 2):
-            return "winter"
-        if monat in (3, 4, 5):
-            return "fruehling"
-        if monat in (6, 7, 8):
-            return "sommer"
-        if monat in (9, 10, 11):
-            return "herbst"
-        return "unbekannt"
+        return saison_von_datum(tag)
 
     def get_haushaltsprofil_je_tag(self, tage: int = 28) -> Dict[str, float]:
         """Tages-Haushaltsbilanz: {Wochentag: geschätzter Verbrauch in Wh}.
@@ -727,7 +716,8 @@ class LearningEngine:
         return float(wert)
 
     def get_surplus_profile_with_forecast(self, forecast_today_wh_qm=None,
-                                           forecast_hourly_wh=None):
+                                           forecast_hourly_wh=None,
+                                           wochentag=None, saison=None):
         """Surplus-Profil je Stunde - Haushaltsprofil fuer den CalcStart.
 
         BUGFIX (21.10.2026): Diese Methode wurde am 04.09.2026 vom Aufrufer
@@ -751,7 +741,9 @@ class LearningEngine:
 
         Rueckgabe: {stunde(str): watt} oder None (noch unbrauchbar).
         """
-        profil = self.get_surplus_profile()
+        # BUGFIX (21.10.2026): Optional nach Wochentag / Jahreszeit
+        # filtern - der Hausverbrauch unterscheidet sich danach stark.
+        profil = self.get_surplus_profile(wochentag=wochentag, saison=saison)
         if not profil:
             return None
 
@@ -786,8 +778,21 @@ class LearningEngine:
         deviation = actual - forecast (positiv = Forecast zu niedrig, negativ = zu hoch)."""
         return dict(self.data.forecast_hourly_deviations)
 
-    def get_surplus_profile(self):
+    def get_surplus_profile(self, wochentag=None, saison=None):
         """Stundensurplus-Profil {stunde: watt} oder None (noch unbrauchbar).
+
+        BUGFIX (21.10.2026): Der Hausverbrauch haengt stark vom
+        Wochentag und von der Jahreszeit ab (Berufstagen vs. Wochenende,
+        Heizung im Winter, mehr Kochen am Wochenende). Ohne Trennung
+        mittelt das Profil ueber alles - gemessen: Werktag 1800 W gegen
+        Wochenende 400 W in derselben Stunde wurden zu 1100 W
+        gemittelt, und der CalcStart rechnete 6,7 h statt 2,9 h
+        (Werktag) bzw. 0,7 h (Wochenende) Heizzeit.
+
+        Mit `wochentag` (0=Mo..6=So) und/oder `saison` werden nur die
+        passenden Tage ausgewertet. Fehlen passende Daten, wird auf das
+        Gesamtprofil zurueckgefallen (lieber ein Mittelwert als gar
+        keiner).
 
         Eine Stunde gilt als brauchbar ab n>=5 Samples; das Profil als
         Ganzes ab 4 brauchbaren Stunden (Tageslicht-Luecken erlaubt).
@@ -810,12 +815,35 @@ class LearningEngine:
         # fallen nur ~3 Samples auf die volle Stunde (die restlichen
         # laufen in die Folgestunde), ein einzelner Tag erreicht also
         # nie n>=5 - der Buckettest wuerde das Profil nie freigeben.
+        #
+        # BUGFIX (21.10.2026): Der Key enthaelt den TAG ("2026-10-05-08").
+        # Damit lassen sich die Tage nach Wochentag und Jahreszeit
+        # filtern - der Hausverbrauch unterscheidet sich danach stark.
+        def _passt(key: str) -> bool:
+            """Passt der Bucket zum gewuenschten Wochentag / zur Saison?"""
+            if wochentag is None and saison is None:
+                return True
+            datum = str(key)[:10]
+            if wochentag is not None:
+                try:
+                    ts = datetime.fromisoformat(datum)
+                except (TypeError, ValueError):
+                    return True
+                if ts.weekday() != int(wochentag):
+                    return False
+            if saison is not None:
+                if self._saison_von_datum(datum) != saison:
+                    return False
+            return True
+
         je_stunde = {}
         for key, e in self.data.surplus_by_hour.items():
             try:
                 # Schluessel-Format: "YYYY-MM-DD-HH"
                 stunde = int(str(key).rsplit("-", 1)[-1])
             except (TypeError, ValueError):
+                continue
+            if not _passt(key):
                 continue
             je_stunde.setdefault(stunde, []).append(e)
         nutzbar = {}
@@ -829,6 +857,11 @@ class LearningEngine:
             # mit mehr Samples soll nicht staerker wiegen)
             werte = [float(e["avg"]) for e in eintraege]
             nutzbar[stunde] = round(sum(werte) / len(werte), 1)
+        if len(nutzbar) < 4 and (wochentag is not None or saison is not None):
+            # Zu wenige passende Daten (z.B. der Wochentag kam erst
+            # zweimal vor): auf das Gesamtprofil zurueckfallen. Lieber
+            # ein Mittelwert ueber alle Tage als gar kein Profil.
+            return self.get_surplus_profile()
         return nutzbar if len(nutzbar) >= 4 else None
 
     def get_quellen_statistik(self) -> Dict:
