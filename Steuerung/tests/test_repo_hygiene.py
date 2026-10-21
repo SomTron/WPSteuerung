@@ -175,8 +175,60 @@ def test_wps_wrapper_ist_vollstaendig_und_nutzt_den_stabilen_launcher():
         "der Wrapper darf das Menue nicht direkt starten - der Launcher "
         "ist der Weg mit Syntax-Check und Rueckfall"
     )
-    # Ortfest: der Wrapper darf kein cwd voraussetzen.
-    assert 'dirname "$0"' in inhalt, "der Wrapper muss sein Verzeichnis selbst finden"
+    # Ortfest: der Wrapper darf kein cwd voraussetzen - er ermittelt sein
+    # Verzeichnis selbst (ueber den aufgeloesten Pfad, s. u.).
+    assert "dirname" in inhalt, "der Wrapper muss sein Verzeichnis selbst finden"
+    assert "SCRIPT_DIR=" in inhalt, "der Wrapper muss SCRIPT_DIR bestimmen"
+    # REGRESSION: Der Aufruf erfolgt haeufig ueber einen Symlink
+    # (/usr/local/bin/wps -> ~/WPSteuerung/Updater/wps). Ohne Aufloesung
+    # des Symlinks sucht der Wrapper den Launcher im FALSCHEN Verzeichnis
+    # und bricht mit "der Manager-Launcher fehlt" ab.
+    assert "readlink" in inhalt, (
+        "der Wrapper muss einem Symlink folgen - sonst findet er den "
+        "Launcher nicht, wenn er per Symlink aufgerufen wird"
+    )
+    assert "-L" in inhalt, "die Symlink-Pruefung (-L) fehlt"
+
+
+def test_wps_wrapper_findet_den_launcher_ueber_einen_symlink(tmp_path):
+    """REGRESSION: der Symlink-Aufruf war kaputt.
+
+    Auf dem Pi wird `wps` per Symlink aus /usr/local/bin aufgerufen. Der
+    Wrapper muss dem Symlink folgen, sonst sucht er den Launcher in
+    /usr/local/bin statt im Repository.
+
+    Der Test laeuft nur, wo Symlinks erlaubt sind (unter Windows braucht
+    das Administratorrechte oder den Entwicklermodus).
+    """
+    import shutil
+
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("keine POSIX-Shell verfuegbar")
+    repo = tmp_path / "repo" / "Updater"
+    repo.mkdir(parents=True)
+    bin_verz = tmp_path / "bin"
+    bin_verz.mkdir()
+    quelle = os.path.join(REPO_ROOT, "Updater", "wps")
+    ziel = repo / "wps"
+    shutil.copy(quelle, ziel)
+    # Ein Attrapp-Launcher: er belegt, dass der richtige Ordner gefunden wurde.
+    (repo / "wp-manager.sh").write_text(
+        '#!/bin/sh\necho "GEFUNDEN:$(dirname "$0")"\n', encoding="utf-8"
+    )
+    link = bin_verz / "wps"
+    try:
+        os.symlink(str(ziel), str(link))
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks sind hier nicht erlaubt")
+
+    res = subprocess.run(
+        [sh, str(link)], capture_output=True, text=True, timeout=30
+    )
+    assert "GEFUNDEN:" in res.stdout, (
+        f"der Wrapper fand den Launcher per Symlink nicht: {res.stderr[:300]}"
+    )
+    assert "repo" in res.stdout
 
 
 # --- WebApp: Inline-JavaScript muss syntaktisch gueltig sein --------------

@@ -24,7 +24,20 @@
 
 set -u
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || {
+# Der Aufruf erfolgt haeufig ueber einen Symlink (z. B.
+# /usr/local/bin/wps -> ~/WPSteuerung/Updater/wps). Dann ist "$0" der
+# Symlink-Pfad, nicht das echte Skript - der Launcher wuerde im falschen
+# Verzeichnis gesucht. Deshalb wird dem Symlink gefolgt.
+SCRIPT_PATH="$0"
+while [ -L "$SCRIPT_PATH" ]; do
+    _ziel=$(readlink "$SCRIPT_PATH" 2>/dev/null) || break
+    case "$_ziel" in
+        /*) SCRIPT_PATH="$_ziel" ;;
+        *)  SCRIPT_PATH="$(dirname "$SCRIPT_PATH")/$_ziel" ;;
+    esac
+done
+
+SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd) || {
     printf 'wps: eigenes Verzeichnis nicht ermittelbar.\n' >&2
     exit 1
 }
@@ -34,6 +47,13 @@ LAUNCHER="$SCRIPT_DIR/wp-manager.sh"
 if [ ! -f "$LAUNCHER" ]; then
     printf 'wps: der Manager-Launcher fehlt: %s\n' "$LAUNCHER" >&2
     printf '      Ist das WPSteuerung-Repository? (Erwartet: Updater/wp-manager.sh)\n' >&2
+    # Der haeufigste Fall: der Aufruf erfolgt ueber einen Symlink, der auf
+    # einen nicht (mehr) existierenden Pfad zeigt.
+    if [ -L "$0" ]; then
+        printf '      Hinweis: "%s" ist ein Symlink auf "%s".\n' "$0" "$(readlink "$0")" >&2
+        printf '      Zeigt das Ziel auf einen anderen Ort, hilft der direkte Aufruf:\n' >&2
+        printf '        %s\n' "$SCRIPT_PATH" >&2
+    fi
     exit 1
 fi
 
