@@ -955,6 +955,14 @@ class LearningEngine:
             # statt hoechste Prognose).
             "haushalt_je_wochentag": self.get_haushaltsprofil_je_tag(),
             "haushalt_tage_erfasst": len(self.data.tages_haushalt),
+            # BUGFIX (21.10.2026): Die gelernten Korrekturfaktoren je
+            # Stunde sichtbar machen. Sie zeigen, OB und WIE stark die
+            # Wetterprognose von der Realitaet abweicht - und ob die
+            # Korrektur ueberhaupt greift.
+            "stunden_korrekturfaktor": {
+                str(h): f for h, f in self.get_stunden_korrekturfaktor().items()
+            },
+            "stunden_abweichung_anzahl": len(self.data.forecast_hourly_deviations),
             # Die aktuelle Jahreszeit - damit die WebApp die
             # saisonbezogenen Werte ("wd-saison") zuordnen kann.
             "saison": self._saison_von_datum(

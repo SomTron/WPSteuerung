@@ -393,6 +393,66 @@ class TestStundenKorrekturfaktor:
         assert eng.get_stunden_korrekturfaktor() == {}
 
 
+class TestLerndatenSichtbar:
+    """BUGFIX (21.10.2026): Die neuen Lernfelder muessen die API
+    erreichen - die Whitelist in status_snapshot.py filtert sonst weg.
+    """
+
+    def test_korrekturfaktor_ist_im_api_payload(self, tmp_path):
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        hourly = {h: 300.0 for h in range(10, 18)}
+        for d in range(6):
+            tag = datetime(2026, 10, 21, 0, 0) + timedelta(days=d)
+            for h in range(24):
+                if h not in hourly:
+                    continue
+                for k in range(6):
+                    eng.update(
+                        now=tag + timedelta(hours=h, minutes=10 * k),
+                        temp_dict={"unten": 40.0}, compressor_is_on=False,
+                        feedin_watt=0.0, pv_acpower_watt=0.0,
+                        pv_erzeugung_watt=1500.0, soc=50.0,
+                        forecast_today_wh_qm=2500.0, forecast_hourly_wh=hourly,
+                        pv_array_size_qm=10.0,
+                    )
+        info = eng.get_info()
+        assert "stunden_korrekturfaktor" in info
+        assert info["stunden_korrekturfaktor"], "Kein Korrekturfaktor im Payload"
+        assert info["stunden_abweichung_anzahl"] > 0
+
+    def test_whitelist_laesst_die_felder_durch(self, tmp_path):
+        """Die API filtert nach einer Whitelist - die Felder muessen drin sein."""
+        from status_snapshot import _learning_summary
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        summary = _learning_summary(eng)
+        assert "stunden_korrekturfaktor" in summary, (
+            "Der Korrekturfaktor wird vom Status-Snapshot weggefiltert - "
+            "die WebApp wuerde nichts anzeigen")
+        assert "stunden_abweichung_anzahl" in summary
+        assert "haushalt_je_wochentag" in summary
+        assert "saison" in summary
+
+
+class TestToteParameterBereinigt:
+    """BUGFIX (21.10.2026): Die toten Parameter wurden entfernt.
+    Der Test haelt fest, dass sie auch wirklich nicht zurueckkommen.
+    """
+
+    def test_evaluate_legionellen_ohne_forecast_parameter(self):
+        import inspect
+        from priority_control import evaluate_legionellen
+        params = inspect.signature(evaluate_legionellen).parameters
+        assert "forecast_today_wh_qm" not in params
+        assert "forecast_wh_qm" not in params
+        assert "forecast_day2_wh_qm" not in params
+
+    def test_bewerte_alle_regeln_ohne_forecast_hourly_wh(self):
+        import inspect
+        from priority_control import bewerte_alle_regeln
+        params = inspect.signature(bewerte_alle_regeln).parameters
+        assert "forecast_hourly_wh" not in params
+
+
 class TestTagesbilanzEchterHausverbrauch:
     """Die Bilanz muss den echten Hausverbrauch messen, nicht PV-Export."""
 

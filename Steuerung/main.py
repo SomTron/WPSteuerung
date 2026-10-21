@@ -2023,6 +2023,14 @@ def build_heizungsdaten_zeile(state):
             # Wie im regulaeren Pfad: die Erzeugung (DC) statt des AC-Ausgangs,
             # damit der Diagnose-Fallback dieselbe Quelle wie die Anlage nennt.
             pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
+            # BUGFIX (21.10.2026): Auch der Diagnose-Fallback muss das
+            # PV-Fenster beachten. `state.pv_fenster_ausserhalb` wird
+            # von der Regel-Engine gesetzt, wenn das PV-Fenster
+            # geschlossen ist. Ohne diesen Parameter wuerde das CSV
+            # nachts "PV" melden, obwohl die Anlage aus dem Netz
+            # geheizt hat - die Auswertung wuerde das falsche Bild
+            # zeigen.
+            pv_erlaubt=not bool(getattr(state, "pv_fenster_ausserhalb", False)),
         )
         power_source = source_status.quelle.value
         # Rueckwaertskompatibilitaet fuer historische/teilweise befuellte States:

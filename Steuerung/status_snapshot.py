@@ -46,6 +46,9 @@ def _learning_summary(source):
             # sie weg - die API lieferte "haushalt_je_wochentag: None",
             # und die WebApp zeigte trotz vorhandener Daten nichts an.
             "haushalt_je_wochentag", "haushalt_tage_erfasst", "saison",
+            # BUGFIX (21.10.2026): Ohne diese Felder in der Whitelist
+            # filterte der Snapshot sie weg - die WebApp zeigte nichts.
+            "stunden_korrekturfaktor", "stunden_abweichung_anzahl",
         )
         if key in info
     }

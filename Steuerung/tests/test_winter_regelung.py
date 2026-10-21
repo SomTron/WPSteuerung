@@ -124,8 +124,11 @@ class TestLegionellenFrist:
     def _aufrufen(cfg, last_done, **kwargs):
         params = dict(
             temp_dict={"unten": 45.0, "mitte": 46.0, "oben": 47.0, "verd": 20.0},
-            now=HEUTE, forecast_today_wh_qm=100.0, forecast_wh_qm=100.0,
-            forecast_day2_wh_qm=100.0, legionellen_last_done=last_done,
+            # BUGFIX (21.10.2026): Die drei Forecast-Parameter wurden aus
+            # evaluate_legionellen entfernt - sie wurden nie gelesen. Die
+            # Tageswahl ueber den Forecast laeuft ueber den Legionellen-
+            # Plan (main.py), nicht ueber diese Regel.
+            now=HEUTE, legionellen_last_done=last_done,
             kompressor_ein=False, pv_leistung=0.0, soc=50.0,
             solar_stale=False,
         )

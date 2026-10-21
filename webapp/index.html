@@ -2502,6 +2502,46 @@
             if (spWrap) {
                 const prof = statusData.learning && statusData.learning.surplus_profil || {};
                 // Tages-Haushaltsbilanz je Wochentag (BUGFIX 21.10.2026).
+                // Gelernte Prognose-Korrektur je Stunde (BUGFIX 21.10.2026).
+                (() => {
+                    const korr = document.getElementById('prognose-korrektur');
+                    if (!korr) return;
+                    const lrn = statusData.learning || {};
+                    const faktoren = lrn.stunden_korrekturfaktor || {};
+                    const anzahl = lrn.stunden_abweichung_anzahl || 0;
+                    const eintraege = Object.entries(faktoren)
+                        .map(([h, f]) => ({ h: Number(h), f: Number(f) }))
+                        .filter(x => Number.isFinite(x.h) && Number.isFinite(x.f))
+                        .sort((a, b) => a.h - b.h);
+                    if (!eintraege.length) {
+                        korr.innerHTML = '<span style="color:var(--text-secondary)">'
+                            + 'Prognose-Korrektur: noch keine Daten'
+                            + (anzahl ? ' (' + anzahl + ' Messpunkte, braucht 3 je Stunde)' : '')
+                            + '</span>';
+                        return;
+                    }
+                    let html = '<div style="color:var(--text-secondary);margin-bottom:3px">'
+                        + 'Prognose-Korrektur je Stunde (gelernt): Faktor auf die Wetterprognose</div>'
+                        + '<div style="display:flex;gap:3px;align-items:flex-end;height:30px">';
+                    for (const e of eintraege) {
+                        // 1.0 = Prognose passt, 0.5 = halb so viel wie prognostiziert
+                        const abw = Math.abs(1 - e.f);
+                        const h = Math.max(3, Math.round(abw * 30));
+                        const farbe = e.f >= 0.95 ? '#4caf50' : (e.f >= 0.6 ? '#ffa726' : '#ff6b6b');
+                        html += '<div style="flex:1;text-align:center">'
+                            + '<div title="' + e.h + ' Uhr: Faktor ' + e.f.toFixed(2)
+                            + ' (Prognose ' + (e.f < 1 ? 'zu optimistisch' : 'zu pessimistisch') + ')"'
+                            + ' style="height:' + h + 'px;background:' + farbe
+                            + ';border-radius:2px;opacity:0.85"></div>'
+                            + '<div style="font-size:0.6rem;color:var(--text-secondary)">'
+                            + String(e.h).padStart(2, '0') + '</div></div>';
+                    }
+                    html += '</div><div style="font-size:0.65rem;color:var(--text-secondary);margin-top:3px">'
+                        + 'Gr&uuml;n = passt, Orange/Rot = Prognose zu optimistisch. '
+                        + 'Der Faktor korrigiert das PV-Fenster-Ende.</div>';
+                    korr.innerHTML = html;
+                })();
+
                 (() => {
                     const hw = document.getElementById('haushalt-wochentage');
                     if (!hw) return;
@@ -3141,6 +3181,10 @@
                              und ist kein Tagesprofil - die Legionellenwahl
                              stuetzt sich deshalb auf diese Bilanz. -->
                         <div id="haushalt-wochentage" style="margin:8px 0;font-size:0.8rem"></div>
+                        <!-- BUGFIX (21.10.2026): Die gelernten Korrekturfaktoren
+                             je Stunde machen sichtbar, OB und WIE stark die
+                             Wetterprognose von der Realitaet abweicht. -->
+                        <div id="prognose-korrektur" style="margin:10px 0;font-size:0.8rem"></div>
                         <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">HAUSVERBRAUCH je Stunde (gelernt, bei ausgeschalteter WP). BUGFIX 21.10.2026: Das Profil misst jetzt den Hausverbrauch, nicht die Netzeinspeisung - die ist nachts 0 und beschreibt den PV-&Uuml;berschuss, nicht den Haushalt. Rote Balken sind Verbrauchsspitzen (&gt;800 W, z.&nbsp;B. Kochen) - sie verfr&uuml;hen den CalcStart-Sp&auml;test-Start.</div>
                     </div>
 

@@ -787,7 +787,6 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         now=_now_for_state(state),
         forecast_wh_qm=forecast_wh_qm,
         forecast_today_wh_qm=forecast_today_wh,
-        forecast_hourly_wh=hourly_forecast_watt,
         soc=getattr(state.solar, "soc", None),
         battery_power=getattr(state.solar, "batpower", None),
         pv_acpower=getattr(state.solar, "acpower", None),

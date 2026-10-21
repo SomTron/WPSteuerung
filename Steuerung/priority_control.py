@@ -1067,6 +1067,12 @@ def evaluate_zeitfenster(
 def evaluate_abweichung(
     abw: AbweichungConfig,
     temp_dict: Dict[str, Optional[float]],
+    # BUGFIX (21.10.2026): Dieser Parameter wird hier NICHT gelesen -
+    # er stand nur in der Signatur. Er bleibt erhalten, weil er
+    # positionale Aufrufer hat (und die Aufrufer in der Regel-Engine
+    # den Zustand uebergeben). Die Hysterese-Aussage "Kompressor
+    # laeuft weiter/bleibt aus" wird ueber `result.einschalten = None`
+    # ausgedrueckt, nicht ueber diesen Parameter.
     kompressor_ein: bool,
     now_hour: int,
     nachtsperre_start: int,
@@ -2403,9 +2409,6 @@ def evaluate_legionellen(
     legionellen_cfg,
     temp_dict,
     now,
-    forecast_today_wh_qm=None,
-    forecast_wh_qm=None,
-    forecast_day2_wh_qm=None,
     legionellen_aktiv=False,
     legionellen_last_done=None,
     legionellen_started_at=None,
@@ -2646,7 +2649,6 @@ def bewerte_alle_regeln(
     learned_heating_rate_unten: Optional[float] = None,
     learned_heating_rate_gesamt: Optional[float] = None,
     learned_target_hour: Optional[float] = None,
-    forecast_hourly_wh: Optional[Dict[int, float]] = None,
     fc_ratio: float = 1.0,
     surplus_profile: Optional[Dict[str, float]] = None,
     recent_usage_events: Optional[List[Dict]] = None,
@@ -2913,9 +2915,6 @@ def bewerte_alle_regeln(
         config.legionellen,
         temp_dict,
         now,
-        forecast_today_wh_qm=forecast_today_wh_qm,
-        forecast_wh_qm=forecast_wh_qm,
-        forecast_day2_wh_qm=forecast_day2_wh_qm,
         legionellen_aktiv=legionellen_aktiv,
         legionellen_last_done=legionellen_last_done,
         legionellen_started_at=legionellen_started_at,
