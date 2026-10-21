@@ -915,6 +915,7 @@ class LearningEngine:
         forecast_hourly_wh: Optional[Dict[int, float]] = None,
         pv_array_size_qm: Optional[float] = None,
         hausverbrauch_watt: Optional[float] = None,
+        hausverbrauch_stunden_profil: bool = False,
     ):
         """
         Wird jeden Regelzyklus aufgerufen.
@@ -1043,14 +1044,34 @@ class LearningEngine:
         #
         # Der Key enthaelt jetzt den TAG: "2026-10-05-08". Damit ist der
         # Bucket wirklich "die Einspeisung am 05.10. um 8 Uhr".
-        if feedin_watt is not None and not compressor_is_on:
+        #
+        # BUGFIX (21.10.2026): Der Wert muss der HAUSVERBRAUCH sein,
+        # nicht die Einspeisung. Die Einspeisung ist tagsueber
+        # "PV minus Haushalt" und nachts 0 - sie beschreibt den
+        # PV-Ueberschuss, nicht das Haushaltsmuster. Auf dem Pi zeigte
+        # das gelernte Profil consequently ~0 W fuer ALLE Stunden
+        # (Werte -4 bis +1 W).
+        #
+        # Folge: jede Stunde galt als "Surplus-schwach" (< 250 W) und
+        # wurde als Mittagstief gezaehlt. Gemessen auf dem Pi:
+        #   ohne Profil: brauche 0.7h bis 17:00, Puffer 12.5h
+        #   mit Profil:  brauche 6.7h bis 17:00, Puffer  3.5h
+        # Der Start wurde also um Stunden zu spaet berechnet.
+        #
+        # Der Hausverbrauch (acpower - feedin) ist der echte
+        # Haushalts-Wert: nachts 487 W, tagsueber je nach Last.
+        # Ohne ihn (kein Messwert) wird nicht gesampelt - lieber kein
+        # Profil als ein falsches.
+        if hausverbrauch_stunden_profil and hausverbrauch_watt is not None \
+                and not compressor_is_on:
             key = f"{heute}-{now.hour:02d}"
+            wert = max(0.0, float(hausverbrauch_watt))
             alt_e = self.data.surplus_by_hour.get(
-                key, {"avg": float(feedin_watt), "n": 0})
+                key, {"avg": wert, "n": 0})
             alpha_surplus = self.data.config.surplus_ewma_alpha
             self.data.surplus_by_hour[key] = {
                 "avg": round(alt_e["avg"] * (1.0 - alpha_surplus)
-                             + float(feedin_watt) * alpha_surplus, 1),
+                             + wert * alpha_surplus, 1),
                 "n": alt_e["n"] + 1}
 
         # Zyklus-Akkumulation fuer die Quellen-Attribution

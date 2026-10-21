@@ -2550,14 +2550,18 @@
                 })();
                 const stunden = Object.keys(prof).map(Number).sort((a, b) => a - b);
                 if (!stunden.length) {
-                    spWrap.innerHTML = '<div style="font-size:0.75rem;color:var(--text-secondary)">Noch nicht gelernt - sammelt stuendliche Netzeinspeisung (braucht einige Tage Betrieb).</div>';
+                    spWrap.innerHTML = '<div style="font-size:0.75rem;color:var(--text-secondary)">Noch nicht gelernt - sammelt stuendlichen Hausverbrauch (braucht einige Tage Betrieb).</div>';
                 } else {
                     const maxW = Math.max(500, ...stunden.map(h => Number(prof[h]) || 0));
                     let barsHtml = '';
                     for (const h of stunden) {
                         const w = Number(prof[h]) || 0;
                         const hPct = Math.max(4, Math.round(w / maxW * 100));
-                        const tief = w < 250;
+                        // BUGFIX (21.10.2026): Das Profil misst jetzt den
+                        // HAUSVERBRAUCH. Eine Verbrauchsspitze (z.B.
+                        // Kochen) ist ein HOHER Wert - vorher galt umgekehrt
+                        // ein niedriger Wert als Tief.
+                        const tief = w > 800;
                         const farbe = tief ? '#ff6b6b' : '#4caf50';
                         barsHtml += '<div style="flex:1;min-width:18px;display:flex;flex-direction:column;align-items:center;gap:2px">'
                             + '<div style="width:100%;height:64px;display:flex;align-items:flex-end">'
@@ -3137,7 +3141,7 @@
                              und ist kein Tagesprofil - die Legionellenwahl
                              stuetzt sich deshalb auf diese Bilanz. -->
                         <div id="haushalt-wochentage" style="margin:8px 0;font-size:0.8rem"></div>
-                        <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">Netzeinspeisung je Stunde (bei ausgeschalteter WP = Haushaltsmuster). Rote Balken sind Tiefstunden (&lt;250 W, z.&nbsp;B. Kochen) - sie verfr&uuml;hen den CalcStart-Sp&auml;test-Start.</div>
+                        <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)">HAUSVERBRAUCH je Stunde (gelernt, bei ausgeschalteter WP). BUGFIX 21.10.2026: Das Profil misst jetzt den Hausverbrauch, nicht die Netzeinspeisung - die ist nachts 0 und beschreibt den PV-&Uuml;berschuss, nicht den Haushalt. Rote Balken sind Verbrauchsspitzen (&gt;800 W, z.&nbsp;B. Kochen) - sie verfr&uuml;hen den CalcStart-Sp&auml;test-Start.</div>
                     </div>
 
                     <!-- Boiler-Fuellstand (Punkt A) -->

@@ -221,6 +221,8 @@ class TestStundenprognoseWirdGenutzt:
                         forecast_today_wh_qm=2500.0,
                         forecast_hourly_wh={h: 100.0},
                         pv_array_size_qm=10.0,
+                        hausverbrauch_watt=300.0 + (h - 8) * 40,
+                        hausverbrauch_stunden_profil=True,
                     )
         profil = engine.get_surplus_profile_with_forecast(
             forecast_today_wh_qm=2500.0,
@@ -238,16 +240,22 @@ def engine(tmp_path):
 
 
 def _schritt(e, now, kompressor, feedin=None, soc=None, pv_array_size_qm=None,
-             acpower=None):
+             acpower=None, hausverbrauch=None, stundenprofil=False):
     # `acpower` ist die PV-ERZEUGUNG und der Zaehler der Forecast-
     # Kalibrierung. Ohne sie wird nicht kalibriert - genau wie in der
     # Produktion, wo `update()` sie von priority_control_logic bekommt.
+    #
+    # BUGFIX (21.10.2026): Das Stundenprofil misst jetzt den
+    # HAUSVERBRAUCH, nicht die Einspeisung. `stundenprofil=True`
+    # aktiviert das (Produktion setzt es ebenfalls).
     e.update(
         now,
         {"oben": 45.0, "mittig": 43.0, "unten": 40.0},
         kompressor, feedin_watt=feedin, soc=soc,
         pv_acpower_watt=acpower,
         pv_array_size_qm=pv_array_size_qm,
+        hausverbrauch_watt=hausverbrauch,
+        hausverbrauch_stunden_profil=stundenprofil,
     )
 
 
@@ -442,16 +450,19 @@ def _kalibriere_am_abend(e, tag_datum, forecast):
 
 class TestSurplusProfil:
     def test_profil_lernt_mittagstief(self, engine):
-        stunde_watt = {8: 800.0, 9: 700.0, 10: 600.0, 11: 500.0,
-                       12: 150.0, 13: 180.0, 14: 600.0}
+        # BUGFIX (21.10.2026): Das Profil misst den HAUSVERBRAUCH.
+        # Ein "Tief" ist jetzt eine Stunde mit HOHEM Verbrauch
+        # (Kochen), nicht mit niedriger Einspeisung.
+        stunde_watt = {8: 200.0, 9: 250.0, 10: 300.0, 11: 350.0,
+                       12: 900.0, 13: 800.0, 14: 400.0}
         for tag in range(7):
             for h, w in stunde_watt.items():
                 _schritt(engine, datetime(2026, 8, 20 + tag, h, 30),
-                         False, feedin=w)
+                         False, hausverbrauch=w, stundenprofil=True)
         profil = engine.get_surplus_profile()
         assert profil is not None
-        assert profil[12] < 250.0          # Kochtief gelernt
-        assert profil[8] > 400.0           # Morgenueberschuss intakt
+        assert profil[12] > 250.0          # Kochtief gelernt
+        assert profil[8] < 250.0           # Morgenruhe intakt
 
     def test_get_info_liefert_profil_fuer_ui(self, engine):
         info = engine.get_info()
@@ -460,16 +471,20 @@ class TestSurplusProfil:
         assert info["quellen"]["zu_frueh_14d"] == 0
         # Nach dem Lernen steht das Profil {stunde: watt} im Payload:
         for i in range(6):
-            _schritt(engine, datetime(2026, 8, 26, 12, i), False, feedin=120.0)
+            _schritt(engine, datetime(2026, 8, 26, 12, i), False,
+                     hausverbrauch=120.0, stundenprofil=True)
         for i in range(6):
-            _schritt(engine, datetime(2026, 8, 26, 13, i), False, feedin=600.0)
+            _schritt(engine, datetime(2026, 8, 26, 13, i), False,
+                     hausverbrauch=600.0, stundenprofil=True)
         for i in range(6):
-            _schritt(engine, datetime(2026, 8, 26, 14, i), False, feedin=500.0)
+            _schritt(engine, datetime(2026, 8, 26, 14, i), False,
+                     hausverbrauch=500.0, stundenprofil=True)
         for i in range(6):
-            _schritt(engine, datetime(2026, 8, 26, 15, i), False, feedin=450.0)
+            _schritt(engine, datetime(2026, 8, 26, 15, i), False,
+                     hausverbrauch=450.0, stundenprofil=True)
         info = engine.get_info()
         assert set(info["surplus_profil"].keys()) == {"12", "13", "14", "15"}
-        assert info["surplus_profil"]["12"] < 250
+        assert info["surplus_profil"]["12"] == pytest.approx(120.0, abs=1.0)
 
     def test_profil_bleibt_none_bei_zu_wenig_stunden(self, engine):
         for i in range(8):
@@ -500,10 +515,16 @@ class TestCalcstartMittagstief:
         assert erg.einschalten is None
 
     def test_mittagstief_verfrueht_den_spaetest_start(self):
-        """Tief um 15 Uhr -> 15-Uhr-Stunde zaehlt nur 75% -> frueher EIN."""
+        """Verbrauchsspitze um 15 Uhr -> Stunde zaehlt nur 75% -> frueher EIN.
+
+        BUGFIX (21.10.2026): Das Profil misst jetzt den HAUSVERBRAUCH.
+        Ein Tief ist eine Stunde mit HOHEM Verbrauch (> 250 W) - z.B.
+        Kochen. Vorher galt umgekehrt eine Stunde mit NIEDRIGER
+        Einspeisung als Tief.
+        """
         erg = evaluate_calculated_start(
             _calc_cfg(netz_fallback_erlaubt=True), TEMPS, 14, 45,
-            surplus_profile={"15": 100.0},
+            surplus_profile={"15": 900.0},
         )
         assert erg.einschalten is True
         assert "SPAETEST" in erg.grund
@@ -593,7 +614,9 @@ class TestVerdrahtungBewerteAlleRegeln:
             forecast_wh_qm=None,
             forecast_today_wh_qm=1300.0,
             fc_ratio=0.4,
-            surplus_profile={"15": 100.0},
+            # BUGFIX (21.10.2026): Das Profil misst den HAUSVERBRAUCH;
+            # ein Tief ist eine Stunde mit HOHEM Verbrauch (> 250 W).
+            surplus_profile={"15": 900.0},
         )
         cs = [e for e in alle if e.name == "CalcStart"][0]
         assert "x0.40" in cs.grund

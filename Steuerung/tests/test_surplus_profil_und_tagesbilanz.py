@@ -27,7 +27,7 @@ from learning_engine import LearningEngine
 
 
 def _schritt(engine, now, compressor_is_on=False, feedin=0.0,
-             hausverbrauch=None):
+             hausverbrauch=None, stundenprofil=False):
     engine.update(
         now=now,
         temp_dict={"unten": 40.0},
@@ -40,6 +40,7 @@ def _schritt(engine, now, compressor_is_on=False, feedin=0.0,
         forecast_hourly_wh=None,
         pv_array_size_qm=10.0,
         hausverbrauch_watt=hausverbrauch,
+        hausverbrauch_stunden_profil=stundenprofil,
     )
 
 
@@ -54,7 +55,7 @@ class TestSurplusProfilTagesTrennung:
         for h, w in stunden.items():
             for k in range(6):
                 _schritt(eng, tag1 + timedelta(hours=h, minutes=10 * k),
-                         feedin=w)
+                         hausverbrauch=w, stundenprofil=True)
         profil = eng.get_surplus_profile()
         assert profil is not None
         assert profil[8] == pytest.approx(900.0, abs=1.0)
@@ -64,7 +65,7 @@ class TestSurplusProfilTagesTrennung:
         for h in stunden:
             for k in range(6):
                 _schritt(eng, tag2 + timedelta(hours=h, minutes=10 * k),
-                         feedin=0.0)
+                         hausverbrauch=0.0, stundenprofil=True)
         profil = eng.get_surplus_profile()
         assert profil is not None
         # Der Wert darf NICHT der Mischwert aus beiden Tagen sein
@@ -89,12 +90,60 @@ class TestSurplusProfilTagesTrennung:
             for h in range(24):
                 for k in range(6):
                     _schritt(eng, tag + timedelta(hours=h, minutes=10 * k),
-                             feedin=float(werte.get(h, 0)))
+                             hausverbrauch=float(werte.get(h, 0)),
+                             stundenprofil=True)
         profil = eng.get_surplus_profile()
         assert profil is not None
         for h, wert in werte.items():
             assert profil[h] == pytest.approx(wert, abs=1.0), (
                 f"Stunde {h}: {profil[h]} statt {wert}")
+
+
+class TestVerbrauchsprofilUndMittagstief:
+    """Das Profil misst den Hausverbrauch; die Tief-Erkennung findet ihn."""
+
+    def test_profil_misst_hausverbrauch_nicht_einspeisung(self, tmp_path):
+        """BUGFIX (21.10.2026): Die Einspeisung ist nachts 0 und
+        beschreibt den PV-Ueberschuss, nicht das Haushaltsmuster.
+        Auf dem Pi zeigte das gelernte Profil ~0 W fuer alle Stunden -
+        wodurch JEDE Stunde als Mittagstief galt.
+        """
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        start = datetime(2026, 10, 5, 0, 0)
+        for d in range(3):
+            tag = start + timedelta(days=d)
+            for h in range(24):
+                for k in range(6):
+                    _schritt(eng, tag + timedelta(hours=h, minutes=10 * k),
+                             hausverbrauch=400.0, stundenprofil=True)
+        profil = eng.get_surplus_profile()
+        assert profil is not None
+        assert profil[0] == pytest.approx(400.0, abs=1.0)
+        assert profil[12] == pytest.approx(400.0, abs=1.0)
+
+    def test_mittagstief_findet_verbrauchsspitze(self, tmp_path):
+        """Der Lookup muss int-Keys UND str-Keys akzeptieren.
+
+        BUGFIX (21.10.2026): Die Lernengine liefert int-Keys, die
+        Funktion suchte mit str(h) - damit wurde NIE eine Stunde
+        gefunden und die Erkennung war wirkungslos.
+        """
+        from priority_control import _mittagstief_stunden
+        profil_int = {12: 1800.0, 13: 1800.0, 14: 500.0, 15: 500.0}
+        profil_str = {"12": 1800.0, "13": 1800.0, "14": 500.0, "15": 500.0}
+        for profil in (profil_int, profil_str):
+            h, label = _mittagstief_stunden(11.0, 17.0, profil,
+                                            schwelle_w=800.0)
+            assert h == 2.0, f"{h} statt 2 - Key-Typ wird nicht akzeptiert"
+            assert "12" in label
+
+    def test_geringe_verbrauchsstunden_sind_kein_tief(self, tmp_path):
+        """Der Grundverbrauch (400-500 W) ist kein Tief."""
+        from priority_control import _mittagstief_stunden
+        profil = {h: 450.0 for h in range(24)}
+        h, label = _mittagstief_stunden(8.0, 17.0, profil, schwelle_w=800.0)
+        assert h == 0.0
+        assert label == ""
 
 
 class TestTagesbilanzEchterHausverbrauch:

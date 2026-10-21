@@ -567,6 +567,12 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             # erfasst nur den Sonnentag; die naechtlichen ~4400 Wh
             # fehlten (gemessen: 5200 statt 9600 Wh/Tag).
             hausverbrauch_watt=getattr(state.solar, "hausverbrauch", None),
+            # BUGFIX (21.10.2026): Das Stundenprofil misst den
+            # HAUSVERBRAUCH (nicht die Einspeisung). Ohne dieses
+            # Flag wuerde weiterhin die Einspeisung gesampelt -
+            # die ist nachts 0 und beschreibt den PV-Ueberschuss,
+            # nicht das Haushaltsmuster.
+            hausverbrauch_stunden_profil=True,
         )
         gelernte_rate_unten = learning_engine.get_learned_heating_rate(
             now_local.month, "unten"

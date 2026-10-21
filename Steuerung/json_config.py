@@ -852,6 +852,17 @@ class CalculatedStartConfig(BaseModel):
         default=0.5,
         description="Sicherheitszuschlag (h) auf die berechnete Heizzeit fuer den Spaetest-Start ohne Quelle",
     )
+    mittagstief_schwelle_w: float = Field(
+        default=800.0,
+        description=(
+            "Ab diesem HAUSVERBRAUCH (W) gilt eine Stunde als "
+            "Verbrauchsspitze (z.B. Kochen) und zaehlt nur teilweise "
+            "als Heizzeit. BUGFIX 21.10.2026: Das gelernte Profil "
+            "misst jetzt den Hausverbrauch statt der Einspeisung - "
+            "die Schwelle musste daher von 250 W (Einspeisung) auf "
+            "einen Verbrauchswert angehoben werden."
+        ),
+    )
     nutzung_fenster_h: float = Field(
         default=2.0,
         description=(

@@ -1468,7 +1468,7 @@ def _mittagstief_stunden(
     current_time: float,
     ziel_uhr: float,
     surplus_profile: Dict[str, float],
-    schwelle_w: float = 250.0,
+    schwelle_w: float = 800.0,
 ) -> tuple:
     """Gelernte Surplus-schwache Stunden zwischen jetzt und Zielzeit.
 
@@ -1481,8 +1481,19 @@ def _mittagstief_stunden(
     stunden = []
     h = int(current_time) + 1
     while h < ziel_uhr and (h - current_time) <= 10.0:
-        wert = surplus_profile.get(str(h % 24))
-        if wert is not None and wert < schwelle_w:
+        # BUGFIX (21.10.2026): Der Lookup muss beide Key-Typen
+        # akzeptieren. Die Lernengine liefert int-Keys (get_surplus_
+        # profile), die API serialisiert sie zu str. Mit str-Lookup
+        # gegen int-Keys wurde NIE eine Stunde gefunden - die
+        # Mittagstief-Erkennung war thus wirkungslos.
+        wert = surplus_profile.get(h % 24)
+        if wert is None:
+            wert = surplus_profile.get(str(h % 24))
+        # BUGFIX (21.10.2026): Das Profil misst jetzt den HAUSVERBRAUCH
+        # (nicht mehr die Einspeisung). Ein "Tief" ist damit eine Stunde
+        # mit HOHEM Verbrauch (z.B. Kochen) - vorher galt umgekehrt eine
+        # Stunde mit WENIGER Einspeisung als Tief.
+        if wert is not None and wert > schwelle_w:
             stunden.append(h % 24)
         h += 1
     if not stunden:
@@ -2114,7 +2125,15 @@ def evaluate_calculated_start(
     # (Mittags Kochen etc.) zaehlen nur zu 75% als Heizzeit -> frueherer
     # Start, damit waehrend des Tiefs pausiert werden kann.
     dip_h, dip_label = (
-        _mittagstief_stunden(current_time, ziel_uhr, surplus_profile)
+        _mittagstief_stunden(
+            current_time, ziel_uhr, surplus_profile,
+            # BUGFIX (21.10.2026): Die Schwelle ist konfigurierbar, weil
+            # das Profil jetzt den HAUSVERBRAUCH misst (vorher die
+            # Einspeisung). Der alte Wert 250 W war fuer Einspeisung
+            # gedacht - als Verbrauchsschwelle lag er unter dem
+            # Grundverbrauch und jede Stunde galt als Spitze.
+            schwelle_w=float(getattr(calc_cfg, "mittagstief_schwelle_w", 800.0)),
+        )
         if surplus_profile
         else (0.0, "")
     )
@@ -2354,7 +2373,8 @@ def _legionellen_ueberfaellig(cfg, last_done, now) -> bool:
     return tage >= frist
 
 
-def _legionellen_quelle_status(cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower=None):
+def _legionellen_quelle_status(cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower=None,
+                               pv_erlaubt=True):
     """Prüft PV/Batterie anhand derselben zentralen Quellenlogik."""
     status = classify_energy_source(
         pv_acpower=pv_acpower,
@@ -2366,6 +2386,13 @@ def _legionellen_quelle_status(cfg, pv_leistung, battery_power, soc, solar_stale
         battery_min_watt=float(getattr(cfg, "batterie_start_min_watt", 50.0)),
         soc_min_prozent=float(getattr(cfg, "batterie_start_min_soc_prozent", 90.0)),
         max_netzkauf_watt=float(getattr(cfg, "max_netzbezug_watt", -50.0)),
+        # BUGFIX (21.10.2026): Ausserhalb des PV-Fensters zaehlt PV
+        # nicht als Quelle. Dieser Aufruf war der letzte, der den
+        # Parameter nicht durchreichte - die Legionelle haette damit
+        # auch nachts oder nach Sonnenuntergang aus PV starten
+        # duerfen. Nachweis: PV 600 W ergab "PV erneuerbar=True",
+        # obwohl das Fenster geschlossen war.
+        pv_erlaubt=pv_erlaubt,
     )
     if status.ist_erneuerbar:
         return True, status.quelle.value
@@ -2393,6 +2420,9 @@ def evaluate_legionellen(
     battery_power: Optional[float] = None,
     soc: Optional[float] = None,
     solar_stale: bool = False,
+    # BUGFIX (21.10.2026): Ausserhalb des PV-Fensters zaehlt PV nicht
+    # als Quelle - auch nicht fuer die Legionellenprophylaxe.
+    pv_quelle_erlaubt: bool = True,
 ):
     """Bewertet, ob die Legionellenprophylaxe durchgefuehrt werden soll."""
     result = RegelErgebnis(
@@ -2559,7 +2589,8 @@ def evaluate_legionellen(
         quelle_ok, quelle_text = True, "Hygiene-Notfall (Frist ueberschritten, Netzbetrieb)"
     else:
         quelle_ok, quelle_text = _legionellen_quelle_status(
-            legionellen_cfg, pv_leistung, battery_power, soc, solar_stale, pv_acpower
+            legionellen_cfg, pv_leistung, battery_power, soc, solar_stale,
+            pv_acpower, pv_erlaubt=pv_quelle_erlaubt
         )
     if not quelle_ok:
         result.einschalten = None

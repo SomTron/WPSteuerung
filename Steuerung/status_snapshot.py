@@ -41,6 +41,11 @@ def _learning_summary(source):
             "komfort_verletzungen_1d", "forecast_ratio",
             "forecast_ratio_samples", "forecast_hourly_deviations",
             "quellen", "surplus_stunden", "surplus_profil", "letzte_zapfung",
+            # BUGFIX (21.10.2026): Die neuen Felder der Tagesbilanz
+            # mussten in die Whitelist. Ohne sie filterte der Snapshot
+            # sie weg - die API lieferte "haushalt_je_wochentag: None",
+            # und die WebApp zeigte trotz vorhandener Daten nichts an.
+            "haushalt_je_wochentag", "haushalt_tage_erfasst", "saison",
         )
         if key in info
     }
