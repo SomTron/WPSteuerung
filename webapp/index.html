@@ -1336,9 +1336,21 @@
                 el.style.display = 'none';
                 return;
             }
-            const healthy = healthData.status === 'ok';
-            el.textContent = healthy ? 'Steuerung ok' : 'Steuerung eingeschränkt';
-            el.className = 'status-badge ' + (healthy ? 'badge-compressor' : 'badge-compressor off');
+            // Die SD-Karte traegt die gesamte Historie. Faellt sie aus, ist
+            // das Wichtigste weg - das muss man sehen, auch wenn die
+            // Steuerung selbst noch laeuft.
+            const sd = healthData.sd_karte;
+            const sdProblem = sd && sd.sd_ok === false;
+            const healthy = healthData.status === 'ok' && !sdProblem;
+            if (sdProblem) {
+                el.textContent = 'SD-Karte prüfen!';
+                el.className = 'status-badge badge-danger';
+                el.title = (sd.hinweise || []).join(' | ');
+            } else {
+                el.textContent = healthy ? 'Steuerung ok' : 'Steuerung eingeschränkt';
+                el.className = 'status-badge ' + (healthy ? 'badge-compressor' : 'badge-compressor off');
+                el.title = '';
+            }
             el.style.display = '';
         }
 

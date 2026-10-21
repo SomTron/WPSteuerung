@@ -137,6 +137,49 @@ nachher wegwerfen müsste.
 
 ---
 
+## 💾 SD-Karten-Health & Neustart-Schutz
+
+Auf dem Pi trägt die SD-Karte fast alles: die Heizungsdaten-CSV, das
+Entscheidungslog, `last_state.txt`. **Die Logs liegen dagegen im RAM**
+(`/var/log/wps`, log2ram-tmpfs) und werden stündlich auf die SD gesynct –
+das gilt aber *nur* für die Logs. Die CSV schreibt direkt auf die SD-Karte.
+
+### Früherkennung (`sd_health.py`)
+
+Ein Karten-Ausfall kommt selten überraschend. Der Check wertet vier
+Signale aus und hängt sie in `/health` (`sd_karte`):
+
+| Signal | Quelle |
+|---|---|
+| I/O- und Dateisystem-Fehler | `dmesg` (Muster u. a. `Buffer I/O error`, `EXT4-fs … error`, `error -84`) |
+| Dateisystem-Fehlerzähler | `/sys/fs/ext4/<dev>/errors_count` |
+| Schreibtest | kleine Datei im Datenverzeichnis schreiben/lesen/löschen |
+| CSV-Konsistenz | Header + Datenzeilen lesbar? |
+
+Angezeigt wird das im **Header-Badge der WebApp** (rot: „SD-Karte
+prüfen!") und in der **Manager-Option 22**. Geprüft wird alle 5 Minuten
+(gecacht) – `/health` wird alle 5 s abgerufen.
+
+### Neustart-Dämpfung (`start_daempfung.py`)
+
+Die Unit startet den Dienst mit `Restart=always` und **ohne** StartLimit –
+bewusst, denn eine Heizungssteuerung darf nach einem Absturz nicht
+aufgeben. Kehrseite: Startet der Dienst dauerhaft fehl, entstehen 8.640
+Neustarts pro Tag mit Stacktrace im Journal.
+
+Ab dem **dritten** Fehlstart in 10 Minuten wartet der Prozess 5 Minuten
+*in-place* und versucht es erneut – ohne Neustart durch systemd, ohne
+Journal-Spam. Die Heizung versucht es weiter, denn der Fehler kann
+weggehen (z. B. wenn ein Sensor zurückkommt).
+
+> Wichtig: Es wird **nur** ein Fehler beim *Start* gezählt. Ein Absturz im
+> laufenden Betrieb führt weiterhin zum sofortigen Neustart – das ist
+> richtig so.
+
+Einstellbar über `WPS_MAX_FEHLSTARTS`, `WPS_FEHLSTART_WARTEZEIT_MIN`.
+
+---
+
 ## 📂 Projektstruktur
 
 Das Projekt ist in funktionale Bereiche unterteilt:

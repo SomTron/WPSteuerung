@@ -507,6 +507,44 @@ def _control_state():
         return control_state
     return shared_state
 
+# --- SD-Karten-Health ---------------------------------------------------
+#
+# Die SD-Karte des Pi traegt Heizungsdaten-CSV, Entscheidungslog und
+# last_state.txt. Faellt sie aus, ist die Historie weg. Die Karte meldet
+# das vorher - der Check wertet Kernel-Meldungen, den Dateisystem-
+# Fehlerzaehler, einen Schreibtest und die CSV-Konsistenz aus.
+#
+# Gecacht: /health wird alle 5 s abgerufen. dmesg zu lesen und einen
+# Schreibtest zu machen, ist dafuer zu teuer. Der Cache ist 5 Minuten
+# alt - ein sterbender Datentraeger meldet sich ueber Tage, nicht
+# Sekunden, vorher.
+
+_SD_HEALTH_CACHE: dict = {"zeit": None, "status": None}
+_SD_HEALTH_TTL_SEC = 300.0
+
+
+def _sd_karten_status() -> dict:
+    """Liefert den SD-Karten-Status (gecacht)."""
+    jetzt = time.time()
+    if _SD_HEALTH_CACHE["zeit"] is not None:
+        if jetzt - _SD_HEALTH_CACHE["zeit"] < _SD_HEALTH_TTL_SEC:
+            return _SD_HEALTH_CACHE["status"]
+    status = {"sd_ok": True, "hinweise": [], "unbekannt": True}
+    try:
+        import sd_health
+        status = sd_health.pruefe(
+            os.path.dirname(HEIZUNGSDATEN_CSV) or ".",
+            HEIZUNGSDATEN_CSV,
+        )
+    except Exception as exc:
+        # Die Pruefung darf den Healthcheck nie ausfallen lassen.
+        status = {"sd_ok": True, "hinweise": [], "unbekannt": True,
+                  "fehler": f"{type(exc).__name__}: {exc}"}
+    _SD_HEALTH_CACHE["zeit"] = jetzt
+    _SD_HEALTH_CACHE["status"] = status
+    return status
+
+
 @app.get("/health")
 def health_status():
     """Schneller, nicht-sensibler Healthcheck fuer Monitoring/Uptime."""
@@ -549,6 +587,7 @@ def health_status():
         "notaus_ts": getattr(control, "notaus_ts", None),
         "last_state_write_ok": snapshot_ok,
         "last_state_write_error": getattr(state, "last_state_write_error", None),
+        "sd_karte": _sd_karten_status(),
     }
 
 

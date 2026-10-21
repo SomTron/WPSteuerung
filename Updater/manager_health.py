@@ -114,6 +114,16 @@ def render_health(health: dict) -> tuple[str, bool]:
         zeilen.append(f"Snapshot:     {_fmt(persistenz)}")
         if health.get("last_state_write_error"):
             zeilen.append(f"              {health['last_state_write_error']}")
+    # SD-Karte: traegt die gesamte Historie (CSV, Entscheidungslog, Snapshot).
+    # Ein Ausfall kommt nicht ueraschend - die Karte meldet vorher I/O-Fehler.
+    sd = health.get("sd_karte")
+    if isinstance(sd, dict) and sd.get("sd_ok") is False:
+        gesund = False
+        zeilen.append("SD-Karte:     WARNUNG")
+        for hinweis in sd.get("hinweise", []):
+            zeilen.append(f"              {hinweis}")
+    elif isinstance(sd, dict) and sd.get("sd_ok") is True:
+        zeilen.append("SD-Karte:     ok")
     if not gesund:
         zeilen.append("")
         zeilen.append("Hinweis: 'degraded' heisst meist ein externer Dienst,")

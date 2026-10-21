@@ -2350,9 +2350,57 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
     
+    # Neustart-Schleife daempfen. Die Unit startet den Dienst bewusst immer
+    # neu (Restart=always, RestartSec=10) - eine Heizungssteuerung darf nach
+    # einem Absturz nicht aufgeben. Startet der Dienst aber dauerhaft fehl
+    # (fehlende Sensoren, kaputte Konfiguration), entstehen sonst 8.640
+    # Neustarts pro Tag mit Stacktrace im Journal. Deshalb: ab dem dritten
+    # Fehlstart in 10 Minuten wartet der Prozess in-place und versucht es
+    # erneut - ohne Neustart durch systemd, ohne Journal-Spam. Der Dienst
+    # beendet sich dabei NICHT, das Aufraeumen im finally-Block bleibt
+    # unberuehrt.
+    while True:
+        try:
+            asyncio.run(main_loop())
+            # Normaler Betriebsende (Signal, Not-Aus) - keine Schleife.
+            break
+        except KeyboardInterrupt:
+            break
+        except SystemExit:
+            # Der Not-Aus-Exitcode (42) muss unveraendert durchkommen.
+            raise
+        except BaseException as _startfehler:  # noqa: BLE001
+            import traceback
+            _tb = "".join(traceback.format_exception(
+                type(_startfehler), _startfehler, _startfehler.__traceback__))
+            logging.critical(
+                "Dienst konnte nicht starten - Fehler:\n" + _tb[-4000:]
+            )
+            # GPIO/Releais freigeben, bevor es der naechste Versuch
+            # uebernimmt. Sonst haengt der Kompressor-Ausgang im Fehlerfall.
+            try:
+                if hardware_manager is not None:
+                    hardware_manager.cleanup()
+            except Exception:
+                pass
+            # Ein gesetztes stop_event (z. B. "Ausschalten scheitert")
+            # wuerde den naechsten Versuch sofort beenden.
+            try:
+                stop_event.clear()
+            except Exception:
+                pass
+            try:
+                import start_daempfung
+                start_daempfung.warte_bei_fehlerschleife(logger=logging.getLogger())
+            except Exception as _daempf_exc:
+                logging.error(f"Neustart-Daempfung nicht moeglich: {_daempf_exc}")
+
+    # Der Dienst lief erfolgreich: die Fehlstart-Historie loeschen, damit
+    # ein spaeterer Fehler nicht als "Schleife" gewertet wird.
     try:
-        asyncio.run(main_loop())
-    except KeyboardInterrupt:
+        import start_daempfung
+        start_daempfung.fehlstart_zuruecksetzen()
+    except Exception:
         pass
     # Not-Aus beendet den Dienst mit einem eigenen Exitcode. In
     # wpsteuerung.service steht dafuer RestartPreventExitStatus=42, damit
