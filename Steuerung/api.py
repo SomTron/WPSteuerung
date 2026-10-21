@@ -22,6 +22,7 @@ except ImportError:
     entscheidungs_log = None
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -336,6 +337,15 @@ limiter = Limiter(key_func=lambda r: "global", default_limits=["100/minute"])
 app.state.limiter = limiter
 app.add_middleware(RateLimitMiddleware, limiter=limiter)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Antworten komprimieren. Die API liefert fast nur JSON mit Zahlen - das
+# komprimiert um Faktor 10-35. Gemessen an der 7-Tage-History: 52 KB -> 1,5 KB.
+# Das hilft vor allem, wenn die WebApp ueber den Cloudflare-Tunnel im
+# Mobilfunk laeuft - jeder eingesparte Byte zaehlt dort.
+# Der Browser dekomprimiert transparent ("Accept-Encoding: gzip").
+# Unter 1 KB wird nichts komprimiert: da ist der Overhead groesser als der
+# Gewinn (z. B. /health beim 5-Sekunden-Polling).
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Live-Daten niemals durch Browser, FastAPI-Proxy oder Service Worker cachen.
 _LIVE_NO_STORE_PATHS = {

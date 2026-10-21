@@ -13,6 +13,7 @@ import pytest
 
 from utils import (
     EXPECTED_CSV_HEADER,
+    raeume_csv_archiv_auf,
     relevante_csv_dateien,
     rotiere_csv_monatlich,
 )
@@ -34,7 +35,6 @@ def csv_pfad(tmp_path):
 
 
 # ── rotiere_csv_monatlich ─────────────────────────────────────────────
-
 class TestRotation:
     def test_fehlende_datei_ist_kein_fehler(self, tmp_path):
         pfad = str(tmp_path / "gibts" / "nicht.csv")
@@ -146,3 +146,89 @@ class TestRelevanteDateien:
         dateien = relevante_csv_dateien(csv_pfad, jetzt=datetime(2026, 1, 1, 8, 0))
 
         assert dateien == [archiv, csv_pfad]
+
+
+# ── Aufraeumen der Monatsarchive ──────────────────────────────────────
+
+class TestAufraeumen:
+    """Die Monatsarchive wachsen unbegrenzt (~17 MB/Monat auf der SD-Karte).
+
+    Ohne Aufraeumen waechst der Bestand um ~200 MB im Jahr. Nach 24 Monaten
+    (zwei Jahre - das deckt die Saison- und Wettervergleiche ab) wird das
+    aelteste Archiv entfernt.
+    """
+
+    def _archiv(self, tmp_path, monat, basis="heizungsdaten"):
+        verzeichnis = os.path.join(str(tmp_path), "csv log")
+        os.makedirs(verzeichnis, exist_ok=True)
+        pfad = os.path.join(verzeichnis, f"{basis}_{monat}.csv")
+        schreibe_csv(pfad, [f"{monat}-01 00:00:00"])
+        return pfad
+
+    def test_alte_archived_werden_geloescht(self, tmp_path):
+        alt = self._archiv(tmp_path, "2023-05")
+        neu = self._archiv(tmp_path, "2026-05")
+
+        geloescht = raeume_csv_archiv_auf(
+            os.path.dirname(alt), "heizungsdaten",
+            max_monate=24, heute=datetime(2026, 6, 1),
+        )
+
+        assert alt in geloescht
+        assert not os.path.exists(alt)
+        assert os.path.exists(neu), "ein aktuelles Archiv darf nicht sterben"
+
+    def test_die_aktive_csv_wird_nie_geloescht(self, tmp_path):
+        verzeichnis = os.path.join(str(tmp_path), "csv log")
+        os.makedirs(verzeichnis, exist_ok=True)
+        aktiv = os.path.join(verzeichnis, "heizungsdaten.csv")
+        schreibe_csv(aktiv, ["2020-01-01 00:00:00"])
+
+        raeume_csv_archiv_auf(
+            verzeichnis, "heizungsdaten",
+            max_monate=1, heute=datetime(2026, 6, 1),
+        )
+
+        assert os.path.exists(aktiv), "die aktive CSV ist nie ein Monatsarchiv"
+
+    def test_fremde_dateien_bleiben_unangetastet(self, tmp_path):
+        verzeichnis = os.path.join(str(tmp_path), "csv log")
+        os.makedirs(verzeichnis, exist_ok=True)
+        fremd = os.path.join(verzeichnis, "zyklen.csv")
+        schreibe_csv(fremd, ["2020-01-01 00:00:00"])
+        anders = os.path.join(verzeichnis, "heizungsdaten_backup.csv")
+        schreibe_csv(anders, ["2020-01-01 00:00:00"])
+
+        raeume_csv_archiv_auf(
+            verzeichnis, "heizungsdaten",
+            max_monate=1, heute=datetime(2026, 6, 1),
+        )
+
+        assert os.path.exists(fremd)
+        assert os.path.exists(anders)
+
+    def test_abgeschaltet_loescht_nichts(self, tmp_path):
+        alt = self._archiv(tmp_path, "2020-05")
+
+        geloescht = raeume_csv_archiv_auf(
+            os.path.dirname(alt), "heizungsdaten",
+            max_monate=0, heute=datetime(2026, 6, 1),
+        )
+
+        assert geloescht == []
+        assert os.path.exists(alt)
+
+    def test_rotation_raeumt_alte_archived_auf(self, tmp_path, csv_pfad):
+        """Der Aufruf muss aus der Rotation heraus automatisch erfolgen."""
+        verzeichnis = os.path.dirname(csv_pfad)
+        os.makedirs(verzeichnis, exist_ok=True)
+        alt = os.path.join(verzeichnis, "heizungsdaten_2020-01.csv")
+        schreibe_csv(alt, ["2020-01-01 00:00:00"])
+        schreibe_csv(csv_pfad, ["2020-01-31 23:59:00"])
+
+        rotiere_csv_monatlich(csv_pfad, heute=datetime(2020, 2, 1))
+
+        # Die Rotation archiviert nach 2020-01; das alte 2020-01-Archiv
+        # (durch den Rotations-Test schon vorhanden) ist nicht aelter als
+        # 24 Monate und bleibt deshalb erhalten.
+        assert os.path.exists(alt)

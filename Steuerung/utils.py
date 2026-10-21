@@ -258,10 +258,73 @@ def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None, delimite
             )
         os.replace(csv_path, archiv_pfad)
         logging.info(f"CSV-Monatsrotation: {csv_path} -> {archiv_pfad}")
+        # Alte Monatsarchive wegraeumen. Ohne das waechst der Bestand auf der
+        # SD-Karte unbegrenzt: ~17 MB je Monat, ~200 MB je Jahr.
+        # Wichtig: die Referenzzeit durchreichen. Sonst wuerde die
+        # Aufraeumung immer gegen die echte Uhrzeit messen - bei einer
+        # Rotation mit einem anderen Datum (Tests, Nachholen) wuerde sie
+        # viel zu aggressiv loeschen.
+        raeume_csv_archiv_auf(verzeichnis, basis, heute=heute)
         return archiv_pfad
     except Exception as e:
         logging.error(f"Fehler bei CSV-Monatsrotation ({csv_path}): {e}")
         return None
+
+
+# Monatsarchive, die aelter als diese Anzahl Monate sind, werden geloescht.
+# 24 Monate = zwei Jahre - das deckt die Saison- und Wettervergleiche ab, fuer
+# die die Historie da ist (siehe Kommentar in entscheidungs_log.py).
+CSV_ARCHIV_MAX_MONATE = int(os.environ.get("WPS_CSV_ARCHIV_MAX_MONATE", "24"))
+
+
+def raeume_csv_archiv_auf(
+    verzeichnis: str, basis: str, max_monate: int = None, heute: datetime = None
+) -> List[str]:
+    """Loescht Monatsarchive, die aelter als `max_monate` Monate sind.
+
+    Betroffen sind nur Dateien im Muster "<basis>_YYYY-MM.csv" - die aktive
+    CSV und alles andere bleiben unangetastet. Es wird NICHTS geloescht,
+    wenn max_monate <= 0 ist (ausschalten).
+
+    Rueckgabe: Liste der geloeschten Pfade.
+    """
+    if max_monate is None:
+        max_monate = CSV_ARCHIV_MAX_MONATE
+    if max_monate is None or max_monate <= 0:
+        return []
+    if heute is None:
+        heute = datetime.now()
+    if not verzeichnis or not os.path.isdir(verzeichnis):
+        return []
+
+    grenze = heute - timedelta(days=int(max_monate) * 31)
+    geloescht: List[str] = []
+    try:
+        for datei in sorted(os.listdir(verzeichnis)):
+            if not datei.startswith(basis + "_") or not datei.endswith(".csv"):
+                continue
+            monat = datei[len(basis) + 1:-4]
+            # Nur echte Monatsarchive "YYYY-MM" - keine Sonderdateien.
+            if len(monat) != 7 or monat[4] != "-":
+                continue
+            try:
+                jahr = int(monat[:4])
+                monat_nr = int(monat[5:])
+                zeitpunkt = datetime(jahr, monat_nr, 1)
+            except ValueError:
+                continue
+            if zeitpunkt >= grenze:
+                continue
+            pfad = os.path.join(verzeichnis, datei)
+            try:
+                os.remove(pfad)
+                geloescht.append(pfad)
+                logging.info(f"Altes CSV-Archiv entfernt: {pfad}")
+            except OSError as e:
+                logging.debug(f"CSV-Archiv nicht loeschbar: {pfad}: {e}")
+    except Exception as e:
+        logging.error(f"Fehler beim Aufraeumen der CSV-Archive: {e}")
+    return geloescht
 
 
 def relevante_csv_dateien(csv_path: str = None, jetzt: datetime = None) -> List[str]:
