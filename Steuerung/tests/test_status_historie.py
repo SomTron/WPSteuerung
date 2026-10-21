@@ -22,9 +22,157 @@ def _cache_leeren():
     """Cache vor/nach jedem Test zuruecksetzen (Modulzustand!)."""
     api._HIST_WH_QM_CACHE["zeit"] = None
     api._HIST_WH_QM_CACHE["wert"] = None
+    api._history_cache_clear()
     yield
     api._HIST_WH_QM_CACHE["zeit"] = None
     api._HIST_WH_QM_CACHE["wert"] = None
+    api._history_cache_clear()
+
+
+# --- /history: Cache und RAM ---------------------------------------------
+#
+# Jeder Klick auf ein Zeitfenster las die CSV neu: 17 MB Datei, bis zu
+# 100.000 Tailzeilen als Dict mit 21 Spalten. Gemessen auf dem Pi-
+# Rechner: 121 MB RAM-Spitze bei 0,5 s Rechenzeit - bei einem 7-Tage-
+# Fenster also ein RAM-Spike, der den Dienst killen kann (vgl. den
+# OOM-Kill am 15.09. im Modul-Docstring).
+#
+# Zwei Massnahmen:
+# 1. Die Zeilen kommen als kompaktes Tupel mit nur den 8 benoetigten
+#    Spalten (121 MB -> 44 MB).
+# 2. Ein LRU-Cache beantwortet wiederholte Abfragen aus dem Speicher
+#    (0,5 s -> 0,1 ms).
+
+HIST_KOPF = (
+    "Zeitstempel,T_Oben,T_Mittig,T_Unten,T_Verd,Kompressor,ACPower,"
+    "FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,"
+    "Einschaltpunkt,Ausschaltpunkt,Solarueberschuss,Urlaubsmodus,"
+    "PowerSource,Prognose_Morgen\n"
+)
+
+
+def _history_csv(pfad, anzahl=2000, abstand_sec=10):
+    """Schreibt eine CSV mit aktuellen Zeitstempeln (wie im Betrieb)."""
+    jetzt = datetime.now()
+    with open(pfad, "w", encoding="utf-8") as f:
+        f.write(HIST_KOPF)
+        for i in range(anzahl):
+            ts = (jetzt - timedelta(seconds=abstand_sec * i)).strftime("%Y-%m-%d %H:%M:%S")
+            f.write(
+                f"{ts},42.0,41.0,40.0,10.0,1,700.0,600.0,0.0,55.0,350.0,"
+                "350.0,1900.0,42.0,48.0,0,0,Netz,4.6\n"
+            )
+
+
+def test_read_csv_tail_liefert_tupel_mit_acht_spalten(tmp_path):
+    """Der Tail-Reader haelt nur die benoetigten Spalten - kompakt im RAM."""
+    p = tmp_path / "h.csv"
+    _history_csv(str(p), anzahl=50)
+    rows, quality = api._read_csv_tail(str(p), max_rows=25)
+    assert len(rows) == 25
+    assert quality["invalid_rows"] == 0
+    # Tupel mit genau 8 Werten (nicht Dict mit 21 Spalten).
+    assert all(isinstance(r, tuple) and len(r) == 8 for r in rows)
+    # Der Zeitstempel steht vorn, die Temperaturen folgen.
+    assert rows[0][0].startswith("20")
+    assert rows[0][1] == "42.0"
+
+
+def test_read_csv_tail_liest_die_juengsten_zeilen(tmp_path):
+    """Der Tail muss die LETZTEN Zeilen liefern, nicht die ersten."""
+    p = tmp_path / "h.csv"
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(HIST_KOPF)
+        for i in range(100):
+            f.write(
+                f"2026-09-01 10:{i:02d}:00,1,2,3,4,AUS,0,0,0,0,0,0,0,42,48,0,0,Netz,0\n"
+            )
+    rows, _ = api._read_csv_tail(str(p), max_rows=5)
+    assert len(rows) == 5
+    # Chronologische Reihenfolge: die LETZTEN fuenf Zeilen der Datei
+    # (i=95..99).
+    assert rows[-1][0] == "2026-09-01 10:99:00"
+    assert rows[0][0] == "2026-09-01 10:95:00"
+
+
+def test_history_cache_liefert_beim_zweiten_aufruf_dieselben_daten(tmp_path, monkeypatch):
+    """Der zweite Aufruf kommt aus dem Cache - ohne CSV-Lesen."""
+    from types import SimpleNamespace
+    import pytz
+
+    p = tmp_path / "h.csv"
+    _history_csv(str(p), anzahl=500)
+    monkeypatch.setattr(api, "HEIZUNGSDATEN_CSV", str(p))
+    monkeypatch.setattr(
+        api, "shared_state",
+        SimpleNamespace(local_tz=pytz.timezone("Europe/Berlin"), clock=None),
+    )
+    api._history_cache_clear()
+
+    # Lesezaehler: zaehlt die tatsaechlichen CSV-Zugriffe.
+    aufrufe = {"n": 0}
+    original = api._read_csv_tail
+
+    def spion(pfad, *args, **kwargs):
+        aufrufe["n"] += 1
+        return original(pfad, *args, **kwargs)
+
+    monkeypatch.setattr(api, "_read_csv_tail", spion)
+
+    erste = api.get_history(hours=24)
+    assert aufrufe["n"] == 1
+    zweite = api.get_history(hours=24)
+    assert aufrufe["n"] == 1, "Der zweite Aufruf muss aus dem Cache kommen"
+    assert erste == zweite
+    # Ein anderes Zeitfenster ist ein eigener Cache-Eintrag.
+    api.get_history(hours=1)
+    assert aufrufe["n"] == 2
+
+
+def test_history_cache_wird_bei_neuen_csv_daten_verworfen(tmp_path, monkeypatch):
+    """Die CSV waechst alle 10 s - der Cache muss das merken."""
+    from types import SimpleNamespace
+    import pytz
+
+    p = tmp_path / "h.csv"
+    _history_csv(str(p), anzahl=200)
+    monkeypatch.setattr(api, "HEIZUNGSDATEN_CSV", str(p))
+    monkeypatch.setattr(
+        api, "shared_state",
+        SimpleNamespace(local_tz=pytz.timezone("Europe/Berlin"), clock=None),
+    )
+    api._history_cache_clear()
+
+    api.get_history(hours=24)
+    key_vorher = api._history_cache_key(str(p), 24)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')},43,42,41,11,1,700,600,0,55,"
+            "350,350,1900,42,48,0,0,Netz,4.6\n"
+        )
+    key_nachher = api._history_cache_key(str(p), 24)
+    assert key_vorher != key_nachher, (
+        "Der Cache-Key muss die CSV-Groesse enthalten, sonst bleibt die "
+        "Anzeige bis zu 30 s alt"
+    )
+
+
+def test_history_cache_ist_begrenzt(tmp_path, monkeypatch):
+    """Der Cache darf die RAM des Pi nicht unbegrenzt aufblaest."""
+    from types import SimpleNamespace
+    import pytz
+
+    p = tmp_path / "h.csv"
+    _history_csv(str(p), anzahl=50)
+    monkeypatch.setattr(api, "HEIZUNGSDATEN_CSV", str(p))
+    monkeypatch.setattr(
+        api, "shared_state",
+        SimpleNamespace(local_tz=pytz.timezone("Europe/Berlin"), clock=None),
+    )
+    api._history_cache_clear()
+    for stunden in range(1, 12):
+        api.get_history(hours=stunden)
+    assert len(api._HISTORY_CACHE) <= api.HISTORY_CACHE_MAX_EINTRAEGE
 
 
 def _csv_schreiben(pfad, tage=3, feedin=1000.0):
