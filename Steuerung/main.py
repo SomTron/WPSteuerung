@@ -917,6 +917,15 @@ async def update_system_data(session, state, refresh_solar: bool = True):
         # Wert fiel `classify_energy_source` auf `acpower` zurueck und meldete
         # die Anlage nachts faelschlich als "PV" (Befund 14.10.2026, 21:44).
         pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
+        # BUGFIX (21.10.2026): Dieselbe Fensterlage wie in der Regelung. Ohne
+        # das zeigte die Statuszeile "PV", waehrend die Regelung wegen
+        # geschlossenem PV-Fenster auf die Batterie wartete - Anzeige und
+        # Entscheidung widersprachen sich. Der Wert stammt aus dem
+        # vorherigen Loop-Durchlauf (Data-Phase laeuft vor der Regel-Phase),
+        # die Verzoegerung ist ein Takt (10 s).
+        pv_erlaubt=not bool(
+            getattr(getattr(state, "control", None), "pv_fenster_ausserhalb", False)
+        ),
     )
     state.solar.energy_source = source_status.quelle.value
     state.energy_source_detail = source_status.begruendung

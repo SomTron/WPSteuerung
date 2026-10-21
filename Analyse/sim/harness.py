@@ -662,6 +662,12 @@ class Simulation:
             soc_min_prozent=float(getattr(cfg, "min_soc_prozent", 90.0)),
             max_netzkauf_watt=float(getattr(cfg, "max_netzbezug_watt", -50.0)),
             pv_erzeugung_watt=solar.pv_erzeugung,
+            # BUGFIX (21.10.2026): Dieselbe Fensterlage wie in der Regelung.
+            # Sonst zeigte die Simulation "PV", waehrend die Regelung wegen
+            # geschlossenem PV-Fenster auf die Batterie wartete.
+            pv_erlaubt=not bool(
+                getattr(self.state.control, "pv_fenster_ausserhalb", False)
+            ),
         )
         solar.energy_source = status.quelle.value
         self.state.energy_source_detail = status.begruendung

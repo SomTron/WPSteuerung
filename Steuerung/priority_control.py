@@ -1080,7 +1080,7 @@ def evaluate_abweichung(
     battery_power: Optional[float] = None,
     solar_stale: bool = False,
     notfall_einschalten_c: Optional[float] = None,
-    pv_fenster_aktiv: bool = True,
+    pv_quelle_erlaubt: bool = True,
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: haelt den Boiler auf Solltemperatur (Komfort-Boden).
@@ -1169,7 +1169,7 @@ def evaluate_abweichung(
                 battery_power=battery_power,
                 battery_min_watt=getattr(abw, "batterie_entladung_min_watt", 50.0),
                 solar_stale=solar_stale,
-                pv_erlaubt=pv_fenster_aktiv,
+                pv_erlaubt=pv_quelle_erlaubt,
             )
         ):
             eff = _forecast_effektiv_wh_qm(forecast_today_wh_qm, fc_ratio)
@@ -1201,7 +1201,7 @@ def evaluate_abweichung(
                         battery_power=battery_power,
                         battery_min_watt=getattr(abw, "batterie_entladung_min_watt", 50.0),
                         solar_stale=solar_stale,
-                        pv_erlaubt=pv_fenster_aktiv,
+                        pv_erlaubt=pv_quelle_erlaubt,
                     )
                     netz_erlaubt = getattr(
                         abw, "schichtung_netz_fallback_erlaubt", False
@@ -1344,7 +1344,7 @@ def evaluate_abweichung(
                 battery_power=battery_power,
                 battery_min_watt=getattr(abw, "batterie_entladung_min_watt", 50.0),
                 solar_stale=solar_stale,
-                pv_erlaubt=pv_fenster_aktiv,
+                pv_erlaubt=pv_quelle_erlaubt,
             ):
                 result.einschalten = None
                 result.grund = (
@@ -1414,6 +1414,12 @@ def _energiequelle_ok(
 
     ``pv_erlaubt=False`` = ausserhalb des PV-Fensters (Befund 18.10.2026):
     dann zaehlt die PV-Momentanmessung nicht mehr als Quelle, nur die Batterie.
+
+    BUGFIX: ``pv_erlaubt`` wurde hier zwar angenommen, aber NICHT an
+    ``classify_energy_source`` weitergereicht. Damit war das Gate
+    wirkungslos - der PV-Zweig meldete immer "Quelle vorhanden", auch
+    ausserhalb des PV-Fensters. Die Zwillingsfunktion
+    ``_energiequelle_mit_grund`` reichte den Wert korrekt weiter.
     """
     return classify_energy_source(
         pv_acpower=pv_acpower,
@@ -1425,6 +1431,7 @@ def _energiequelle_ok(
         battery_min_watt=battery_min_watt,
         soc_min_prozent=soc_min_prozent,
         max_netzkauf_watt=max_netzkauf_watt,
+        pv_erlaubt=pv_erlaubt,
     ).ist_erneuerbar
 
 
@@ -1534,7 +1541,7 @@ def evaluate_forecast(
     pv_acpower: Optional[float] = None,
     battery_power: Optional[float] = None,
     solar_stale: bool = False,
-    pv_fenster_aktiv: bool = True,
+    pv_quelle_erlaubt: bool = True,
     kompressor_ein: bool = False,
 ) -> RegelErgebnis:
     """
@@ -1581,7 +1588,7 @@ def evaluate_forecast(
                     pv_acpower=pv_acpower,
                     battery_power=battery_power,
                     solar_stale=solar_stale,
-                    pv_erlaubt=pv_fenster_aktiv,
+                    pv_erlaubt=pv_quelle_erlaubt,
                 )
                 if not quelle_ok:
                     # Keine akzeptierte Quelle (weder PV noch volle Batterie):
@@ -1883,6 +1890,7 @@ def evaluate_calculated_start(
     solar_stale: bool = False,
     pv_fenster_stunde: Optional[float] = None,
     pv_fenster_aktiv: bool = True,
+    pv_quelle_erlaubt: bool = True,
     pv_fenster_reserve_h: float = 0.5,
 ) -> RegelErgebnis:
     """
@@ -1896,6 +1904,10 @@ def evaluate_calculated_start(
     Spaetest-Start wird dann auf ``Fensterende - pv_fenster_reserve_min``
     vorgezogen, damit der Lauf noch aus PV gedeckt ist; ohne diesen Wert
     (keine Prognose) bleibt das Verhalten unveraendert.
+
+    ``pv_fenster_aktiv`` = Master-Schalter der Fensterlogik (Config).
+    ``pv_quelle_erlaubt`` = ob die PV-Momentanmessung gerade als Quelle
+    zaehlen darf (False = ausserhalb des Fensters).
     """
     result = RegelErgebnis(
         name="CalcStart", prioritaet=calc_cfg.prioritaet, aktiv=calc_cfg.aktiv
@@ -2122,7 +2134,7 @@ def evaluate_calculated_start(
         battery_power=battery_power,
         battery_min_watt=getattr(calc_cfg, "batterie_entladung_min_watt", 50.0),
         solar_stale=solar_stale,
-        pv_erlaubt=pv_fenster_aktiv,
+        pv_erlaubt=pv_quelle_erlaubt,
     )
 
     # Strukturierte Startplanung fuer API/WebApp/Diagnose. Die menschliche
@@ -2621,6 +2633,7 @@ def bewerte_alle_regeln(
     pv_erzeugung_watt: Optional[float] = None,
     pv_fenster_stunde: Optional[float] = None,
     pv_fenster_aktiv: bool = True,
+    pv_quelle_erlaubt: bool = True,
     pv_fenster_reserve_h: float = 0.5,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
@@ -2796,7 +2809,7 @@ def bewerte_alle_regeln(
         battery_power=battery_power,
         solar_stale=solar_stale,
         notfall_einschalten_c=float(config.notfallschutz.einschalten_bei_c),
-        pv_fenster_aktiv=pv_fenster_aktiv,
+        pv_quelle_erlaubt=pv_quelle_erlaubt,
     )
     ergebnisse.append(ergebnis)
 
@@ -2814,7 +2827,7 @@ def bewerte_alle_regeln(
         battery_power=battery_power,
         solar_stale=solar_stale,
         kompressor_ein=kompressor_ein,
-        pv_fenster_aktiv=pv_fenster_aktiv,
+        pv_quelle_erlaubt=pv_quelle_erlaubt,
     )
     ergebnisse.append(ergebnis)
 
@@ -2859,6 +2872,7 @@ def bewerte_alle_regeln(
         solar_stale=solar_stale,
         pv_fenster_stunde=pv_fenster_stunde,
         pv_fenster_aktiv=pv_fenster_aktiv,
+        pv_quelle_erlaubt=pv_quelle_erlaubt,
         pv_fenster_reserve_h=pv_fenster_reserve_h,
     )
     ergebnisse.append(ergebnis)

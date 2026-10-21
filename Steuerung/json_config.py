@@ -652,9 +652,13 @@ class ForecastConfig(BaseModel):
     pv_fenster_aktiv: bool = Field(
         default=True,
         description=(
-            "Ausserhalb des PV-Fensters (letzte Prognose-Stunde >= "
-            "pv_fenster_min_w) zaehlt die PV-Momentanmessung nicht mehr als "
-            "Quelle - dann heizt nur noch die Batterie"
+            "Master-Schalter fuer das PV-Fenster-Gate: True = das Gate wird "
+            "benutzt (ausserhalb des Fensters zaehlt die PV-Momentanmessung "
+            "nicht mehr als Quelle, dann heizt nur noch die Batterie). "
+            "False = das Gate wird nicht benutzt, die PV zaehlt immer als "
+            "Quelle. Achtung: Das ist NICHT die Fensterlage - die ergibt sich "
+            "aus der stuendlichen Prognose (letzte Stunde >= "
+            "pv_fenster_min_w)."
         ),
     )
     pv_fenster_min_w: float = Field(

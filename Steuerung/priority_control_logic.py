@@ -632,6 +632,24 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     # dort traegt nur die Batterie (Befund 18.10.2026: 93-100 % der Laeufe
     # nach Sonnenuntergang kamen aus dem Netz).
     fc_forecast_cfg = getattr(effektive_config, "forecast", None)
+    # `pv_fenster_aktiv` ist der MASTER-SCHALTER aus der Config: er sagt nur,
+    # OB das PV-Fenster-Gate ueberhaupt benutzt wird. Er sagt NICHT, ob wir
+    # gerade IM Fenster sind.
+    #
+    # BUGFIX: Beide wurden bisher verwechselt. Der Schalter (Default True)
+    # wurde als `pv_erlaubt` an die Quellen-Pruefung gereicht - damit war
+    # das Gate permanent offen, und genau die dokumentierte Fehlwirkung
+    # trat ein: "93-100 % der Laeufe nach Sonnenuntergang kamen aus dem
+    # Netz" (Befund 18.10.2026).
+    #
+    # Die echte Fensterlage ist `pv_fenster_stunde is None` (heute keine
+    # Stunde mehr ueber der Schwelle). Nur dann darf die PV-Messung nicht
+    # mehr als Quelle zaehlen.
+    #
+    # OHNE Stundenprognose ist das Gate bewusst INAKTIV (fail-open): dann
+    # weiss die Steuerung nichts ueber das Fenster, und ein Blockieren
+    # waere geraten. Nur eine belastbare Aussage "keine PV-Stunde mehr"
+    # schliesst das Fenster.
     pv_fenster_aktiv = bool(getattr(fc_forecast_cfg, "pv_fenster_aktiv", True))
     pv_fenster_min_w = float(
         getattr(fc_forecast_cfg, "pv_fenster_min_w", 300.0) or 300.0
@@ -644,13 +662,24 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         hourly_forecast_watt, jetzt_stunde, pv_fenster_min_w, fc_ratio
     )
     pv_fenster_stunde = fenster[0] if fenster else None
+    # Die Lage, die das Quellen-Gate braucht: PV zaehlt nur dann als Quelle,
+    # wenn wir noch IN einem PV-Fenster sind.
+    #
+    # WICHTIG: "keine Stundenprognose" und "Fenster geschlossen" sind
+    # verschiedene Zustaende. Ohne Prognose (z. B. Forecast veraltet ->
+    # `_set_stale_forecast` setzt `forecast_hourly_wm2` auf None) kennt die
+    # Steuerung das Fenster nicht - dann bleibt das Gate INAKTIV (fail-open),
+    # sonst wuerde die Heizung grundlos blockiert.
+    pv_fenster_bekannt = hourly_forecast_watt is not None
+    pv_fenster_zu = bool(
+        pv_fenster_aktiv and pv_fenster_bekannt and pv_fenster_stunde is None
+    )
+    pv_quelle_erlaubt = not pv_fenster_zu
     try:
         state.control.pv_fenster_stunde = pv_fenster_stunde
         state.control.pv_fenster_watt = fenster[1] if fenster else None
         state.control.pv_fenster_aktiv = pv_fenster_aktiv
-        state.control.pv_fenster_ausserhalb = bool(
-            pv_fenster_aktiv and pv_fenster_stunde is None
-        )
+        state.control.pv_fenster_ausserhalb = pv_fenster_zu
     except AttributeError:
         pass
     if check_log_throttle(state, "log_pv_fenster", interval_minutes=15):
@@ -698,6 +727,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         learned_heating_rate_gesamt=gelernte_rate_gesamt,
         pv_fenster_stunde=pv_fenster_stunde,
         pv_fenster_aktiv=pv_fenster_aktiv,
+        # Die echte Fensterlage (nicht der Master-Schalter): nur wenn wir
+        # gerade IN einem PV-Fenster sind, darf die PV-Messung als Quelle
+        # zaehlen. Ausserhalb zaehlt nur die Batterie.
+        pv_quelle_erlaubt=pv_quelle_erlaubt,
         pv_fenster_reserve_h=pv_fenster_reserve_h,
         learned_target_hour=gelernte_zielzeit,
         fc_ratio=fc_ratio,

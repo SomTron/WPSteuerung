@@ -20,6 +20,7 @@ kalibriert mit dem gelernten `fc_ratio`):
 import os
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -132,17 +133,49 @@ def _config():
 
 def test_abweichung_startet_ausserhalb_nicht_mit_pv():
     """Innerhalb des Fensters startet der Schichtungs-Start mit PV, ausserhalb
-    nicht mehr (dort nur Batterie)."""
-    drin = _allel(_config(), pv_fenster_aktiv=True)["Abweichung"]
+    nicht mehr (dort nur Batterie).
+
+    BUGFIX (Befund 21.10.2026): Der Test benutzte `pv_fenster_aktiv` als
+    Synonym fuer "ausserhalb des Fensters". Das ist der MASTER-SCHALTER aus
+    der Config ("Gate ueberhaupt benutzen") - nicht die Fensterlage. In der
+    Produktion wurde genau dieser Schalter als `pv_erlaubt` gereicht, damit
+    war das Gate permanent offen und die PV zaehlte auch nach
+    Sonnenuntergang als Quelle.
+
+    `pv_quelle_erlaubt` ist jetzt die echte Fensterlage: True = wir sind im
+    PV-Fenster, False = ausserhalb.
+    """
+    drin = _allel(_config(), pv_quelle_erlaubt=True)["Abweichung"]
     assert drin.einschalten is True, drin.grund
 
-    draussen = _allel(_config(), pv_fenster_aktiv=False)["Abweichung"]
+    draussen = _allel(_config(), pv_quelle_erlaubt=False)["Abweichung"]
     assert draussen.einschalten is None, draussen.grund
 
     mit_batterie = _allel(
-        _config(), pv_fenster_aktiv=False, battery_power=-300.0, soc=95.0
+        _config(), pv_quelle_erlaubt=False, battery_power=-300.0, soc=95.0
     )["Abweichung"]
     assert mit_batterie.einschalten is True, mit_batterie.grund
+
+
+def test_master_schalter_steuert_nicht_das_gate():
+    """Der Config-Schalter `pv_fenster_aktiv` darf das Quellen-Gate nicht
+    beeinflussen - er sagt nur, OB das Gate benutzt wird.
+
+    BUGFIX (Befund 21.10.2026): Beide wurden verwechselt. Jetzt gilt:
+    - Schalter AUS  -> Gate komplett aus -> PV zaehlt immer als Quelle
+    - Schalter AN   -> Gate aktiv -> es entscheidet die Fensterlage
+    """
+    # Schalter AN, aber ausserhalb des Fensters -> PV zaehlt nicht.
+    ausserhalb = _allel(
+        _config(), pv_fenster_aktiv=True, pv_quelle_erlaubt=False
+    )["Abweichung"]
+    assert ausserhalb.einschalten is None, ausserhalb.grund
+
+    # Schalter AUS -> Gate aus -> PV zaehlt wieder als Quelle.
+    schalter_aus = _allel(
+        _config(), pv_fenster_aktiv=False, pv_quelle_erlaubt=True
+    )["Abweichung"]
+    assert schalter_aus.einschalten is True, schalter_aus.grund
 
 
 def test_calcstart_startet_am_fensterende_und_nicht_spaeter():
@@ -198,4 +231,185 @@ def test_pv_fenster_im_statuslog_und_zaehler():
     assert control.pv_fenster_aktiv is True
     assert control.pv_fenster_ausserhalb is False
     assert control.starts_ausserhalb_pv_fenster == 0
+
+
+# ── (c) Produktionsverdrahtung (determine_mode_and_setpoints) ───────────
+#
+# BUGFIX (Befund 21.10.2026): Der Master-Schalter `forecast.pv_fenster_aktiv`
+# wurde als `pv_erlaubt` an die Quellen-Pruefung gereicht. Damit war das
+# PV-Fenster-Gate permanent offen - die PV zaehlte auch nach
+# Sonnenuntergang als Quelle. Die Tests oben konnten das nicht sehen,
+# weil sie `pv_fenster_aktiv` direkt als "ausserhalb des Fensters"
+# missbrauchten (falsche Semantik).
+#
+# Diese Tests fahren die ECHTE Verdrahtung: State -> determine_mode_and_setpoints
+# -> bewerte_alle_regeln -> Quellen-Gate.
+
+
+def _pcl_state(stundenprognose, pv_erzeugung=800.0, jetzt_stunde=16.0):
+    """State fuer die Produktionsverdrahtung."""
+    import pytz
+    TZ = pytz.timezone("Europe/Berlin")
+    config = WPSteuerungConfig()
+    config.abweichung.schichtung_erlaube_start = True
+    return SimpleNamespace(
+        local_tz=TZ,
+        priority_config=config,
+        config=SimpleNamespace(Urlaubsmodus=SimpleNamespace(URLAUBSABSENKUNG=5.0)),
+        bademodus_aktiv=False,
+        urlaubsmodus_aktiv=False,
+        sommer_modus_aktiv=False,
+        legionellen_aktiv=False,
+        legionellen_last_done=None,
+        legionellen_started_at=None,
+        legionellen_unvollstaendig=False,
+        sensors=SimpleNamespace(t_oben=48.0, t_unten=33.0, t_mittig=45.0, t_verd=30.0),
+        solar=SimpleNamespace(
+            feedinpower=0.0, batpower=0.0, soc=60.0, acpower=pv_erzeugung,
+            pv_erzeugung=pv_erzeugung,
+            forecast_today=None, forecast_tomorrow=None, forecast_day2=None,
+            forecast_hourly_wm2=stundenprognose,
+            last_api_call=TZ.localize(datetime(2026, 12, 8, int(jetzt_stunde), 30)),
+        ),
+        solar_stale=False,
+        forecast_stale=False,
+        control=SimpleNamespace(
+            kompressor_ein=False, previous_modus="Normalmodus",
+            aktueller_einschaltpunkt=None, aktueller_ausschaltpunkt=None,
+            active_rule_name=None, active_rule_sensor=None,
+            komfort_aktiv=False, alle_ergebnisse=[], _soll_einschalten=False,
+            notfall_aktiv=False, blocking_reason=None,
+        ),
+    )
+
+
+def _abweichung(state):
+    for e in state.control.alle_ergebnisse:
+        if e.name == "Abweichung":
+            return e
+    return None
+
+
+async def _fahre(state):
+    """Fuehrt die Produktionsverdrahtung aus (16:30 am 08.12.2026).
+
+    Die Zeit kommt ueber `state.clock` (die zentrale Zeitquelle der
+    Steuerung) - nicht ueber ein `datetime`-Mocking. Letzteres macht das
+    Modul-`datetime` zum Mock-Objekt und bricht isinstance-Pruefungen
+    im Entscheidungslog.
+    """
+    import priority_control_logic as pcl
+    import pytz
+
+    fest = pytz.timezone("Europe/Berlin").localize(datetime(2026, 12, 8, 16, 30))
+    state.clock = SimpleNamespace(now=lambda: fest)
+    await pcl.determine_mode_and_setpoints(state, 33.0, 45.0)
+    return state
+
+
+@pytest.mark.asyncio
+async def test_produktion_zaehlt_pv_ausserhalb_des_fensters_nicht_als_quelle():
+    """Kernfall: Fenster zu -> die PV-Messung traegt den Lauf NICHT.
+
+    Vor dem Fix startete die Abweichungs-Regel hier aus dem Netz, weil der
+    Config-Schalter statt der Fensterlage als `pv_erlaubt` durchging.
+    """
+    # Stundenprognose: nur noch 12 Uhr ueber der Schwelle, jetzt ist 16:30
+    # -> das Fenster ist geschlossen.
+    state = _pcl_state({12: 900.0})
+    await _fahre(state)
+
+    assert state.control.pv_fenster_ausserhalb is True
+    abw = _abweichung(state)
+    assert abw is not None
+    assert abw.einschalten is not True, abw.grund
+
+
+@pytest.mark.asyncio
+async def test_produktion_zaehlt_pv_im_fenster_als_quelle():
+    """Gegenprobe: solange das Fenster offen ist, zaehlt die PV als Quelle."""
+    # Stundenprognose: bis 18 Uhr ueber der Schwelle, jetzt 16:30 -> offen.
+    state = _pcl_state({16: 900.0, 17: 800.0, 18: 600.0})
+    await _fahre(state)
+
+    assert state.control.pv_fenster_ausserhalb is False
+    abw = _abweichung(state)
+    assert abw is not None
+    assert abw.einschalten is True, abw.grund
+
+
+@pytest.mark.asyncio
+async def test_ohne_stundenprognose_bleibt_das_gate_offen():
+    """Fail-open: ohne Prognose kennt die Steuerung das Fenster nicht.
+
+    Ein Blockieren waere geraten - dann wuerde die Heizung grundlos
+    ausfallen. Das Gate bleibt deshalb INAKTIV, PV zaehlt als Quelle.
+    """
+    state = _pcl_state(None)
+    await _fahre(state)
+
+    # Kein Fenster bekannt -> kein "ausserhalb", PV zaehlt als Quelle.
+    assert state.control.pv_fenster_ausserhalb is False
+    abw = _abweichung(state)
+    assert abw is not None
+    assert abw.einschalten is True, abw.grund
+
+
+@pytest.mark.asyncio
+async def test_master_schalter_aus_oeffnet_das_gate_wieder():
+    """Schalter AUS -> das Gate wird nicht benutzt -> PV zaehlt als Quelle.
+
+    Der Schalter ist die einzige Abschaltung fuer die ganze Funktion.
+    """
+    state = _pcl_state({12: 900.0})
+    state.priority_config.forecast.pv_fenster_aktiv = False
+    await _fahre(state)
+
+    assert state.control.pv_fenster_ausserhalb is False
+    abw = _abweichung(state)
+    assert abw is not None
+    assert abw.einschalten is True, abw.grund
+
+
+def test_energiequelle_ok_reicht_pv_erlaubt_durch():
+    """BUGFIX 1: `_energiequelle_ok` reicht `pv_erlaubt` jetzt weiter.
+
+    Vorher nahm die Funktion den Parameter an, liess ihn aber fallen -
+    das Gate war damit wirkungslos.
+    """
+    from priority_control import _energiequelle_ok
+
+    werte = dict(pv_acpower=800.0, battery_power=0.0, solar_stale=False)
+    drin = _energiequelle_ok(
+        0.0, 95.0, 50.0, 90.0, -50.0, pv_erlaubt=True, **werte)
+    draussen = _energiequelle_ok(
+        0.0, 95.0, 50.0, 90.0, -50.0, pv_erlaubt=False, **werte)
+    assert drin is True
+    assert draussen is False, "pv_erlaubt=False muss die PV als Quelle sperren"
+
+
+def test_notfall_tiefenschutz_heizt_auch_bei_geschlossenem_fenster():
+    """Sicherheitsgarantie: Das PV-Fenster-Gate darf nie den Frostschutz
+    blockieren.
+
+    Bei geschlossenem Fenster wartet die Abweichungs-Regel auf PV/Batterie.
+    Faellt der Speicher jedoch unter die Notfall-Tiefgrenze, muss der
+    Kompressor aus dem Netz laufen - sonst bliebe das Brauchwasser kalt.
+    """
+    from priority_control import evaluate_abweichung
+
+    config = WPSteuerungConfig()
+    notfall_c = float(config.notfallschutz.einschalten_bei_c)
+
+    # Kalter Speicher, warmer Speicher oben (Schichtungs-Falle), Gate ZU.
+    temp = {"unten": 30.0, "mittig": 35.0, "oben": 48.0}
+    r = evaluate_abweichung(
+        config.abweichung, temp, False, 16,
+        config.sicherheit.nachtsperre_start, config.sicherheit.nachtsperre_ende,
+        feedin_watt=0.0, soc=95.0, pv_acpower=800.0, battery_power=0.0,
+        solar_stale=False, notfall_einschalten_c=notfall_c,
+        pv_quelle_erlaubt=False,
+    )
+    assert r.einschalten is True, r.grund
+    assert "Notfall" in r.grund or "Tiefgrenze" in r.grund, r.grund
 
