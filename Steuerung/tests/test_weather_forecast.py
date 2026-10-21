@@ -82,39 +82,97 @@ def baue_api_payload():
     }
 
 
+def _tagesprognose(werte=None, jetzt=None):
+    """Tagesprognose {ISO-Datum: kWh/m2} fuer die kommenden 7 Tage.
+
+    Wird fuer die Legionellenwahl gebraucht: der beste der drei Tage
+    Freitag/Samstag/Sonntag wird nach Prognose gewaehlt. Ohne diese
+    Tageswerte gabe es keine Auswahlbasis (BUGFIX 21.10.2026).
+
+    `jetzt` erlaubt es, einen festen Referenztag zu setzen (z. B. den
+    Donnerstag im Test) - sonst haengt die Auswahl vom echten Tagesdatum
+    ab.
+    """
+    tz = pytz.timezone("Europe/Berlin")
+    now = jetzt or datetime.now(tz)
+    if werte is None:
+        # Alle Tage gleich gut - der Wochentag entscheidet dann nicht.
+        werte = [2500.0] * 7
+    return {
+        (now + timedelta(days=i)).strftime("%Y-%m-%d"): w
+        for i, w in enumerate(werte[:7])
+    }
+
+
+def _tagesprognose_fuer_wochenende(fr_oder=2000.0, sa=3000.0, so=1500.0,
+                                   jetzt=None):
+    """Tagesprognose mit bewusst unterschiedlichen Wochenend-Tagen.
+
+    Die Werte werden den Kalendertagen Fr/Sa/So zugeordnet, damit die
+    Auswahl "bester Tag nach Prognose" geprueft werden kann. Tage
+    ausserhalb des Wochenendes bekommen einen mittleren Wert.
+    """
+    tz = pytz.timezone("Europe/Berlin")
+    now = jetzt or datetime.now(tz)
+    werte = []
+    for i in range(7):
+        wochentag = (now + timedelta(days=i)).weekday()
+        if wochentag == 4:
+            werte.append(fr_oder)
+        elif wochentag == 5:
+            werte.append(sa)
+        elif wochentag == 6:
+            werte.append(so)
+        else:
+            werte.append(1200.0)
+    return _tagesprognose(werte, jetzt=now)
+
+
 # --- 1) Rueckgabewert-Vertrag -------------------------------------------------
 
 class TestGetSolarForecastReturnValueCount:
-    """Vertrag: IMMER genau 8 Werte (Erfolg UND Fehlerpfade)."""
+    """Vertrag: IMMER genau 9 Werte (Erfolg UND Fehlerpfade).
+
+    BUGFIX (21.10.2026): Aus 8 wurden 9 Werte. Der 9. ist die
+    Tagesprognose fuer die kommenden Tage ({ISO-Datum: kWh/mÃ‚Â²}), aus der
+    die Legionellenplanung den besten der drei Tage Fr/Sa/So waehlt. Mit
+    nur 3 prognostizierten Tagen war diese Auswahl in der ersten halben
+    Woche gar nicht moeglich.
+    """
 
     @pytest.mark.asyncio
-    async def test_success_liefert_8_werte(self, tmp_path):
+    async def test_success_liefert_9_werte(self, tmp_path):
         from weather_forecast import get_solar_forecast
         result = await get_solar_forecast(
             baue_mock_session(baue_api_payload()), None,
             csv_path=str(tmp_path / "forecast.csv"),
         )
-        assert len(result) == 8
-        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tom, ss_tom, hourly = result
-        assert rad_today == pytest.approx(0.11)      # (100+10)/1000 kWh/m²
+        assert len(result) == 9
+        (rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tom,
+         ss_tom, hourly, tage) = result
+        assert rad_today == pytest.approx(0.11)      # (100+10)/1000 kWh/mÃ‚Â²
         assert rad_tomorrow == pytest.approx(0.22)
         assert rad_day2 == pytest.approx(0.33)
         assert sr_today == "06:15" and ss_today == "20:15"
         assert sr_tom == "06:16" and ss_tom == "20:14"
         assert isinstance(sr_today, str) and ":" in sr_today
+        # Die Tagesprognose enthaelt alle Tage ab heute - in Wh/m2
+        # (die Config-Schwellen sind in Wh/m2 angegeben).
+        assert isinstance(tage, dict) and len(tage) == 3
+        assert tage[min(tage)] == pytest.approx(110.0)
 
     @pytest.mark.asyncio
-    async def test_api_error_liefert_8x_none(self, tmp_path):
+    async def test_api_error_liefert_9x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         result = await get_solar_forecast(
             baue_mock_session(None, status=500), None,
             csv_path=str(tmp_path / "forecast.csv"),
         )
-        assert len(result) == 8
+        assert len(result) == 9
         assert all(v is None for v in result)
 
     @pytest.mark.asyncio
-    async def test_leere_stunden_daten_liefert_8x_none(self, tmp_path):
+    async def test_leere_stunden_daten_liefert_9x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         payload = {"hourly": {"time": [], "direct_radiation": [], "diffuse_radiation": []},
                    "daily": {"time": [], "sunrise": [], "sunset": []}}
@@ -122,28 +180,45 @@ class TestGetSolarForecastReturnValueCount:
             baue_mock_session(payload), None,
             csv_path=str(tmp_path / "forecast.csv"),
         )
-        assert len(result) == 8
+        assert len(result) == 9
         assert all(v is None for v in result)
 
     @pytest.mark.asyncio
-    async def test_netzwerkfehler_liefert_8x_none(self, tmp_path):
+    async def test_netzwerkfehler_liefert_9x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         session = MagicMock()
         session.get.side_effect = Exception("Connection refused")
         result = await get_solar_forecast(session, None,
                                           csv_path=str(tmp_path / "forecast.csv"))
-        assert len(result) == 8
+        assert len(result) == 9
         assert all(v is None for v in result)
 
     @pytest.mark.asyncio
-    async def test_timeout_liefert_8x_none(self, tmp_path):
+    async def test_timeout_liefert_9x_none(self, tmp_path):
         from weather_forecast import get_solar_forecast
         session = MagicMock()
         session.get.side_effect = TimeoutError("API timeout")
         result = await get_solar_forecast(session, None,
                                           csv_path=str(tmp_path / "forecast.csv"))
-        assert len(result) == 8
+        assert len(result) == 9
         assert all(v is None for v in result)
+
+    @pytest.mark.asyncio
+    async def test_7_tage_prognose_wird_angefragt(self, tmp_path):
+        """Die Abfrage muss 7 Tage holen - sonst fehlen Fr/Sa/So.
+
+        Mit 3 Tagen lagen die prognostizierten Tage von Montag bis Mittwoch
+        ausserhalb des Wochenendes - die Legionellenwahl hatte dann keine
+        Auswahlbasis.
+        """
+        from weather_forecast import get_solar_forecast
+        session = baue_mock_session(baue_api_payload())
+        await get_solar_forecast(session, None,
+                                 csv_path=str(tmp_path / "forecast.csv"))
+        params = session.get.call_args.kwargs.get("params") or \
+            session.get.call_args[1].get("params")
+        assert params["forecast_days"] >= 7, \
+            f"forecast_days={params.get('forecast_days')} - Fr/Sa/So waeren nicht planbar!"
 
 
 # --- 2) Schreib-Isolation ------------------------------------------------------
@@ -322,6 +397,170 @@ def test_normalize_forecast_wh_qm_hauptfaelle():
             normalize_forecast_wh_qm(1.0, value_unit="unbekannt")
 
 
+class TestLegionellenBesterTagNachPrognose:
+    """BUGFIX (21.10.2026): Der beste der drei Tage Fr/Sa/So wird nach der
+    Tagesprognose gewaehlt.
+
+    Vorher wurden nur die 3 prognostizierten Tage (heute/morgen/uebermorgen)
+    betrachtet und ueber Wochentags-Nummern gemappt. Von Montag bis Mittwoch
+    lagen die drei Tage damit ausserhalb des Wochenendes - es gab KEINE
+    Auswahlbasis. Und selbst wenn eine bestand, ueberschrieb der
+    "Mindestvorsprung" (`tagwechsel_ab_diff_wh_qm`) den besseren Tag.
+
+    Diese Tests fahren die echte Planung ueber `check_periodic_tasks`.
+    """
+
+    def _state(self, jetzt):
+        from types import SimpleNamespace
+        from json_config import LegionellenConfig, SommerModusConfig
+        state = SimpleNamespace()
+        state.local_tz = pytz.timezone("Europe/Berlin")
+        state.last_forecast_update = None
+        state.last_forecast_attempt = None
+        state.config = None
+        state.sommer_modus_aktiv = False
+        state.sommer_modus_zaehler = 0
+        state.legionellen_aktiv = False
+        state.legionellen_last_done = None
+        state.legionellen_started_at = None
+        state.legionellen_planned_day = None
+        state.legionellen_planned_time = None
+        state.legionellen_planned_reason = None
+        state.legionellen_planned_tag = None
+        state.legionellen_planned_date = None
+        state.legionellen_planned_forecast_wh = None
+        state.legionellen_plan_revision = 0
+        state.legionellen_plan_created_at = None
+        state.legionellen_telegram_start_sent = False
+        state.legionellen_telegram_done_sent = False
+        state.legionellen_temp_override = None
+        state.legionellen_target_reached_at = None
+        state.legionellen_wochennummer = None
+        state.solar = SimpleNamespace(forecast_today=None, forecast_tomorrow=None,
+                                      forecast_day2=None)
+        state.priority_config = SimpleNamespace(
+            sommer_modus=SommerModusConfig(aktiv=False),
+            legionellen=LegionellenConfig(
+                aktiv=True, bevorzugter_tag=4, letzter_tag=6,
+                mindest_prognose_wh_qm=800.0, erforderliche_wh_qm=800.0,
+                pv_prognose_schwelle_gut=2000.0,
+            ),
+        )
+        return state
+
+    async def _plane(self, jetzt, tagesprognose):
+        """Fuehrt die echte Planung aus und liefert den geplanten Tag."""
+        from main import check_periodic_tasks
+        state = self._state(jetzt)
+        with patch("main.save_plan", lambda s: True), \
+             patch("main.clear_plan", lambda s, reason, persist=True: None), \
+             patch("main._state_now", lambda state=None, tz=None: jetzt), \
+             patch("main.check_vpn_status", new_callable=AsyncMock):
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mf:
+                mf.return_value = (0.5, 0.6, 0.4, "07:30", "18:00",
+                                   "07:31", "18:01", {}, tagesprognose)
+                await check_periodic_tasks(
+                    AsyncMock(), state, jetzt - timedelta(hours=2))
+        return state
+
+    def _prognose(self, jetzt, werte):
+        """Tagesprognose mit Werten je Wochentag (0=Mo..6=So)."""
+        out = {}
+        for i in range(7):
+            datum = (jetzt + timedelta(days=i)).date()
+            out[datum.isoformat()] = werte.get(datum.weekday(), 1200.0)
+        return out
+
+    @pytest.mark.asyncio
+    async def test_bester_tag_wird_gewahlt(self):
+        """Der Tag mit der hoechsten Prognose gewinnt - auch wenn er nicht
+        der bevorzugte Tag ist."""
+        # Mittwoch 21.10.2026, 12:00
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        # Fr(4)=1500, Sa(5)=3000, So(6)=1200
+        prognose = self._prognose(jetzt, {4: 1500.0, 5: 3000.0, 6: 1200.0})
+
+        state = await self._plane(jetzt, prognose)
+
+        assert state.legionellen_planned_tag == 5, (
+            "Samstag muss gewaehlt werden (beste Prognose), "
+            f"gewaehlt: {state.legionellen_planned_day}"
+        )
+        assert state.legionellen_planned_day == "Samstag"
+        assert state.legionellen_planned_date == datetime(2026, 10, 24).date()
+        assert state.legionellen_planned_forecast_wh == 3000.0
+
+    @pytest.mark.asyncio
+    async def test_mittwoch_hat_ueberhaupt_eine_auswahlbasis(self):
+        """Kernfall: Von Montag bis Mittwoch gibt es mit 3 Tagen Prognose
+        KEINEN Wochenendtag - die Auswahl war also frueher leer."""
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))   # Mittwoch
+        prognose = self._prognose(jetzt, {4: 1500.0, 5: 3000.0, 6: 1200.0})
+
+        state = await self._plane(jetzt, prognose)
+
+        assert state.legionellen_planned_tag is not None, (
+            "Am Mittwoch muss ein Wochenendtag planbar sein!"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sonntag_wird_gewaehlt_wenn_bester(self):
+        """Auch Sonntag ist ein Kandidat - nicht nur Fr/Sa."""
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        prognose = self._prognose(jetzt, {4: 1000.0, 5: 1500.0, 6: 3500.0})
+
+        state = await self._plane(jetzt, prognose)
+
+        assert state.legionellen_planned_tag == 6, (
+            f"Sonntag muss gewaehlt werden, gewaehlt: {state.legionellen_planned_day}"
+        )
+        assert state.legionellen_planned_day == "Sonntag"
+
+    @pytest.mark.asyncio
+    async def test_unter_mindestprognose_kein_plan(self):
+        """Ohne belastbaren PV-Tag wird kein Plan erzeugt."""
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        prognose = self._prognose(jetzt, {4: 400.0, 5: 500.0, 6: 300.0})
+
+        state = await self._plane(jetzt, prognose)
+
+        assert state.legionellen_planned_tag is None, (
+            "Unter der Mindestprognose darf kein Plan entstehen!"
+        )
+
+    @pytest.mark.asyncio
+    async def test_nur_wochentage_ohne_wochenendprognose(self):
+        """Faellt der Freitag in die 3-Tage-Prognose, wird er geplant.
+
+        Am Mittwoch reicht die 3-Tage-Prognose bis Freitag - der Freitag
+        ist also planbar, Samstag und Sonntag noch nicht. Das ist die
+        realistische Konstellation: mit 7 Tagen sind alle drei da, mit
+        3 Tagen nur der Freitag.
+
+        Der Test haelt fest, dass die Auswahlbasis den TAGESPROGNOSE-
+        Daten folgt und nicht pauschal dem Wochentag.
+        """
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))   # Mittwoch
+        # Nur Mi/Do/Fr prognostiziert (3 Tage wie vor der Erweiterung)
+        prognose = {
+            (jetzt + timedelta(days=i)).date().isoformat(): 2500.0
+            for i in range(3)
+        }
+
+        state = await self._plane(jetzt, prognose)
+
+        # Der Freitag ist der einzige planbare Wochenendtag.
+        assert state.legionellen_planned_tag == 4, (
+            "Nur der Freitag ist in der 3-Tage-Prognose, "
+            f"gewaehlt: {state.legionellen_planned_day}"
+        )
+
+
 class TestCheckPeriodicTasks:
         """Test ob main.py check_periodic_tasks() mit 7 Werten umgehen kann."""
 
@@ -362,7 +601,7 @@ class TestCheckPeriodicTasks:
             state = self._baue_state()
 
             with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-                mock_forecast.return_value = (2.5, 3.0, 1.5, "06:15", "20:15", "06:16", "20:14", {})
+                mock_forecast.return_value = (2.5, 3.0, 1.5, "06:15", "20:15", "06:16", "20:14", {}, _tagesprognose())
                 with patch("main.check_vpn_status", new_callable=AsyncMock):
                     last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
                     result = await check_periodic_tasks(AsyncMock(), state, last_check)
@@ -413,7 +652,7 @@ class TestCheckPeriodicTasks:
             )
             # Unvollstaendige Prognose: day2 fehlt
             with patch("main.get_solar_forecast", new_callable=AsyncMock) as mf:
-                mf.return_value = (3.0, 3.2, None, "06:15", "20:15", "06:16", "20:14", {})
+                mf.return_value = (3.0, 3.2, None, "06:15", "20:15", "06:16", "20:14", {}, _tagesprognose())
                 await check_periodic_tasks(
                     AsyncMock(), state, jetzt - timedelta(hours=2)
                 )
@@ -451,7 +690,7 @@ class TestCheckPeriodicTasks:
             monkeypatch.setattr("main.check_vpn_status", AsyncMock())
             monkeypatch.setattr("main._state_now", lambda state=None, tz=None: jetzt)
             with patch("main.get_solar_forecast", new_callable=AsyncMock) as mf:
-                mf.return_value = (3.0, 3.2, None, "06:15", "20:15", "06:16", "20:14", {})
+                mf.return_value = (3.0, 3.2, None, "06:15", "20:15", "06:16", "20:14", {}, _tagesprognose())
                 await check_periodic_tasks(
                     AsyncMock(), state, jetzt - timedelta(hours=2)
                 )
@@ -492,13 +731,30 @@ class TestCheckPeriodicTasks:
                 ),
             ):
                 with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-                    # Donnerstag heute; Freitag 2.0 < erforderliche 2.5,
-                    # Samstag 3.0 ist der nächste gute planbare Tag.
-                    mock_forecast.return_value = (2.5, 2.0, 3.0, "06:15", "20:15", "06:16", "20:14", {})
+                    # Freitag 2.0 < erforderliche 2.5 -> der Freitag
+                    # faellt als Kandidat weg; Samstag 3.0 ist der beste
+                    # planbare Tag. (Die Werte liegen in kWh/m2.)
+                    mock_forecast.return_value = (
+                        2.5, 2.0, 3.0, "06:15", "20:15", "06:16", "20:14", {},
+                        _tagesprognose_fuer_wochenende(
+                            fr_oder=2000.0, sa=3000.0, so=1500.0,
+                            jetzt=pytz.timezone("Europe/Berlin").localize(
+                                datetime(2026, 9, 24, 12, 0)),
+                        ),
+                    )
                     await check_periodic_tasks(AsyncMock(), state, datetime.now() - timedelta(hours=2))
 
             assert state.legionellen_planned_tag == 5
             assert state.legionellen_planned_forecast_wh == 3000.0
+            # BUGFIX (21.10.2026): Der beste Tag wird NACH der Prognose
+            # gewaehlt - der bevorzugte Tag ist nur noch Tie-Breaker bei
+            # exakt gleicher Prognose. Der alte "Mindestvorsprung"
+            # (`tagwechsel_ab_diff_wh_qm`) wuerde einen deutlich besseren
+            # Samstag ignorieren und stattdessen den Freitag nehmen.
+            assert state.legionellen_planned_day == "Samstag", (
+                "Der beste Tag nach Prognose muss gewaehlt werden, "
+                f"nicht der bevorzugte (Plan: {state.legionellen_planned_day})"
+            )
 
         @pytest.mark.asyncio
         async def test_check_periodic_tasks_reicht_sommer_modus_wh_werte(self):
@@ -507,7 +763,7 @@ class TestCheckPeriodicTasks:
             state.priority_config.sommer_modus.benoetigte_tage = 1
 
             with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-                mock_forecast.return_value = (2.5, 3.0, 2.0, "06:15", "20:15", "06:16", "20:14", {})
+                mock_forecast.return_value = (2.5, 3.0, 2.0, "06:15", "20:15", "06:16", "20:14", {}, _tagesprognose())
                 with patch("main.check_vpn_status", new_callable=AsyncMock), patch(
                     "main.evaluate_sommer_modus",
                     return_value=(1, True, datetime.now().date(), "aktiviert"),
@@ -520,7 +776,7 @@ class TestCheckPeriodicTasks:
             assert kwargs["rad_today"] == pytest.approx(2500.0)
             assert kwargs["rad_tomorrow"] == pytest.approx(3000.0)
             assert kwargs["rad_day2"] == pytest.approx(2000.0)
-            # Der State bleibt als kWh/m²-Versorgung erhalten.
+            # Der State bleibt als kWh/mÃ‚Â²-Versorgung erhalten.
             assert state.solar.forecast_today == 2.5
             assert state.solar.forecast_tomorrow == 3.0
 
@@ -530,7 +786,7 @@ class TestCheckPeriodicTasks:
             state = self._baue_state()
 
             with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-                mock_forecast.return_value = (None,) * 8
+                mock_forecast.return_value = (None,) * 9
                 with patch("main.check_vpn_status", new_callable=AsyncMock):
                     last_check = datetime.now() - timedelta(hours=2)  # naiv, wie in main.py
                     result = await check_periodic_tasks(AsyncMock(), state, last_check)
@@ -548,7 +804,7 @@ class TestCheckPeriodicTasks:
             state = self._baue_state()
 
             with patch("main.get_solar_forecast", new_callable=AsyncMock) as mock_forecast:
-                mock_forecast.return_value = (None,) * 8
+                mock_forecast.return_value = (None,) * 9
                 with patch("main.check_vpn_status", new_callable=AsyncMock):
                     last_check = datetime.now() - timedelta(hours=2)
 

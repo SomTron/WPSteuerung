@@ -564,6 +564,60 @@ class LearningEngine:
             return 1.0
         return self.data.forecast_ratio
 
+    def get_surplus_profile_with_forecast(self, forecast_today_wh_qm=None,
+                                           forecast_hourly_wh=None):
+        """Surplus-Profil je Stunde - Haushaltsprofil fuer den CalcStart.
+
+        BUGFIX (21.10.2026): Diese Methode wurde am 04.09.2026 vom Aufrufer
+        in priority_control_logic aufgerufen (mit `forecast_today_wh_qm` und
+        `forecast_hourly_wh`), aber NIE implementiert. `getattr(...)` lieferte
+        deshalb `None`, und `surplus_profil` war IMMER None - die
+        Mittagstief-Erkennung (`_mittagstief_stunden`, die den Start bei
+        wenig Netzeinschuss frueher ansetzt) lief nie.
+
+        Das gelernte Profil `surplus_by_hour` misst die Netzeinspeisung bei
+        AUSgeschaltetem Kompressor - also den Haushalt: in der Mittagstunde
+        mit grossem Verbrauch ist die Einspeisung niedrig.
+
+        Wichtig zur Semantik: Die Einspeisung ist bereits "Erzeugung minus
+        Haushalt". Die Prognose wird deshalb NICHT abgezogen - das hiesse
+        den Haushalt doppelt zu rechnen. Sie dient als Plausibilitaets-
+        PRUEFUNG: eine Stunde ganz ohne Prognose (Nacht, oder die
+        Stundensprognose fehlt) liefert keine verwertbare
+        Haushaltsinformation und wird verworfen. So bleibt das Profil
+        belastbar, ohne die Aussage zu erfinden.
+
+        Rueckgabe: {stunde(str): watt} oder None (noch unbrauchbar).
+        """
+        profil = self.get_surplus_profile()
+        if not profil:
+            return None
+
+        # Stunden ohne Prognose sind nicht verwertbar (Nachtstunden oder
+        # fehlende Stundensprognose).
+        nutzbar = dict(profil)
+        if forecast_hourly_wh:
+            mit_prognose = {}
+            for stunde_s, wert in profil.items():
+                try:
+                    key = int(stunde_s)
+                except (TypeError, ValueError):
+                    continue
+                wm2 = forecast_hourly_wh.get(key)
+                if wm2 is None:
+                    continue
+                try:
+                    wm2 = float(wm2)
+                except (TypeError, ValueError):
+                    continue
+                if wm2 <= 0:
+                    continue
+                mit_prognose[stunde_s] = float(wert)
+            if mit_prognose:
+                nutzbar = mit_prognose
+
+        return nutzbar if len(nutzbar) >= 4 else None
+
     def get_forecast_hourly_deviations(self) -> Dict:
         """Stundenscharfe Forecast-Abweichungen {stunde: {forecast, actual, deviation}}.
 
@@ -730,6 +784,28 @@ class LearningEngine:
         # und ein dauerhaftes "samples 0/3" in der WebApp.
         self._kalibriere_forecast(now, heute, forecast_today_wh_qm)
 
+        # ── Stündliche Prognose-Abweichung (BUGFIX 21.10.2026) ──
+        #
+        # Die Stundensprognose war bis hierher ein toter Parameter: sie
+        # wurde entgegengesetzt (`forecast_hourly_wh`) und NIE gelesen.
+        # Ebenso blieb `data.forecast_hourly_deviations` leer - das Feld
+        # existierte, wurde aber nie befuellt.
+        #
+        # Nutzen: Die Tageskalibrierung vergleicht die ERZEUGTE Tagesenergie
+        # mit der Tagesprognose. Das ist ein Mittelwert ueber den ganzen Tag
+        # und verwechselt "Prognose zu pessimistisch" mit "Prognose zu
+        # optimistisch". Der stuendliche Vergleich zeigt dagegen, ZU WELCHER
+        # TAGESZEIT die Prognose danebenliegt - das ist genau die Information,
+        # die fuer die PV-Fenster-Berechnung (Ende des PV-Fensters) zaehlt.
+        #
+        # Ein hour_key- Eintrag bekommt:
+        #   forecast: erwartete Erzeugung dieser Stunde in Wh (Prognose W/m2
+        #              x Flaeche x 1 h)
+        #   actual:   tatsaechlich erzeugte Wh in dieser Stunde
+        #   deviation: actual - forecast (positiv = Prognose zu niedrig)
+        if forecast_hourly_wh and erzeugung_w is not None and dt_secs > 0:
+            self._erfasse_stunden_abweichung(now, forecast_hourly_wh, erzeugung_w, dt_secs)
+
         # Stundensurplus-Profil: Nur bei AUSgeschaltetem Kompressor sampeln,
         # sonst verfaelscht die WP-Leistung das Haushaltsmuster. Persistenz
         # opportunistisch ueber die _save()-Aufrufe der anderen Events.
@@ -825,6 +901,71 @@ class LearningEngine:
         self._last_temp_time = now
 
     # ── Heizzyklus auswerten ───────────────────────────────
+
+    def _erfasse_stunden_abweichung(self, now: datetime,
+                                     forecast_hourly_wh: Dict[int, float],
+                                     erzeugung_w: float, dt_secs: float):
+        """Sammelt die stuendliche Prognose-Abweichung.
+
+        BUGFIX (21.10.2026): Fuellt `data.forecast_hourly_deviations`, das
+        seit Anlage existierte, aber nie befuellt wurde - und nutzt damit
+        den bis dahin toten Parameter `forecast_hourly_wh`.
+
+        Je Stunde wird ein EWMA ueber
+            actual   = erzeugte Energie dieser Stunde (Wh)
+            forecast = erwartete Energie dieser Stunde (Wh)
+        gebildet. Die Abweichung (actual - forecast) zeigt, OB und WIE
+        stark die Prognose danebenliegt.
+
+        Wichtig: Die Stundenwerte werden pro Kalendertag getrennt
+        gesammelt (Schluessel "YYYY-MM-DD-HH"), damit der Vergleich
+        taeglich neu bewertet wird. Eine alte Prognose vom Vortag darf
+        nicht in die heutige Bewertung einlaufen.
+
+        Nur Stunden MIT Prognose werden erfasst - Nachtstunden ohne
+        Prognose (0 W) wuerden sonst als "Prognose daneben" zaehlen.
+        """
+        flaeche_qm = float(getattr(self.data.config, "pv_array_size_qm", 0.0) or 0.0)
+        if flaeche_qm <= 0:
+            return
+        stunde = now.hour
+        wm2 = forecast_hourly_wh.get(stunde)
+        if wm2 is None:
+            return
+        try:
+            wm2 = float(wm2)
+        except (TypeError, ValueError):
+            return
+        if wm2 <= 0:
+            return
+        # Prognose-Wh dieser Stunde: W/m2 x m2 x Zeitanteil
+        forecast_wh = wm2 * flaeche_qm * (dt_secs / 3600.0)
+        actual_wh = max(erzeugung_w, 0.0) * dt_secs / 3600.0
+        schluessel = f"{now.strftime('%Y-%m-%d')}-{stunde:02d}"
+        alt = self.data.forecast_hourly_deviations.get(schluessel)
+        if alt and alt.get("n"):
+            alpha = self.data.config.surplus_ewma_alpha
+            forecast_wh = (alt.get("forecast", forecast_wh) * (1 - alpha)
+                           + forecast_wh * alpha)
+            actual_wh = (alt.get("actual", actual_wh) * (1 - alpha)
+                         + actual_wh * alpha)
+            n = int(alt.get("n", 0)) + 1
+        else:
+            n = 1
+        self.data.forecast_hourly_deviations[schluessel] = {
+            "forecast": round(forecast_wh, 2),
+            "actual": round(actual_wh, 2),
+            "deviation": round(actual_wh - forecast_wh, 2),
+            "n": n,
+        }
+        # Alte Eintraege verwerfen: die Auswertung interessiert nur die
+        # letzten Tage, sonst waechst die Datei unbegrenzt.
+        grenze = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+        if len(self.data.forecast_hourly_deviations) > 24 * 14 * 2:
+            self.data.forecast_hourly_deviations = {
+                k: v for k, v in self.data.forecast_hourly_deviations.items()
+                if k[:10] >= grenze
+            }
 
     def _kalibriere_forecast(self, now: datetime, heute: str,
                              forecast_today_wh_qm: Optional[float]):

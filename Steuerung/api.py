@@ -1604,6 +1604,13 @@ def get_status():
             # Granularitaet, auch wenn `solar_stale` noch False ist.
             "solar_age_s": solar_age_s,
             "forecast_day2": getattr(shared_state.solar, 'forecast_day2', None),
+            # Tagesprognose der kommenden Tage: {ISO-Datum: Wh/m2}.
+            # BUGFIX (21.10.2026): Die Legionellenwahl (bester der drei
+            # Tage Fr/Sa/So) basiert darauf. Das Feld macht die Auswahl in
+            # der WebApp nachvollziehbar - der Plan selbst nennt die
+            # Kandidaten bereits in `legionellen_planned_reason`.
+            "forecast_tage_wh_m2": getattr(
+                shared_state.solar, 'forecast_tage_wh_m2', None),
             "forecast_stale": bool(getattr(shared_state, "forecast_stale", False)),
             "forecast_age_s": getattr(shared_state, "forecast_age_s", None),
             "sunrise": getattr(shared_state.solar, 'sunrise_today', ''),

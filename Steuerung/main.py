@@ -1064,7 +1064,7 @@ async def check_periodic_tasks(session, state, last_vpn_check):
 
     if versuch_faellig:
         state.last_forecast_attempt = now_local
-        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow, hourly_today_wm2 = await get_solar_forecast(session, state.config)
+        rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tomorrow, ss_tomorrow, hourly_today_wm2, forecast_tage = await get_solar_forecast(session, state.config)
         # Nur ein vollständiger Tagesforecast gilt als erfolgreich. Sonst
         # dürfen weder alte Prognose noch alter Legionellenplan weiterlaufen.
         if any(value is None for value in (rad_today, rad_tomorrow, rad_day2)):
@@ -1081,6 +1081,12 @@ async def check_periodic_tasks(session, state, last_vpn_check):
             state.solar.forecast_hourly_wm2 = hourly_today_wm2
             state.solar.forecast_tomorrow = rad_tomorrow
             state.solar.forecast_day2 = rad_day2
+            # BUGFIX (21.10.2026): Die Tagesprognose fuer die kommenden
+            # Tage (bis 7 Tage im Voraus) wird im State gehalten. Die
+            # Legionellenplanung unten nutzt die lokale Variable (sie
+            # steht im selben Block), das State-Feld macht die Auswahl in
+            # der WebApp nachvollziehbar.
+            state.solar.forecast_tage_wh_m2 = forecast_tage or None
             state.solar.sunrise_today = sr_today
             state.solar.sunset_today = ss_today
             state.sunrise_tomorrow = sr_tomorrow
@@ -1144,38 +1150,57 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                 if any(prognose is None for prognose in (rad_today_wh, rad_tomorrow_wh, rad_day2_wh)):
                     clear_plan(state, "Unvollständige Tagesprognose", persist=True)
                 elif letzte_kw != aktuelle_kw or state.legionellen_last_done is None:
-                    aktueller_wochentag = now_local.weekday()
+                    # BUGFIX (Befund 21.10.2026, Nutzerwunsch): Der beste
+                    # der drei Tage Freitag/Samstag/Sonntag wird nach der
+                    # Tagesprognose gewaehlt.
+                    #
+                    # Vorher wurden nur die 3 prognostizierten Tage
+                    # (heute/morgen/uebermorgen) betrachtet und ueber
+                    # Wochentags-Nummern gemappt. Von Montag bis Mittwoch
+                    # lagen die drei Tage damit ausserhalb des Wochenendes -
+                    # es gab KEINE Auswahlbasis, und die Prognose fuer
+                    # Freitag/Samstag/Sonntag war erst ab Donnerstag bekannt.
+                    #
+                    # Jetzt wird das Datum der Kalendertage bestimmt und
+                    # die Prognose aus `forecast_tage_wh_m2` (7 Tage) geholt.
+                    #
+                    # WICHTIG: Der Bezug bleibt "diese Woche" - ein Tag in
+                    # der naechsten Woche wird NICHT geplant, weil die
+                    # Startfrist dann schon verstrichen waere.
+                    kandidaten = []
+                    for tage_voraus in range(0, 8):
+                        datum = now_local.date() + timedelta(days=tage_voraus)
+                        wochentag = datum.weekday()
+                        if wochentag < legionellen_cfg.bevorzugter_tag:
+                            continue
+                        if wochentag > legionellen_cfg.letzter_tag:
+                            continue
+                        # Heute nur, solange das Startfenster noch offen ist.
+                        if tage_voraus == 0 and now_local.hour > int(
+                            legionellen_cfg.spaeteste_start_uhr
+                        ):
+                            continue
+                        prognose = forecast_tage.get(datum.isoformat())
+                        if prognose is None:
+                            continue
+                        kandidaten.append((datum, wochentag, float(prognose)))
 
-                    # Nur die verbleibenden erlaubten Kalendertage berücksichtigen.
-                    # Ein bereits verstrichener Plan darf nicht wieder auf einen
-                    # alten Wochentag zurückfallen.
-                    verfuegbare_tage = [
-                        tag
-                        for tag in range(legionellen_cfg.bevorzugter_tag, legionellen_cfg.letzter_tag + 1)
-                        if tag >= aktueller_wochentag
-                        and not (
-                            tag == aktueller_wochentag
-                            and now_local.hour > int(legionellen_cfg.spaeteste_start_uhr)
+                    if not kandidaten:
+                        clear_plan(
+                            state,
+                            f"Kein weiterer Legionellen-Tag in dieser Woche "
+                            f"(Prognose fehlt oder unter {legionellen_cfg.mindest_prognose_wh_qm:.0f} Wh/m²)",
+                            persist=True,
                         )
-                    ]
-
-                    if not verfuegbare_tage:
-                        clear_plan(state, "Kein weiterer Legionellen-Tag in dieser Woche", persist=True)
                     else:
+                        # Mindestprognose: nur Tage, die ueberhaupt einen
+                        # belastbaren PV-Tag ergeben, kommen in die Wahl.
+                        # Der bevorzugte Tag hat eine hoehere Anforderung
+                        # (`erforderliche_wh_qm`).
                         tages_prognose = {
-                            aktueller_wochentag: rad_today_wh,
-                            (aktueller_wochentag + 1) % 7: rad_tomorrow_wh,
-                            (aktueller_wochentag + 2) % 7: rad_day2_wh,
-                        }
-                        # Planbare Tage benötigen die allgemeine Mindestprognose.
-                        # Der bevorzugte Tag benötigt zusätzlich seine eigene
-                        # Anforderung; ein guter PV-Tag wird für die Auswahl
-                        # und den sichtbaren Planstatus berücksichtigt.
-                        tages_prognose = {
-                            tag: prognose for tag, prognose in tages_prognose.items()
-                            if prognose is not None
-                            and tag in verfuegbare_tage
-                            and prognose >= legionellen_cfg.mindest_prognose_wh_qm
+                            tag: prognose
+                            for (_datum, tag, prognose) in kandidaten
+                            if prognose >= legionellen_cfg.mindest_prognose_wh_qm
                             and (
                                 tag != legionellen_cfg.bevorzugter_tag
                                 or prognose >= legionellen_cfg.erforderliche_wh_qm
@@ -1188,34 +1213,41 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                 persist=True,
                             )
                         else:
+                            # DER BESTE TAG nach Prognose. Der bevorzugte
+                            # Tag ist nur noch Tie-Breaker bei exakt gleicher
+                            # Prognose - die Nutzeranforderung lautet
+                            # ausdruecklich "der Beste der drei Tage lt
+                            # Forecast".
                             bester_tag = max(
                                 tages_prognose,
                                 key=lambda tag: (
                                     tages_prognose[tag],
-                                    tages_prognose[tag] >= legionellen_cfg.pv_prognose_schwelle_gut,
                                     tag == legionellen_cfg.bevorzugter_tag,
                                 ),
                             )
-                            # Nur bei deutlich besserem Alternativtag wechseln.
-                            preferred = tages_prognose.get(legionellen_cfg.bevorzugter_tag)
-                            if preferred is not None and (
-                                tages_prognose[bester_tag] - preferred
-                                < legionellen_cfg.tagwechsel_ab_diff_wh_qm
-                            ):
-                                bester_tag = legionellen_cfg.bevorzugter_tag
                             from priority_control import _wochentag_name
-                            delta = (bester_tag - aktueller_wochentag) % 7
+                            bester_datum = next(
+                                datum for (datum, tag, _p) in kandidaten
+                                if tag == bester_tag
+                            )
                             state.legionellen_planned_day = _wochentag_name(bester_tag)
                             state.legionellen_planned_tag = bester_tag
                             state.legionellen_planned_time = f"{legionellen_cfg.start_uhr:02d}:00"
-                            state.legionellen_planned_date = now_local.date() + timedelta(days=delta)
+                            state.legionellen_planned_date = bester_datum
                             state.legionellen_planned_forecast_wh = float(tages_prognose[bester_tag])
                             state.legionellen_plan_revision += 1
                             state.legionellen_plan_created_at = now_local
                             gueter_tag = tages_prognose[bester_tag] >= legionellen_cfg.pv_prognose_schwelle_gut
+                            # Alle Kandidaten mit ihrer Prognose nennen - der
+                            # Betreiber soll sehen, WARUM dieser Tag gewaehlt
+                            # wurde und wie die Konkurrenz abschnitt.
+                            vergleich = ", ".join(
+                                f"{_wochentag_name(tag)}={tages_prognose[tag]:.0f}"
+                                for tag in sorted(tages_prognose)
+                            )
                             state.legionellen_planned_reason = (
                                 f"Bester PV-Tag: {tages_prognose[bester_tag]:.0f} Wh/m² "
-                                f"(>= {legionellen_cfg.mindest_prognose_wh_qm:.0f} Wh/m², "
+                                f"(Kandidaten: {vergleich}, "
                                 + (
                                     "guter PV-Tag"
                                     if gueter_tag

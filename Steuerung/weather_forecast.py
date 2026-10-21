@@ -64,7 +64,20 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
     Fetches solar radiation forecast from Open-Meteo.
     Returns: (rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, hourly_today_wm2)
         Radiation in kWh/m², times as strings "HH:MM", hourly_today_wm2 is Dict[hour: W/m²].
-    Vertrag: IMMER genau 8 Werte liefern (Fehlerpfade inklusive)."""
+    Vertrag: IMMER genau 8 Werte liefern (Fehlerpfade inklusive).
+
+    BUGFIX/ERWEITERUNG (Befund 21.10.2026): Die Abfrage holt jetzt 7 Tage
+    statt 3. Die Legionellenplanung soll den BESTEN der drei Tage
+    Freitag/Samstag/Sonntag nach Prognose waehlen - mit einer 3-Tage-Prognose
+    war das nicht moeglich: von Montag bis Mittwoch liegen die drei
+    prognostizierten Tage ausserhalb des Wochenendes, es gab also gar keine
+    Auswahlbasis (nur der Freitag ab Donnerstag war absehbar).
+
+    Die tägliche Strahlungs-Summe wird deshalb fuer alle 7 Tage berechnet
+    und als `daily_totals` im hourly-Pfad mitgefuehrt. Die ersten drei
+    Tage bleiben unveraendert (rad_today/rad_tomorrow/rad_day2), damit der
+    8-Werte-Vertrag und alle bestehenden Aufrufer unangetastet bleiben.
+    """
     # Use config values or defaults
     lat = config.Wetterprognose.LATITUDE if config else 46.7142
     lon = config.Wetterprognose.LONGITUDE if config else 13.6361
@@ -77,7 +90,11 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
         "daily": "sunrise,sunset",
         "hourly": "direct_radiation,diffuse_radiation",
         "timezone": DEFAULT_TIMEZONE,
-        "forecast_days": 3,
+        # 7 Tage: noetig, damit die Legionellenplanung Freitag/Samstag/
+        # Sonntag VORLÄUFIG beurteilen kann - nicht erst, wenn der Tag
+        # selbst erreicht ist. Mit 3 Tagen war die Auswahlbasis in der
+        # ersten halben Woche leer.
+        "forecast_days": 7,
         "tilt": tilt
     }
     
@@ -103,7 +120,7 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
             
             if not times or not direct or not diffuse:
                 logging.warning("Open-Meteo API returned empty hourly data.")
-                return None, None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None, None
             
             total_radiation = [dir + diff for dir, diff in zip(direct, diffuse)]
             daily_totals = {}
@@ -148,6 +165,23 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
             sunset_today = sun_data.get(today_str, {}).get("sunset")
             sunrise_tomorrow = sun_data.get(tomorrow_str, {}).get("sunrise")
             sunset_tomorrow = sun_data.get(tomorrow_str, {}).get("sunset")
+
+            # Tagesprognose fuer ALLE Tage (bis 7 Tage im Voraus).
+            # Key = ISO-Datum, Value = Wh/m².
+            # Die Legionellenplanung braucht die Prognose fuer
+            # Freitag/Samstag/Sonntag VORLAEUFIG - mit den 3 Tageswerten
+            # allein war das in der ersten halben Woche nicht moeglich.
+            #
+            # BUGFIX (21.10.2026): Die Werte werden hier in Wh/m² umgerechnet
+            # (x1000), weil ALLE Schwellen in der Legionellenkonfiguration
+            # (mindest_prognose_wh_qm, erforderliche_wh_qm,
+            # pv_prognose_schwelle_gut) in Wh/m² angegeben sind. Ohne die
+            # Umrechnung lage ein Tag mit 2,5 kWh/m² bei 2,5 statt 2500
+            # Wh/m² und damit immer unter der Mindestprognose.
+            forecast_tage = {
+                d: round(v * 1000.0, 2) for d, v in daily_totals.items()
+                if d >= today_str
+            }
             
             # Nur loggen wenn Daten vorhanden, sonst None safe behandeln
             rad_today_str = f"{rad_today:.2f}" if rad_today is not None else "None"
@@ -156,20 +190,29 @@ async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_pa
             sr_str = sunrise_today if sunrise_today is not None else "None"
             ss_str = sunset_today if sunset_today is not None else "None"
             logging.info(f"Solar forecast updated: Today={rad_today_str} kWh/m² ({sr_str}-{ss_str}), Tomorrow={rad_tomorrow_str} kWh/m², Day2={rad_day2_str} kWh/m²")
+            logging.info(
+                "Tagesprognose (%d Tage): %s", len(forecast_tage),
+                ", ".join(f"{d[5:]}={v:.0f}" for d, v in sorted(forecast_tage.items()))
+            )
             
             # Log to dedicated CSV
             await log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=csv_path)
             
-            return rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, hourly_today_wm2
+            # Rueckgabe: die 8 bisherigen Werte PLUS die Tagesprognose
+            # (9. Wert). Der 8-Werte-Vertrag der ersten Positionen bleibt
+            # unveraendert - bestehende Aufrufer und Tests bleiben gueltig.
+            return (rad_today, rad_tomorrow, rad_day2, sunrise_today,
+                    sunset_today, sunrise_tomorrow, sunset_tomorrow,
+                    hourly_today_wm2, forecast_tage)
         else:
             # API-Fehler (Timeout, HTTP-Fehler, etc.) - wurde bereits im api_client geloggt
             logging.error(
                 f"Error fetching solar forecast: {result.error_type} - {result.error_message[:100] if result.error_message else 'Unbekannter Fehler'}"
             )
-            return None, None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None
     except Exception as e:
         logging.error(f"Unexpected error in get_solar_forecast: {e}")
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
 
 async def log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, csv_path=None):
     """Logs the forecast results to a separate CSV file.

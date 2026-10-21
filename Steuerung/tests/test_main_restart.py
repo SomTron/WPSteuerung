@@ -67,7 +67,9 @@ async def test_periodic_tasks_akzeptiert_naiven_vpn_timestamp(monkeypatch):
     monkeypatch.setattr(
         main,
         "get_solar_forecast",
-        AsyncMock(return_value=(None, None, None, None, None, None, None, None)),
+        # 9 Werte (BUGFIX 21.10.2026): die ersten 8 plus die
+        # Tagesprognose fuer die Legionellenwahl.
+        AsyncMock(return_value=(None,) * 9),
     )
     monkeypatch.setattr(main, "FORECAST_RETRY_INTERVAL_MIN", 15)
     monkeypatch.setattr(main, "VPN_CHECK_INTERVAL_SEC", 60)

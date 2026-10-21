@@ -24,6 +24,97 @@ from priority_control import (  # noqa: E402
 )
 
 
+class TestStundenprognoseWirdGenutzt:
+    """BUGFIX (21.10.2026): Die Stundensprognose war ein toter Parameter.
+
+    `LearningEngine.update()` nahm `forecast_hourly_wh` entgegen und las
+    es NIE. Ebenso blieb `data.forecast_hourly_deviations` leer - das
+    Feld existierte, wurde aber nie befuellt. Und
+    `get_surplus_profile_with_forecast` wurde vom Aufrufer in
+    priority_control_logic aufgerufen, war aber gar nicht implementiert -
+    `getattr` lieferte `None`, das Surplus-Profil (Mittagstief-Erkennung
+    fuer den CalcStart) war damit IMMER leer.
+
+    Diese Tests sichern beide Luecken.
+    """
+
+    def test_abweichungen_werden_erfasst(self, engine):
+        """Die stuendliche Prognose-Abweichung wird gefuellt."""
+        engine.data.config.pv_array_size_qm = 10.0
+        t0 = datetime(2026, 10, 21, 12, 0)
+        t1 = datetime(2026, 10, 21, 12, 30)
+        for t in (t0, t1):
+            engine.update(
+                now=t, temp_dict={"unten": 40.0}, compressor_is_on=False,
+                feedin_watt=300.0, pv_acpower_watt=0.0,
+                pv_erzeugung_watt=500.0, soc=50.0,
+                forecast_today_wh_qm=2500.0,
+                forecast_hourly_wh={12: 100.0},
+                pv_array_size_qm=10.0,
+            )
+        devs = engine.get_forecast_hourly_deviations()
+        assert devs, "forecast_hourly_deviations bleibt leer!"
+        eintrag = list(devs.values())[0]
+        # Prognose 100 W/m2 x 10 m2 x 0,5 h = 500 Wh erwartet,
+        # tatsaechlich 500 W x 0,5 h = 250 Wh.
+        assert eintrag["forecast"] == pytest.approx(500.0, rel=0.05)
+        assert eintrag["actual"] == pytest.approx(250.0, rel=0.05)
+        assert eintrag["deviation"] < 0, "Prognose war zu hoch"
+        assert eintrag["n"] >= 1
+
+    def test_ohne_stundenprognose_keine_abweichung(self, engine):
+        """Ohne Stundensprognose wird nichts erfasst (kein Unsinn)."""
+        engine.data.config.pv_array_size_qm = 10.0
+        t0 = datetime(2026, 10, 21, 12, 0)
+        for t in (t0, datetime(2026, 10, 21, 12, 30)):
+            engine.update(
+                now=t, temp_dict={"unten": 40.0}, compressor_is_on=False,
+                feedin_watt=300.0, pv_acpower_watt=0.0,
+                pv_erzeugung_watt=500.0, soc=50.0,
+                forecast_today_wh_qm=2500.0,
+                forecast_hourly_wh=None,
+                pv_array_size_qm=10.0,
+            )
+        assert engine.get_forecast_hourly_deviations() == {}
+
+    def test_surplus_profil_mit_forecast_existiert(self, engine):
+        """`get_surplus_profile_with_forecast` MUSS existieren.
+
+        Der Aufrufer in priority_control_logic fragt sie per `getattr` ab -
+        fehlt sie, ist `surplus_profil` stillschweigend None und die
+        Mittagstief-Erkennung laeuft nie.
+        """
+        assert hasattr(engine, "get_surplus_profile_with_forecast"), (
+            "Die Methode fehlt - der Aufrufer bekommt None und das "
+            "Surplus-Profil bleibt ungenutzt!"
+        )
+
+    def test_surplus_profil_wird_belegt(self, engine):
+        """Ein ausreichend belegtes Profil wird zurueckgegeben."""
+        engine.data.config.pv_array_size_qm = 10.0
+        tag = datetime(2026, 10, 15, 8, 0)
+        for d in range(6):
+            for h in range(8, 16):
+                for k in range(6):
+                    t = tag + timedelta(days=d, hours=h - 8, minutes=k * 10)
+                    engine.update(
+                        now=t, temp_dict={"unten": 40.0},
+                        compressor_is_on=False,
+                        feedin_watt=300.0 + (h - 8) * 40,
+                        pv_acpower_watt=0.0, pv_erzeugung_watt=500.0, soc=50.0,
+                        forecast_today_wh_qm=2500.0,
+                        forecast_hourly_wh={h: 100.0},
+                        pv_array_size_qm=10.0,
+                    )
+        profil = engine.get_surplus_profile_with_forecast(
+            forecast_today_wh_qm=2500.0,
+            forecast_hourly_wh={h: 100.0 for h in range(8, 16)},
+        )
+        assert profil, "Surplus-Profil bleibt leer!"
+        assert len(profil) >= 4
+        assert all(isinstance(v, float) for v in profil.values())
+
+
 @pytest.fixture
 def engine(tmp_path):
     """Isolierte Engine (keine echte learning_data.json anfassen!)."""

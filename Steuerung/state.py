@@ -49,6 +49,15 @@ class SolarState:
         self.forecast_tomorrow: Optional[float] = None
         self.forecast_day2: Optional[float] = None  # Übermorgen-Prognose (Sommer-Modus)
         self.forecast_hourly_wm2: Optional[Dict[int, float]] = None  # W/m²
+        # Tagesprognose fuer die kommenden Tage: {ISO-Datum: Wh/m²}.
+        # Wird fuer die Legionellenplanung gebraucht: der beste der drei
+        # Tage Freitag/Samstag/Sonntag wird nach Prognose gewaehlt - das
+        # setzt eine Prognose ueber 3 Tage hinaus voraus.
+        #
+        # BUGFIX (21.10.2026): Das Feld wird seit der Erweiterung auf 7
+        # Tage befuellt und in der API ausgeliefert - damit ist die
+        # Tagwahl in der WebApp nachvollziehbar.
+        self.forecast_tage_wh_m2: Optional[Dict[str, float]] = None
         self.sunrise_today: Optional[str] = None
         self.sunset_today: Optional[str] = None
 
