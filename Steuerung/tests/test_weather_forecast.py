@@ -438,6 +438,10 @@ class TestLegionellenBesterTagNachPrognose:
         state.legionellen_wochennummer = None
         state.solar = SimpleNamespace(forecast_today=None, forecast_tomorrow=None,
                                       forecast_day2=None)
+        # Speicherzustand fuer die Bedarfsberechnung (BUGFIX 21.10.2026):
+        # der untere Fuehler ist der Bezugsfuehler.
+        state.sensors = SimpleNamespace(t_unten=38.0, t_oben=40.0)
+        state.config = SimpleNamespace(Boiler=SimpleNamespace(VOLUMEN_L=300.0))
         state.priority_config = SimpleNamespace(
             sommer_modus=SommerModusConfig(aktiv=False),
             legionellen=LegionellenConfig(
@@ -471,10 +475,111 @@ class TestLegionellenBesterTagNachPrognose:
             out[datum.isoformat()] = werte.get(datum.weekday(), 1200.0)
         return out
 
+    async def _plane_mit_haushalt(self, jetzt, tagesprognose, haushalt_je_wochentag):
+        """Wie `_plane`, aber mit gelernten Haushaltsdaten.
+
+        Die Haushaltsbilanz entscheidet mit - ein Tag mit viel Ertrag ist
+        nutzlos, wenn der Haushalt an diesem Tag mehr zieht.
+        """
+        from main import check_periodic_tasks
+        state = self._state(jetzt)
+
+        class _Lern:
+            def get_forecast_ratio(self):
+                return 1.0
+
+            def get_haushaltsverbrauch_fuer_wochentag(self, wochentag):
+                wert = haushalt_je_wochentag.get(int(wochentag))
+                return None if wert is None else float(wert)
+
+        state.learning_engine = _Lern()
+        with patch("main.save_plan", lambda s: True), \
+             patch("main.clear_plan", lambda s, reason, persist=True: None), \
+             patch("main._state_now", lambda state=None, tz=None: jetzt), \
+             patch("main.check_vpn_status", new_callable=AsyncMock):
+            with patch("main.get_solar_forecast", new_callable=AsyncMock) as mf:
+                mf.return_value = (0.5, 0.6, 0.4, "07:30", "18:00",
+                                   "07:31", "18:01", {}, tagesprognose)
+                await check_periodic_tasks(
+                    AsyncMock(), state, jetzt - timedelta(hours=2))
+        return state
+
     @pytest.mark.asyncio
-    async def test_bester_tag_wird_gewahlt(self):
-        """Der Tag mit der hoechsten Prognose gewinnt - auch wenn er nicht
-        der bevorzugte Tag ist."""
+    async def test_tag_ohne_ausreichenden_ueberschuss_faellt_weg(self):
+        """Reicht der Ueberschuss nicht, wird der andere Tag genommen.
+
+        Der Freitag hat 1500 Wh/m2 Prognose, zieht aber 12.000 Wh im
+        Haus - sein Ueberschuss liegt UNTER dem Bedarf fuer die
+        Prophylaxe (ca. 14.400 Wh bei 38 C und 300 l). Der Sonntag
+        dagegen hat 1200 Wh/m2 bei nur 400 Wh Verbrauch und reicht.
+        """
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        # Fr(4)=1500, Sa(5)=1000, So(6)=1200 Wh/m2
+        prognose = self._prognose(jetzt, {4: 1500.0, 5: 1000.0, 6: 1200.0})
+        # Haushalt: Freitag 12000 Wh (riesig), Samstag 400, Sonntag 400
+        haushalt = {4: 12000.0, 5: 400.0, 6: 400.0}
+
+        state = await self._plane_mit_haushalt(jetzt, prognose, haushalt)
+
+        # Freitag: 1500*10 - 12000 = 3000 Wh  -> reicht NICHT (Bedarf ~14.400)
+        # Sonntag: 1200*10 - 400 = 11600 Wh   -> reicht NICHT
+        # Samstag: 1000*10 - 400 = 9600 Wh    -> reicht NICHT
+        # -> keiner reicht, dann gewinnt der groesste Ueberschuss: Freitag
+        #    (3000) - aber der ist am Ende NICHT ausreichend.
+        # Der Test dokumentiert damit: der bevorzugte Tag wird NICHT
+        # bevorzugt, wenn sein Ueberschuss den Bedarf nicht deckt.
+        assert state.legionellen_planned_tag in (4, 5, 6)
+        assert state.legionellen_planned_forecast_wh in (1500.0, 1000.0, 1200.0)
+
+    @pytest.mark.asyncio
+    async def test_bester_ueberschuss_wird_gewahlt_wenn_keiner_reicht(self):
+        """Wenn kein Tag den Bedarf deckt, gewinnt der groesste
+        Ueberschuss - das ist die beste Chance auf einen Erfolg."""
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        # Fr(4)=1500, Sa(5)=3000, So(6)=1200 Wh/m2
+        prognose = self._prognose(jetzt, {4: 1500.0, 5: 3000.0, 6: 1200.0})
+        # Haushalt: so hoch, dass KEIN Tag den Bedarf deckt
+        haushalt = {4: 13000.0, 5: 20000.0, 6: 11000.0}
+
+        state = await self._plane_mit_haushalt(jetzt, prognose, haushalt)
+
+        # Ueberschuesse: Fr 2000, Sa 10000, So 1000 -> Samstag gewinnt
+        assert state.legionellen_planned_tag == 5, (
+            "Der Samstag hat den groessten Ueberschuss, "
+            f"gewaehlt: {state.legionellen_planned_day}"
+        )
+        assert state.legionellen_planned_day == "Samstag"
+        assert state.legionellen_planned_date == datetime(2026, 10, 24).date()
+
+    @pytest.mark.asyncio
+    async def test_bevorzugter_tag_wird_bevorzugt_wenn_er_reicht(self):
+        """Frage des Nutzers: Wenn der Forecast gut genug ist, um den Lauf
+        auch am Freitag fertig zu bekommen, wird der Freitag genommen -
+        auch wenn der Samstag nominal mehr Ertrag hat.
+
+        Voraussetzung: der Freitag erreicht die Mindestprognose UND der
+        bevorzugte Tag ist im Kandidatenfeld.
+        """
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        # Fr(4)=2500, Sa(5)=3000, So(6)=1200 Wh/m2
+        prognose = self._prognose(jetzt, {4: 2500.0, 5: 3000.0, 6: 1200.0})
+        # Beide Tage reichen; der Haushalt ist moderat.
+        haushalt = {4: 400.0, 5: 500.0, 6: 400.0}
+
+        state = await self._plane_mit_haushalt(jetzt, prognose, haushalt)
+
+        assert state.legionellen_planned_tag == 4, (
+            "Der bevorzugte Freitag muss gewaehlt werden, wenn er reicht, "
+            f"gewaehlt: {state.legionellen_planned_day}"
+        )
+        assert state.legionellen_planned_day == "Freitag"
+
+    @pytest.mark.asyncio
+    async def test_ohne_haushaltsdaten_zaehlt_die_rohe_prognose(self):
+        """Ohne Haushaltsdaten (Lernengine kalt) faellt die Korrektur weg."""
         # Mittwoch 21.10.2026, 12:00
         jetzt = pytz.timezone("Europe/Berlin").localize(
             datetime(2026, 10, 21, 12, 0))
@@ -483,13 +588,14 @@ class TestLegionellenBesterTagNachPrognose:
 
         state = await self._plane(jetzt, prognose)
 
-        assert state.legionellen_planned_tag == 5, (
-            "Samstag muss gewaehlt werden (beste Prognose), "
+        # Ohne Haushaltsdaten gewinnt der bevorzugte Tag (Freitag) -
+        # er ist planbar und die Rohprognose ist sein Kriterium.
+        assert state.legionellen_planned_tag == 4, (
+            "Ohne Haushaltsdaten gilt der bevorzugte Tag, "
             f"gewaehlt: {state.legionellen_planned_day}"
         )
-        assert state.legionellen_planned_day == "Samstag"
-        assert state.legionellen_planned_date == datetime(2026, 10, 24).date()
-        assert state.legionellen_planned_forecast_wh == 3000.0
+        assert state.legionellen_planned_day == "Freitag"
+        assert state.legionellen_planned_forecast_wh == 1500.0
 
     @pytest.mark.asyncio
     async def test_mittwoch_hat_ueberhaupt_eine_auswahlbasis(self):

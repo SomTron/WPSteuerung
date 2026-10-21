@@ -2,7 +2,7 @@
 richtige_config.ini
 config.ini
 
-# Ignoriere Infodatepí
+# Ignoriere InfodatepÃ­
 Infos
 
 # Ignoriere Runtime-Dateien (Logs)
@@ -95,3 +95,7 @@ _fremde_aenderungen_backup/
 # Wegwerf-Debugskripte (Einmal-Analyse im Projektordner). Sie brechen den
 # CI-Lint (ruff prueft "Steuerung" komplett) und gehoeren nicht ins Repo.
 Steuerung/_demo*.py
+
+# Lerndaten der LearningEngine (Laufzeit, nie committen)
+Steuerung/learning_data.json
+learning_data.json

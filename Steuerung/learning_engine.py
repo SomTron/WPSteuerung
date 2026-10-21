@@ -225,7 +225,20 @@ class LearningData:
     # ── Verbrauchsbewusstsein: Stundensurplus-Profil ──
     # {"8": {"avg": 350.0, "n": 12}, ...}: gemitelte Netzeinspeisung je Stunde,
     # nur gesampelt bei AUSgeschaltetem Kompressor (= Haushaltsmuster pur).
+    #
+    # ACHTUNG (Befund 21.10.2026): Dieses Profil ist KEIN Tagesprofil. Es
+    # unterscheidet weder Wochentag noch Saison, und der EWMA laeuft im
+    # 10-Sekunden-Takt - der Wert ist nach 50 Sekunden "belastbar" und
+    # friert dann auf dem aktuellen Tag ein. Fuer Aussagen ueber einen
+    # ganzen TAG ist es deshalb unbrauchbar. Siehe dafuer
+    # `tages_haushalt` (Tagesbilanz aus echten Tagessummen).
     surplus_by_hour: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
+    # ── Tages-Haushaltsbilanz (Befund 21.10.2026) ──
+    # [{"ts": "2026-10-21", "verbrauch_wh": 1234.0}, ...]
+    # Verbrauch des Haushalts je TAG, getrennt nach Wochentag ausgewertet.
+    # Grundlage: erzeugte Energie (Wh) minus Einspeisung (Wh) des Tages.
+    tages_haushalt: List[Dict] = field(default_factory=list)
 
     # ── Konfigurierbare Lernparameter (persistiert) ──
     config: LearningConfig = field(default_factory=LearningConfig)
@@ -328,6 +341,7 @@ class LearningEngine:
                     forecast_ratio_samples=raw.get("forecast_ratio_samples", 0),
                     forecast_hourly_deviations=raw.get("forecast_hourly_deviations", {}),
                     surplus_by_hour=raw.get("surplus_by_hour", {}),
+    tages_haushalt=list(raw.get("tages_haushalt", []) or []),
                     config=LearningConfig(**raw.get("config", {})),
                 )
         except Exception as e:
@@ -564,6 +578,83 @@ class LearningEngine:
             return 1.0
         return self.data.forecast_ratio
 
+    def get_haushaltsprofil_je_tag(self, tage: int = 28) -> Dict[str, float]:
+        """Tages-Haushaltsbilanz: {Wochentag: geschätzter Verbrauch in Wh}.
+
+        BUGFIX (21.10.2026): `surplus_by_hour` taugt NICHT als
+        Haushaltsprofil. Es ist nachweislich kein Tagesprofil, sondern der
+        aktuellste Wert der jeweiligen Stunde:
+
+          * Der Schluessel ist NUR die Stunde - Wochentag und Saison werden
+            nicht unterschieden (gemessen: Montag/Dienstag 2000 W und
+            Wochenende 200 W ergeben fuer alle Stunden denselben Wert
+            922,9 W).
+          * Der EWMA laeuft im 10-Sekunden-Takt. Ein Tagesprofil braucht
+            aber TAGE, nicht Takte - der Wert ist nach 50 Sekunden
+            "belastbar" (n>=5 Takte) und friert dann auf dem Wert des
+            aktuellen Tages ein.
+
+        Fuer die Legionellen-Tageswahl brauchen wir aber genau das, was
+        dieses Profil NICHT liefert: wie viel Energie der HAUSHALT an
+        einem Tag verbraucht. Ein Tag mit 3000 Wh/m2 Ertrag ist schlecht,
+        wenn der Haushalt an diesem Tag 3000 Wh zieht.
+
+        Deshalb wird hier etwas anderes gemessen: die TAGESSUMME der
+        tatsaechlichen Erzeugung (`_day_pv_wh`) minus die TAGESSUMME der
+        Einspeisung (`_day_surplus_wh`) ergibt den Tagesverbrauch des
+        Haushalts - inklusive der Batterie, genauer als jeder Stundenwert.
+
+        Das Ergebnis wird je Wochentag (Mo..So) getrennt gehalten, weil
+        der Verbrauch am Wochenende typisch anders ist als werktags.
+
+        Returns: {wochentag_str: wh} - nur Tage mit ausreichend
+        Messpunkten (mind. `min_tage_pro_wochentag` Tage).
+        """
+        min_tage_pro_wochentag = 2
+        werte: Dict[str, list] = {}
+        for eintrag in self.data.tages_haushalt:
+            try:
+                ts = self._parse_ts(eintrag.get("ts"))
+            except (AttributeError, TypeError):
+                ts = None
+            if ts is None:
+                continue
+            verbrauch = eintrag.get("verbrauch_wh")
+            if not isinstance(verbrauch, (int, float)) or isinstance(verbrauch, bool):
+                continue
+            if verbrauch < 0 or verbrauch > 40000:
+                continue
+            # Wochentag 0=Mo..6=So
+            key = str(ts.weekday())
+            werte.setdefault(key, []).append(float(verbrauch))
+
+        profil: Dict[str, float] = {}
+        for key, liste in werte.items():
+            if len(liste) < min_tage_pro_wochentag:
+                continue
+            # Median statt Mittelwert: ein einzelner Ausreißer-Tag (Party,
+            # Waschmaschine) soll den Plan nicht verschieben.
+            liste = sorted(liste)
+            mitte = len(liste) // 2
+            if len(liste) % 2:
+                median = liste[mitte]
+            else:
+                median = (liste[mitte - 1] + liste[mitte]) / 2.0
+            profil[key] = round(median, 1)
+        return profil
+
+    def get_haushaltsverbrauch_fuer_wochentag(self, wochentag: int) -> Optional[float]:
+        """Geschaetzter Haushaltsverbrauch fuer einen Wochentag (in Wh).
+
+        None, wenn fuer diesen Wochentag noch keine brauchbare Messung
+        vorliegt - dann darf der Plan nicht darauf gestuetzt werden.
+        """
+        profil = self.get_haushaltsprofil_je_tag()
+        wert = profil.get(str(int(wochentag)))
+        if wert is None:
+            return None
+        return float(wert)
+
     def get_surplus_profile_with_forecast(self, forecast_today_wh_qm=None,
                                            forecast_hourly_wh=None):
         """Surplus-Profil je Stunde - Haushaltsprofil fuer den CalcStart.
@@ -744,6 +835,12 @@ class LearningEngine:
         # Tages-Energie integrieren und abends gegen die Prognose kalibrieren (B).
         heute = now.strftime("%Y-%m-%d")
         if self._surplus_tag != heute:
+            # BUGFIX (21.10.2026): Beim Tageswechsel den VERGANGENEN Tag
+            # bilanzieren, BEVOR die Zaehler zurueckgesetzt werden. Ohne
+            # das ginge die Tagesbilanz verloren und die Haushalts-
+            # schaetzung (fuer die Legionellen-Tageswahl) haette nie Daten.
+            if self._surplus_tag is not None:
+                self._bilanziere_vortag(self._surplus_tag)
             self._surplus_tag = heute
             self._day_surplus_wh = 0.0
             self._day_pv_wh = 0.0
@@ -901,6 +998,40 @@ class LearningEngine:
         self._last_temp_time = now
 
     # ── Heizzyklus auswerten ───────────────────────────────
+
+    def _bilanziere_vortag(self, tag: str) -> None:
+        """Bildet die Tagesbilanz des VORTAGES und speichert sie.
+
+        Der Haushaltsverbrauch eines Tages ist die ERZEUGTE Energie minus
+        die EINSPEISUNG. Die Differenz ist der Verbrauch von Haus und
+        Batterie - also genau das, was die Legionellen-Tageswahl braucht:
+        ein Tag mit viel Ertrag ist nutzlos, wenn der Haushalt an diesem
+        Tag mehr zieht als die PV hergibt.
+
+        Ein Tag mit weniger als 5 Minuten Messdauer wird verworfen: dann
+        waere die Bilanz nur ein Ausschnitt des Tages und wuerde den
+        Verbrauch unterschaetzen.
+        """
+        if self._day_pv_wh <= 0:
+            # Keine Erzeugung gemessen - der Tag taugt nicht zur Bilanz.
+            return
+        verbrauch = self._day_pv_wh - self._day_surplus_wh
+        if verbrauch < 0:
+            # Mehr eingespeist als erzeugt: die Batterie hat entladen.
+            # Der Verbrauch laesst sich daraus NICHT ableiten (die
+            # Batterieenergie fehlt in der Bilanz) - der Tag wird
+            # verworfen statt geraten.
+            return
+        self.data.tages_haushalt.append({
+            "ts": tag,
+            "verbrauch_wh": round(verbrauch, 1),
+        })
+        # Historie begrenzen (die Medianberechnung nutzt die letzten
+        # Wochen; aeltere Eintraege bringen nichts).
+        max_eintraege = 120
+        if len(self.data.tages_haushalt) > max_eintraege:
+            self.data.tages_haushalt = self.data.tages_haushalt[-max_eintraege:]
+        self._save()
 
     def _erfasse_stunden_abweichung(self, now: datetime,
                                      forecast_hourly_wh: Dict[int, float],

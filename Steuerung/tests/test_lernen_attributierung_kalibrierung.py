@@ -24,6 +24,110 @@ from priority_control import (  # noqa: E402
 )
 
 
+class TestTagesHaushaltsbilanz:
+    """BUGFIX (21.10.2026): Die Tagesbilanz fuer die Legionellenwahl.
+
+    `surplus_by_hour` taugt NICHT als Haushaltsprofil - es ist nachweislich
+    nur der aktuellste Wert der jeweiligen Stunde (kein Tagesprofil, keine
+    Wochentag-/Saisontrennung, EWMA im 10-Sekunden-Takt).
+
+    Deshalb wurde die Tagesbilanz neu erhoben: erzeugte Energie minus
+    Einspeisung je TAG, getrennt nach Wochentag ausgewertet.
+    """
+
+    def _lern_mit_tagen(self, tmp_path, tage_verbrauch):
+        """Baut eine Engine mit vorgegebenen Tagesverbraeuchen."""
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        eng.data.config.pv_array_size_qm = 10.0
+        for eintrag in tage_verbrauch:
+            eng.data.tages_haushalt.append(dict(eintrag))
+        return eng
+
+    def test_tagesbilanz_wird_beim_tageswechsel_erfasst(self, tmp_path):
+        """Der Vortag wird beim Tageswechsel bilanziert."""
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        eng.data.config.pv_array_size_qm = 10.0
+        tag = datetime(2026, 10, 19, 8, 0)
+        # Ein Tag: 5000 Wh erzeugt, 3000 Wh eingespeist -> 2000 Wh Verbrauch
+        for h in range(8, 20):
+            for k in range(6):
+                t = tag + timedelta(hours=h - 8, minutes=k * 10)
+                eng.update(
+                    now=t, temp_dict={"unten": 40.0}, compressor_is_on=False,
+                    feedin_watt=3000.0 / 72, pv_acpower_watt=0.0,
+                    pv_erzeugung_watt=5000.0 / 72, soc=50.0,
+                    forecast_today_wh_qm=2500.0, forecast_hourly_wh=None,
+                    pv_array_size_qm=10.0,
+                )
+        # Der Folgetag triggert die Bilanzierung des Vortags.
+        eng.update(
+            now=datetime(2026, 10, 20, 8, 0), temp_dict={"unten": 40.0},
+            compressor_is_on=False, feedin_watt=0.0, pv_acpower_watt=0.0,
+            pv_erzeugung_watt=0.0, soc=50.0, forecast_today_wh_qm=2500.0,
+            forecast_hourly_wh=None, pv_array_size_qm=10.0,
+        )
+        assert eng.data.tages_haushalt, "Keine Tagesbilanz erfasst!"
+        eintrag = eng.data.tages_haushalt[0]
+        assert eintrag["ts"] == "2026-10-19"
+        # Der Verbrauch ist die Differenz aus erzeugter und eingespeister
+        # Energie. Die Bilanz misst die Zeit zwischen den Samples
+        # (dt_secs) - der Absolutwert haengt daher vom Sample-Takt ab.
+        # Geprueft wird das VERHAELTNIS: 5000 Wh erzeugt, 3000 Wh
+        # eingespeist -> 40 % der Erzeugung sind Verbrauch.
+        assert eintrag["verbrauch_wh"] > 0
+        erzeugt_wh = 5000.0 / 72 * 71 * 600 / 3600
+        erwartet = (5000.0 - 3000.0) / 72 * 71 * 600 / 3600
+        assert eintrag["verbrauch_wh"] == pytest.approx(erwartet, rel=0.05)
+        assert eintrag["verbrauch_wh"] < erzeugt_wh
+
+    def test_profil_trennt_wochentage(self, tmp_path):
+        """Der Median je Wochentag - ein Ausreisser-Tag verschiebt den
+        Plan nicht."""
+        eng = self._lern_mit_tagen(tmp_path, [
+            {"ts": "2026-10-05", "verbrauch_wh": 1000.0},   # Montag
+            {"ts": "2026-10-12", "verbrauch_wh": 1000.0},   # Montag
+            {"ts": "2026-10-19", "verbrauch_wh": 1000.0},   # Montag
+            {"ts": "2026-10-06", "verbrauch_wh": 3000.0},   # Dienstag
+            {"ts": "2026-10-13", "verbrauch_wh": 3000.0},   # Dienstag
+            {"ts": "2026-10-20", "verbrauch_wh": 3000.0},   # Dienstag
+        ])
+        profil = eng.get_haushaltsprofil_je_tag()
+        assert profil["0"] == pytest.approx(1000.0)   # Montag
+        assert profil["1"] == pytest.approx(3000.0)   # Dienstag
+
+    def test_ausreisser_verschiebt_den_plan_nicht(self, tmp_path):
+        """Ein einzelner Party-Tag darf den Median nicht kippen."""
+        eng = self._lern_mit_tagen(tmp_path, [
+            {"ts": "2026-10-05", "verbrauch_wh": 1000.0},   # Montag
+            {"ts": "2026-10-12", "verbrauch_wh": 1000.0},   # Montag
+            {"ts": "2026-10-19", "verbrauch_wh": 1000.0},   # Montag
+            {"ts": "2026-10-26", "verbrauch_wh": 9000.0},   # Montag (Party)
+        ])
+        profil = eng.get_haushaltsprofil_je_tag()
+        assert profil["0"] == pytest.approx(1000.0), (
+            "Der Ausreisser hat den Median verschoben!"
+        )
+
+    def test_zu_wenig_daten_kein_profil(self, tmp_path):
+        """Ein einzelner Tag je Wochentag reicht nicht."""
+        eng = self._lern_mit_tagen(tmp_path, [
+            {"ts": "2026-10-05", "verbrauch_wh": 1000.0},
+        ])
+        assert eng.get_haushaltsprofil_je_tag() == {}
+        assert eng.get_haushaltsverbrauch_fuer_wochentag(0) is None
+
+    def test_bekannter_wochentag_liefert_wert(self, tmp_path):
+        eng = self._lern_mit_tagen(tmp_path, [
+            {"ts": "2026-10-05", "verbrauch_wh": 1000.0},
+            {"ts": "2026-10-12", "verbrauch_wh": 1100.0},
+        ])
+        # Montag
+        wert = eng.get_haushaltsverbrauch_fuer_wochentag(0)
+        assert wert == pytest.approx(1050.0)
+        # Sonntag: keine Daten
+        assert eng.get_haushaltsverbrauch_fuer_wochentag(6) is None
+
+
 class TestStundenprognoseWirdGenutzt:
     """BUGFIX (21.10.2026): Die Stundensprognose war ein toter Parameter.
 

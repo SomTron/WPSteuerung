@@ -1021,6 +1021,76 @@ def _as_local_datetime(value, local_tz, default=None):
         return value.replace(tzinfo=local_tz)
 
 
+def _legionellen_bedarf_wh(legionellen_cfg, state, flaeche_qm: float):
+    """Energiebedarf fuer eine vollstaendige Legionellenfahrt (in Wh).
+
+    BUGFIX (21.10.2026): Die Tageswahl orientierte sich bisher nur an der
+    ROHEN Prognose. Die Nutzerfrage war aber, ob der Lauf an einem Tag
+    UEBERHAUPT fertig wird: "ist der Forecast gut genug, um den Lauf auch
+    am Freitag fertig zu bekommen?"
+
+    Der Bedarf setzt sich zusammen aus:
+      * Aufheizenergie: (Zieltemperatur - aktuelle Temperatur) x
+        Speichervolumen x spezifische Waermekapazitaet (vereinfacht:
+        1 kWh pro 10 K und 100 L),
+      * Probezeit: die Haltezeit nach Erreichen der Zieltemperatur.
+
+    Der aktuelle Speicherzustand wird ueber `state` genommen - ohne ihn
+    waere der Bedarf nicht berechenbar.
+
+    Rueckgabe: Bedarf in Wh oder None, wenn nicht berechenbar (dann
+    entscheidet die Rohprognose).
+    """
+    try:
+        ziel_c = float(legionellen_cfg.target_temp_c)
+        probezeit_min = float(getattr(legionellen_cfg, "probezeit_minuten", 0) or 0)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if ziel_c <= 0:
+        return None
+
+    # Aktueller Speicherzustand: der untere Fuehler ist der Bezugsfuehler
+    # (kaltester Punkt, Bezugsfuehler fuer das Boiler-Maximum).
+    aktuell_c = None
+    try:
+        aktuell_c = getattr(state.sensors, "t_unten", None)
+        if aktuell_c is None:
+            aktuell_c = getattr(state.sensors, "t_oben", None)
+    except AttributeError:
+        aktuell_c = None
+    if not isinstance(aktuell_c, (int, float)) or isinstance(aktuell_c, bool):
+        return None
+    aktuell_c = float(aktuell_c)
+
+    # Speichervolumen: aus der Boiler-Konfiguration, sonst der Standard
+    # des Analyse-Tools (300 L).
+    volumen_l = 300.0
+    try:
+        boiler = getattr(getattr(state, "config", None), "Boiler", None)
+        if boiler is not None:
+            wert = getattr(boiler, "VOLUMEN_L", None)
+            if isinstance(wert, (int, float)) and not isinstance(wert, bool):
+                volumen_l = float(wert)
+    except AttributeError:
+        pass
+    if volumen_l <= 0:
+        volumen_l = 300.0
+
+    # Waermekapazitaet des Wassers: 1,163 Wh/(l*K). Vereinfacht wird die
+    # Speichermasse (Wasser + Boiler) mit dem Faktor 1,2 gerechnet.
+    delta_k = max(0.0, ziel_c - aktuell_c)
+    aufheiz_wh = delta_k * volumen_l * 1.163 * 1.2
+    # Die Probezeit (Halten der Zieltemperatur) kostet zusaetzlich Energie -
+    # bei 60 C und 30 min sind das rund 30 l * 60 K * 1,163 Wh/(l*K) / 60
+    # min/h = 35 Wh. Der genaue Wert haengt am Lastgang; konservativ
+    # gerechnet wird mit dem Anteil am Tagesbedarf.
+    probe_wh = 0.0
+    if probezeit_min > 0:
+        probe_wh = (volumen_l * 1.163 * max(0.0, ziel_c - 30.0)
+                    * (probezeit_min / 60.0))
+    return aufheiz_wh + probe_wh
+
+
 async def check_periodic_tasks(session, state, last_vpn_check):
     """FÃ¼hrt zeitgesteuerte Hintergrundaufgaben aus."""
     now_dt = _state_now(state)
@@ -1213,18 +1283,153 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                 persist=True,
                             )
                         else:
-                            # DER BESTE TAG nach Prognose. Der bevorzugte
-                            # Tag ist nur noch Tie-Breaker bei exakt gleicher
-                            # Prognose - die Nutzeranforderung lautet
-                            # ausdruecklich "der Beste der drei Tage lt
-                            # Forecast".
-                            bester_tag = max(
-                                tages_prognose,
-                                key=lambda tag: (
-                                    tages_prognose[tag],
-                                    tag == legionellen_cfg.bevorzugter_tag,
-                                ),
-                            )
+                            # BUGFIX (21.10.2026, Nutzerwunsch 2): Der
+                            # beste Tag wird nicht mehr nach ROHER Prognose
+                            # gewaehlt, sondern nach dem VERFUEGBAREN
+                            # UEBERSCHUSS:
+                            #
+                            #   Ueberschuss = Prognose - Hausverbrauch
+                            #
+                            # Der Hausverbrauch kommt aus der gelernten
+                            # Tagesbilanz (echte Tagessummen, getrennt je
+                            # Wochentag). Ohne diese Korrektur wuerde ein
+                            # Samstag mit 3000 Wh/m2 gewaehlt, obwohl der
+                            # Haushalt an diesem Tag 2500 Wh zieht - der
+                            # Lauf kaeme dann nicht fertig.
+                            #
+                            # Zusaetzlich: Der BEVORZUGTE Tag (Freitag)
+                            # wird bevorzugt, SOFERN er die Anforderung
+                            # ebenfalls erfuellt. Das beantwortet die Frage
+                            # "wenn der Forecast gut genug ist, um den
+                            # Lauf auch am Freitag fertig zu bekommen".
+                            #
+                            # Ohne Haushaltsdaten (Lernengine noch kalt)
+                            # faellt die Korrektur weg - dann zaehlt die
+                            # rohe Prognose, wie bisher.
+                            flaeche_qm = 0.0
+                            try:
+                                flaeche_qm = float(getattr(
+                                    getattr(state.priority_config, "wp", None),
+                                    "pv_array_size_qm", 0.0) or 0.0)
+                            except (TypeError, ValueError):
+                                flaeche_qm = 0.0
+                            if flaeche_qm <= 0:
+                                flaeche_qm = 10.0
+                            # Der Kalibrierfaktor der Lernengine: die
+                            # Prognose wird damit auf die Realitaet des
+                            # Standorts geeicht (sonst waere die Prognose
+                            # systematisch zu optimistisch).
+                            fc = 1.0
+                            lern_engine = getattr(state, "learning_engine", None)
+                            if lern_engine is not None:
+                                _ratio = getattr(lern_engine, "get_forecast_ratio", None)
+                                if callable(_ratio):
+                                    try:
+                                        fc = float(_ratio()) or 1.0
+                                    except (TypeError, ValueError):
+                                        fc = 1.0
+
+                            def _ueberschuss_wh(tag, prognose_wh_m2):
+                                """Nutzbare Energie fuer die Prophylaxe an einem Tag."""
+                                erzeugung_wh = prognose_wh_m2 * flaeche_qm * fc
+                                verbrauch_wh = None
+                                if lern_engine is not None:
+                                    _getter = getattr(
+                                        lern_engine,
+                                        "get_haushaltsverbrauch_fuer_wochentag",
+                                        None,
+                                    )
+                                    if callable(_getter):
+                                        try:
+                                            verbrauch_wh = _getter(tag)
+                                        except (TypeError, ValueError):
+                                            verbrauch_wh = None
+                                if verbrauch_wh is None:
+                                    # Keine Haushaltsdaten: die rohe
+                                    # Prognose zaehlt (besser als nichts).
+                                    return erzeugung_wh, None
+                                return erzeugung_wh - float(verbrauch_wh), float(verbrauch_wh)
+
+                            kandidaten_ueberschuss = {}
+                            for (_datum, tag, prognose) in kandidaten:
+                                if tag not in tages_prognose:
+                                    continue
+                                ueberschuss, verbrauch = _ueberschuss_wh(tag, prognose)
+                                kandidaten_ueberschuss[tag] = (ueberschuss, verbrauch)
+
+                            # Auswahl nach ERREICHBARKE, nicht nach
+                            # Maximalitaet.
+                            #
+                            # Die Nutzerfrage war: "wie koennte der Freitag
+                            # als bevorzugter Tag genutzt werden, wenn der
+                            # Forecast gut genug ist, um den Lauf auch am
+                            # Freitag fertig zu bekommen?"
+                            #
+                            # Das ist die Frage, OB DER LAUF AM TAG
+                            # UEBERHAUPT GELINGT - nicht die Frage, welcher
+                            # Tag den groessten Ertrag hat. Deshalb wird
+                            # der BEDARF berechnet und mit dem
+                            # Tagesueberschuss verglichen:
+                            #
+                            #   Bedarf = Energie fuer das Aufheizen auf die
+                            #            Zieltemperatur + Probezeit-Halteenergie
+                            #
+                            # Der bevorzugte Tag gewinnt, SOLANGE sein
+                            # Ueberschuss den Bedarf deckt. Erst wenn er
+                            # NICHT reicht, wird der Tag mit dem groessten
+                            # Ueberschuss gewaehlt.
+                            #
+                            # Ohne Haushaltsbilanz (Lernengine noch kalt)
+                            # ist der Bedarf nicht berechenbar - dann
+                            # entscheidet die Rohprognose.
+                            bevorzugt = legionellen_cfg.bevorzugter_tag
+                            bester_tag = None
+                            bedarf_wh = _legionellen_bedarf_wh(
+                                legionellen_cfg, state, flaeche_qm)
+                            if kandidaten_ueberschuss:
+                                # WICHTIG: `max(dict, key=...)` liefert den
+                                # SCHLUESSEL des gewaehlten Eintrags. Bei
+                                # Gleichstand wird der ERSTE Schluessel
+                                # genommen (nicht der letzte) - deshalb
+                                # wird der Wert hier explizit geholt.
+                                bester_ueberschuss = max(
+                                    kandidaten_ueberschuss,
+                                    key=lambda tag: (
+                                        kandidaten_ueberschuss[tag][0],
+                                        tag == bevorzugt,
+                                    ),
+                                )
+                                bester_ueberschuss_wh = (
+                                    kandidaten_ueberschuss[bester_ueberschuss][0]
+                                )
+                                if bevorzugt in kandidaten_ueberschuss:
+                                    eigener = kandidaten_ueberschuss[bevorzugt][0]
+                                    if bedarf_wh is None:
+                                        # Bedarf unbekannt: die Rohprognose
+                                        # entscheidet, der bevorzugte Tag
+                                        # hat bei Gleichstand Vorrang.
+                                        tol = float(
+                                            getattr(legionellen_cfg,
+                                                    "tagwechsel_ab_diff_wh_qm", 0.0)
+                                            or 0.0
+                                        ) * flaeche_qm * fc
+                                        if eigener >= bester_ueberschuss_wh - tol:
+                                            bester_tag = bevorzugt
+                                    elif eigener >= bedarf_wh:
+                                        # Der bevorzugte Tag REICHT - er wird
+                                        # gewaehlt, auch wenn ein anderer Tag
+                                        # mehr Ertrag verspricht.
+                                        bester_tag = bevorzugt
+                                if bester_tag is None:
+                                    bester_tag = bester_ueberschuss
+                            if bester_tag is None:
+                                bester_tag = max(
+                                    tages_prognose,
+                                    key=lambda tag: (
+                                        tages_prognose[tag],
+                                        tag == bevorzugt,
+                                    ),
+                                )
                             from priority_control import _wochentag_name
                             bester_datum = next(
                                 datum for (datum, tag, _p) in kandidaten
@@ -1243,6 +1448,12 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                             # wurde und wie die Konkurrenz abschnitt.
                             vergleich = ", ".join(
                                 f"{_wochentag_name(tag)}={tages_prognose[tag]:.0f}"
+                                + (
+                                    f"/ueber {kandidaten_ueberschuss[tag][0]:.0f}Wh"
+                                    if tag in kandidaten_ueberschuss
+                                    and kandidaten_ueberschuss[tag][1] is not None
+                                    else ""
+                                )
                                 for tag in sorted(tages_prognose)
                             )
                             state.legionellen_planned_reason = (
