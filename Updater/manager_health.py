@@ -97,18 +97,33 @@ def render_health(health: dict) -> tuple[str, bool]:
     status = str(health.get("status", "unknown"))
     gesund = status == "ok"
     zeilen = ["=== Steuerungs-Health ===", f"Status:       {status}"]
+    # WICHTIG: Die Feldnamen muessen zu denen der API passen. Sie stimmten
+    # ueber langem nicht ueberein - "Version: n/a", "Loop-Alter: n/a" usw.
+    # Und "Regelfehler: 0" war irrefuehrend: es wurde gar kein Wert
+    # gelesen, es stand nur die Vorgabe "0" da.
     zeilen.append(f"Version:      {_fmt(health.get('version'))}")
-    zeilen.append(f"Loop-Alter:   {_fmt(health.get('loop_age_s'))} s")
-    zeilen.append(f"Regelung:     {_fmt(health.get('last_control_ok'))}")
-    zeilen.append(f"Sensoren:     {_fmt(health.get('last_sensor_ok'))}")
-    fehler = health.get("control_errors")
+    zeilen.append(f"Loop-Alter:   {_fmt(health.get('loop_heartbeat_age_s'))} s")
+    zeilen.append(f"Regelung:     {_fmt(health.get('last_control_success'))}")
+    zeilen.append(f"Sensoren:     {_fmt(health.get('last_sensor_success'))}")
+    fehler = health.get("consecutive_control_errors")
     zeilen.append(f"Regelfehler:  {_fmt(fehler, '0')}")
     hardware = health.get("hardware")
     if isinstance(hardware, dict):
-        gpio_ok = hardware.get("gpio_ok")
-        zeilen.append(f"GPIO:         {_fmt(gpio_ok)}")
-        if hardware.get("last_switch_error"):
-            zeilen.append(f"              {hardware['last_switch_error']}")
+        if "kompressor_ein" in hardware:
+            zeilen.append(
+                f"Kompressor:   {'EIN' if hardware['kompressor_ein'] else 'AUS'}"
+            )
+        if hardware.get("verifizierungsfehler"):
+            zeilen.append(
+                f"              {hardware['verifizierungsfehler']} "
+                "Kompressor-Verifizierungsfehler"
+            )
+        for feld, label in (
+            ("sensor_fehler_seit", "Sensorfehler seit"),
+            ("druck_fehler_seit", "Druckfehler seit"),
+        ):
+            if hardware.get(feld):
+                zeilen.append(f"              {label}: {hardware[feld]}")
     persistenz = health.get("last_state_write_ok")
     if persistenz is not None:
         zeilen.append(f"Snapshot:     {_fmt(persistenz)}")
@@ -126,8 +141,12 @@ def render_health(health: dict) -> tuple[str, bool]:
         zeilen.append("SD-Karte:     ok")
     if not gesund:
         zeilen.append("")
-        zeilen.append("Hinweis: 'degraded' heisst meist ein externer Dienst,")
-        zeilen.append("nicht zwingend ein Fehler der Heizungssteuerung.")
+        if status != "ok":
+            zeilen.append("Hinweis: 'degraded' heisst meist ein externer Dienst,")
+            zeilen.append("nicht zwingend ein Fehler der Heizungssteuerung.")
+        else:
+            zeilen.append("Hinweis: Die Steuerung laeuft, aber es gibt einen")
+            zeilen.append("Warnhinweis (siehe oben).")
     return "\n".join(zeilen), gesund
 
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import urllib.error
+from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -59,15 +61,22 @@ def test_health_degraded_wird_als_krank_gemeldet_mit_hinweis():
 
 
 def test_health_zeigt_hardware_und_persistenz():
+    """Hardware-Info und Persistenz-Fehler muessen sichtbar sein.
+
+    Die Felder "gpio_ok"/"last_switch_error" wurden hier nie von der API
+    geliefert - der Test pruefte ein Feldbild, das es nicht gab. Jetzt
+    prueft er die Felder, die /health tatsaechlich liefert.
+    """
     text, _ = mh.render_health(
         {
             "status": "degraded",
-            "hardware": {"gpio_ok": False, "last_switch_error": "GPIO-Fehler"},
+            "hardware": {"kompressor_ein": True, "verifizierungsfehler": 2},
             "last_state_write_ok": False,
             "last_state_write_error": "SD-Karte read-only",
         }
     )
-    assert "GPIO-Fehler" in text
+    assert "Kompressor:   EIN" in text
+    assert "2 Kompressor-Verifizierungsfehler" in text
     assert "SD-Karte read-only" in text
 
 
@@ -188,3 +197,89 @@ def test_cli_quality_gibt_exitcode_2_bei_warnung(tmp_path, capsys):
     rc = mh.main(["quality", "--quality-report", str(pfad)])
     assert rc == 2
     assert "Analyse-Qualitaet" in capsys.readouterr().out
+
+
+# --- Kopplung API <-> Manager -------------------------------------------
+#
+# Der Manager las seit langem Feldnamen, die die API gar nicht liefert:
+# "Version: n/a", "Loop-Alter: n/a", "Regelung: n/a", "Sensoren: n/a".
+# Und "Regelfehler: 0" war irrefuehrend - es wurde gar kein Wert gelesen,
+# es stand nur die Vorgabe "0" da.
+#
+# Der Test nimmt die ECHTE API-Antwort und laesst den Manager damit
+# arbeiten. Jede Umbenennung eines API-Feldes faellt hier sofort auf.
+
+
+def _mock_state():
+    """Ein State, der alle von /health gelesenen Felder traegt."""
+    jetzt = datetime.now()
+    return SimpleNamespace(
+        clock=SimpleNamespace(now=lambda: jetzt),
+        loop_heartbeat=jetzt - timedelta(seconds=3),
+        last_control_success=jetzt - timedelta(seconds=2),
+        last_sensor_success=jetzt - timedelta(seconds=1),
+        last_status_snapshot_at=jetzt,
+        consecutive_control_errors=0,
+        last_data_update_ok=True,
+        last_state_write_ok=True,
+        last_state_write_error=None,
+        kompressor_verification_error_count=0,
+        last_sensor_error_time=None,
+        last_pressure_error_time=None,
+        control=SimpleNamespace(
+            notaus_aktiv=False, notaus_grund=None, notaus_ts=None,
+            kompressor_ein=False,
+        ),
+    )
+
+
+@pytest.fixture
+def api_antwort(monkeypatch):
+    import api
+    original = api.shared_state
+    api.shared_state = _mock_state()
+    try:
+        yield api.health_status()
+    finally:
+        api.shared_state = original
+
+
+def test_alle_manager_felder_kommen_aus_der_api(api_antwort):
+    """Jeder vom Manager gelesene Wert muss in der API-Antwort stehen."""
+    text, _ = mh.render_health(api_antwort)
+    assert "n/a" not in text, f"Manager zeigt Felder als unbekannt:\n{text}"
+
+
+def test_regelfehler_zeigen_den_echten_wert(api_antwort):
+    """Vorher stand hier immer "0" - auch wenn der echte Wert unbekannt war."""
+    api_antwort["consecutive_control_errors"] = 7
+    text, _ = mh.render_health(api_antwort)
+    assert "Regelfehler:  7" in text
+
+
+def test_sd_karte_wird_angezeigt(api_antwort):
+    api_antwort["sd_karte"] = {"sd_ok": True, "hinweise": []}
+    text, gesund = mh.render_health(api_antwort)
+    assert "SD-Karte:     ok" in text
+    assert gesund is True
+
+    api_antwort["sd_karte"] = {
+        "sd_ok": False, "hinweise": ["Schreibtest fehlgeschlagen: kein Platz"],
+    }
+    text, gesund = mh.render_health(api_antwort)
+    assert "SD-Karte:     WARNUNG" in text
+    assert "kein Platz" in text
+    assert gesund is False, "eine kaputte SD-Karte muss als ungesund gelten"
+
+
+def test_version_wird_aus_der_api_uebernommen(api_antwort):
+    api_antwort["version"] = "abc1234"
+    text, _ = mh.render_health(api_antwort)
+    assert "abc1234" in text
+
+
+def test_hardware_status_wird_angezeigt(api_antwort):
+    api_antwort["hardware"] = {"kompressor_ein": True, "verifizierungsfehler": 3}
+    text, _ = mh.render_health(api_antwort)
+    assert "Kompressor:   EIN" in text
+    assert "3 Kompressor-Verifizierungsfehler" in text

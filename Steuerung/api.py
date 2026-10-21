@@ -588,7 +588,46 @@ def health_status():
         "last_state_write_ok": snapshot_ok,
         "last_state_write_error": getattr(state, "last_state_write_error", None),
         "sd_karte": _sd_karten_status(),
+        "version": _versions_kennung(),
+        "hardware": _hardware_status(state),
     }
+
+
+def _versions_kennung() -> str:
+    """Kennung des laufenden Code-Stands (Git-Hash, '+' bei lokalen Aenderungen).
+
+    Gecacht (code_revision), also kostet der Aufruf nichts. Der Manager
+    zeigt die Kennung an - nur so laesst sich nach einem Deploy auch
+    wirklich pruefen, ob der neue Code laeuft.
+    """
+    try:
+        import code_revision
+        return code_revision.kennung()
+    except Exception:
+        return "unbekannt"
+
+
+def _hardware_status(state) -> dict:
+    """Kurzstatus der Hardware fuer den Healthcheck.
+
+    Der Kompressor-Verifizierungsfehler zaehlt, wie oft das Relais nicht
+    bestaetigt werden konnte - das ist das wichtigste Hardware-Signal
+    und lag bisher nirgends sichtbar.
+    """
+    status = {}
+    control = getattr(state, "control", None)
+    if control is not None:
+        status["kompressor_ein"] = bool(getattr(control, "kompressor_ein", False))
+    verifizierung = getattr(state, "kompressor_verification_error_count", None)
+    if isinstance(verifizierung, int):
+        status["verifizierungsfehler"] = verifizierung
+    sensor_fehler = getattr(state, "last_sensor_error_time", None)
+    if isinstance(sensor_fehler, datetime):
+        status["sensor_fehler_seit"] = sensor_fehler.isoformat()
+    druck_fehler = getattr(state, "last_pressure_error_time", None)
+    if isinstance(druck_fehler, datetime):
+        status["druck_fehler_seit"] = druck_fehler.isoformat()
+    return status
 
 
 # --- Fehlerhistorie ---------------------------------------------------------
