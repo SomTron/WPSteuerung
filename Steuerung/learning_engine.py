@@ -1029,7 +1029,19 @@ class LearningEngine:
         #   actual:   tatsaechlich erzeugte Wh in dieser Stunde
         #   deviation: actual - forecast (positiv = Prognose zu niedrig)
         if forecast_hourly_wh and erzeugung_w is not None and dt_secs > 0:
+            vorher = len(self.data.forecast_hourly_deviations)
             self._erfasse_stunden_abweichung(now, forecast_hourly_wh, erzeugung_w, dt_secs)
+            # BUGFIX (21.10.2026): Die Abweichungen wurden gesammelt,
+            # aber erst beim naechsten Zyklusabschluss gespeichert - das
+            # kann 12 Stunden dauern (nachts laeuft keine WP) oder bis
+            # zum Neustart. Auf dem Pi stand das Feld dadurch dauerhaft
+            # auf "0 Eintraege".
+            #
+            # Gespeichert wird nur, wenn sich der Bestand geaendert hat
+            # (neue Stunde) - das ist selten und schreibt nicht bei
+            # jedem 10-Sekunden-Takt auf die Platte.
+            if len(self.data.forecast_hourly_deviations) != vorher:
+                self._save()
 
         # Stundensurplus-Profil: Nur bei AUSgeschaltetem Kompressor sampeln,
         # sonst verfaelscht die WP-Leistung das Haushaltsmuster. Persistenz

@@ -146,6 +146,88 @@ class TestVerbrauchsprofilUndMittagstief:
         assert label == ""
 
 
+class TestPersistenz:
+    """BUGFIX (21.10.2026): Die gelernten Daten muessen gespeichert werden.
+
+    Die Stunden-Prognoseabweichung wurde gesammelt, aber erst beim
+    naechsten Zyklusabschluss gespeichert - das kann 12 Stunden
+    dauern (nachts laeuft keine WP) oder bis zum Neustart. Auf dem Pi
+    stand das Feld dadurch dauerhaft auf "0 Eintraege".
+    """
+
+    def test_stundenabweichung_wird_gespeichert(self, tmp_path):
+        import json
+        pfad = tmp_path / "lern.json"
+        eng = LearningEngine(data_path=str(pfad))
+        hourly = {h: 300.0 for h in range(7, 19)}
+        for k in range(6):
+            eng.update(
+                now=datetime(2026, 10, 21, 12, 0) + timedelta(minutes=10 * k),
+                temp_dict={"unten": 40.0}, compressor_is_on=False,
+                feedin_watt=0.0, pv_acpower_watt=0.0, pv_erzeugung_watt=1500.0,
+                soc=50.0, forecast_today_wh_qm=2500.0,
+                forecast_hourly_wh=hourly, pv_array_size_qm=10.0,
+            )
+        assert pfad.exists(), "Die Lerndaten wurden nicht gespeichert"
+        with open(pfad, encoding="utf-8") as f:
+            gespeichert = json.load(f)
+        assert "2026-10-21-12" in (gespeichert.get("forecast_hourly_deviations") or {}), (
+            "Die Stundenabweichung fehlt in der gespeicherten Datei - "
+            "sie ginge bei jedem Neustart verloren")
+
+    def test_taegliche_bilanz_wird_gespeichert(self, tmp_path):
+        import json
+        pfad = tmp_path / "lern.json"
+        eng = LearningEngine(data_path=str(pfad))
+        for h in range(24):
+            for k in range(6):
+                _schritt(eng, datetime(2026, 10, 21, h, 10 * k),
+                         hausverbrauch=400.0)
+        # Folgetag triggert die Bilanzierung
+        _schritt(eng, datetime(2026, 10, 22, 8, 0), hausverbrauch=400.0)
+        with open(pfad, encoding="utf-8") as f:
+            gespeichert = json.load(f)
+        assert gespeichert.get("tages_haushalt"), (
+            "Die Tagesbilanz fehlt in der gespeicherten Datei")
+
+
+class TestAutoLearningWirkt:
+    """Das Gelernte muss Entscheidungen tatsaechlich beeinflussen."""
+
+    def test_profil_verschiebt_den_calcstart(self, tmp_path):
+        """Ein Verbrauchsprofil muss die Heizdauer verlaengern."""
+        from priority_control import evaluate_calculated_start
+        from json_config import WPSteuerungConfig
+        cfg = WPSteuerungConfig()
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        start = datetime(2026, 10, 5, 0, 0)
+        for d in range(7):
+            tag = start + timedelta(days=d)
+            for h in range(24):
+                w = 1800.0 if h in (13, 14, 15) else 400.0
+                for k in range(6):
+                    _schritt(eng, tag + timedelta(hours=h, minutes=10 * k),
+                             hausverbrauch=w, stundenprofil=True)
+        profil = eng.get_surplus_profile()
+        assert profil[13] == pytest.approx(1800.0, abs=1.0)
+
+        def _calc(p):
+            return evaluate_calculated_start(
+                cfg.calculated_start, {"unten": 40.0, "oben": 45.0, "mittig": 42.0},
+                now_hour=8, now_minute=0, forecast_wh_qm=1500.0,
+                feedin_watt=300.0, soc=40.0, pv_acpower=300.0,
+                solar_stale=False, pv_fenster_stunde=10.0,
+                pv_fenster_aktiv=True, surplus_profile=p,
+            )
+        mit = _calc(profil)
+        ohne = _calc(None)
+        assert "Mittagstief" in mit.grund, "Das Profil wirkt nicht auf den CalcStart"
+        assert "Mittagstief" not in ohne.grund
+        # Mehr Verbrauchsspitzen -> mehr Heizzeit noetig
+        assert "2.9h" in mit.grund, mit.grund
+        assert "0.7h" in ohne.grund, ohne.grund
+
+
 class TestTagesbilanzEchterHausverbrauch:
     """Die Bilanz muss den echten Hausverbrauch messen, nicht PV-Export."""
 
