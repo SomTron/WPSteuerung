@@ -91,6 +91,27 @@ Begrenzung: 14 Tage Historie **und** ein Gesamtbudget von 60 MB (15 MB für
 `error.log`). Das Byte-Budget ist auf dem Pi entscheidend, weil
 `/var/log/wps` im RAM liegt.
 
+### Uploads (WP-Manager 9/14/16/18/21)
+
+Die Upload-Optionen laden **nicht** nur die aktive Datei hoch, sondern den
+**vollständigen Datenbestand** als `tar.gz`:
+
+| Option | Inhalt des Archivs |
+|---|---|
+| 9) CSV | `heizungsdaten.csv` + alle Monatsarchive (`heizungsdaten_2026-09.csv`) |
+| 14) Log | `heizungssteuerung.log` + alle Tages-Generationen |
+| 16) Entscheidungslog | `entscheidungs_log.jsonl` + alle `.old.N`-Generationen |
+| 18) Zyklen | laufende `zyklen.csv` + alle aus `logs/analyse_*/` |
+| 21) Lerndaten | `learning_data.json` + Sicherungskopien |
+
+Ohne das ging bei rotierenden Daten die komplette Historie verloren – ein
+Upload der aktiven Datei liefert nach der Tagesrotation praktisch nur den
+laufenden Tag. Die Datei-Auswahl liegt in `Steuerung/datenbestand.py` und
+ist damit für Anzeige und Upload dieselbe.
+
+> ⚠️ Die Daten landen **öffentlich** auf catbox.moe und sind ohne Login
+> abrufbar. Der Upload bleibt daher bestätigungspflichtig.
+
 ---
 
 ## 📂 Projektstruktur

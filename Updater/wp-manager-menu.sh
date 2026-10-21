@@ -357,9 +357,14 @@ verify_service_action() {
 
 # Einheitlicher, bewusst bestaetigungspflichtiger Catbox-Upload. Originaldaten
 # werden nur in ein privates temporaeres Verzeichnis kopiert und danach geloescht.
-upload_file() {
+#
+# upload_fertig() bekommt eine fertige Datei (z. B. ein tar.gz). Der restliche
+# Teil (Groessengrenze, Rueckfrage, curl) ist fuer Einzeldatei und Datenbestand
+# identisch - deshalb steckt er in dieser einen Funktion.
+upload_fertig() {
     source_file="$1"
     label="$2"
+    upload_name="$3"
     max_bytes="${WPS_UPLOAD_MAX_BYTES:-209715200}"
     case "$max_bytes" in
         ''|*[!0-9]*)
@@ -390,8 +395,8 @@ upload_file() {
         printf "${RED}✗ Upload zu gross: %s Bytes (Limit %s).${NC}\n" "$file_size" "$max_bytes"
         return 1
     fi
-    if ! command -v gzip >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-        printf "${RED}✗ Upload benoetigt curl und gzip.${NC}\n"
+    if ! command -v curl >/dev/null 2>&1; then
+        printf "${RED}✗ Upload benoetigt curl.${NC}\n"
         return 1
     fi
     printf "${YELLOW}ACHTUNG: '%s' wird oeffentlich auf catbox.moe hochgeladen.${NC}\n" "$label"
@@ -402,7 +407,30 @@ upload_file() {
         [Jj]*) ;;
         *) printf "Upload abgebrochen.\n"; return 0 ;;
     esac
+    printf "Lade %s (%s) ...\n" "$label" "$(du -h "$source_file" | cut -f1)"
+    upload_url=$(curl --connect-timeout 15 --max-time 300 -fsS \
+        -F 'reqtype=fileupload' -F "fileToUpload=@$source_file" \
+        https://catbox.moe/user/api.php)
+    curl_rc=$?
+    if [ "$curl_rc" -ne 0 ]; then
+        printf "${RED}✗ Upload fehlgeschlagen (curl RC=%s).${NC}\n" "$curl_rc"
+        return 1
+    fi
+    if ! printf '%s' "$upload_url" | grep -Eq '^https://files\.catbox\.moe/[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)?$'; then
+        printf "${RED}✗ Unerwartete Catbox-Antwort.${NC}\n"
+        return 1
+    fi
+    printf "${GREEN}✓ Upload erfolgreich.${NC}\nURL: ${BLUE}%s${NC}\n" "$upload_url"
+}
 
+# Ladt eine einzelne Datei hoch (gzip-komprimiert).
+upload_file() {
+    source_file="$1"
+    label="$2"
+    if ! command -v gzip >/dev/null 2>&1; then
+        printf "${RED}✗ Upload benoetigt gzip.${NC}\n"
+        return 1
+    fi
     temp_dir=$(mktemp -d 2>/dev/null) || {
         printf "${RED}✗ Temporaeres Verzeichnis konnte nicht erstellt werden.${NC}\n"
         return 1
@@ -415,35 +443,57 @@ upload_file() {
         printf "${RED}✗ Komprimierung fehlgeschlagen.${NC}\n"
         return 1
     fi
-    compressed_size=$(wc -c < "$temp_dir/$upload_name" 2>/dev/null | tr -d ' ')
-    case "$compressed_size" in
-        ''|*[!0-9]*)
-            rm -rf "$temp_dir"
-            printf "${RED}✗ Komprimierte Dateigröße konnte nicht ermittelt werden.${NC}\n"
-            return 1
-            ;;
-    esac
-    if [ "$compressed_size" -gt "$max_bytes" ]; then
-        rm -rf "$temp_dir"
-        printf "${RED}✗ Komprimierte Datei überschreitet das Limit (%s > %s Bytes).${NC}\n" \
-            "$compressed_size" "$max_bytes"
-        return 1
-    fi
-    printf "Lade %s (%s komprimiert) ...\n" "$label" "$(du -h "$temp_dir/$upload_name" | cut -f1)"
-    upload_url=$(curl --connect-timeout 15 --max-time 300 -fsS \
-        -F 'reqtype=fileupload' -F "fileToUpload=@$temp_dir/$upload_name" \
-        https://catbox.moe/user/api.php)
-    curl_rc=$?
+    upload_fertig "$temp_dir/$upload_name" "$label" "$upload_name"
+    upload_rc=$?
     rm -rf "$temp_dir"
-    if [ "$curl_rc" -ne 0 ]; then
-        printf "${RED}✗ Upload fehlgeschlagen (curl RC=%s).${NC}\n" "$curl_rc"
+    return $upload_rc
+}
+
+# Laedt den VOLLSTAENDIGEN Datenbestand hoch - nicht nur die aktive Datei.
+#
+# Bei rotierenden Daten liegt die Historie in Dateien neben der aktiven:
+# Log-Generationen (heizungssteuerung.log.2026-10-19), CSV-Monatsarchive
+# (heizungsdaten_2026-09.csv), Entscheidungslog-Generationen (.old.1) und
+# Lern-Backups. Ein Upload nur der aktiven Datei liefert davon nichts.
+#
+# $1 = Datenart (log|csv|jsonl|lern|zyklen)
+# $2 = Pfad der aktiven Datei
+# $3 = Label (Basisname des Archivs)
+# $4... = optionale Suchverzeichnisse (z. B. logs/)
+upload_bestand() {
+    art="$1"
+    pfad="$2"
+    label="$3"
+    shift 3
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf "${RED}✗ Upload des Datenbestands benoetigt python3.${NC}\n"
         return 1
     fi
-    if ! printf '%s' "$upload_url" | grep -Eq '^https://files\.catbox\.moe/[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)?$'; then
-        printf "${RED}✗ Unerwartete Catbox-Antwort.${NC}\n"
+    temp_dir=$(mktemp -d 2>/dev/null) || {
+        printf "${RED}✗ Temporaeres Verzeichnis konnte nicht erstellt werden.${NC}\n"
+        return 1
+    }
+    trap 'rm -rf "$temp_dir"' 0 1 2 3 15
+    archiv="$temp_dir/${label}.tar.gz"
+    # Suchverzeichnisse ueber die Umgebung uebergeben: Newline als Trenner
+    # erlaubt Leerzeichen im Pfad (z. B. "csv log") ohne Quote-Hackerei.
+    suchverz=""
+    for _dir in "$@"; do
+        suchverz="${suchverz}${_dir}
+"
+    done
+    anzahl=$(WPS_SUCHVERZ="$suchverz" python3 "$TARGET_DIR/datenbestand.py" \
+        --art "$art" --pfad "$pfad" --tar-out "$archiv" 2>/dev/null)
+    if [ -z "$anzahl" ] || [ ! -s "$archiv" ]; then
+        rm -rf "$temp_dir"
+        printf "${RED}✗ Datenbestand konnte nicht zusammengestellt werden.${NC}\n"
         return 1
     fi
-    printf "${GREEN}✓ Upload erfolgreich.${NC}\nURL: ${BLUE}%s${NC}\n" "$upload_url"
+    printf "${CYAN}Enthaltene Dateien: %s${NC}\n" "$anzahl"
+    upload_fertig "$archiv" "$label (vollstaendiger Datenbestand)" "${label}.tar.gz"
+    upload_rc=$?
+    rm -rf "$temp_dir"
+    return $upload_rc
 }
 
 preflight
@@ -1406,19 +1456,19 @@ WPMODI
     printf "6) ⏹️    Stop Service\n"
     printf "7) ▶️    Start Service\n"
     printf "8) 📂   List Files\n"
-    printf "9) ☁️    Upload CSV to Catbox\n"
+    printf "9) ☁️    Upload CSV + Monatsarchive to Catbox\n"
     printf "10) 🆕  Update WP-Manager (this script)\n"
     printf "11) 🔍  Query Logs by Time (enter datetime)\n"
     printf "12) ⏱️  Query Logs by Duration (last N hours)\n"
     printf "13) 📊  Service-Details (systemctl status)\n"
-    printf "14) ☁️  Upload Log to Catbox\n"
+    printf "14) ☁️  Upload Log (alle Tage) to Catbox\n"
     printf "15) 📖  Entscheidungs-Log anzeigen (letzte Entscheidungen)\n"
-    printf "16) ☁️  Upload entscheidungs_log.jsonl to Catbox\n"
+    printf "16) ☁️  Upload Entscheidungslog (alle Generationen) to Catbox\n"
     printf "17) 📊  Zyklen-Analyse anzeigen (zyklen.csv)\n"
-    printf "18) ☁️  Upload zyklen.csv to Catbox\n"
+    printf "18) ☁️  Upload zyklen.csv (alle Analysen) to Catbox\n"
     printf "19) 🩺  Lauf-Status / letzte Abstuerze (letzter_lauf.json)\n"
     printf "20) ⏰  Auto-Analyse (Status, Testlauf, Timer, Journal)\n"
-    printf "21) 🧠  Upload learning_data.json to Catbox\n"
+    printf "21) 🧠  Upload learning_data.json (+ Backups) to Catbox\n"
         printf "22) 🩺  Steuerungs-Health (API /health)\n"
     printf "23) 📈  Analyse-Qualitaet (quality_report.json)\n"
     printf "24) 🔑  API-Schluessel (erzeugen / anzeigen / entfernen)\n"
@@ -1519,7 +1569,9 @@ WPMODI
             ;;
         8) ls -la "$TARGET_DIR"; wait_for_key ;;
         9)
-            upload_file "$HEATING_CSV" "heizungsdaten.csv"
+            # Nicht nur die aktuelle CSV: die Monatsarchive (heizungsdaten_
+            # 2026-09.csv usw.) liegen daneben und sind Teil der Historie.
+            upload_bestand csv "$HEATING_CSV" "heizungsdaten"
             wait_for_key
             ;;
         10)
@@ -1559,13 +1611,18 @@ WPMODI
             wait_for_key
             ;;
         14)
-            upload_file "$LOG_FILE" "heizungssteuerung.log"
+            # Das Betriebslog rotiert taeglich (heizungssteuerung.log.2026-10-19,
+            # ...). Die aktive Datei enthaelt nur noch den laufenden Tag - ohne
+            # die Generationen waere der Upload praktisch leer.
+            upload_bestand log "$LOG_FILE" "heizungssteuerung"
             wait_for_key
             ;;
         15) show_entcheidungs_log ;;
         16)
             ENT_LOG_FILE="${WPS_ENT_LOG_FILE:-$TARGET_DIR/entscheidungs_log.jsonl}"
-            upload_file "$ENT_LOG_FILE" "entscheidungs_log.jsonl"
+            # Das Entscheidungslog rotiert in Generationen (.old.1 ... .old.7).
+            # Nur die aktive Datei hochzuladen verliert den grossten Teil.
+            upload_bestand jsonl "$ENT_LOG_FILE" "entscheidungs_log"
             wait_for_key
             ;;
         17)
@@ -1599,13 +1656,30 @@ WPMODI
                               if (u) printf "  %-22s %s\n", "reason_code=unbekannt", u }' \
                         "$ZYKLEN_CSV"
                 fi
+                # Zusaetzlich: die zyklen.csv aus den Analyse-Laeufen. Vorher
+                # war nur die laufende Historie sichtbar - die Auswertungen
+                # aus logs/analyse_*/ blieben unberuecksichtigt.
+                zyk_weitere=$(python3 "$TARGET_DIR/datenbestand.py" --art zyklen \
+                    --pfad "$ZYKLEN_CSV" --suchverzeichnis "$REPO_ROOT/logs" \
+                    2>/dev/null | grep -v -F -x "$ZYKLEN_CSV")
+                if [ -n "$zyk_weitere" ]; then
+                    printf "\n${CYAN}=== Weitere Auswertungen (logs/analyse_*) ===${NC}\n"
+                    printf '%s\n' "$zyk_weitere" | while IFS= read -r _z; do
+                        [ -n "$_z" ] || continue
+                        printf "\n${CYAN}--- %s (%s Zeilen) ---${NC}\n" "$_z" \
+                            "$(wc -l < "$_z" 2>/dev/null | tr -d ' ')"
+                        tail -n 5 "$_z"
+                    done
+                fi
                 wait_for_key
             fi
             ;;
         18)
             ZYKLEN_CSV=$(finde_zyklen_csv)
             if [ -n "$ZYKLEN_CSV" ]; then
-                upload_file "$ZYKLEN_CSV" "zyklen.csv"
+                # Alle zyklen.csv: die laufende Historie PLUS die aus den
+                # Analyse-Laeufen unter logs/analyse_*/.
+                upload_bestand zyklen "$ZYKLEN_CSV" "zyklen" "$REPO_ROOT/logs"
             else
                 printf "${RED}Fehler: keine zyklen.csv gefunden.${NC}\\n"
             fi
@@ -1613,7 +1687,8 @@ WPMODI
             ;;
         20) analysis_menu ;;
         21)
-            upload_file "$LEARNING_JSON" "learning_data.json"
+            # Lerndaten + die Sicherungskopien daneben (.korrupt-...).
+            upload_bestand lern "$LEARNING_JSON" "learning_data"
             wait_for_key
             ;;
         19)

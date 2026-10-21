@@ -196,6 +196,49 @@ def test_upload_ist_bestaetigungspflichtig_begrenzt_und_bereinigt():
     assert 'rm -rf "$temp_dir"' in manager
 
 
+def test_upload_optionen_nehmen_den_vollstaendigen_datenbestand():
+    """REGRESSION: die Uploads luden nur die AKTIVE Datei hoch.
+
+    Bei rotierenden Daten ging damit die ganze Historie verloren:
+      * heizungssteuerung.log    - Generationen .2026-10-19, .1 daneben
+      * heizungsdaten.csv        - Monatsarchive heizungsdaten_2026-09.csv
+      * entscheidungs_log.jsonl  - Generationen .old.1 ... .old.7
+      * learning_data.json       - Sicherungskopien .korrupt-...
+
+    Deshalb laufen die Optionen 9/14/16/18/21 jetzt ueber upload_bestand,
+    das den Bestand als tar.gz buendelt.
+    """
+    manager, _ = _updater_scripts()
+
+    # Kein Upload darf mehr direkt eine einzelne Datei hochladen.
+    for zeile in (
+        'upload_file "$LOG_FILE"',
+        'upload_file "$HEATING_CSV"',
+        'upload_file "$ENT_LOG_FILE"',
+        'upload_file "$ZYKLEN_CSV"',
+        'upload_file "$LEARNING_JSON"',
+    ):
+        assert zeile not in manager, f"{zeile} laedt nur die aktive Datei hoch"
+
+    # Stattdessen: der Bestand als Archiv.
+    assert 'upload_bestand log "$LOG_FILE"' in manager
+    assert 'upload_bestand csv "$HEATING_CSV"' in manager
+    assert 'upload_bestand jsonl "$ENT_LOG_FILE"' in manager
+    assert 'upload_bestand lern "$LEARNING_JSON"' in manager
+    assert "datenbestand.py" in manager
+
+
+def test_upload_bestaetigung_bleibt_auch_beim_archiv():
+    """Auch der Archiv-Upload muss bestaetigungspflichtig bleiben -
+    die Daten landen oeffentlich auf catbox.moe."""
+    manager, _ = _updater_scripts()
+    block = manager.split("upload_fertig() {", 1)[1].split("\n}", 1)[0]
+    assert "Upload jetzt ausfuehren? (j/N)" in block
+    assert "WPS_UPLOAD_MAX_BYTES" in block
+    # Der Archiv-Weg nutzt dieselbe bestaetigte Funktion.
+    assert 'upload_fertig "$archiv"' in manager
+
+
 # ------------------- Korrektheits- und Härtungsverträge -------------------
 
 def test_kpis_werden_mit_pflichtparametern_aufgerufen():
