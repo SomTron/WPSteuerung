@@ -1,0 +1,58 @@
+#!/bin/sh
+# wps - Kurzstart des WP-Managers
+#
+# Bisher war der Aufruf umstaendlich:
+#     cd /home/patrik/WPSteuerung
+#     sh Updater/wp-manager.sh
+#
+# Dieser Wrapper macht daraus "wps". Er ist ortsfest: er findet sein
+# eigenes Verzeichnis selbst, laeuft also aus jedem Arbeitsverzeichnis -
+# und, wichtiger, auch remote:
+#     ssh patrik@raspberrypiz2 wps
+#
+# Einmalig in die PATH legen (dann geht "wps" ueberall, auch aus einem
+# Unterverzeichnis oder per SSH):
+#     sudo ln -s ~/WPSteuerung/Updater/wps /usr/local/bin/wps
+#
+# Alternativ ohne sudo, in ~/.bashrc:
+#     alias wps='~/WPSteuerung/Updater/wps'
+#
+# Das Menue selbst bleibt in wp-manager-menu.sh, der stabile Startweg in
+# wp-manager.sh (mit Syntax-Check und Rueckfall auf die letzte gute
+# Kopie). Dieser Wrapper ruft genau diesen Launcher auf - er umgeht
+# bewusst KEINEN der Sicherungen.
+
+set -u
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || {
+    printf 'wps: eigenes Verzeichnis nicht ermittelbar.\n' >&2
+    exit 1
+}
+
+LAUNCHER="$SCRIPT_DIR/wp-manager.sh"
+
+if [ ! -f "$LAUNCHER" ]; then
+    printf 'wps: der Manager-Launcher fehlt: %s\n' "$LAUNCHER" >&2
+    printf '      Ist das WPSteuerung-Repository? (Erwartet: Updater/wp-manager.sh)\n' >&2
+    exit 1
+fi
+
+# --hilfe: nur die Bedienung zeigen, nichts starten.
+case "${1:-}" in
+    -h|--hilfe|--help)
+        cat <<EOF
+WP-Manager starten:          wps
+Letzte gute Kopie starten:   wps --downgrade
+
+Einmalig in die PATH legen (damit "wps" ueberall geht):
+    sudo ln -s $SCRIPT_DIR/wps /usr/local/bin/wps
+
+Der Wrapper findet sein Verzeichnis selbst - ein "cd" ist nicht noetig.
+Auch remote moeglich:  ssh $(id -un)@$(hostname) wps
+EOF
+        exit 0
+        ;;
+esac
+
+# Alle anderen Argumente (z. B. --downgrade) gehen an den Launcher.
+exec sh "$LAUNCHER" "$@"

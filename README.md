@@ -137,6 +137,46 @@ nachher wegwerfen müsste.
 
 ---
 
+## 🖥️ WP-Manager starten
+
+Bisher war der Aufruf umständlich:
+
+```bash
+cd /home/patrik/WPSteuerung
+sh Updater/wp-manager.sh
+```
+
+Der **`cd` ist überflüssig** – der Launcher findet sein Verzeichnis selbst
+(`SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)`). Mit dem neuen Kurzstart
+`Updater/wps` geht es noch kürzer:
+
+```bash
+~/WPSteuerung/Updater/wps          # aus jedem Verzeichnis
+wps                                # einmalig in die PATH gelegt
+ssh patrik@raspberrypiz2 wps        # auch remote
+```
+
+**Einmalig einrichten** (dann geht `wps` überall, auch aus
+Unterverzeichnissen und per SSH):
+
+```bash
+sudo ln -s ~/WPSteuerung/Updater/wps /usr/local/bin/wps
+```
+
+Ohne `sudo` in die `~/.bashrc`:
+
+```bash
+alias wps='~/WPSteuerung/Updater/wps'
+```
+
+Der Wrapper ruft bewusst den **stabilen Launcher** `wp-manager.sh` auf –
+nicht direkt das Menü. Der Launcher prüft die Menü-Syntax und fällt auf die
+letzte funktionierende Kopie zurück (`wps --downgrade` startet sie direkt).
+Ein kaputtes Menü-Update nimmt so nicht auch noch den einzigen Startweg
+mit.
+
+---
+
 ## 💾 SD-Karten-Health & Neustart-Schutz
 
 Auf dem Pi trägt die SD-Karte fast alles: die Heizungsdaten-CSV, das

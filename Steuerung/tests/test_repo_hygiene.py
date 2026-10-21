@@ -21,6 +21,8 @@ import shutil
 import subprocess
 import tempfile
 
+import pytest
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Verzeichnisse ohne eigenen Quellcode (Venvs, Caches, Fremd-Backups)
@@ -93,6 +95,88 @@ def test_keine_python_dateien_mit_bom():
             if f.read(3) == b"\xef\xbb\xbf":
                 mit_bom.append(os.path.relpath(pfad, REPO_ROOT))
     assert not mit_bom, "Dateien mit UTF-8-BOM:\n" + "\n".join(mit_bom)
+
+
+# --- Shell-Skripte: CRLF waere auf dem Pi ein Syntaxfehler -------------
+def _git(*args):
+    """Fuehrt ein git-Kommando im Repo aus. Gibt None bei Fehlern zurueck."""
+    try:
+        res = subprocess.run(
+            ["git", *args], cwd=REPO_ROOT, capture_output=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    return res.stdout
+
+
+def test_shell_skripte_haben_keine_crlf_zeilenenden():
+    """REGRESSION: CRLF in einem Shell-Skript ist auf dem Pi fatal.
+
+    `sh` bricht bei einem CRLF-Zeilenumbruch mit "syntax error near
+    unexpected token $'\\r'" ab. Der Manager waere dann tot - und das
+    faellt auf dem Pi erst auf, wenn er gebraucht wird.
+
+    Geprueft wird der GIT-INDEX: das ist exakt der Stand, der deployed
+    wird. Die Arbeitskopie kann unter Windows CRLF haben (core.autocrlf),
+    ohne dass das etwas bedeutet - im Repository und auf dem Pi steht LF.
+    """
+    listing = _git("ls-files", "*.sh")
+    if listing is None:
+        pytest.skip("git nicht verfuegbar")
+    schuldige = []
+    for pfad in listing.decode("utf-8", "replace").splitlines():
+        if not pfad.strip():
+            continue
+        inhalt = _git("show", f":{pfad}")
+        if inhalt and b"\r\n" in inhalt:
+            schuldige.append(pfad)
+    assert not schuldige, (
+        "Shell-Skripte mit CRLF (Syntaxfehler auf dem Pi):\n"
+        + "\n".join(schuldige)
+    )
+
+
+def test_gitattributes_erzwingt_lf_fuer_shellskripte():
+    """Die .gitattributes ist der eigentliche Schutz.
+
+    Ohne `*.sh text eol=lf` landen CRLF-Skripte beim Deploy auf dem Pi.
+    """
+    attributes = os.path.join(REPO_ROOT, ".gitattributes")
+    assert os.path.exists(attributes), ".gitattributes fehlt"
+    with open(attributes, "r", encoding="utf-8") as f:
+        inhalt = f.read()
+    assert "text eol=lf" in inhalt, (
+        "die Regel 'text eol=lf' fehlt - Shellskripte koennten dann mit "
+        "CRLF auf dem Pi landen"
+    )
+    assert "*.sh" in inhalt, "die Regel muss fuer *.sh gelten"
+
+
+def test_wps_wrapper_ist_vollstaendig_und_nutzt_den_stabilen_launcher():
+    """Der Kurzstart `wps` muss existieren und den STABILEN Launcher nutzen.
+
+    wp-manager.sh prueft die Menue-Syntax und faellt auf die letzte gute
+    Kopie zurueck. Ruft der Wrapper stattdessen direkt das Menue auf,
+    waere dieser Schutz umgangen.
+    """
+    wrapper = os.path.join(REPO_ROOT, "Updater", "wps")
+    assert os.path.exists(wrapper), "Updater/wps fehlt (Kurzstart 'wps')"
+    with open(wrapper, "r", encoding="utf-8") as f:
+        inhalt = f.read()
+    # Der Wrapper muss den STABILEN Launcher aufrufen. wp-manager.sh
+    # prueft die Menue-Syntax und faellt auf die letzte gute Kopie
+    # zurueck - das darf der Wrapper nicht umgehen.
+    assert 'exec sh "$LAUNCHER"' in inhalt, (
+        "der Wrapper muss den Launcher (wp-manager.sh) aufrufen"
+    )
+    assert 'sh "$SCRIPT_DIR/wp-manager-menu.sh"' not in inhalt, (
+        "der Wrapper darf das Menue nicht direkt starten - der Launcher "
+        "ist der Weg mit Syntax-Check und Rueckfall"
+    )
+    # Ortfest: der Wrapper darf kein cwd voraussetzen.
+    assert 'dirname "$0"' in inhalt, "der Wrapper muss sein Verzeichnis selbst finden"
 
 
 # --- WebApp: Inline-JavaScript muss syntaktisch gueltig sein --------------
