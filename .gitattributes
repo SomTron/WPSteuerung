@@ -1,6 +1,10 @@
 # Shellskripte MUESEN LF haben - CRLF macht sie unter /bin/sh nicht startbar
 *.sh text eol=lf
 Updater/*.sh text eol=lf
+# Der Kurzstart "wps" hat bewusst keine .sh-Endung (der Befehl soll kurz
+# sein) - ohne eigene Regel wuerde er unter die Windows-Autocrlf-Regel
+# fallen und in der Arbeitskopie CRLF bekommen.
+Updater/wps text eol=lf
 *.service text eol=lf
 
 # Python/JSON/HTML: normale Textkonvention

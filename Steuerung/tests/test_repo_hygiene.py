@@ -121,17 +121,29 @@ def test_shell_skripte_haben_keine_crlf_zeilenenden():
     Geprueft wird der GIT-INDEX: das ist exakt der Stand, der deployed
     wird. Die Arbeitskopie kann unter Windows CRLF haben (core.autocrlf),
     ohne dass das etwas bedeutet - im Repository und auf dem Pi steht LF.
+
+    Es wird NICHT nach der Endung gefiltert, sondern nach dem Shebang:
+    der Kurzstart "wps" hat bewusst keine .sh-Endung.
     """
-    listing = _git("ls-files", "*.sh")
+    listing = _git("ls-files")
     if listing is None:
         pytest.skip("git nicht verfuegbar")
     schuldige = []
+    geprueft = 0
     for pfad in listing.decode("utf-8", "replace").splitlines():
         if not pfad.strip():
             continue
         inhalt = _git("show", f":{pfad}")
-        if inhalt and b"\r\n" in inhalt:
+        if not inhalt:
+            continue
+        if not inhalt.startswith(b"#!"):
+            continue
+        if b"sh" not in inhalt.split(b"\n", 1)[0]:
+            continue
+        geprueft += 1
+        if b"\r\n" in inhalt:
             schuldige.append(pfad)
+    assert geprueft > 0, "es wurde kein Shell-Skript gefunden - der Test waert nichts"
     assert not schuldige, (
         "Shell-Skripte mit CRLF (Syntaxfehler auf dem Pi):\n"
         + "\n".join(schuldige)
