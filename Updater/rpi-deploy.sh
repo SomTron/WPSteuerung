@@ -147,6 +147,34 @@ reload_oder_ende() {
 #               3 = sonstiges
 FETCH_STATUS=0
 FETCH_OUTPUT=""
+# Klassifiziert die Ausgabe eines fehlgeschlagenen 'git fetch'.
+#   1 = Netzwerk/Host nicht erreichbar
+#   2 = SSH-Key nicht akzeptiert (KEIN Netzproblem!)
+#   3 = sonstige Ursache
+#
+# Wichtig: Das Netz- und das Key-Problem muessen unterscheidbar sein. Vorher
+# stand in den Fehlerpfaden fest "print_fetch_hint 1" - es wurde also immer
+# "Netz/WireGuard pruefen" gemeldet, auch wenn der SSH-Key schuld war. Das
+# fuehrte bei der Fehlersuche in die falsche Richtung.
+klassifiziere_fetch_fehler() {
+    case "$1" in
+        *"Permission denied"*|*"publickey"*|*"Host key verification failed"*|\
+        *"Too many authentication failures"*|*"Bad configuration option"*|\
+        *"Could not open a connection to your authentication agent"*|\
+        *"Load key "*|*"sign_and_send_pubkey"*|*"no matching host key"*|\
+        *"agent refused"*)
+            echo 2 ;;
+        *"Could not resolve hostname"*|*"Couldn't resolve hostname"*|\
+        *"Temporary failure in name resolution"*|*"Connection refused"*|\
+        *"Connection timed out"*|*"Operation timed out"*|\
+        *"No route to host"*|*"Network is unreachable"*|\
+        *"Connection reset"*|*"Could not read from remote repository"*)
+            echo 1 ;;
+        *)
+            echo 3 ;;
+    esac
+}
+
 fetch_remote_info() {
     FETCH_STATUS=0
     FETCH_OUTPUT=""
@@ -161,23 +189,28 @@ fetch_remote_info() {
     if [ "$_fetch_rc" = "0" ]; then
         return 0
     fi
-    case "$FETCH_OUTPUT" in
-        *"Permission denied"*|*"publickey"*|*"Host key verification failed"*|\
-        *"Too many authentication failures"*|*"Bad configuration option"*|\
-        *"Could not open a connection to your authentication agent"*|\
-        *"Load key "*|*"sign_and_send_pubkey"*|*"no matching host key"*|\
-        *"agent refused"*)
-            FETCH_STATUS=2 ;;
-        *"Could not resolve hostname"*|*"Couldn't resolve hostname"*|\
-        *"Temporary failure in name resolution"*|*"Connection refused"*|\
-        *"Connection timed out"*|*"Operation timed out"*|\
-        *"No route to host"*|*"Network is unreachable"*|\
-        *"Connection reset"*|*"Could not read from remote repository"*)
-            FETCH_STATUS=1 ;;
-        *)
-            FETCH_STATUS=3 ;;
-    esac
+    FETCH_STATUS=$(klassifiziere_fetch_fehler "$FETCH_OUTPUT")
     return 0
+}
+
+# Meldet einen fehlgeschlagenen 'git fetch' mit der RICHTIGEN Ursache.
+# $1 = Ausgabe des git-fetch, $2 = Kontext (z. B. "Option 1")
+melde_fetch_fehler() {
+    _status=$(klassifiziere_fetch_fehler "$1")
+    case "$_status" in
+        2)
+            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - der SSH-Key wurde nicht akzeptiert."
+            color_print "$YELLOW" "Das ist KEIN Netzproblem - der Key fehlt oder seine Passphrase wurde nicht abgefragt."
+            ;;
+        1)
+            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - GitHub nicht erreichbar."
+            color_print "$YELLOW" "Bitte Netz/WireGuard pruefen und erneut versuchen."
+            ;;
+        *)
+            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen."
+            ;;
+    esac
+    print_fetch_hint "$_status" "$1"
 }
 
 # Erklaert das Ergebnis von fetch_remote_info knapp und faktisch korrekt.
@@ -297,12 +330,14 @@ case "$choice" in
         fi
         printf "\n${CYAN}Hole Informationen von GitHub...${NC}\n"
         # OHNE BatchMode: hier darf (und soll) ssh nach der Passphrase fragen.
-        # stderr wird deshalb NICHT unterdrueckt - der Passphrase-Hinweis geht
-        # ueber /dev/tty und muss fuer den Nutzer sichtbar bleiben.
-        if ! git fetch --all > /dev/null; then
-            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - GitHub nicht erreichbar?"
-            color_print "$YELLOW" "Bitte Netz/WireGuard pruefen und erneut versuchen."
-            print_fetch_hint 1 ""
+        # Die Ausgabe wird erfasst, um die URSACHE zu erkennen (SSH-Key oder
+        # Netzwerk) - vorher stand hier fest "Netzwerk", auch wenn der Key
+        # schuld war. Die Passphrase-Abfrage laeuft ueber /dev/tty und
+        # bleibt sichtbar.
+        _fetch_out=$(git fetch --all 2>&1)
+        if [ $? -ne 0 ]; then
+            [ -n "$_fetch_out" ] && printf '%s\n' "$_fetch_out"
+            melde_fetch_fehler "$_fetch_out"
             exit 1
         fi
 
@@ -365,9 +400,10 @@ case "$choice" in
         2)
         printf "\n${CYAN}Hole neueste Branch-Informationen...${NC}\n"
         # Passphrase darf hier interaktiv abgefragt werden (kein BatchMode).
-        if ! git fetch --all > /dev/null; then
-            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - GitHub nicht erreichbar?"
-            print_fetch_hint 1 ""
+        _fetch_out=$(git fetch --all 2>&1)
+        if [ $? -ne 0 ]; then
+            [ -n "$_fetch_out" ] && printf '%s\n' "$_fetch_out"
+            melde_fetch_fehler "$_fetch_out"
             exit 1
         fi
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"
@@ -413,9 +449,10 @@ case "$choice" in
         3)
         printf "\n${CYAN}Hole neueste Branch-Informationen...${NC}\n"
         # Passphrase darf hier interaktiv abgefragt werden (kein BatchMode).
-        if ! git fetch --all > /dev/null; then
-            color_print "$RED" "FEHLER: 'git fetch' fehlgeschlagen - GitHub nicht erreichbar?"
-            print_fetch_hint 1 ""
+        _fetch_out=$(git fetch --all 2>&1)
+        if [ $? -ne 0 ]; then
+            [ -n "$_fetch_out" ] && printf '%s\n' "$_fetch_out"
+            melde_fetch_fehler "$_fetch_out"
             exit 1
         fi
         printf "\n${CYAN}Verfuegbare Branches:${NC}\n"

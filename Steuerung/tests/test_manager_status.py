@@ -531,3 +531,78 @@ def test_nicht_interaktiver_deploy_wird_unterstuetzt():
         "der Wrapper muss alle Argumente an den Launcher durchreichen"
     )
     assert "--deploy" in wrapper, "der Wrapper nennt '--deploy' nicht in der Hilfe"
+
+
+def test_unbekannte_argumente_werden_abgewiesen():
+    """REGRESSION: ein Tippfehler im Argument startete still das Menue.
+
+    "wps --deply" lieferte das volle Menue - der Fehler war nicht zu
+    sehen. Jetzt gibt es eine Meldung und Exitcode 2.
+    """
+    text = _menu_text()
+    assert "--*)" in text, "unbekannte Argumente werden nicht abgewiesen"
+    assert "Unbekanntes Argument" in text
+
+
+# --- git-fetch-Diagnose: SSH-Key oder Netzwerk? ------------------------
+
+
+def _deploy_text():
+    return (UPDATER_DIR / "rpi-deploy.sh").read_text(encoding="utf-8")
+
+
+def test_fetch_fehlerpfade_werten_die_ursache_aus():
+    """REGRESSION: es wurde immer "Netzwerk" gemeldet.
+
+    Auf dem Pi schlug der Deploy mit "Permission denied (publickey)" fehl
+    (der SSH-Key war nach dem Reboot nicht im Agent) - gemeldet wurde
+    "GitHub nicht erreichbar? Bitte Netz/WireGuard pruefen". Das fuehrte
+    bei der Fehlersuche in die falsche Richtung: das VPN war aktiv, der
+    Key fehlte.
+    """
+    text = _deploy_text()
+    assert 'print_fetch_hint 1 ""' not in text, (
+        "die Fehlerpfade melden immer noch fest 'Netzwerk' - die Ursache "
+        "wird nicht ausgewertet"
+    )
+    assert "melde_fetch_fehler" in text, "die Ursachen-Auswertung fehlt"
+    assert "klassifiziere_fetch_fehler" in text, "die Klassifikation fehlt"
+
+
+def test_fetch_fehler_wird_korrekt_klassifiziert():
+    """Die echte Shell-Funktion muss publickey als Key-Problem erkennen."""
+    import shutil
+    import subprocess
+
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("keine POSIX-Shell verfuegbar")
+    deploy = UPDATER_DIR / "rpi-deploy.sh"
+    res = subprocess.run(
+        [
+            sh, "-c",
+            "sed -n '/^klassifiziere_fetch_fehler() {/,/^}/p' \"$1\" > /tmp/_kf.sh; "
+            ". /tmp/_kf.sh; rm -f /tmp/_kf.sh; klassifiziere_fetch_fehler \"$2\"",
+            "sh", str(deploy),
+            "git@github.com: Permission denied (publickey).\n"
+            "fatal: Could not read from remote repository.",
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert res.stdout.strip() == "2", (
+        f"publickey muss als SSH-Key-Problem erkannt werden, war {res.stdout.strip()!r}"
+    )
+
+
+def test_header_zeigt_den_ssh_key_status():
+    """Der Header muss zeigen, ob ein SSH-Key geladen ist.
+
+    Nach einem Reboot ist der ssh-agent weg - der Key wird nicht mehr
+    angeboten und jeder Deploy scheitert. Das sieht man so VOR dem
+    Versuch statt erst in der Fehlermeldung.
+    """
+    text = _menu_text()
+    assert "SSH_KEY_STATE" in text, "der SSH-Key-Status fehlt"
+    assert "ssh-add -l" in text, "der Key-Status wird nicht geprueft"
+    assert "Deploy moeglich" in text, "die Meldung nennt keine Abhilfe"
+    assert "ssh-add ~/.ssh/id_ed25519" in text, "die Abhilfe fehlt"

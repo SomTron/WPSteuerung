@@ -545,6 +545,15 @@ case "${1:-}" in
         fi
         exit "$deploy_rc"
         ;;
+    --*)
+        # Unbekanntes Argument: eine Meldung ist besser als ein Menue, das
+        # den Fehler stillschweigend ignoriert (so verhielt es sich vorher:
+        # "wps --deply" startete einfach das Menue).
+        printf "${RED}Unbekanntes Argument: %s${NC}\n" "$1" >&2
+        printf "Bekannt: --deploy (nur deployen), --downgrade (letzte gute Kopie)\n" >&2
+        printf "Ohne Argument startet das Menue.\n" >&2
+        exit 2
+        ;;
 esac
 
 
@@ -1313,6 +1322,22 @@ while true; do
     ANALYSIS_NEXT=$(systemctl list-timers wp-analyse.timer --all --no-pager --no-legend 2>/dev/null | awk 'NR==1 {print $1 " " $2 " " $3}')
     [ -z "$ANALYSIS_NEXT" ] && ANALYSIS_NEXT="kein Lauf geplant"
 
+    # SSH-Key-Status fuer GitHub. Nach einem Reboot ist der ssh-agent weg
+    # (er laeuft nicht als Dienst mit) - der Key wird dann nicht mehr
+    # angeboten und jeder Deploy scheitert an "Permission denied
+    # (publickey)". Das sieht man hier VOR dem Deploy statt erst in der
+    # Fehlermeldung. Die Pruefung selbst ist billig (ssh-add -l).
+    SSH_KEY_STATE=""
+    _ssh_keys=$(ssh-add -l 2>/dev/null | grep -c . 2>/dev/null || echo 0)
+    case "$_ssh_keys" in
+        ''|*[!0-9]*) _ssh_keys=0 ;;
+    esac
+    if [ "$_ssh_keys" -gt 0 ]; then
+        SSH_KEY_STATE="${GREEN}✓ SSH-Key geladen${NC} (Deploy moeglich)"
+    else
+        SSH_KEY_STATE="${RED}✗ kein SSH-Key - Deploy schlaegt fehl${NC} (ssh-add ~/.ssh/id_ed25519)"
+    fi
+
     # VPN / WireGuard Status
     if systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
         VPN_STATUS="${GREEN}✓ AKTIV${NC}"
@@ -1468,6 +1493,13 @@ WPMODI
     printf "Analyse:   Timer %s/%s, Autostart %s | nächst: %s\n" \
         "$ANALYSIS_ACTIVE" "$ANALYSIS_ENABLED" "$ANALYSIS_ENABLED" "$ANALYSIS_NEXT"
     printf "VPN:       %b%s\n" "$VPN_STATUS" "$VPN_INFO"
+    # SSH-Key-Status: nach einem Reboot ist der ssh-agent weg, der Key wird
+    # nicht mehr angeboten und JEDER Deploy scheitert an
+    # "Permission denied (publickey)". Das sieht man hier sofort, statt
+    # es erst im Deploy-Fehler zu erfahren.
+    if [ -n "$SSH_KEY_STATE" ]; then
+        printf "GitHub:    %b\n" "$SSH_KEY_STATE"
+    fi
     printf "Lauf:      %b\n" "$LAUF_STATUS"
     SYS_LINE="System:   ${HOST_UP:-unbekannt}"
     [ -n "$CPU_TEMP" ] && SYS_LINE="$SYS_LINE | CPU $CPU_TEMP"
