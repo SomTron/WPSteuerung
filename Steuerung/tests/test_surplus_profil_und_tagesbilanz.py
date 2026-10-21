@@ -323,6 +323,76 @@ class TestWochentagsUndSaisonTrennung:
         assert saison_von_datum("kaputt") == "unbekannt"
 
 
+class TestPvFensterUeberschuss:
+    """BUGFIX (21.10.2026): Das PV-Fenster bewertete die BRUTTO-Erzeugung.
+
+    Entscheidend ist aber der Ueberschuss: bei 8000 W Erzeugung endete
+    das Fenster bei Hausverbrauch 500 / 1800 / 4000 W immer bei Stunde
+    17 - der Verbrauch hatte keinen Einfluss.
+    """
+
+    def test_ueberschuss_bewertet_den_hausverbrauch(self):
+        from logic_utils import pv_fenster_ueberschuss
+        prognose = {h: 8000.0 for h in range(10, 18)}
+        # Ohne Profil: Brutto-Bewertung (fail-open, wie bisher)
+        assert pv_fenster_ueberschuss(prognose, 9.0, 300.0, 1.0)[0] == 17
+        # Ruhiger Haushalt: Fenster bleibt offen
+        ruhig = {h: 500.0 for h in range(24)}
+        assert pv_fenster_ueberschuss(
+            prognose, 9.0, 300.0, 1.0, haushalt_profil=ruhig)[0] == 17
+        # Hoher Verbrauch: kein Ueberschuss mehr -> Fenster geschlossen
+        hoch = {h: 7800.0 for h in range(24)}
+        assert pv_fenster_ueberschuss(
+            prognose, 9.0, 300.0, 1.0, haushalt_profil=hoch) is None
+
+    def test_leeres_profil_bleibt_fail_open(self):
+        from logic_utils import pv_fenster_ueberschuss
+        prognose = {h: 8000.0 for h in range(10, 18)}
+        assert pv_fenster_ueberschuss(
+            prognose, 9.0, 300.0, 1.0, haushalt_profil={})[0] == 17
+
+
+class TestStundenKorrekturfaktor:
+    """BUGFIX (21.10.2026): Die gesammelten Stundenabweichungen wurden
+    gespeichert, aber NIRGENDS gelesen. Sie sind genau die Information,
+    die fuer das PV-Fenster-Ende fehlt: zu welcher Tageszeit liegt die
+    Prognose daneben?
+    """
+
+    @staticmethod
+    def _lern(eng, prognose_wm2, tatsaechlich_w, tage=6):
+        from datetime import datetime, timedelta
+        hourly = {h: prognose_wm2 for h in range(10, 18)}
+        start = datetime(2026, 10, 5, 0, 0)
+        for d in range(tage):
+            tag = start + timedelta(days=d)
+            for h in range(24):
+                if h not in hourly:
+                    continue
+                for k in range(6):
+                    eng.update(
+                        now=tag + timedelta(hours=h, minutes=10 * k),
+                        temp_dict={"unten": 40.0}, compressor_is_on=False,
+                        feedin_watt=0.0, pv_acpower_watt=0.0,
+                        pv_erzeugung_watt=tatsaechlich_w, soc=50.0,
+                        forecast_today_wh_qm=2500.0, forecast_hourly_wh=hourly,
+                        pv_array_size_qm=10.0,
+                    )
+
+    def test_korrekturfaktor_wird_gelernt(self, tmp_path):
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        # Prognose 800 W/m2 (x10 m2 = 8000 W), tatsaechlich nur 3000 W
+        self._lern(eng, 800.0, 3000.0)
+        faktor = eng.get_stunden_korrekturfaktor()
+        assert faktor, "Kein Korrekturfaktor gelernt"
+        for h, f in faktor.items():
+            assert 0.3 <= f <= 0.4, f"Stunde {h}: Faktor {f} statt ~0,375"
+
+    def test_ohne_daten_kein_faktor(self, tmp_path):
+        eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+        assert eng.get_stunden_korrekturfaktor() == {}
+
+
 class TestTagesbilanzEchterHausverbrauch:
     """Die Bilanz muss den echten Hausverbrauch messen, nicht PV-Export."""
 

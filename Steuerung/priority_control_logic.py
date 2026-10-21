@@ -26,7 +26,7 @@ from collections import deque
 from logic_utils import (
     check_log_throttle,
     normalize_forecast_wh_qm,
-    pv_fenster_endstunde,
+    pv_fenster_ueberschuss,
     saison_von_datum,
 )
 from legionellen_plan import clear_plan
@@ -706,9 +706,37 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     pv_fenster_reserve_h = (
         float(getattr(fc_forecast_cfg, "pv_fenster_reserve_min", 30.0) or 0.0) / 60.0
     )
+    # BUGFIX (21.10.2026): Die gelernten Stunden-Korrekturfaktoren
+    # werden auf die Prognose angewendet. Die Prognose allein sagt
+    # nicht, ZU WELCHER TAGESZEIT sie danebenliegt - das weiss nur
+    # die Lernengine. Ohne diese Korrektur endet das PV-Fenster zu
+    # spaet, wenn die Prognose am Nachmittag zu optimistisch ist: die
+    # Steuerung wartet dann auf PV, das nie kommt.
+    stunden_korrektur = {}
+    _korr_getter = getattr(learning_engine, "get_stunden_korrekturfaktor", None)
+    if callable(_korr_getter):
+        try:
+            stunden_korrektur = _korr_getter() or {}
+        except (TypeError, ValueError):
+            stunden_korrektur = {}
+    hourly_korrigiert = None
+    if hourly_forecast_watt and stunden_korrektur:
+        hourly_korrigiert = {}
+        for h, w in hourly_forecast_watt.items():
+            try:
+                hh = int(h)
+            except (TypeError, ValueError):
+                continue
+            f = float(stunden_korrektur.get(hh, 1.0) or 1.0)
+            hourly_korrigiert[hh] = float(w) * f
     jetzt_stunde = now_local.hour + now_local.minute / 60.0
-    fenster = pv_fenster_endstunde(
-        hourly_forecast_watt, jetzt_stunde, pv_fenster_min_w, fc_ratio
+    # BUGFIX (21.10.2026): Das Fenster bewertet den UEBERSCHUSS
+    # (Erzeugung minus Hausverbrauch), nicht die Brutto-Erzeugung.
+    # Das gelernte Haushaltsprofil liefert den Verbrauch je Stunde.
+    fenster = pv_fenster_ueberschuss(
+        hourly_korrigiert or hourly_forecast_watt,
+        jetzt_stunde, pv_fenster_min_w, fc_ratio,
+        haushalt_profil=surplus_profil,
     )
     pv_fenster_stunde = fenster[0] if fenster else None
     # Die Lage, die das Quellen-Gate braucht: PV zaehlt nur dann als Quelle,

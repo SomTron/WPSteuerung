@@ -31,6 +31,56 @@ def forecast_kwh_m2_to_wh_m2(value):
     return wert * 1000.0
 
 
+def pv_fenster_ueberschuss(
+    hourly_watt,
+    jetzt_h,
+    schwelle_w,
+    fc_ratio=1.0,
+    haushalt_profil=None,
+):
+    """Letzte Stunde mit erwartetem PV-UEBERSCHUSS >= Schwelle.
+
+    BUGFIX (21.10.2026): Das PV-Fenster bewertete die BRUTTO-Erzeugung
+    ("liegt die Sonne noch ueber der Schwelle?"). Das ist die falsche
+    Groesse: entscheidend ist, ob nach Abzug des Hausverbrauchs noch
+    etwas uebrig bleibt. Gemessen: bei 8000 W Erzeugung endet das
+    Fenster nach der Sonnenuntergangsgrenze in allen drei Faellen
+    (Haus 500 / 1800 / 4000 W) bei Stunde 17 - der Hausverbrauch
+    hatte keinen Einfluss. Bei 4000 W Hausverbrauch ist der
+    Ueberschuss aber nur noch 4000 W, und die WP koennte den
+    Speicher gar nicht mehr fuellen.
+
+    Mit `hausverbrauch_profil` ({Stunde: Watt}) wird der erwartete
+    Verbrauch je Stunde abgezogen. Fehlt das Profil, wird wie bisher
+    die Brutto-Erzeugung bewertet (fail-open: lieber ein zu langes
+    Fenster als ein grundlos geschlossenes).
+
+    Rueckgabe: (stunde, erwarteter_ueberschuss_watt) oder None.
+    """
+    if haushalt_profil:
+        abgezogen = {}
+        for h, w in (hourly_watt or {}).items():
+            try:
+                hh = int(h)
+                ww = float(w)
+            except (TypeError, ValueError):
+                continue
+            verbrauch = 0.0
+            for hh2, wv in haushalt_profil.items():
+                try:
+                    if int(hh2) == hh:
+                        verbrauch = float(wv)
+                        break
+                except (TypeError, ValueError):
+                    continue
+            abgezogen[hh] = max(0.0, ww - verbrauch)
+        if abgezogen:
+            return pv_fenster_endstunde(
+                abgezogen, jetzt_h, schwelle_w, fc_ratio
+            )
+    return pv_fenster_endstunde(hourly_watt, jetzt_h, schwelle_w, fc_ratio)
+
+
 def pv_fenster_endstunde(hourly_watt, jetzt_h, schwelle_w, fc_ratio=1.0):
     """Letzte Stunde mit erwarteter PV >= Schwelle (heute, ab jetzt).
 

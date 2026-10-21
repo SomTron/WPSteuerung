@@ -772,6 +772,49 @@ class LearningEngine:
 
         return nutzbar if len(nutzbar) >= 4 else None
 
+    def get_stunden_korrekturfaktor(self) -> Dict[int, float]:
+        """Je Stunde: gelernter Korrekturfaktor auf die Prognose.
+
+        BUGFIX (21.10.2026): Die gesammelten Stunden-Abweichungen
+        ("zu welcher Tageszeit liegt die Prognose daneben?") wurden
+        gespeichert, aber NIRGENDS gelesen. Sie sind genau die
+        Information, die fuer die PV-Fenster-Ende-Berechnung fehlt:
+        wenn die Prognose um 16 Uhr zu optimistisch ist, endet das
+        PV-Fenster frueher als berechnet.
+
+        Der Faktor ist der Quotient aus tatsaechlicher und prognostizier-
+        ter Erzeugung, je Stunde ueber die letzten Tage (Median, damit ein
+        einzelner Ausreisser-Tag nicht durchschlaegt). Begrenzt auf
+        0,2 .. 2,0, damit ein Ausreisser die Steuerung nicht kippt.
+
+        Returns: {Stunde: Faktor} - leer, wenn noch nichts gelernt ist.
+        """
+        werte: Dict[int, List[float]] = {}
+        for key, e in self.data.forecast_hourly_deviations.items():
+            try:
+                stunde = int(str(key).rsplit("-", 1)[-1])
+                prognose = float(e.get("forecast", 0.0))
+                actual = float(e.get("actual", 0.0))
+            except (TypeError, ValueError, KeyError):
+                continue
+            # Nur relative Abweichungen sind nutzbar - eine Prognose von
+            # fast 0 W liefert keinen stabilen Quotienten.
+            if prognose <= 1.0 or actual <= 0:
+                continue
+            werte.setdefault(stunde, []).append(actual / prognose)
+        faktor: Dict[int, float] = {}
+        for stunde, quotienten in werte.items():
+            quotienten = sorted(quotienten)[-14:]
+            if len(quotienten) < 3:
+                continue
+            mitte = len(quotienten) // 2
+            if len(quotienten) % 2:
+                median = quotienten[mitte]
+            else:
+                median = (quotienten[mitte - 1] + quotienten[mitte]) / 2.0
+            faktor[stunde] = round(min(2.0, max(0.2, median)), 3)
+        return faktor
+
     def get_forecast_hourly_deviations(self) -> Dict:
         """Stundenscharfe Forecast-Abweichungen {stunde: {forecast, actual, deviation}}.
 
