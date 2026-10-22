@@ -14,6 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 
+# BUGFIX (22.10.2026): Die Solar-Ausfall-Alarmierung wurde in das
+# Modul solar_stale_alarm verschoben. Die Tests patchen die
+# Drosselung dort statt in main.
+import solar_stale_alarm  # noqa: E402
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 
@@ -47,7 +52,8 @@ async def test_solar_ausfall_wird_gemeldet(monkeypatch):
         return True
 
     monkeypatch.setattr(m.control_logic, "send_telegram_message", send)
-    monkeypatch.setattr(m, "check_log_throttle", lambda *a, **k: True)
+    monkeypatch.setattr(
+            solar_stale_alarm, "check_log_throttle", lambda *a, **k: True)
 
     state = SimpleNamespace(
         bot_token="t",
@@ -81,7 +87,8 @@ async def test_wiederholung_nur_nach_intervall(monkeypatch):
         throttle_aufrufe.append((key, interval_minutes))
         return False  # Intervall noch nicht abgelaufen
 
-    monkeypatch.setattr(m, "check_log_throttle", _throttle)
+    monkeypatch.setattr(
+            solar_stale_alarm, "check_log_throttle", _throttle)
     state = SimpleNamespace(
         bot_token="t",
         config=SimpleNamespace(Telegram=SimpleNamespace(CHAT_ID="1", BOT_TOKEN="t")),
@@ -95,7 +102,7 @@ async def test_wiederholung_nur_nach_intervall(monkeypatch):
     # Jede Meldung nach der ersten wird gedrosselt, mit dem definierten Intervall.
     assert len(throttle_aufrufe) == 4, throttle_aufrufe
     assert all(
-        key == "_alarm_solar_stale" and iv == m.STALE_ALARM_MINUTEN
+        key == "_alarm_solar_stale" and iv == solar_stale_alarm.STALE_ALARM_MINUTEN
         for key, iv in throttle_aufrufe
     ), throttle_aufrufe
 
@@ -118,7 +125,8 @@ async def test_langer_ausfall_wiederholt_sich(monkeypatch):
         durchlauf.append(1)
         return len(durchlauf) >= 2
 
-    monkeypatch.setattr(m, "check_log_throttle", _throttle)
+    monkeypatch.setattr(
+            solar_stale_alarm, "check_log_throttle", _throttle)
     state = SimpleNamespace(
         bot_token="t",
         config=SimpleNamespace(Telegram=SimpleNamespace(CHAT_ID="1", BOT_TOKEN="t")),
@@ -176,7 +184,8 @@ async def test_ohne_bot_token_kein_absturz(monkeypatch):
     """Fehlender Telegram-Token darf den Datenpfad nie reiessen."""
     import main as m
 
-    monkeypatch.setattr(m, "check_log_throttle", lambda *a, **k: True)
+    monkeypatch.setattr(
+            solar_stale_alarm, "check_log_throttle", lambda *a, **k: True)
     state = SimpleNamespace(bot_token=None, config=None)
     await m._melde_solar_ausfall(None, state, 20.0)  # darf nicht werfen
     assert state.solar_stale_meldungen == 1
