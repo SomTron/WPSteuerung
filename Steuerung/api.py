@@ -545,6 +545,48 @@ def _sd_karten_status() -> dict:
     return status
 
 
+@app.get("/debug/lernstand")
+def debug_lernstand():
+    """Lernstand der Engine - fuer die Beobachtung des Auto-Lernens.
+
+    BUGFIX (21.10.2026): Die gelernten Daten waren nur ueber die
+    WebApp sichtbar. Fuer die Kontrolle "lernt die Steuerung
+    wirklich?" ist ein kompakter Endpunkt praktisch - er zeigt, ob
+    die Profile wachsen, ob die Korrekturfaktoren plausibel sind und
+    ab wann die Tagesbilanz je Wochentag/Saison vorliegt.
+
+    Kein Schreibzugriff, keine sensiblen Daten (nur Aggregate).
+    """
+    le = getattr(shared_state, "learning_engine", None)
+    if le is None:
+        return {"verfuegbar": False, "grund": "keine Lernengine im State"}
+    try:
+        info = le.get_info()
+        daten = getattr(le, "data", None)
+        return {
+            "verfuegbar": True,
+            "eintraege": {
+                "surplus_by_hour": len(getattr(daten, "surplus_by_hour", {}) or {}),
+                "tages_haushalt": len(getattr(daten, "tages_haushalt", []) or []),
+                "forecast_hourly_deviations": len(
+                    getattr(daten, "forecast_hourly_deviations", {}) or {}),
+                "usage_events": len(getattr(daten, "usage_events", []) or []),
+            },
+            "kennzahlen": {
+                "forecast_ratio": info.get("forecast_ratio"),
+                "forecast_ratio_samples": info.get("forecast_ratio_samples"),
+                "heat_rates": info.get("heat_rates"),
+                "saison": info.get("saison"),
+                "haushalt_tage_erfasst": info.get("haushalt_tage_erfasst"),
+            },
+            "stunden_korrekturfaktor": info.get("stunden_korrekturfaktor"),
+            "haushalt_je_wochentag": info.get("haushalt_je_wochentag"),
+            "surplus_profil": info.get("surplus_profil"),
+        }
+    except Exception as e:
+        return {"verfuegbar": False, "grund": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/health")
 def health_status():
     """Schneller, nicht-sensibler Healthcheck fuer Monitoring/Uptime."""
