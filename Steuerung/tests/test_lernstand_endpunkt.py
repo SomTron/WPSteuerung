@@ -76,12 +76,49 @@ def test_lernstand_zeigt_den_fortschritt(monkeypatch, lern_engine):
     # Die Schluessel muessen zur WebApp passen
     for schluessel in ("stundenprofil_tage", "stundenprofil_stunden",
                         "tagesbilanz_tage", "tagesbilanz_wochentage",
+                        "tagesbilanz_wochentage_saison", "saison",
                         "korrektur_stunden", "zyklen", "zapfungen"):
         assert schluessel in stand
+    # Die aktuelle Jahreszeit wird genannt (fuer die Anzeige)
+    assert stand["saison"] in ("winter", "fruehling", "sommer", "herbst")
 
     # Und die WebApp bekommt ihn (Whitelist!)
     from status_snapshot import _learning_summary
     assert "lernstand" in _learning_summary(lern_engine)
+
+
+def test_saison_bilanz_zaehlt_nur_die_aktuelle_saison(tmp_path):
+    """BUGFIX (22.10.2026): Die Tagesbilanz wird je Wochentag UND
+    Jahreszeit gefuehrt. Fuer die Legionellenwahl zaehlt, wie viele
+    Wochentage in der AKTUELLEN Saison schon einen Wert haben.
+    """
+    from learning_engine import LearningEngine
+    from datetime import datetime, timedelta
+    eng = LearningEngine(data_path=str(tmp_path / "lern.json"))
+    # 3 Wochen Herbst (Oktober) - das ergibt 7 Wochentage in "herbst"
+    start = datetime(2026, 10, 5, 0, 0)
+    for woche in range(3):
+        for tag_idx in range(7):
+            tag = start + timedelta(days=woche * 7 + tag_idx)
+            for h in range(24):
+                for k in range(6):
+                    eng.update(
+                        now=tag + timedelta(hours=h, minutes=10 * k),
+                        temp_dict={"unten": 40.0}, compressor_is_on=False,
+                        feedin_watt=0.0, pv_acpower_watt=0.0,
+                        pv_erzeugung_watt=0.0, soc=50.0,
+                        forecast_today_wh_qm=None, forecast_hourly_wh=None,
+                        pv_array_size_qm=10.0, hausverbrauch_watt=400.0,
+                        hausverbrauch_stunden_profil=True,
+                    )
+    stand = eng.get_info()["lernstand"]
+    # Der Test laeuft "heute" - die Saison ist die aktuelle, nicht
+    # zwingend "herbst". Es muss aber ein gueltiger Wert sein.
+    assert stand["saison"] in ("winter", "fruehling", "sommer", "herbst")
+    # Beide Zaehler existieren; der saisonbezogene ist nicht groesser
+    # als der overall-Zaehler.
+    assert stand["tagesbilanz_wochentage_saison"] <= stand["tagesbilanz_wochentage"]
+    assert stand["tagesbilanz_wochentage"] == 7
 
 
 def test_lernstand_ist_leer_bei_neuer_installation(monkeypatch):

@@ -929,6 +929,10 @@ class LearningEngine:
     def get_info(self) -> Dict:
         """Übersicht der gelernten Werte für API/UI."""
         fenster = self.get_learned_evening_window()
+        # BUGFIX (22.10.2026): Aktuelle Jahreszeit fuer den
+        # Lernstand (der Saison-Vergleich braucht sie).
+        _saison_jetzt = self._saison_von_datum(
+            datetime.now().strftime("%Y-%m-%d"))
         return {
             "heat_rates": self.data.heat_rates,
             "learned_target_hour": self.get_learned_target_hour(),
@@ -975,7 +979,18 @@ class LearningEngine:
                 "tagesbilanz_tage": len(self.data.tages_haushalt or []),
                 "tagesbilanz_wochentage": len({
                     str(k) for k in self.get_haushaltsprofil_je_tag() or {}
+                    if "-" not in str(k)
                 }),
+                # BUGFIX (22.10.2026): Die Tagesbilanz wird je Wochentag
+                # UND Jahreszeit gefuehrt. Fuer die aktuelle Saison zaehlt,
+                # wie viele Wochentage bereits einen saisonbezogenen
+                # Wert haben - nur dann trifft die Legionellenwahl den
+                # Verbrauch des jeweiligen Tages.
+                "tagesbilanz_wochentage_saison": len({
+                    str(k) for k in self.get_haushaltsprofil_je_tag() or {}
+                    if str(k).endswith("-" + _saison_jetzt)
+                }),
+                "saison": _saison_jetzt,
                 "korrektur_stunden": len(self.get_stunden_korrekturfaktor() or {}),
                 "zyklen": len(self.data.cycles or []),
                 "zapfungen": len(self.data.usage_events or []),

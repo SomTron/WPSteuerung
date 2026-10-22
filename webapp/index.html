@@ -2389,7 +2389,10 @@
                 // Gesamt-Fortschritt: die drei Lernziele und ihre Schwellen.
                 const ziele = [
                     { name: 'Stundenprofil', wert: stand.stundenprofil_stunden || 0, ziel: 24 },
-                    { name: 'Tagesbilanz', wert: stand.tagesbilanz_wochentage || 0, ziel: 7 },
+                    // Fuer die Tagesbilanz zaehlt die aktuelle SAISON -
+                    // nur dann kennt die Steuerung den Verbrauch des
+                    // jeweiligen Tages in dieser Jahreszeit.
+                    { name: 'Tagesbilanz', wert: stand.tagesbilanz_wochentage_saison || 0, ziel: 7 },
                     { name: 'Prognose-Korrektur', wert: stand.korrektur_stunden || 0, ziel: 12 },
                 ];
                 const fertig = ziele.filter(z => z.wert >= z.ziel).length;
@@ -2402,11 +2405,36 @@
                     + (tage ? ' (ueber ' + tage + ' Tage)' : ''),
                     (stand.stundenprofil_stunden || 0) >= 24 ? '#4caf50' : '');
 
-                const wtag = stand.tagesbilanz_wochentage || 0;
+                const wtag = stand.tagesbilanz_wochentage_saison || 0;
+                const saison = stand.saison || '';
                 setze('learn-stand-bilanz',
                     wtag + ' von 7 Wochentagen'
-                    + (stand.tagesbilanz_tage ? ' (' + stand.tagesbilanz_tage + ' Tage)' : ''),
+                    + (saison ? ' (' + saison + ')' : '')
+                    + (stand.tagesbilanz_tage ? ', ' + stand.tagesbilanz_tage + ' Tage' : ''),
                     wtag >= 7 ? '#4caf50' : '');
+
+                // BUGFIX (22.10.2026): Wenn noch kein Ziel erreicht ist,
+                // erklaeren, dass das KEIN Fehler ist - die Steuerung
+                // nutzt dann noch die Standardwerte. Ohne den Hinweis
+                // wirkt die Anzeige wie eine Stoerung.
+                const hinweisRow = document.getElementById('learn-stand-hinweis-row');
+                const hinweisEl = document.getElementById('learn-stand-hinweis');
+                if (hinweisRow && hinweisEl) {
+                    if (fertig === 0) {
+                        hinweisRow.style.display = '';
+                        hinweisEl.textContent = 'Noch kein Ziel erreicht - die Steuerung nutzt'
+                            + ' aktuell Standardwerte. Das ist normal nach einem Neustart'
+                            + ' und behebt sich mit den Betriebstagen.';
+                    } else if (fertig < 3) {
+                        hinweisRow.style.display = '';
+                        hinweisEl.textContent = 'Ziel noch nicht erreicht - die betroffene'
+                            + ' Regel nutzt bis dahin einen Mittelwert statt des'
+                            + ' Tagesprofils.';
+                    } else {
+                        hinweisRow.style.display = 'none';
+                        hinweisEl.textContent = '';
+                    }
+                }
 
                 const korr = stand.korrektur_stunden || 0;
                 setze('learn-stand-korrektur',
@@ -3216,6 +3244,10 @@
 <div class="info-row"><span class="info-label">Stundenprofil</span><span class="info-value" id="learn-stand-stunden" style="font-size:0.75rem">&mdash;</span></div>
 <div class="info-row"><span class="info-label">Tagesbilanz (Wochentage)</span><span class="info-value" id="learn-stand-bilanz" style="font-size:0.75rem">&mdash;</span></div>
 <div class="info-row"><span class="info-label">Prognose-Korrektur</span><span class="info-value" id="learn-stand-korrektur" style="font-size:0.75rem">&mdash;</span></div>
+<div class="info-row" id="learn-stand-hinweis-row" style="display:none">
+<span class="info-label" style="font-size:0.75rem;color:var(--text-secondary)">Hinweis</span>
+<span class="info-value" id="learn-stand-hinweis" style="font-size:0.75rem;color:var(--text-secondary)"></span>
+</div>
 </div>
                                             </div>
 
