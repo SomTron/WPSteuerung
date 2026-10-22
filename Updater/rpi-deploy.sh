@@ -51,6 +51,57 @@ backup_local_changes() {
     printf '%s\n' "$backup_dir"
 }
 
+# Setzt den lokalen Branch auf den Remote-Stand, WENN der Dateistand
+# identisch ist. Nuetzt das bei einer umgeschriebenen Historie:
+#
+#   BUGFIX (22.10.2026): Ein Force-Push (z.B. History-Aufraeumen mit
+#   Rebase) ersetzt die Commits auf dem Remote. Der Pi hat dann die
+#   alten Commits und `git pull --ff-only` scheitert mit
+#   "Not possible to fast-forward" - der Deploy bricht ab, obwohl
+#   inhaltlich NICHTS geaendert wurde.
+#
+#   Sicherheitsregel: Zurueckgesetzt wird nur, wenn Tree-Hash von HEAD
+#   und origin/<branch> IDENTISCH sind. Dann aendert der Reset den
+#   Dateistand um nichts - er ersetzt nur die Historie.
+#
+#   Bei unterschiedlichem Dateistand wird NICHT zurueckgesetzt: dann
+#   waere es ein echter Codewechsel, der eine Entscheidung des
+#   Betreibers braucht (Merge, Cherry-Pick oder manueller Reset).
+#
+#   Gibt 0 zurueck, wenn der Branch jetzt auf origin/<branch> steht.
+reset_bei_identischem_dateistand() {
+    local branch="$1"
+    local lokal_tree remote_tree
+
+    if ! git rev-parse --verify --quiet "origin/$branch" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    lokal_tree=$(git rev-parse "HEAD^{tree}" 2>/dev/null || echo "")
+    remote_tree=$(git rev-parse "origin/$branch^{tree}" 2>/dev/null || echo "")
+
+    if [ -z "$lokal_tree" ] || [ -z "$remote_tree" ]; then
+        return 1
+    fi
+
+    if [ "$lokal_tree" != "$remote_tree" ]; then
+        # Echter inhaltlicher Unterschied - kein Reset. Der Betreiber
+        # entscheidet (Merge, Cherry-Pick, manueller Reset).
+        color_print "$RED" "Dateistand weicht ab (lokal $lokal_tree / remote $remote_tree)."
+        color_print "$YELLOW" "Kein automatisches Zuruecksetzen - bitte manuell zusammenfuehren."
+        return 1
+    fi
+
+    color_print "$YELLOW" "Historie auf dem Pi weicht ab, Dateistand ist aber IDENTISCH."
+    color_print "$YELLOW" "Setze den Branch auf origin/$branch zurueck (aendert keinen Code)."
+    if git reset --hard "origin/$branch" >/dev/null 2>&1; then
+        color_print "$GREEN" "Branch auf origin/$branch zurueckgesetzt.${NC}"
+        return 0
+    fi
+    color_print "$RED" "FEHLER: 'git reset --hard' fehlgeschlagen."
+    return 1
+}
+
 # Unit aus dem Repo nach /etc/systemd/system uebertragen, wenn sie sich
 # geaendert hat.
 #
@@ -377,6 +428,10 @@ case "$choice" in
             printf "\n${CYAN}Aktualisiere Branch '%s' (nur Fast-Forward)...${NC}\n" "$CURRENT_BRANCH"
             if git pull --ff-only origin "$CURRENT_BRANCH"; then
                 printf "${GREEN}Code aktualisiert!${NC}\n"
+            elif reset_bei_identischem_dateistand "$CURRENT_BRANCH"; then
+                # Historie auf dem Pi war veraltet (z.B. nach einem
+                # Force-Push), der Dateistand ist aber identisch.
+                printf "${GREEN}Code ist aktuell.${NC}\n"
             else
                 # Unter `set -e` wuerde das Skript hier still beenden. Stattdessen
                 # klar benennen - und der Service bleibt unveraendert laufen.
@@ -523,7 +578,9 @@ case "$choice" in
 
             if git pull --ff-only origin "$target_branch"; then
                 printf "${GREEN}Branch gewechselt und aktualisiert!${NC}\n"
-            else
+            elif reset_bei_identischem_dateistand "$target_branch"; then
+                # Historie umgeschrieben, Dateistand aber identisch.
+                printf "${GREEN}Branch ist aktuell.${NC}\n"
                 # Klar benennen statt unter `set -e` still zu beenden.
                 color_print "$RED" "FEHLER: 'git pull --ff-only' fehlgeschlagen - Branch nicht aktualisiert."
                 color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
