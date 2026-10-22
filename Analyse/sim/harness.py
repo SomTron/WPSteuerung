@@ -597,6 +597,26 @@ class Simulation:
         solar.battery_discharge_watt = round(entladung_w, 1)
         solar.battery_charge_watt = round(ladung_w, 1)
         solar.soc = round(self.batterie.soc, 1) if self.batterie else None
+        # BUGFIX (22.10.2026): Der HAUSVERBRAUCH fehlte in der Simulation.
+        #
+        # Die Lernengine braucht ihn fuer die Tagesbilanz und das
+        # Stundenprofil (BUGFIX 21.10.2026: das Profil misst den
+        # Hausverbrauch, nicht die Einspeisung). Ohne diesen Wert
+        # bekam die Engine `None` und lernte nichts - die Simulation
+        # bildete das Auto-Learning also gar nicht ab.
+        #
+        # In der Produktion: hausverbrauch = acpower - feedin
+        # (energy_source.hausverbrauch_watt). Die Simulation hat
+        # acpower und feedinpower bereits, also derselbe Weg.
+        try:
+            _ac = getattr(solar, "acpower", None)
+            _feed = getattr(solar, "feedinpower", None)
+            if _ac is not None and _feed is not None:
+                solar.hausverbrauch = round(max(0.0, float(_ac) - float(_feed)), 1)
+            else:
+                solar.hausverbrauch = None
+        except (TypeError, ValueError):
+            solar.hausverbrauch = None
         solar.last_api_call = jetzt
         # Die Erzeugung kommt von der Gleichstromseite (DC). Der
         # Wechselstromausgang waere Haus + Netz und taugt nicht als
