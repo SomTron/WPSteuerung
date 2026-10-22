@@ -357,6 +357,13 @@ def test_gemischte_naive_und_aware_zeiten_bleiben_lesbar(tmp_path):
     patcher, log_datei, _ = _patch_log_pfad(tmp_path)
     with patcher:
         now = el._log_now()
+        # BUGFIX (21.10.2026): Der Test war ab Mitternacht
+        # (00:00-02:00) fehleranfaellig: der naive Eintrag gehoerte
+        # dann zum Vortag und die 2-min-Differenz verteilte sich
+        # auf zwei Tage -> laufzeit_min = 0. Der Test prueft die
+        # Zeitstempel-Mischung, nicht die Tagesgrenze.
+        now = el._log_now().replace(hour=14, minute=30, second=0,
+        microsecond=0)
         alt_naive = (now - timedelta(minutes=2)).replace(tzinfo=None).isoformat(timespec="seconds")
         aktuell = now.isoformat(timespec="seconds")
         with open(log_datei, "w", encoding="utf-8") as f:
@@ -459,8 +466,28 @@ def _basiszeit():
     `date.today()`, damit die Auswertung "heute" weiterhin greift; nur
     die Tageszeit ist fest.
     """
-    heute = datetime.now().date()
-    return datetime(heute.year, heute.month, heute.day, 12, 0, 0)
+    # BUGFIX (21.10.2026): Die Basiszeit liegt jetzt 10 Minuten in der
+    # VERGANGENHEIT, statt auf 12:00 festzulegen.
+    #
+    # Grund: Die Auswertung zaehlt nur Eintraege, die nicht in der
+    # Zukunft liegen. Bei einem festen 12:00 war das um 00:0x nicht
+    # erfuellt - die Eintraege lagen dann 12 Stunden in der Zukunft
+    # und laufzeit_min wurde 0. Im CI (UTC) um 00:05 schlugen
+    # deshalb drei Tests fehl.
+    #
+    # "Jetzt minus 10 Minuten" ist immer in der Vergangenheit UND
+    # immer am heutigen Tag (10 min nach Mitternacht ist noch heute).
+    # Die Zeitstempel der Eintraege werden als NAIVE Zeiten geschrieben
+    # (isoformat ohne tz). Die Auswertung parst sie als Europe/Berlin
+    # und rechnet die Intervalle. Deshalb muss die Basiszeit in derselben
+    # Zeitzone liegen wie `_log_now()` (aware, Europe/Berlin).
+    #
+    # Wichtig: die Zeit muss in der VERGANGENHEIT liegen (sonst werden
+    # die Eintraege nicht gezaehlt) und der letzte Eintrag muss exakt
+    # "jetzt" sein (sonst greift der Stillstandsfilter und die letzten
+    # 120 s fehlen).
+    jetzt = datetime.now(el.LOG_TIMEZONE).replace(tzinfo=None)
+    return jetzt.replace(second=0, microsecond=0)
 
 
 def test_kpis_aggregieren(tmp_path):
@@ -1035,13 +1062,25 @@ def test_kpis_ueber_generationsgrenzen(tmp_path):
     with patcher:
         with patch.object(el, "MAX_BYTES", 200), \
              patch.object(el, "MAX_GENERATIONEN", 4):
-            start = datetime.now() - timedelta(minutes=90)
-            for i in range(90):
-                # Zeitstempel variieren, sonst ist jeder Abstand 0 s und
-                # die KPI-Auswertung hat nichts zu rechnen.
-                el.schreibe_eintrag(f"R{i}", "x" * 60, i % 2 == 0, i % 2 == 0,
-                                    feedin_watt=1500.0,
-                                    ts=start + timedelta(minutes=i))
+                # BUGFIX (21.10.2026): Die Basiszeit ist jetzt
+                # "jetzt minus 90 min" in der Zeitzone von
+                # _log_now(). Vorher lag das Fenster nachts
+                # (00:00-02:00) auf dem Vortag und die
+                # Laufzeit wurde 0.
+                jetzt = datetime.now(el.LOG_TIMEZONE).replace(tzinfo=None)
+                start = jetzt - timedelta(minutes=90)
+                if start.date() != jetzt.date():
+                    # Mitternacht im Fenster: auf gestern ausweichen,
+                    # die Minuten beibehalten.
+                    start = (jetzt - timedelta(days=1)).replace(
+                        hour=start.hour, minute=start.minute, second=0,
+                        microsecond=0)
+                for i in range(90):
+                    # Zeitstempel variieren, sonst ist jeder Abstand 0 s und
+                    # die KPI-Auswertung hat nichts zu rechnen.
+                    el.schreibe_eintrag(f"R{i}", "x" * 60, i % 2 == 0, i % 2 == 0,
+                                        feedin_watt=1500.0,
+                                        ts=start + timedelta(minutes=i))
         kpi = el.kpis(wp_leistung_watt=600.0, strompreis_eur_kwh=0.35)
     assert kpi["heute"]["laufzeit_min"] > 0
     assert kpi["sieben_tage"]["pv_kwh"] > 0
