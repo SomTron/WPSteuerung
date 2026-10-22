@@ -346,6 +346,24 @@ class Simulation:
         for eintrag_name, felder in spec.items():
             eintrag = by_name.get(eintrag_name)
             if eintrag is None:
+                # BUGFIX (22.10.2026): Unbekannte Namen wurden
+                # stillschweigend uebersprungen. Damit liess sich kein
+                # NEUER MindestTemp-Eintrag simulieren - die Variante
+                # "Abend-Unten" (unten am Abend warm) war dadurch nicht
+                # darstellbar, und die Simulation zeigte Schein-
+                # veraenderungen (0 Prozent), weil der Eintrag nie
+                # existierte. Jetzt wird er angelegt.
+                try:
+                    from json_config import MindestTempEintrag
+                except ImportError:
+                    continue
+                try:
+                    eintrag = MindestTempEintrag(
+                        name=eintrag_name, **felder)
+                except Exception:
+                    continue
+                eintraege.append(eintrag)
+                by_name[eintrag_name] = eintrag
                 continue
             for feld, wert in felder.items():
                 if hasattr(eintrag, feld):
