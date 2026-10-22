@@ -1373,6 +1373,32 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                     continue
                                 ueberschuss, verbrauch = _ueberschuss_wh(tag, prognose, _datum)
                                 kandidaten_ueberschuss[tag] = (ueberschuss, verbrauch)
+                            # BUGFIX (22.10.2026): Die VERWORFENEN Kandidaten
+                            # mitsammeln - mit dem Grund des Ausschlusses.
+                            #
+                            # Vorher nannte die Anzeige nur die Tage, die in der
+                            # Wahl standen. Faellt der bevorzugte Tag (Freitag)
+                            # raus, war er fuer den Betreiber nicht mehr
+                            # sichtbar - es war nicht unterscheidbar, ob er nie
+                            # im Fenster war, zu wenig Prognose hatte, an der
+                            # hoeheren Schwelle des bevorzugten Tages gescheitert
+                            # ist oder sein Ueberschuss nicht fuer den Lauf
+                            # gereicht hat.
+                            verworfene_kandidaten = {}
+                            for (_datum, tag, prognose) in kandidaten:
+                                if tag in tages_prognose:
+                                    continue
+                                if prognose < legionellen_cfg.mindest_prognose_wh_qm:
+                                    grund = (
+                                        "unter Mindestprognose "
+                                        f"{legionellen_cfg.mindest_prognose_wh_qm:.0f}"
+                                    )
+                                else:
+                                    grund = (
+                                        "unter Anforderung des bevorzugten Tages "
+                                        f"{legionellen_cfg.erforderliche_wh_qm:.0f}"
+                                    )
+                                verworfene_kandidaten[tag] = (prognose, grund)
 
                             # Auswahl nach ERREICHBARKE, nicht nach
                             # Maximalitaet.
@@ -1447,6 +1473,23 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                         tag == bevorzugt,
                                     ),
                                 )
+                            # BUGFIX (22.10.2026): Auch die Kandidaten
+                            # nennen, die an ihrem UEBERSCHUSS gescheitert
+                            # sind. Sie bestehen die Prognose-Schwellen,
+                            # tragen aber den Lauf nicht - ohne diese
+                            # Angabe sah der Betreiber den bevorzugten
+                            # Tag einfach nicht in der Anzeige.
+                            if bedarf_wh is not None:
+                                for _tag, (_ueb, _verbrauch) in (
+                                        kandidaten_ueberschuss.items()):
+                                    if _tag == bester_tag:
+                                        continue
+                                    if _ueb < bedarf_wh:
+                                        verworfene_kandidaten[_tag] = (
+                                            tages_prognose.get(_tag, 0.0),
+                                            f"Ueberschuss {_ueb:.0f}Wh "
+                                            f"< Bedarf {bedarf_wh:.0f}Wh",
+                                        )
                             from priority_control import _wochentag_name
                             bester_datum = next(
                                 datum for (datum, tag, _p) in kandidaten
@@ -1473,6 +1516,16 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                                 )
                                 for tag in sorted(tages_prognose)
                             )
+                            # Die verworfenen Tage mit Grund nennen (BUGFIX
+                            # 22.10.2026) - sonst ist nicht erkennbar, WARUM
+                            # ein Tag nicht in der Wahl steht.
+                            if verworfene_kandidaten:
+                                vergleich += " | ohne " + ", ".join(
+                                    f"{_wochentag_name(tag)}="
+                                    f"{verworfene_kandidaten[tag][0]:.0f}"
+                                    f" ({verworfene_kandidaten[tag][1]})"
+                                    for tag in sorted(verworfene_kandidaten)
+                                )
                             state.legionellen_planned_reason = (
                                 f"Bester PV-Tag: {tages_prognose[bester_tag]:.0f} Wh/m² "
                                 f"(Kandidaten: {vergleich}, "

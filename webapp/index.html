@@ -1610,7 +1610,16 @@
             if (!document.getElementById('analysis-quality-card')) return;
             if (errorText) {
                 setText('analysis-quality-status', 'Nicht verfügbar');
-                setText('analysis-quality-generated', errorText);
+                // BUGFIX (22.10.2026): Der Analyse-Bericht entsteht erst
+                // durch den Timer `wp-analyse.timer` (taeglich 04:30). Fehlt
+                // die Datei, ist das kein Fehler der Steuerung, sondern der
+                // Timer laeuft nicht (bzw. wurde noch nie ausgefuehrt).
+                // Die nackte Meldung "Nicht verfuegbar" liest sich wie ein
+                // Ausfall - der Betreiber soll den Grund kennen.
+                setText('analysis-quality-generated',
+                    /404/.test(errorText)
+                    ? 'Bericht noch nicht erzeugt - der Analyse-Timer (wp-analyse.timer) laeuft taeglich 04:30. Einmalig starten: sudo systemctl start wp-analyse.service'
+                    : errorText);
                 setText('analysis-quality-summary', NO_DATA);
                 setText('analysis-quality-scenarios', NO_DATA);
                 setText('analysis-quality-revision', NO_DATA);

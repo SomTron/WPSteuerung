@@ -158,6 +158,63 @@ sync_service_unit() {
     return 0
 }
 
+# BUGFIX (22.10.2026): Der Analyse-Timer wird mitdeployt.
+#
+# Warum das noetig ist: `wp-analyse.timer` erzeugt taeglich um 04:30 den
+# Qualitaetsbericht, den die WebApp unter "Analyse-Qualitaet" anzeigt und
+# den `/analysis/quality` ausliefert. Bisher hat der Deploy NUR die
+# `wpsteuerung.service` synchronisiert - der Timer wurde weder
+# installiert noch aktiviert. Auf einem frischen Pi fehlte er dadurch
+# komplett, und die WebApp zeigte dauerhaft "Nicht verfuegbar", ohne
+# dass der Betreiber den Grund erkannte.
+#
+# Der Timer ist additiv: fehlt die Unit im Repo, wird nur ein Hinweis
+# ausgegeben (kein Deploy-Abbruch).
+sync_analyse_timer() {
+    local timer_quelle="$REPO_DIR/Steuerung/wp-analyse.timer"
+    local service_quelle="$REPO_DIR/Steuerung/wp-analyse.service"
+    local timer_ziel="/etc/systemd/system/wp-analyse.timer"
+    local service_ziel="/etc/systemd/system/wp-analyse.service"
+
+    if [ ! -f "$timer_quelle" ] || [ ! -f "$service_quelle" ]; then
+        color_print "$YELLOW" "  Hinweis: Analyse-Unit fehlt im Repo - Timer nicht synchronisiert."
+        return 0
+    fi
+
+    local geaendert=0
+    if [ ! -f "$timer_ziel" ] || ! cmp -s "$timer_quelle" "$timer_ziel"; then
+        if ! sudo install -m 0644 "$timer_quelle" "$timer_ziel"; then
+            color_print "$YELLOW" "  Warnung: Analyse-Timer nicht kopierbar"
+            return 0
+        fi
+        geaendert=1
+    fi
+    if [ ! -f "$service_ziel" ] || ! cmp -s "$service_quelle" "$service_ziel"; then
+        if ! sudo install -m 0644 "$service_quelle" "$service_ziel"; then
+            color_print "$YELLOW" "  Warnung: Analyse-Service nicht kopierbar"
+            return 0
+        fi
+        geaendert=1
+    fi
+
+    if [ "$geaendert" = "1" ]; then
+        sudo systemctl daemon-reload || true
+        printf "  Analyse-Unit aktualisiert.\n"
+    fi
+
+    # Der Timer wird aktiviert (nur einmal noetig, danach ist er aktiv).
+    if ! systemctl is-enabled wp-analyse.timer >/dev/null 2>&1; then
+        if sudo systemctl enable --now wp-analyse.timer >/dev/null 2>&1; then
+            printf "${GREEN}  Analyse-Timer aktiviert (taeglich 04:30).${NC}\n"
+        else
+            color_print "$YELLOW" "  Warnung: Analyse-Timer nicht aktivierbar"
+        fi
+    else
+        printf "  Analyse-Timer: bereits aktiv\n"
+    fi
+    return 0
+}
+
 verify_service_restart() {
     service_name="$1"
     old_pid=$(systemctl show "$service_name" -p MainPID --value 2>/dev/null || true)
@@ -456,6 +513,9 @@ case "$choice" in
                     color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
                     exit 1
                 fi
+                # BUGFIX (22.10.2026): Den Analyse-Timer mitdeployen.
+                # Er erzeugt den Qualitaetsbericht fuer die WebApp.
+                sync_analyse_timer
                 printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
                 verify_service_restart "$SERVICE_NAME"
             else
@@ -601,6 +661,9 @@ case "$choice" in
                     color_print "$YELLOW" "Der Service wurde NICHT neu gestartet."
                     exit 1
                 fi
+                # BUGFIX (22.10.2026): Den Analyse-Timer mitdeployen.
+                # Er erzeugt den Qualitaetsbericht fuer die WebApp.
+                sync_analyse_timer
                 printf "${CYAN}Starte Service neu und verifiziere...${NC}\n"
                 verify_service_restart "$SERVICE_NAME"
             else

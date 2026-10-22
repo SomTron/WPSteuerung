@@ -598,6 +598,76 @@ class TestLegionellenBesterTagNachPrognose:
         assert state.legionellen_planned_forecast_wh == 1500.0
 
     @pytest.mark.asyncio
+    async def test_verworfener_bevorzugter_tag_wird_genannt(self):
+        """BUGFIX (22.10.2026): Faellt der bevorzugte Tag (Freitag) raus,
+        muss er trotzdem im Grundtext auftauchen - mit dem Ausschlussgrund.
+
+        Vorher nannte die Anzeige nur die Tage, die in der Wahl standen.
+        Der Betreiber sah dann "Kandidaten: Samstag, Sonntag" und konnte
+        nicht unterscheiden, ob der Freitag nie im Fenster war, zu wenig
+        Prognose hatte, an der hoeheren Schwelle des bevorzugten Tages
+        gescheitert ist oder sein Ueberschuss nicht fuer den Lauf reicht.
+        """
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        # Fr(4)=1500, Sa(5)=3000, So(6)=1200 Wh/m2
+        prognose = self._prognose(jetzt, {4: 1500.0, 5: 3000.0, 6: 1200.0})
+        # Der Freitag zieht 12.000 Wh im Haus: sein Ueberschuss liegt
+        # unter dem Bedarf. Damit ist er KEIN Kandidat mehr.
+        haushalt = {4: 12000.0, 5: 400.0, 6: 400.0}
+
+        state = await self._plane_mit_haushalt(jetzt, prognose, haushalt)
+
+        grund = state.legionellen_planned_reason or ""
+        assert "Freitag" in grund, (
+            "Der verworfene bevorzugte Tag muss sichtbar bleiben: " + grund)
+        assert "1500" in grund, (
+            "Seine Prognose muss genannt werden: " + grund)
+        # Der Samstag wird gewaehlt - er traegt den Lauf.
+        assert state.legionellen_planned_tag == 5, (
+            "Der Samstag muss gewaehlt werden, "
+            f"gewaehlt: {state.legionellen_planned_day}")
+
+    @pytest.mark.asyncio
+    async def test_verworfener_tag_wird_mit_grund_gezeigt(self):
+        """Kernfall: Der bevorzugte Tag faellt raus - er muss trotzdem
+        sichtbar sein, MIT dem Grund. Sonst sieht der Betreiber nur
+        "Samstag, Sonntag" und weiss nicht, was mit dem Freitag war."""
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        # Fr(4)=1500, Sa(5)=3000, So(6)=1200 Wh/m2
+        prognose = self._prognose(jetzt, {4: 1500.0, 5: 3000.0, 6: 1200.0})
+        # Der Freitag zieht 12.000 Wh im Haus: sein Ueberschuss liegt
+        # unter dem Bedarf. Damit ist er KEIN Kandidat mehr.
+        haushalt = {4: 12000.0, 5: 400.0, 6: 400.0}
+
+        state = await self._plane_mit_haushalt(jetzt, prognose, haushalt)
+
+        grund = state.legionellen_planned_reason or ""
+        assert "Freitag" in grund, (
+            "Der verworfene bevorzugte Tag muss sichtbar bleiben: " + grund)
+        assert "1500" in grund, (
+            "Seine Prognose muss genannt werden: " + grund)
+
+    @pytest.mark.asyncio
+    async def test_verworfener_tag_nennt_den_grund(self):
+        """Der Ausschlussgrund wird genannt - nicht nur, dass er fehlt."""
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 21, 12, 0))
+        prognose = self._prognose(jetzt, {4: 1500.0, 5: 3000.0, 6: 1200.0})
+        haushalt = {4: 12000.0, 5: 400.0, 6: 400.0}
+
+        state = await self._plane_mit_haushalt(jetzt, prognose, haushalt)
+
+        grund = state.legionellen_planned_reason or ""
+        # Der Grund nennt den Ueberschuss UND den Bedarf - damit ist
+        # erkennbar, dass der Tag an der Erreichbarkeit gescheitert ist.
+        assert "Ueberschuss" in grund, (
+            "Der Ausschlussgrund muss den Ueberschuss nennen: " + grund)
+        assert "Bedarf" in grund, (
+            "Der Ausschlussgrund muss den Bedarf nennen: " + grund)
+
+    @pytest.mark.asyncio
     async def test_mittwoch_hat_ueberhaupt_eine_auswahlbasis(self):
         """Kernfall: Von Montag bis Mittwoch gibt es mit 3 Tagen Prognose
         KEINEN Wochenendtag - die Auswahl war also frueher leer."""
