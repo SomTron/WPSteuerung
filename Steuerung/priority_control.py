@@ -1760,6 +1760,10 @@ def evaluate_adaptive_pv(
     battery_power: Optional[float] = None,
     soc: Optional[float] = None,
     solar_stale: bool = False,
+    # BUGFIX (22.10.2026): Das PV-Fenster-Gate. Ohne diesen Parameter
+    # zaehlte die PV-Messung auch ausserhalb des Fensters als Quelle -
+    # die Regel startete dann nachts oder nach Sonnenuntergang aus PV.
+    pv_quelle_erlaubt: bool = True,
 ) -> RegelErgebnis:
     """
     Adaptive-PV-Regel: PV-Schwelle passt sich dynamisch an.
@@ -1876,6 +1880,11 @@ def evaluate_adaptive_pv(
         battery_min_watt=1.0,
         soc_min_prozent=0.0,
         max_netzkauf_watt=-50.0,
+        # BUGFIX (22.10.2026): Ohne `pv_erlaubt` zaehlte die PV-Messung
+        # auch ausserhalb des PV-Fensters als Quelle. AdaptivePV startete
+        # dann nachts oder nach Sonnenuntergang aus PV - dieselbe
+        # Fehlerklasse wie bei der Legionellen-Regel (BUGFIX 21.10.2026).
+        pv_erlaubt=pv_quelle_erlaubt,
     )
     if _pv_status.quelle == Energiequelle.PV:
         quelle_ok, quelle_text = True, _pv_status.begruendung
@@ -2974,6 +2983,10 @@ def bewerte_alle_regeln(
         battery_power=battery_power,
         soc=soc,
         solar_stale=solar_stale,
+        # BUGFIX (22.10.2026): Das PV-Fenster-Gate auch fuer AdaptivePV.
+        # Ohne es startete die Regel auch ausserhalb des PV-Fensters
+        # aus der PV-Messung.
+        pv_quelle_erlaubt=pv_quelle_erlaubt,
     )
     ergebnisse.append(ergebnis)
 
