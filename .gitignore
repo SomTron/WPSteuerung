@@ -99,3 +99,28 @@ Steuerung/_demo*.py
 # Lerndaten der LearningEngine (Laufzeit, nie committen)
 Steuerung/learning_data.json
 learning_data.json
+
+# ---------------------------------------------------------------------------
+# BUGFIX (22.10.2026): Laufzeit-Artefakte und tote Ordner.
+#
+# 1) "Steuerung/csv log/" ist ein LAUFZEIT-Verzeichnis (cycle_logging.py
+#    schreibt zyklen.csv hinein, cleanup_pi.sh legt es an). Bisher
+#    ignorierten nur einzelne Dateinamen - alles andere landete im Repo.
+#    Beispiel: heizungsdaten2.csv (8 MB!) lag versioniert im Baum.
+#    Der Ordnername MIT LEERZEICHEN ist zusaetzlich eine Linux-Falle:
+#    ein Shell-Skript mit unquotedem Pfad bricht daran.
+#    Deshalb: der komplette Ordner ist ausgenommen.
+Steuerung/csv log/
+Steuerung/csv\ log/
+Steuerung/csv_log/
+
+# 2) "Steuerung/simulated_w1/" - simulierte Geraete aus dem
+#    Shelly-Simulationstest. Reine Test-Artefakte, nie committen.
+Steuerung/simulated_w1/
+
+# 3) "Steuerung/backup/" - .bak-Dateien aus dem Betrieb. Nie committen.
+Steuerung/backup/
+
+# 4) Python-Cache in Unterordnern (lag bereits in archive/).
+Steuerung/archive/__pycache__/
+Steuerung/simulation/__pycache__/

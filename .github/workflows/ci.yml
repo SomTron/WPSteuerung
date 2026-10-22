@@ -46,6 +46,21 @@ jobs:
           python -m ruff check Steuerung Updater/manager_status.py
           echo "ruff OK"
 
+      - name: Typpruefung (mypy)
+        # BUGFIX (22.10.2026): mypy kommt dazu. Der Bestand ist gruen
+        # (die Konfiguration in Steuerung/mypy.ini unterdrueckt nur die
+        # Fehlerklassen, die dort BEWUSST vorkommen - jede Stelle wurde
+        # einzeln geprueft). In NEUEN Dateien meldet mypy echte Fehler,
+        # vor allem ein Optional ohne None-Check - genau die Fehler, die
+        # im Betrieb zu "NoneType has no attribute" fuehren.
+        #
+        # Verifiziert mit einer Probe-Datei: ein len() auf Optional[str]
+        # MUSS gemeldet werden.
+        run: |
+          python -m pip install mypy
+          python -m mypy --config-file Steuerung/mypy.ini Steuerung
+          echo "mypy OK"
+
       - name: Syntaxcheck (Python und POSIX-Shell)
         # archive/ und simulation/ sind historisch bzw. manuell und werden
         # bewusst nicht geprueft; Tests laufen unten ohnehin via pytest.

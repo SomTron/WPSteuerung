@@ -41,3 +41,4 @@ pandas               # telegram_charts.py (CSV-Auswertung); zieht numpy/dateutil
 pytest
 pytest-asyncio
 ruff                 # Linter, auch Bestandteil der CI
+mypy                 # Typpruefung, auch Bestandteil der CI (Steuerung/mypy.ini)
