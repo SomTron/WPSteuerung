@@ -2575,6 +2575,55 @@
                             lzEl.textContent = 'keine erkannte Zapfung';
                         }
 
+                        // Zapfungs-Vorhaltung (BUGFIX 22.10.2026): Nach einer
+                        // Zapfung bleibt "unten" sonst kalt. Die Vorhaltung
+                        // hebt den Sollwert an, damit die Reserve VOR der
+                        // Zapfung im Speicher liegt. Der Endpunkt liefert
+                        // die gelernte Menge je Wochentag und die daraus
+                        // berechnete Vorhaltung.
+                        (() => {
+                            const vEl = document.getElementById('learn-zapf-vorhaltung');
+                            const hEl = document.getElementById('learn-zapf-hinweis');
+                            if (!vEl) return;
+                            fetch(`${API_BASE}/debug/zapfvorhaltung?ts=${Date.now()}`, {
+                                cache: 'no-store', headers: apiHeaders()
+                            }).then(r => r.json()).then(d => {
+                                if (!d || !d.verfuegbar) {
+                                    vEl.textContent = 'nicht verfuegbar';
+                                    if (hEl) hEl.textContent = d && d.grund ? d.grund : '';
+                                    return;
+                                }
+                                const vh = Number(d.vorhaltung_peak_k || 0);
+                                if (vh <= 0) {
+                                    vEl.textContent = 'inaktiv (noch keine Zapfungen gelernt)';
+                                    vEl.style.color = 'var(--text-secondary)';
+                                } else {
+                                    vEl.textContent = '+' + vh.toFixed(1) + 'K  (Soll ' +
+                                        Number(d.sollwert_c).toFixed(0) + 'C \u2192 ' +
+                                        Number(d.soll_mit_vorhaltung_c).toFixed(1) + 'C)';
+                                    const warn = Number(d.soll_mit_vorhaltung_c) > Number(d.boiler_max_c);
+                                    vEl.style.color = warn ? '#ff6b6b' : 'var(--accent,#3b82f6)';
+                                }
+                                if (hEl) {
+                                    hEl.textContent = d.hinweis || '';
+                                    const namen = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+                                    const teile = [];
+                                    for (const nm of namen) {
+                                        const e = (d.je_wochentag || {})[nm];
+                                        if (!e || !e.menge_l) continue;
+                                        teile.push(nm + ' ' + Number(e.menge_l).toFixed(0) + 'l' +
+                                            (e.samples ? ' (n=' + e.samples + ')' : ''));
+                                    }
+                                    if (teile.length) {
+                                        hEl.textContent += ' | Mengen: ' + teile.join(', ');
+                                    }
+                                }
+                            }).catch(() => {
+                                vEl.textContent = 'nicht erreichbar';
+                                if (hEl) hEl.textContent = 'Der Endpunkt /debug/zapfvorhaltung antwortet nicht.';
+                            });
+                        })();
+
                         // PV-Ueberschuss-Profil (Balkendiagramm)
                         const spWrap = document.getElementById('surplus-bars');
             if (spWrap) {
@@ -3244,6 +3293,8 @@
                         <div class="info-row"><span class="info-label">WW-Quellen (Laufzeit)</span><span class="info-value" id="learn-quellen" style="font-size:0.75rem">—</span></div>
                         <div class="info-row"><span class="info-label">Zu fr&uuml;h geheizt (14T)</span><span class="info-value" id="learn-zufrueh">—</span></div>
                                                 <div class="info-row"><span class="info-label">Letzte Zapfung</span><span class="info-value" id="learn-letzte-zapfung" style="font-size:0.75rem">—</span></div>
+                                                <div class="info-row"><span class="info-label">Zapfungs-Vorhaltung</span><span class="info-value" id="learn-zapf-vorhaltung" style="font-size:0.75rem">&mdash;</span></div>
+                                                <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)" id="learn-zapf-hinweis"></div>
 <!-- BUGFIX (22.10.2026): Der LERNSTAND - wie viele Rohdaten vorliegen
                              und wie weit das Gelernte fortgeschritten ist. Ohne das ist
                              nicht erkennbar, ob die Steuerung wirklich lernt oder

@@ -1056,6 +1056,25 @@ class LearningEngine:
                 str(h): f for h, f in self.get_stunden_korrekturfaktor().items()
             },
             "stunden_abweichung_anzahl": len(self.data.forecast_hourly_deviations),
+            # BUGFIX (22.10.2026): Die Zapfungsmenge sichtbar machen -
+            # je Wochentag und der Peak. Damit ist im Betrieb erkennbar,
+            # OB die Vorhaltung greift (das ist der ganze Zweck der
+            # Vorhaltung: "unten" soll nach der Zapfung warm bleiben).
+            "zapfmenge_global_l": self.get_learned_zapfmenge_l(),
+            "zapfmenge_peak_l": self.get_learned_zapfmenge_l(peak=True),
+            "zapfmenge_samples": self.data.zapfmenge_samples,
+            "zapfmenge_je_wochentag": {
+                str(wd): self.get_learned_zapfmenge_je_wochentag(wd)
+                for wd in range(7)
+            },
+            "zapfmenge_rohdaten_je_wochentag": {
+                str(wd): self.data.learned_zapfmenge_je_wochentag.get(str(wd), 0.0)
+                for wd in range(7)
+            },
+            "zapfmenge_samples_je_wochentag": {
+                str(wd): self.data.zapfmenge_samples_je_wochentag.get(str(wd), 0)
+                for wd in range(7)
+            },
             # BUGFIX (22.10.2026): Der LERNSTAND - wie viele Rohdaten
             # liegen vor und wie weit ist das Gelernte fortgeschritten.
             # Ohne das ist nicht erkennbar, ob die Steuerung wirklich

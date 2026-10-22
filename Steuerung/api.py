@@ -1905,6 +1905,110 @@ def _csv_spaltentypen(kopf, daten):
     return typen
 
 
+@app.get("/debug/zapfvorhaltung")
+def debug_zapfvorhaltung():
+    """Beobachtung der Zapfungs-Vorhaltung (BUGFIX 22.10.2026).
+
+    Die Vorhaltung ist die Massnahme, damit "unten" nach der Zapfung
+    warm bleibt. Sie ist nur wirksam, wenn zwei Dinge stimmen:
+      1) Die Zapfungsmenge ist gelernt (sonst gibt es keine Vorhaltung).
+      2) Die berechnete Vorhaltung ist gross genug, um den Verlust
+         auszugleichen.
+
+    Dieser Endpunkt zeigt beides - inklusive der Frage "wuerde die
+    Vorhaltung den Speicher noch ueberhitzen?" (die Obergrenze ist
+    48 C, die Vorhaltung hebt den Sollwert an).
+
+    Kein Schreibzugriff, keine sensiblen Daten (nur Aggregate).
+    """
+    le = getattr(shared_state, "learning_engine", None)
+    if le is None:
+        return {"verfuegbar": False, "grund": "keine Lernengine im State"}
+    try:
+        info = le.get_info()
+        daten = getattr(le, "data", None)
+        cfg = getattr(daten, "config", None)
+
+        # Speichervolumen und Sollwert fuer die Vorhaltungs-Rechnung.
+        vol_l = float(getattr(cfg, "speicher_volumen_l", 0.0) or 0.0)
+        try:
+            from priority_control import _speichervolumen_l
+            from json_config import WPSteuerungConfigManager
+            mgr = WPSteuerungConfigManager()
+            mgr.load_config()
+            soll_c = float(
+                getattr(mgr.config.abweichung, "solltemperatur_c", 42.0))
+            # Das Volumen aus der Fachkonfiguration ist massgeblich.
+            fach_vol = _speichervolumen_l(mgr.config)
+            if fach_vol:
+                vol_l = fach_vol
+        except Exception:
+            soll_c = 42.0
+
+        namen = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+        je_tag = {}
+        for wd in range(7):
+            menge = float(info.get("zapfmenge_je_wochentag", {}).get(str(wd), 0.0) or 0.0)
+            n = int(info.get("zapfmenge_samples_je_wochentag", {}).get(str(wd), 0) or 0)
+            if menge > 0 and vol_l > 0:
+                # Waermebilanz: dT = Q * (T_speicher - T_kalt) / (1,163 * V)
+                vorhaltung = menge * (soll_c - 10.0) / (1.163 * vol_l)
+            else:
+                vorhaltung = 0.0
+            je_tag[namen[wd]] = {
+                "menge_l": round(menge, 1),
+                "samples": n,
+                "vorhaltung_k": round(vorhaltung, 2),
+                "soll_mit_vorhaltung_c": round(soll_c + vorhaltung, 1),
+                "genutzt": bool(menge > 0),
+            }
+
+        peak = float(info.get("zapfmenge_peak_l", 0.0) or 0.0)
+        peak_vorhaltung = (
+            peak * (soll_c - 10.0) / (1.163 * vol_l)
+            if peak > 0 and vol_l > 0 else 0.0
+        )
+        # Sicherheitspruefung: der Sollwert darf die Boiler-Obergrenze
+        # (48 C) nicht ueberschreiten.
+        grenze = 48.0
+        try:
+            from json_config import WPSteuerungConfigManager
+            mgr = WPSteuerungConfigManager()
+            mgr.load_config()
+            grenze = float(
+                getattr(mgr.config.sicherheit, "max_temp_c", 48.0))
+        except Exception:
+            pass
+
+        wirksam = peak_vorhaltung > 0.0
+        return {
+            "verfuegbar": True,
+            "sollwert_c": soll_c,
+            "speicher_volumen_l": vol_l,
+            "boiler_max_c": grenze,
+            "zapfmenge_global_l": info.get("zapfmenge_global_l"),
+            "zapfmenge_peak_l": info.get("zapfmenge_peak_l"),
+            "zapfmenge_samples": info.get("zapfmenge_samples"),
+            "vorhaltung_peak_k": round(peak_vorhaltung, 2),
+            "soll_mit_vorhaltung_c": round(soll_c + peak_vorhaltung, 1),
+            "je_wochentag": je_tag,
+            "hinweis": (
+                "Noch keine Zapfung gelernt - die Vorhaltung ist 0. "
+                "Nach 2-3 Zapfungen je Wochentag (etwa 1-2 Wochen) "
+                "greift sie."
+                if not wirksam else
+                (
+                    f"Vorhaltung aktiv: +{peak_vorhaltung:.1f}K. "
+                    f"Der Sollwert steigt damit auf {soll_c + peak_vorhaltung:.1f}C."
+                    + (" ACHTUNG: Das liegt ueber der Boiler-Obergrenze!"
+                       if soll_c + peak_vorhaltung > grenze else "")
+                )
+            ),
+        }
+    except Exception as e:
+        return {"verfuegbar": False, "grund": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/debug/csv")
 def debug_csv(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
