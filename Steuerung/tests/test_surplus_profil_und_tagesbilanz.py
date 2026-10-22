@@ -450,7 +450,11 @@ class TestToteParameterBereinigt:
         import inspect
         from priority_control import bewerte_alle_regeln
         params = inspect.signature(bewerte_alle_regeln).parameters
-        assert "forecast_hourly_wh" not in params
+        # BUGFIX (22.10.2026): Der Parameter ist wieder da - er hat jetzt
+        # eine echte Funktion: der Rest-Ertrag-Check im PV-Warten braucht
+        # die Stundenprognose, um zu erkennen, dass die Sonne heute nicht
+        # mehr genug liefert. Er wird deshalb auch weitergereicht.
+        assert "forecast_hourly_wh" in params
 
 
 class TestTagesbilanzEchterHausverbrauch:

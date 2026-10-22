@@ -1064,6 +1064,26 @@ def evaluate_zeitfenster(
     return result
 
 
+def _speichervolumen_l(config) -> Optional[float]:
+    """Speichervolumen des Boilers in Litern (oder None).
+
+    BUGFIX (22.10.2026): Wird fuer den Rest-Ertrag-Check im PV-Warten
+    gebraucht: der Aufheizbedarf haengt vom Speichervolumen ab. Ohne
+    Volumen ist der Bedarf nicht berechenbar - dann bleibt das alte
+    Verhalten (fail-open).
+    """
+    for pfad in ("boiler_modell", "boiler", "Boiler"):
+        teil = getattr(config, pfad, None)
+        if teil is None:
+            continue
+        for name in ("volumen_l", "VOLUMEN_L", "volumen"):
+            wert = getattr(teil, name, None)
+            if isinstance(wert, (int, float)) and not isinstance(wert, bool):
+                if wert > 0:
+                    return float(wert)
+    return None
+
+
 def evaluate_abweichung(
     abw: AbweichungConfig,
     temp_dict: Dict[str, Optional[float]],
@@ -1087,6 +1107,10 @@ def evaluate_abweichung(
     solar_stale: bool = False,
     notfall_einschalten_c: Optional[float] = None,
     pv_quelle_erlaubt: bool = True,
+    # BUGFIX (22.10.2026): Stundenprognose (W) fuer den Rest-Ertrag-Check.
+    forecast_hourly_wh: Optional[Dict[int, float]] = None,
+    # Speichervolumen in Litern - fuer den Energiebedarf des Warmstarts.
+    speicher_volumen_l: Optional[float] = None,
 ) -> RegelErgebnis:
     """
     Abweichungs-Regel: haelt den Boiler auf Solltemperatur (Komfort-Boden).
@@ -1158,6 +1182,60 @@ def evaluate_abweichung(
         # Schutz: Unter pv_warten_unten_min_c (echt kalt) wird sofort geheizt,
         # ab pv_warten_bis_uhr spielt die Regel wieder normal; ist die Sonne
         # zum Wartezeitpunkt schon aktiv, wird normal entschieden.
+        # BUGFIX (22.10.2026): Das PV-Warten prueft den TAGES-Forecast -
+        # nicht, wie viel ERTRAG bis zur Wartezeitgrenze noch kommt.
+        #
+        # Das war falsch: um 11:00 ist der meiste Tagesertrag schon
+        # realisiert. Die Regel wartet dann trotzdem bis 12:00 auf die
+        # Sonne, obwohl der Rest-Ertrag den Bedarf nicht mehr deckt. Der
+        # Boiler bleibt zu kalt, und die Regel tut so, als haette sie
+        # richtig gewartet.
+        #
+        # Neu: Wenn die Stundenprognose UND das Speichervolumen
+        # bekannt sind, wird der Rest-Ertrag bis `pv_warten_bis_uhr`
+        # gegen den Aufheizbedarf geprueft. Passt er nicht, wird
+        # NORMAL entschieden (also aus dem Netz geheizt, weil das
+        # Heizen auf PV die Wartezeit nur verbrannt).
+        #
+        # Ohne Stundenprognose oder Volumen bleibt es beim alten
+        # Verhalten (fail-open: lieber zu spaet als zu frue).
+        rest_ertrag_ok = True
+        rest_ertrag_wh = None
+        bedarf_wh = None
+        if forecast_hourly_wh and speicher_volumen_l:
+            try:
+                vol_l = float(speicher_volumen_l)
+                # Bedarf: (Soll - Ist) x Volumen x 1,163 Wh/(l*K)
+                bedarf_wh = max(
+                    0.0,
+                    (float(abw.solltemperatur_c) - float(temp))
+                    * vol_l * 1.163,
+                )
+                # Rest-Ertrag von jetzt bis zur Wartezeitgrenze
+                grenze = int(getattr(abw, "pv_warten_bis_uhr", 12))
+                rest_wh = 0.0
+                for stunde, watt in forecast_hourly_wh.items():
+                    try:
+                        h = int(stunde)
+                        w = float(watt)
+                    except (TypeError, ValueError):
+                        continue
+                    if now_hour <= h < grenze and w > 0:
+                        # Die Stundenprognose ist eine LEISTUNG in W fuer
+                        # die jeweilige Stunde. Fuer die Energie muss sie
+                        # mit der Stundendauer multipliziert werden
+                        # (1 h). Ohne das waeren die Wh um Faktor 3600
+                        # zu klein - der Check wuerde immer "reicht nicht"
+                        # sagen und die Regel nie warten.
+                        rest_wh += w * 1.0
+                rest_ertrag_wh = rest_wh
+                # 30 % Reserve: der Ertrag ist eine Prognose.
+                rest_ertrag_ok = rest_wh >= bedarf_wh * 1.3
+            except (TypeError, ValueError, ZeroDivisionError):
+                rest_ertrag_ok = True
+                rest_ertrag_wh = None
+                bedarf_wh = None
+
         if (
             getattr(abw, "pv_warten_aktiv", True)
             and now_hour < getattr(abw, "pv_warten_bis_uhr", 12)
@@ -1165,6 +1243,7 @@ def evaluate_abweichung(
             and forecast_today_wh_qm is not None
             and _forecast_effektiv_wh_qm(forecast_today_wh_qm, fc_ratio)
             >= getattr(abw, "pv_warten_forecast_schwelle_wh_qm", 2500.0)
+            and rest_ertrag_ok
             and not _energiequelle_ok(
                 feedin_watt,
                 soc,
@@ -1187,6 +1266,14 @@ def evaluate_abweichung(
                 f"Erzeugung {_fmt_pv(pv_acpower)}W, Einspeisung {feedin_watt:.0f}W) "
                 f"-> warte auf PV (Netz ab {getattr(abw, 'pv_warten_bis_uhr', 12)}:00 "
                 f"oder Notfall unter {getattr(abw, 'pv_warten_unten_min_c', 20.0):.0f}C)"
+                # BUGFIX (22.10.2026): Der Rest-Ertrag wird mitgenannt, damit
+                # der Betreiber sieht, WORAUF die Entscheidung beruht.
+                + (
+                    f", Rest-Ertrag bis {getattr(abw, 'pv_warten_bis_uhr', 12)}:00 "
+                    f"{rest_ertrag_wh:.0f}Wh reicht fuer {bedarf_wh:.0f}Wh"
+                    if rest_ertrag_wh is not None and bedarf_wh is not None
+                    else ""
+                )
             )
             return result
         # 2-Zonen-Schichtungs-Check: Wenn der konfigurierte Fuehler nicht "oben" ist
@@ -2668,6 +2755,9 @@ def bewerte_alle_regeln(
     pv_fenster_aktiv: bool = True,
     pv_quelle_erlaubt: bool = True,
     pv_fenster_reserve_h: float = 0.5,
+    # BUGFIX (22.10.2026): Stundenprognose fuer den Rest-Ertrag-Check
+    # im PV-Warten (evaluate_abweichung).
+    forecast_hourly_wh: Optional[Dict[int, float]] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -2843,6 +2933,10 @@ def bewerte_alle_regeln(
         solar_stale=solar_stale,
         notfall_einschalten_c=float(config.notfallschutz.einschalten_bei_c),
         pv_quelle_erlaubt=pv_quelle_erlaubt,
+        # BUGFIX (22.10.2026): Stundenprognose + Speichervolumen fuer den
+        # Rest-Ertrag-Check im PV-Warten (siehe evaluate_abweichung).
+        forecast_hourly_wh=forecast_hourly_wh,
+        speicher_volumen_l=_speichervolumen_l(config),
     )
     ergebnisse.append(ergebnis)
 
