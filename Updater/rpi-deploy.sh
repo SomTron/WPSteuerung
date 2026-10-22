@@ -94,11 +94,20 @@ reset_bei_identischem_dateistand() {
 
     color_print "$YELLOW" "Historie auf dem Pi weicht ab, Dateistand ist aber IDENTISCH."
     color_print "$YELLOW" "Setze den Branch auf origin/$branch zurueck (aendert keinen Code)."
-    if git reset --hard "origin/$branch" >/dev/null 2>&1; then
+    #
+    # BUGFIX (22.10.2026): bewusst 'git reset --soft', NICHT '--hard'.
+    # '--hard' wuerde uncommittete Aenderungen an getrackten Dateien
+    # vernichten - das verbietet der Test
+    # 'test_updater_verwirft_lokale_aenderungen_nicht' zu Recht. Der
+    # Deploy darf NIE lokale Arbeit zerstoeren. '--soft' bewegt nur den
+    # Branch-Zeiger und laesst Index und Arbeitsverzeichnis unberuehrt
+    # - bei identischem Dateistand ist das exakt dasselbe Ergebnis,
+    # ohne irgendeine Datei anzufassen.
+    if git reset --soft "origin/$branch" >/dev/null 2>&1; then
         color_print "$GREEN" "Branch auf origin/$branch zurueckgesetzt.${NC}"
         return 0
     fi
-    color_print "$RED" "FEHLER: 'git reset --hard' fehlgeschlagen."
+    color_print "$RED" "FEHLER: 'git reset --soft' fehlgeschlagen."
     return 1
 }
 

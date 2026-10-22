@@ -157,6 +157,35 @@ def test_updater_verwirft_lokale_aenderungen_nicht():
     assert "tracked-changes.patch" in deploy
 
 
+def test_updater_resetet_nur_bei_identischem_dateistand():
+    """BUGFIX (22.10.2026): Nach einem Force-Push (History-Aufraeumen)
+    scheitert 'git pull --ff-only' auf dem Pi - der Deploy bricht ab,
+    obwohl inhaltlich nichts geaendert wurde.
+
+    Der Deploy darf das nur aufloesen, wenn der Dateistand IDENTISCH
+    ist: dann aendert der Reset nichts am Code. Bei unterschiedlichem
+    Dateistand waere es ein echter Codewechsel, der eine Entscheidung
+    des Betreibers braucht.
+
+    Und: 'git reset --soft' statt '--hard' - uncommittete Aenderungen
+    an getrackten Dateien duerfen NIE vernichtet werden.
+    """
+    _manager, deploy = _updater_scripts()
+
+    # Der Fallback existiert und vergleicht die Tree-Hashes
+    assert "reset_bei_identischem_dateistand" in deploy
+    assert "HEAD^{tree}" in deploy
+    assert "origin/$branch^{tree}" in deploy
+
+    # Und er nutzt bewusst NICHT --hard (das wuerde lokale Arbeit
+    # vernichten - siehe test_updater_verwirft_lokale_aenderungen_nicht)
+    assert "git reset --soft" in deploy
+    assert "git reset --hard" not in deploy
+
+    # Beide Pull-Stellen nutzen den Fallback
+    assert deploy.count("elif reset_bei_identischem_dateistand") == 2
+
+
 def test_alle_updater_pulls_sind_fast_forward_only():
     manager, deploy = _updater_scripts()
     pull_lines = [
