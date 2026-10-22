@@ -479,7 +479,8 @@ class TestSommerModus:
         kwargs = mock_bewerte.call_args.kwargs
         assert kwargs["forecast_wh_qm"] == pytest.approx(3000.0)
         assert kwargs["forecast_today_wh_qm"] == pytest.approx(2500.0)
-        assert kwargs["forecast_day2_wh_qm"] == pytest.approx(2000.0)
+        # BUGFIX (22.10.2026): forecast_day2_wh_qm wurde aus
+        # bewerte_alle_regeln entfernt (nie gelesen).
 
         """Sommer-Modus: state.sommer_modus_aktiv=False -> kein Offset."""
         import priority_control_logic as pcl

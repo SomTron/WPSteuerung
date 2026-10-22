@@ -201,7 +201,10 @@ _lies_cache_zeilen: List[Dict] = []
 
 def _letzte_logzeile() -> Optional[Dict]:
     """Letzte geschriebene Logzeile oder None (liest nur das Dateiende)."""
-    global _cache_zeile
+    # BUGFIX (22.10.2026): "global _cache_zeile" entfernt. Die Variable
+    # wird hier NUR GELESEN - ohne Zuweisung bindet Python den Namen
+    # nicht lokal, die Deklaration war also wirkungslos. Sie suggerierte
+    # aber einen Schreibzugriff, den es nicht gibt.
     if _cache_pfad == LOG_DATEI and _cache_zeile is not None:
         return _cache_zeile
     try:

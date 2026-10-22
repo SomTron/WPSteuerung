@@ -92,7 +92,13 @@ def berechne_profil(
         Dict[stunde=0..23, durchschnittliche_pv_erzeugung_in_watt]
         Leeres/Null-Dict wenn keine Daten.
     """
-    global _cache
+    # BUGFIX (22.10.2026): "global _cache" entfernt. Der Cache wird nur
+    # per Subscript-Zugriff veraendert (_cache[key] = ...); das bindet
+    # den Namen NICHT lokal - ohne "global" wuerde Python die Variable
+    # als lokal behandeln und beim Lesen (cache_key in _cache) einen
+    # UnboundLocalError werfen. Der Eintrag war also noetig UND
+    # unsinnig zugleich: korrekt ist, ihn wegzulassen, weil das
+    # Modul-Level genuegt.
     jetzt = datetime.now()
     cache_key = f"{csv_path}_{forecast_scaling}"
     if not force_refresh and cache_key in _cache:

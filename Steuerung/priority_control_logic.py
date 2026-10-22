@@ -880,10 +880,6 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             getattr(state, "legionellen_unvollstaendig", False)
         ),
         legionellen_target_reached_at=getattr(state, "legionellen_target_reached_at", None),
-        forecast_day2_wh_qm=normalize_forecast_wh_qm(
-            getattr(state.solar, "forecast_day2", None)
-        ),
-        wochenende_cfg=state.priority_config.wochenende,  # fuer Wochenende-Nachholung
         legionellen_planned_tag=(
             planned_tag if isinstance(planned_tag, int) and 0 <= planned_tag <= 6 else None
         ),

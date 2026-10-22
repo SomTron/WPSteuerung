@@ -16,6 +16,7 @@ from config_manager import ConfigManager
 import notaus
 from state import State
 from sensors import SensorManager
+import hardware as hardware_mod
 from hardware import HardwareManager
 from hardware_mock import MockHardwareManager
 from hardware_actuator import CompressorActuator
@@ -614,11 +615,20 @@ async def setup_application():
     startup_diagnose.markiere_lauf_start()
 
     # 4. Hardware & Sensors init
-    try:
-        import RPi.GPIO  # noqa: F401 - Pi-Erkennung
+    #
+    # BUGFIX (22.10.2026): Der Import von RPi.GPIO diente hier nur der
+    # Pi-Erkennung, wurde aber nie benutzt (die ruff-Verstoss-
+    # Unterdrueckung daneben war reine Irritation). Das war
+    # missverstaendlich und verleicht zum Glauben, es werde GPIO benutzt.
+    #
+    # Die Erkennung ist jetzt explizit: `hardware.py` importiert das
+    # Modul bereits in einem try/except und setzt GPIO auf None, wenn
+    # es fehlt. Diese Belegung ist die Quelle der Wahrheit - ein
+    # zweiter Import an dieser Stelle war doppelt.
+    if getattr(hardware_mod, "GPIO", None) is not None:
         hardware_manager = HardwareManager()
         logging.info("Using real hardware (Raspberry Pi detected)")
-    except ImportError:
+    else:
         hardware_manager = MockHardwareManager()
         logging.info("Using mock hardware (non-Raspberry Pi platform)")
     

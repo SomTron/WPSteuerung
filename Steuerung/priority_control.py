@@ -1087,12 +1087,18 @@ def _speichervolumen_l(config) -> Optional[float]:
 def evaluate_abweichung(
     abw: AbweichungConfig,
     temp_dict: Dict[str, Optional[float]],
-    # BUGFIX (21.10.2026): Dieser Parameter wird hier NICHT gelesen -
-    # er stand nur in der Signatur. Er bleibt erhalten, weil er
-    # positionale Aufrufer hat (und die Aufrufer in der Regel-Engine
-    # den Zustand uebergeben). Die Hysterese-Aussage "Kompressor
-    # laeuft weiter/bleibt aus" wird ueber `result.einschalten = None`
-    # ausgedrueckt, nicht ueber diesen Parameter.
+    # BUGFIX (22.10.2026): Dieser Parameter wird hier NICHT gelesen.
+    # Er stand nur in der Signatur und wurde deshalb als irrefuehrend
+    # verkannt (er suggerierte, der Kompressor-Zustand fliesse in die
+    # Hysterese ein - tut er aber nicht: die Aussage "Kompressor
+    # laeuft weiter / bleibt aus" wird ueber `result.einschalten = None`
+    # ausgedrueckt).
+    #
+    # Er bleibt an seiner Position, weil 9 Aufrufer ihn positional
+    # uebergeben. Ein Entfernen oder Verschieben erzwingt die Umstellung
+    # ALLER Aufrufer - bei einem ungenutzten Parameter ein Risiko ohne
+    # Gegenwert. Die Umstellung gehoert in einen Schritt, der die
+    # Regel tatsaechlich umbaut.
     kompressor_ein: bool,
     now_hour: int,
     nachtsperre_start: int,
@@ -2808,8 +2814,14 @@ def bewerte_alle_regeln(
     legionellen_started_at=None,
     legionellen_unvollstaendig: bool = False,
     legionellen_target_reached_at=None,
-    forecast_day2_wh_qm: Optional[float] = None,
-    wochenende_cfg=None,
+    # BUGFIX (22.10.2026): "forecast_day2_wh_qm" und "wochenende_cfg"
+    # entfernt. Beide wurden nie gelesen:
+    # - forecast_day2_wh_qm kam nur in der Signatur vor. Die Forecast-Regel
+    #   arbeitet mit forecast_wh_qm (MORGEN) - die Uebermorgen-Prognose
+    #   wird nirgends ausgewertet.
+    # - wochenende_cfg: evaluate_wochenende holt sich die Daten selbst
+    #   aus config.wochenende (siehe Aufruf in dieser Funktion). Der
+    #   Parameter war doppelt.
     legionellen_planned_tag=None,
     legionellen_planned_date=None,
     notfall_aktiv: bool = False,

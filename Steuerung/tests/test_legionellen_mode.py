@@ -460,7 +460,6 @@ class TestBewerteAlleRegelnLegionellenIntegration:
             legionellen_aktiv=False,
             legionellen_last_done=None,
             legionellen_started_at=None,
-            forecast_day2_wh_qm=None,
         )
         # Mindestens ein Ergebnis (Legionellen) muss vorhanden sein (inaktiv)
         assert len(alle) > 0
@@ -535,9 +534,10 @@ class TestDetermineModeAndSetpointsLegionellen:
             assert kwargs.get('legionellen_aktiv') is True
             assert kwargs.get('legionellen_last_done') == date(2025, 3, 17)
             assert kwargs.get('legionellen_started_at') == datetime(2025, 3, 21, 10, 0, 0, tzinfo=state.local_tz)
-            assert kwargs.get('forecast_day2_wh_qm') is None
-            # Neu: Wochenende-Config wird zur Wochenende-Nachholung gereicht
-            assert kwargs.get('wochenende_cfg') is state.priority_config.wochenende
+            # BUGFIX (22.10.2026): forecast_day2_wh_qm und
+            # wochenende_cfg wurden aus bewerte_alle_regeln entfernt -
+            # sie wurden nie gelesen. Die Wochenende-Regel holt sich ihre
+            # Daten selbst aus config.wochenende.
 
 
 # ============================================================
