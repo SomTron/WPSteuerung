@@ -586,6 +586,32 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             now_local.month, "gesamt"
         )
         gelernte_zielzeit = learning_engine.get_learned_target_hour()
+        # BUGFIX (22.10.2026): Zapfungsmenge und daraus berechnete
+        # Vorhaltung. Nach einer grossen Zapfung bleibt "unten" sonst
+        # kalt (Live-Fall 15.10.2026: 16 K Abfall, "unten" 24 C am
+        # Abend bei 48 C in der Mitte). Die Vorhaltung hebt die Zielzeit
+        # an, damit die Reserve VOR der Zapfung im Speicher liegt.
+        gelernte_zapfmenge_l = 0.0
+        zapf_vorhaltung_k = 0.0
+        _get_menge = getattr(learning_engine, "get_learned_zapfmenge_l", None)
+        if callable(_get_menge):
+            try:
+                gelernte_zapfmenge_l = float(_get_menge(peak=True) or 0.0)
+            except (TypeError, ValueError):
+                gelernte_zapfmenge_l = 0.0
+        _cfg_menge = getattr(getattr(learning_engine, "data", None),
+                             "config", None)
+        _vol_l = float(getattr(_cfg_menge, "speicher_volumen_l", 0.0) or 0.0)
+        if gelernte_zapfmenge_l > 0 and _vol_l > 0:
+            # Waermebilanz: Q * (T_speicher - T_kalt) / (rho * c_p * V)
+            # 1,163 Wh/(l*K) ist die Waermekapazitaet von Wasser.
+            _soll_c = float(
+                getattr(effektive_config.abweichung, "solltemperatur_c", 42.0)
+            )
+            zapf_vorhaltung_k = (
+                gelernte_zapfmenge_l * (_soll_c - 10.0)
+                / (1.163 * _vol_l)
+            )
         # Defensiv: aeltere Lern-Engines/Fakes kennen die Methoden evtl.
         # nicht -> dann neutral bleiben (Ratio 1.0 / kein Profil).
         _get_fenster = getattr(learning_engine, "get_learned_evening_window", None)
@@ -641,6 +667,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         gelernte_rate_gesamt = None
         gelernte_zielzeit = None
         gelerntes_abendfenster = None
+        # BUGFIX (22.10.2026): Auch ohne Lernengine belegt definieren -
+        # sonst bricht der Aufruf mit UnboundLocalError ab.
+        gelernte_zapfmenge_l = 0.0
+        zapf_vorhaltung_k = 0.0
         fc_ratio = 1.0
         surplus_profil = None
         recent_usage_events = []
@@ -813,6 +843,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # Sonne, wenn der Rest-Tagesertrag den Bedarf nicht mehr deckt.
         forecast_hourly_wh=hourly_forecast_watt,
         learned_target_hour=gelernte_zielzeit,
+        # BUGFIX (22.10.2026): Zapfungs-Vorhaltung (aus der gelernten
+        # Zapfungsmenge) - haelt "unten" nach der Zapfung warm.
+        zapf_vorhaltung_k=zapf_vorhaltung_k,
+        zapfmenge_l=gelernte_zapfmenge_l,
         fc_ratio=fc_ratio,
         surplus_profile=surplus_profil,
         recent_usage_events=recent_usage_events,

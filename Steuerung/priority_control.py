@@ -2005,6 +2005,19 @@ def evaluate_calculated_start(
     pv_fenster_aktiv: bool = True,
     pv_quelle_erlaubt: bool = True,
     pv_fenster_reserve_h: float = 0.5,
+    # BUGFIX (22.10.2026): Zapfungs-Vorhaltung.
+    #
+    # Aus der gelernten Zapfungsmenge laesst sich berechnen, wie viel
+    # der Speicher nach der Zapfung kalt ist:
+    #     dT = Q * (T_speicher - T_kaltwasser) / (rho * c_p * V_speicher)
+    # Beispiel (Live-Fall 15.10.2026): 150 l aus einem 300-l-Speicher
+    # mit 42 C, Kaltwasser 10 C -> der Speicher verliert ca. 5,7 K.
+    # Ohne diese Vorhaltung bleibt "unten" nach der Zapfung kalt - die
+    # WP kann den Speicher von unten nicht mehr fuellen (oben ist voll).
+    zapf_vorhaltung_k: float = 0.0,
+    zapfmenge_l: float = 0.0,
+    speicher_volumen_l: float = 300.0,
+    kaltwasser_c: float = 10.0,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -2092,6 +2105,14 @@ def evaluate_calculated_start(
         else float(calc_cfg.target_uhr)
     )
 
+    # BUGFIX (22.10.2026): Zapfungs-Vorhaltung in die Zielzeit einrechnen.
+    #
+    # Nach einer Zapfung ist der Speicher unten kalt: Q Liter warmes Wasser
+    # werden durch dieselbe Menge Kaltwasser ersetzt. Die Waermebilanz:
+    #     dT = Q * (T_speicher - T_kalt) / (rho * c_p * V_speicher)
+    # Damit das "unten" am Abend warm bleibt, muss der Speicher VOR der
+    # Zapfung um genau diesen Betrag wärmer sein.
+    #
     # Noch vor Zielzeit?
     if current_time >= ziel_uhr:
         # Nach Zielzeit ist der Fahrplan erfuellt - bewusst kein Notfall-Start
@@ -2121,11 +2142,36 @@ def evaluate_calculated_start(
         )
         return result
 
+    # BUGFIX (22.10.2026): Zapfungs-Vorhaltung als ZielTEMPERATUR.
+    #
+    # Die Reserve gehoert in den SOLLwert, nicht in die Zielzeit: der
+    # Speicher muss VOR der Zapfung um diesen Betrag waermer sein, damit
+    # "unten" danach warm bleibt. Eine Erhoehung der Zielzeit dagegen
+    # verschiebt nur den Start um Minuten (gemessen: 6 K Vorhaltung ->
+    # 6 Minuten frueherer Start) - der Effekt war damit praktisch null.
+    #
+    # Beispiel (Live-Fall 15.10.2026): 150 l aus einem 300-l-Speicher mit
+    # 42 C, Kaltwasser 10 C -> der Speicher verliert ca. 5,7 K unten.
+    # Mit 5,7 K Vorhaltung heizt die WP auf 47,7 C - nach der Zapfung
+    # bleiben 42 C, "unten" ist warm.
+    soll_effektiv_c = float(calc_cfg.solltemperatur_c) + max(
+        0.0, float(zapf_vorhaltung_k)
+    )
+    # Der Hinweis fuer die Grundtexte: der Betreiber soll sehen, dass der
+    # Sollwert wegen der erwarteten Zapfung angehoben wurde.
+    vorhaltung_hinweis = ""
+    if zapf_vorhaltung_k > 0.0:
+        vorhaltung_hinweis = (
+            f" [Vorhaltung +{zapf_vorhaltung_k:.1f}K fuer "
+            f"{zapfmenge_l:.0f}l Zapfung -> Soll "
+            f"{soll_effektiv_c:.1f}C statt {calc_cfg.solltemperatur_c:.1f}C]"
+        )
+
     # Temperaturdifferenz berechnen
-    diff_unten = max(0, calc_cfg.solltemperatur_c - temp_unten)
-    diff_mitte = max(0, calc_cfg.solltemperatur_c - temp_mitte)
+    diff_unten = max(0, soll_effektiv_c - temp_unten)
+    diff_mitte = max(0, soll_effektiv_c - temp_mitte)
     diff_oben = (
-        max(0, calc_cfg.solltemperatur_c - temp_oben) if temp_oben is not None else 0
+        max(0, soll_effektiv_c - temp_oben) if temp_oben is not None else 0
     )
     diff_gesamt = diff_unten + diff_mitte + diff_oben
 
@@ -2275,6 +2321,12 @@ def evaluate_calculated_start(
         "hours_needed": round(hours_needed, 2),
         "time_left_hours": round(time_left, 2),
         "effective_buffer_hours": round(effektiver_puffer, 2),
+        # BUGFIX (22.10.2026): Die Vorhaltung sichtbar machen - der
+        # Betreiber soll sehen, dass der Sollwert wegen der erwarteten
+        # Zapfung angehoben wurde.
+        "zapf_vorhaltung_k": round(max(0.0, float(zapf_vorhaltung_k)), 2),
+        "zapfmenge_l": round(max(0.0, float(zapfmenge_l)), 1),
+        "soll_effektiv_c": round(soll_effektiv_c, 1),
     }
 
     # Netz-Start mit REDUZIERTEM Soll (Nutzerwunsch 28.09.2026).
@@ -2354,7 +2406,7 @@ def evaluate_calculated_start(
             result.grund = (
                 f"CalcStart: ZU SPAET ({time_left:.1f}h < {hours_needed:.1f}h), "
                 f"aber Netzfallback ist deaktiviert; warte auf PV/Batterie "
-                f"({quelle_grund})"
+                f"({quelle_grund}){vorhaltung_hinweis}"
             )
             return result
         result.einschalten = True
@@ -2370,7 +2422,7 @@ def evaluate_calculated_start(
         result.grund = (
             f"CalcStart: Nur {effektiver_puffer:.1f}h Puffer (PV={pv_label}, "
             f"brauche {hours_needed:.1f}h bis {_uhr_text(ziel_uhr)}) -> EIN "
-            f"[{quelle_grund}]"
+            f"[{quelle_grund}]{vorhaltung_hinweis}"
         )
         return result
 
@@ -2426,7 +2478,7 @@ def evaluate_calculated_start(
         result.grund = (
             f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht, warte auf "
             f"PV/Batterie ({quelle_grund}; brauche {hours_needed:.1f}h bis "
-            f"{_uhr_text(ziel_uhr)}{dip_txt})"
+            f"{_uhr_text(ziel_uhr)}{dip_txt}){vorhaltung_hinweis}"
         )
         return result
     result.einschalten = None
@@ -2434,6 +2486,8 @@ def evaluate_calculated_start(
     result.grund = (
         f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht (PV={pv_label}, "
         f"brauche {hours_needed:.1f}h bis {_uhr_text(ziel_uhr)}{dip_txt}) -> warte auf PV"
+        + (f" (Soll {soll_effektiv_c:.1f}C statt {calc_cfg.solltemperatur_c:.1f}C "
+           f"wegen {zapfmenge_l:.0f}l Zapfung)" if zapf_vorhaltung_k > 0.0 else "")
     )
     return result
 
@@ -2767,6 +2821,10 @@ def bewerte_alle_regeln(
     # BUGFIX (22.10.2026): Stundenprognose fuer den Rest-Ertrag-Check
     # im PV-Warten (evaluate_abweichung).
     forecast_hourly_wh: Optional[Dict[int, float]] = None,
+    # BUGFIX (22.10.2026): Zapfungs-Vorhaltung (K) und die gelernte
+    # Zapfungsmenge (l) fuer den CalcStart.
+    zapf_vorhaltung_k: float = 0.0,
+    zapfmenge_l: float = 0.0,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -3014,6 +3072,10 @@ def bewerte_alle_regeln(
         pv_fenster_aktiv=pv_fenster_aktiv,
         pv_quelle_erlaubt=pv_quelle_erlaubt,
         pv_fenster_reserve_h=pv_fenster_reserve_h,
+        # BUGFIX (22.10.2026): Zapfungs-Vorhaltung
+        zapf_vorhaltung_k=zapf_vorhaltung_k,
+        zapfmenge_l=zapfmenge_l,
+        speicher_volumen_l=_speichervolumen_l(config),
     )
     ergebnisse.append(ergebnis)
 

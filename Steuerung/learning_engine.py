@@ -85,6 +85,12 @@ class LearningConfig:
     #: im Leerlauf mit bis zu 0,5 K/min ab (Log 14.09.-18.10.2026), eine
     #: Zapfung bewegt den unteren Fuehler mit mehreren K/min - 1,0 trennt beides.
     usage_event_min_slope_k_min: float = 1.0
+    # BUGFIX (22.10.2026): Speichervolumen fuer die Schaetzung der
+    # Zapfungsmenge. Ohne Volumen laesst sich der Temperaturabfall nicht
+    # in eine Menge umrechnen.
+    speicher_volumen_l: float = 300.0
+    # Mindestanzahl gelernter Zapfungen, bevor die Menge verwendet wird.
+    zapfmenge_min_samples: int = 2
 
 
     max_usage_per_half_day: int = 2
@@ -188,6 +194,13 @@ class UsageEvent:
     #: die gelernte Zielzeit einfliesst. Altbestand kennt das Feld nicht und
     #: wird als plausibel gelesen.
     plausibel: bool = True
+    #: Geschaetzte Zapfungsmenge in Litern (BUGFIX 22.10.2026).
+    #:
+    #: Aus dem Abfall des unteren Fuehlers und dem Speichervolumen:
+    #:   V = Q * (T_vor - T_nach) / (rho * c_p * V_speicher)
+    #: mit Q = zapfmenge, T = Temperatur, V_speicher = Volumen.
+    #: 0.0, wenn das Volumen unbekannt ist.
+    zapfmenge_l: float = 0.0
 
 
 @dataclass
@@ -205,6 +218,14 @@ class LearningData:
     # Gelernte MORGENliche Zapf-Zeit (Duschen frueh morgens)
     learned_morning_target_hour: float = 7.0
     morning_target_hour_samples: int = 0
+
+    # Zapfungsmenge (BUGFIX 22.10.2026): Aus dem Temperaturabfall des
+    # unteren Fuehlers und dem Speichervolumen geschaetzt.
+    learned_zapfmenge_l: float = 0.0
+    zapfmenge_samples: int = 0
+    #: Peak aus den gelernten Zapfungen (die groesste Menge) - fuer die
+    #: Vorhaltung ist der schlimmste Fall relevant, nicht der Mittelwert.
+    learned_zapfmenge_peak_l: float = 0.0
 
     version: int = 4
     komfort_verletzungen: List[str] = field(default_factory=list)
@@ -423,6 +444,23 @@ class LearningEngine:
         if self.data.target_hour_samples < self.data.config.target_hour_min_samples:
             return 17.0
         return self.data.learned_target_hour
+
+    def get_learned_zapfmenge_l(self, peak: bool = False) -> float:
+        """Gelernte Zapfungsmenge in Litern (0.0, wenn noch keine Daten).
+
+        BUGFIX (22.10.2026): Aus dem Temperaturabfall des unteren
+        Fuehlers und dem Speichervolumen geschaetzt. Daraus berechnet der
+        CalcStart die Vorhaltung: damit "unten" nach der Zapfung warm
+        bleibt und nicht ueber Nacht auskuehlt.
+
+        ``peak=True`` liefert die groesste beobachtete Menge - fuer die
+        Vorhaltung ist der schlimmste Fall relevant, nicht der Mittelwert.
+        """
+        if self.data.zapfmenge_samples < self.data.config.zapfmenge_min_samples:
+            return 0.0
+        if peak:
+            return float(self.data.learned_zapfmenge_peak_l or 0.0)
+        return float(self.data.learned_zapfmenge_l or 0.0)
 
     def get_learned_morning_target_hour(self) -> float:
         """Gelernte MORGEN-Zielzeit (Default 07:00 bei < config.target_hour_min_samples Samples)."""
@@ -1793,6 +1831,31 @@ class LearningEngine:
                 return round(float(wert), 1)
             return 0.0
 
+        # BUGFIX (22.10.2026): Zapfungsmenge schaetzen.
+        #
+        # Aus dem Abfall des unteren Fuehlers folgt die entnommene
+        # Waermemenge:  Q = V * dT / (rho * c_p)
+        # Mit dem Speichervolumen V_speicher laesst sich daraus die
+        # Zapfmenge bestimmen:
+        #     Q_zapf = Q / (rho * c_p * V_speicher)
+        # Beispiel (Live-Fall 15.10.2026): 300 l, Abfall 16 K am unteren
+        # Fuehler -> ca. 150 l entnommen. Ohne diese Groesse kann die
+        # Steuerung das "unten am Abend warm" nicht vorhalten.
+        #
+        # BEACHTUNG: der untere Fuehler zeigt nur den KALTEN Punkt. Der
+        # Abfall dort ist groesser als der Abfall im Mittel des Speichers.
+        # Deshalb wird mit einem Faktor 0,5 gerechnet (die Haelfte des
+        # Speichers liegt unterhalb des Fuehlers) - das ist die
+        # uebliche Naeherung fuer einen Schichtspeicher.
+        zapfmenge_l = 0.0
+        vol_l = float(getattr(cfg, "speicher_volumen_l", 0.0) or 0.0)
+        if vol_l > 0:
+            abfall_unten = float(max_drop.get("unten", 0.0) or 0.0)
+            if abfall_unten > 0:
+                # Waermekapazitaet des Speichers: 1,163 Wh/(l*K)
+                waerme_wh = abfall_unten * vol_l * 1.163 * 0.5
+                zapfmenge_l = round(waerme_wh / (1.163 * 45.0), 1)
+
         event = UsageEvent(
             timestamp=pend["start"].isoformat(),
             temp_before_unten=_wert(pend["before"], "unten"),
@@ -1806,6 +1869,7 @@ class LearningEngine:
             drop_oben_k=_wert(max_drop, "oben"),
             drop_gesamt_k=round(drop_gesamt, 2),
             plausibel=plausibel,
+            zapfmenge_l=zapfmenge_l,
         )
         self.data.usage_events.append(asdict(event))
         # Cooldown ab dem ENDE des Vorgangs.
@@ -1856,6 +1920,26 @@ class LearningEngine:
                 new_target = hour_f if count <= 1 else alt * (1.0 - alpha_t) + hour_f * alpha_t
                 self.data.learned_target_hour = round(new_target, 2)
                 self.data.target_hour_samples = count
+            # BUGFIX (22.10.2026): Zapfungsmenge MITlernen. Aus ihr
+            # berechnet der CalcStart die Vorhaltung, damit "unten" nach
+            # der Zapfung warm bleibt. Ohne die Menge war das nicht
+            # moeglich - der Live-Fall vom 15.10.2026 zeigte 16 K Abfall
+            # am unteren Fuehler, was ohne Menge nicht interpretierbar war.
+            if zapfmenge_l > 0:
+                count_m = self.data.zapfmenge_samples + 1
+                alt_m = self.data.learned_zapfmenge_l
+                alpha_m = cfg.target_hour_ewma_alpha
+                neu_m = (
+                    zapfmenge_l if count_m <= 1
+                    else alt_m * (1.0 - alpha_m) + zapfmenge_l * alpha_m
+                )
+                self.data.learned_zapfmenge_l = round(neu_m, 1)
+                self.data.zapfmenge_samples = count_m
+                # Der Peak wird NICHT verstimmt - er ist der schlimmste
+                # Fall (Duschen am Wochenende) und fuer die Vorhaltung
+                # maßgeblich.
+                if zapfmenge_l > self.data.learned_zapfmenge_peak_l:
+                    self.data.learned_zapfmenge_peak_l = round(zapfmenge_l, 1)
             self._save()
             logging.info(
                 f"Learning: Zapfung {uhrzeit} "
