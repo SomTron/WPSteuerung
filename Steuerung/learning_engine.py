@@ -963,6 +963,23 @@ class LearningEngine:
                 str(h): f for h, f in self.get_stunden_korrekturfaktor().items()
             },
             "stunden_abweichung_anzahl": len(self.data.forecast_hourly_deviations),
+            # BUGFIX (22.10.2026): Der LERNSTAND - wie viele Rohdaten
+            # liegen vor und wie weit ist das Gelernte fortgeschritten.
+            # Ohne das ist nicht erkennbar, ob die Steuerung wirklich
+            # lernt oder nur auf Defaults faehrt.
+            "lernstand": {
+                "stundenprofil_tage": len({
+                    str(k)[:10] for k in (self.data.surplus_by_hour or {})
+                }),
+                "stundenprofil_stunden": len(self.get_surplus_profile() or {}),
+                "tagesbilanz_tage": len(self.data.tages_haushalt or []),
+                "tagesbilanz_wochentage": len({
+                    str(k) for k in self.get_haushaltsprofil_je_tag() or {}
+                }),
+                "korrektur_stunden": len(self.get_stunden_korrekturfaktor() or {}),
+                "zyklen": len(self.data.cycles or []),
+                "zapfungen": len(self.data.usage_events or []),
+            },
             # Die aktuelle Jahreszeit - damit die WebApp die
             # saisonbezogenen Werte ("wd-saison") zuordnen kann.
             "saison": self._saison_von_datum(

@@ -5,6 +5,7 @@ wie viele Stundenprofile, Tagesbilanzen und Prognoseabweichungen
 vorliegen, und welche Korrekturfaktoren daraus gelernt wurden.
 """
 
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,6 +47,52 @@ def test_endpunkt_zeigt_die_gelernten_aggregate(monkeypatch, lern_engine):
     # Und die abgeleiteten Groessen
     assert "stunden_korrekturfaktor" in antwort
     assert "haushalt_je_wochentag" in antwort
+
+
+def test_lernstand_zeigt_den_fortschritt(monkeypatch, lern_engine):
+    """BUGFIX (22.10.2026): Der Lernstand macht sichtbar, OB die
+    Steuerung wirklich lernt. Ohne ihn ist nicht erkennbar, ob die
+    Engine sammelt oder auf Defaults faehrt.
+    """
+    from datetime import datetime, timedelta
+    for d in range(3):
+        tag = datetime(2026, 10, 21, 0, 0) + timedelta(days=d)
+        for h in range(24):
+            for k in range(6):
+                lern_engine.update(
+                    now=tag + timedelta(hours=h, minutes=10 * k),
+                    temp_dict={"unten": 40.0}, compressor_is_on=False,
+                    feedin_watt=0.0, pv_acpower_watt=0.0,
+                    pv_erzeugung_watt=0.0, soc=50.0,
+                    forecast_today_wh_qm=None, forecast_hourly_wh=None,
+                    pv_array_size_qm=10.0, hausverbrauch_watt=400.0,
+                    hausverbrauch_stunden_profil=True,
+                )
+    info = lern_engine.get_info()
+    stand = info["lernstand"]
+    assert stand["stundenprofil_stunden"] == 24
+    assert stand["stundenprofil_tage"] == 3
+    assert stand["tagesbilanz_tage"] >= 1
+    # Die Schluessel muessen zur WebApp passen
+    for schluessel in ("stundenprofil_tage", "stundenprofil_stunden",
+                        "tagesbilanz_tage", "tagesbilanz_wochentage",
+                        "korrektur_stunden", "zyklen", "zapfungen"):
+        assert schluessel in stand
+
+    # Und die WebApp bekommt ihn (Whitelist!)
+    from status_snapshot import _learning_summary
+    assert "lernstand" in _learning_summary(lern_engine)
+
+
+def test_lernstand_ist_leer_bei_neuer_installation(monkeypatch):
+    """Ohne Daten darf die WebApp nicht abstuerzen."""
+    from learning_engine import LearningEngine
+    import tempfile
+    eng = LearningEngine(
+        data_path=os.path.join(tempfile.mkdtemp(), "lern.json"))
+    stand = eng.get_info()["lernstand"]
+    assert stand["stundenprofil_stunden"] == 0
+    assert stand["tagesbilanz_tage"] == 0
 
 
 def test_endpunkt_zaehlt_die_echten_eintraege(monkeypatch, lern_engine):

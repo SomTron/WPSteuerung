@@ -2372,6 +2372,47 @@
 
             // Selbstlernen anzeigen
             const lrn = statusData.learning || {};
+            // BUGFIX (22.10.2026): LERNSTAND anzeigen - wie viele Rohdaten
+            // vorliegen und wie weit das Gelernte fortgeschritten ist.
+            (() => {
+                const stand = lrn.lernstand || {};
+                const setze = (id, text, farbe) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.textContent = text;
+                    if (farbe) el.style.color = farbe;
+                };
+                if (!Object.keys(stand).length) {
+                    setze('learn-stand', 'keine Daten (Neuinstallation?)');
+                    return;
+                }
+                // Gesamt-Fortschritt: die drei Lernziele und ihre Schwellen.
+                const ziele = [
+                    { name: 'Stundenprofil', wert: stand.stundenprofil_stunden || 0, ziel: 24 },
+                    { name: 'Tagesbilanz', wert: stand.tagesbilanz_wochentage || 0, ziel: 7 },
+                    { name: 'Prognose-Korrektur', wert: stand.korrektur_stunden || 0, ziel: 12 },
+                ];
+                const fertig = ziele.filter(z => z.wert >= z.ziel).length;
+                const farbe = fertig === 3 ? '#4caf50' : (fertig > 0 ? '#ffa726' : 'var(--text-secondary)');
+                setze('learn-stand', fertig + '/3 Ziele vollstaendig', farbe);
+
+                const tage = stand.stundenprofil_tage || 0;
+                setze('learn-stand-stunden',
+                    (stand.stundenprofil_stunden || 0) + ' von 24 Stunden'
+                    + (tage ? ' (ueber ' + tage + ' Tage)' : ''),
+                    (stand.stundenprofil_stunden || 0) >= 24 ? '#4caf50' : '');
+
+                const wtag = stand.tagesbilanz_wochentage || 0;
+                setze('learn-stand-bilanz',
+                    wtag + ' von 7 Wochentagen'
+                    + (stand.tagesbilanz_tage ? ' (' + stand.tagesbilanz_tage + ' Tage)' : ''),
+                    wtag >= 7 ? '#4caf50' : '');
+
+                const korr = stand.korrektur_stunden || 0;
+                setze('learn-stand-korrektur',
+                    korr + ' von 12 Stunden',
+                    korr >= 12 ? '#4caf50' : '');
+            })();
             const ltEl = document.getElementById('learn-target');
             if (ltEl) {
                 if (lrn.learned_target_hour != null) {
@@ -3166,6 +3207,16 @@
                         <div class="info-row"><span class="info-label">WW-Quellen (Laufzeit)</span><span class="info-value" id="learn-quellen" style="font-size:0.75rem">—</span></div>
                         <div class="info-row"><span class="info-label">Zu fr&uuml;h geheizt (14T)</span><span class="info-value" id="learn-zufrueh">—</span></div>
                                                 <div class="info-row"><span class="info-label">Letzte Zapfung</span><span class="info-value" id="learn-letzte-zapfung" style="font-size:0.75rem">—</span></div>
+<!-- BUGFIX (22.10.2026): Der LERNSTAND - wie viele Rohdaten vorliegen
+                             und wie weit das Gelernte fortgeschritten ist. Ohne das ist
+                             nicht erkennbar, ob die Steuerung wirklich lernt oder
+                             auf Defaults faehrt. -->
+<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-color,rgba(128,128,128,0.25))">
+<div class="info-row"><span class="info-label">Lernstand</span><span class="info-value" id="learn-stand" style="font-size:0.75rem">&mdash;</span></div>
+<div class="info-row"><span class="info-label">Stundenprofil</span><span class="info-value" id="learn-stand-stunden" style="font-size:0.75rem">&mdash;</span></div>
+<div class="info-row"><span class="info-label">Tagesbilanz (Wochentage)</span><span class="info-value" id="learn-stand-bilanz" style="font-size:0.75rem">&mdash;</span></div>
+<div class="info-row"><span class="info-label">Prognose-Korrektur</span><span class="info-value" id="learn-stand-korrektur" style="font-size:0.75rem">&mdash;</span></div>
+</div>
                                             </div>
 
                     <!-- PV-Ueberschuss-Profil (gelernt) -->

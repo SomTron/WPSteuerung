@@ -49,6 +49,7 @@ def _learning_summary(source):
             # BUGFIX (21.10.2026): Ohne diese Felder in der Whitelist
             # filterte der Snapshot sie weg - die WebApp zeigte nichts.
             "stunden_korrekturfaktor", "stunden_abweichung_anzahl",
+            "lernstand",
         )
         if key in info
     }
