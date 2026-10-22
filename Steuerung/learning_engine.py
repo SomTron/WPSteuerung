@@ -91,6 +91,9 @@ class LearningConfig:
     speicher_volumen_l: float = 300.0
     # Mindestanzahl gelernter Zapfungen, bevor die Menge verwendet wird.
     zapfmenge_min_samples: int = 2
+    # Mindestanzahl Zapfungen je Wochentag, bevor der wochentags-
+    # spezifische Wert verwendet wird.
+    zapfmenge_min_samples_per_wochentag: int = 2
 
 
     max_usage_per_half_day: int = 2
@@ -223,6 +226,22 @@ class LearningData:
     # unteren Fuehlers und dem Speichervolumen geschaetzt.
     learned_zapfmenge_l: float = 0.0
     zapfmenge_samples: int = 0
+    #: Zapfungsmenge je Wochentag (BUGFIX 22.10.2026).
+    #:
+    #: Sonntag wird durch Baden mehr Warmwasser gebraucht als fuer eine
+    #: Dusche unter der Woche. Live-Messung (Entscheidungslog
+    #: 09.-15.10.2026): groesster steiler Temperaturabfall am unteren
+    #: Fuehler - Sa 5,8 K, Fr 4,2 K, Do 3,2 K, Mi 2,7 K, Mo 2,1 K.
+    #:
+    #: Schluessel: "0"=Montag .. "6"=Sonntag. Gespeichert wird der
+    #: Mittelwert je Wochentag (Median waere robuster, ist aber hier
+    #: bewusst nicht implementiert - die Vorhaltung nutzt ohnehin den
+    #: Peak als uebergeordneten Wert).
+    learned_zapfmenge_je_wochentag: Dict[str, float] = field(default_factory=dict)
+    #: Zaehler je Wochentag, damit erst nach genug Beobachtungen
+    #: gelernt wird (sonst wuerde ein einzelner Montag die Vorhaltung
+    #: fuer den ganzen Monat bestimmen).
+    zapfmenge_samples_je_wochentag: Dict[str, int] = field(default_factory=dict)
     #: Peak aus den gelernten Zapfungen (die groesste Menge) - fuer die
     #: Vorhaltung ist der schlimmste Fall relevant, nicht der Mittelwert.
     learned_zapfmenge_peak_l: float = 0.0
@@ -461,6 +480,38 @@ class LearningEngine:
         if peak:
             return float(self.data.learned_zapfmenge_peak_l or 0.0)
         return float(self.data.learned_zapfmenge_l or 0.0)
+
+    def get_learned_zapfmenge_je_wochentag(self, wochentag: int) -> float:
+        """Gelernte Zapfungsmenge fuer einen Wochentag (0=Mo..6=So).
+
+        BUGFIX (22.10.2026): Sonntag wird durch Baden mehr Warmwasser
+        gebraucht als fuer eine Dusche unter der Woche. Die Live-Messung
+        (09.-15.10.2026) zeigt: groesster steiler Temperaturabfall am
+        unteren Fuehler - Sa 5,8 K, Fr 4,2 K, Do 3,2 K, Mi 2,7 K,
+        Mo 2,1 K.
+
+        Wird je Wochentag getrennt gelernt, damit die WP am Wochenende
+        mehr vorheizt als unter der Woche - und umgekehrt montags nicht
+        auf dem Sonntags-Niveau.
+
+        Rueckfall auf den globalen Wert, solange fuer den Wochentag noch
+        zu wenige Beobachtungen vorliegen (dann ist der globale Wert
+        die bessere Naeherung als gar keiner).
+        """
+        try:
+            wd = int(wochentag)
+        except (TypeError, ValueError):
+            return self.get_learned_zapfmenge_l()
+        if not 0 <= wd <= 6:
+            return self.get_learned_zapfmenge_l()
+        key = str(wd)
+        n = self.data.zapfmenge_samples_je_wochentag.get(key, 0)
+        if n >= int(self.data.config.zapfmenge_min_samples_per_wochentag):
+            return float(
+                self.data.learned_zapfmenge_je_wochentag.get(key, 0.0) or 0.0
+            )
+        # Zu wenige Daten fuer diesen Wochentag: globaler Wert.
+        return self.get_learned_zapfmenge_l()
 
     def get_learned_morning_target_hour(self) -> float:
         """Gelernte MORGEN-Zielzeit (Default 07:00 bei < config.target_hour_min_samples Samples)."""
@@ -1935,6 +1986,23 @@ class LearningEngine:
                 )
                 self.data.learned_zapfmenge_l = round(neu_m, 1)
                 self.data.zapfmenge_samples = count_m
+                # BUGFIX (22.10.2026): Zusätzlich je Wochentag lernen.
+                # Sonntag wird durch Baden mehr Warmwasser gebraucht als
+                # fuer eine Dusche unter der Woche - mit einem globalen
+                # Mittelwert wuerde die WP auch montags auf dem
+                # Sonntags-Niveau vorheizen.
+                _wd = str(pend["start"].weekday())
+                _count_wd = self.data.zapfmenge_samples_je_wochentag.get(
+                    _wd, 0) + 1
+                _alt_wd = self.data.learned_zapfmenge_je_wochentag.get(
+                    _wd, 0.0)
+                _neu_wd = (
+                    zapfmenge_l if _count_wd <= 1
+                    else _alt_wd * (1.0 - alpha_m) + zapfmenge_l * alpha_m
+                )
+                self.data.learned_zapfmenge_je_wochentag[_wd] = round(
+                    _neu_wd, 1)
+                self.data.zapfmenge_samples_je_wochentag[_wd] = _count_wd
                 # Der Peak wird NICHT verstimmt - er ist der schlimmste
                 # Fall (Duschen am Wochenende) und fuer die Vorhaltung
                 # maßgeblich.

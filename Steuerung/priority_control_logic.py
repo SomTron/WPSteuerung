@@ -593,12 +593,34 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # an, damit die Reserve VOR der Zapfung im Speicher liegt.
         gelernte_zapfmenge_l = 0.0
         zapf_vorhaltung_k = 0.0
-        _get_menge = getattr(learning_engine, "get_learned_zapfmenge_l", None)
+        # BUGFIX (22.10.2026): Der Wochentag der ZAPFUNG zaehlt, nicht
+        # der heutige. Die WP heizt fuer die Zapfung am geplanten Tag -
+        # an einem Sonntag wird mehr gebraucht (Baden) als unter der
+        # Woche (Dusche). Deshalb wird der Wochentag des geplanten
+        # Termins verwendet (bzw. der heute, wenn kein Termin steht).
+        _zapf_wochentag = now_local.weekday()
+        if planned_date is not None:
+            try:
+                _zapf_wochentag = int(planned_date.weekday())
+            except (AttributeError, TypeError, ValueError):
+                pass
+        _get_menge = getattr(
+            learning_engine, "get_learned_zapfmenge_je_wochentag", None)
         if callable(_get_menge):
             try:
-                gelernte_zapfmenge_l = float(_get_menge(peak=True) or 0.0)
+                gelernte_zapfmenge_l = float(
+                    _get_menge(_zapf_wochentag) or 0.0
+                )
             except (TypeError, ValueError):
                 gelernte_zapfmenge_l = 0.0
+        else:
+            _get_menge = getattr(
+                learning_engine, "get_learned_zapfmenge_l", None)
+            if callable(_get_menge):
+                try:
+                    gelernte_zapfmenge_l = float(_get_menge(peak=True) or 0.0)
+                except (TypeError, ValueError):
+                    gelernte_zapfmenge_l = 0.0
         _cfg_menge = getattr(getattr(learning_engine, "data", None),
                              "config", None)
         _vol_l = float(getattr(_cfg_menge, "speicher_volumen_l", 0.0) or 0.0)

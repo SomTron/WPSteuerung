@@ -149,6 +149,66 @@ class TestVorhaltungImCalcStart:
             "Die Vorhaltung muss im Grundtext stehen: " + str(r.grund))
 
 
+class TestWochentag:
+    """Sonntag wird durch Baden mehr Warmwasser gebraucht (BUGFIX 22.10.2026).
+
+    Live-Messung (Entscheidungslog 09.-15.10.2026), groesster steiler
+    Temperaturabfall am unteren Fuehler:
+
+        Sa 5,8 K   Fr 4,2 K   Do 3,2 K   Mi 2,7 K   Mo 2,1 K
+
+    Die Menge muss deshalb je Wochentag gelernt werden - mit einem
+    globalen Mittelwert wuerde die WP auch montags auf dem
+    Sonntags-Niveau vorheizen.
+    """
+
+    def _lern_menge(self, eng, wochentag, menge_abfall_k):
+        """Eine Zapfung an einem bestimmten Wochentag erzeugen."""
+        tag = datetime(2026, 10, 12 + wochentag, 18, 30)  # 12.10.=Mo
+        _zapfe(eng, tag, 43.0, 43.0 - menge_abfall_k)
+
+    def test_je_wochentag_wird_gelernt(self, tmp_path):
+        eng = _engine(tmp_path)
+        # Sa groesser als Mo
+        self._lern_menge(eng, 5, 16.0)   # Samstag
+        self._lern_menge(eng, 0, 8.0)    # Montag
+        assert "5" in eng.data.learned_zapfmenge_je_wochentag
+        assert "0" in eng.data.learned_zapfmenge_je_wochentag
+        sa = eng.data.learned_zapfmenge_je_wochentag["5"]
+        mo = eng.data.learned_zapfmenge_je_wochentag["0"]
+        assert sa > mo, f"Samstag muert mehr als Montag: {sa} vs {mo}"
+
+    def test_wochentags_getter_unterscheidet(self, tmp_path):
+        """Mit je 2 Beobachtungen je Wochentag greift der
+        wochentagsspezifische Wert."""
+        eng = _engine(tmp_path)
+        self._lern_menge(eng, 5, 16.0)   # Sa
+        self._lern_menge(eng, 5, 16.0)
+        self._lern_menge(eng, 0, 8.0)    # Mo
+        self._lern_menge(eng, 0, 8.0)
+        sa = eng.get_learned_zapfmenge_je_wochentag(5)
+        mo = eng.get_learned_zapfmenge_je_wochentag(0)
+        assert sa > mo, f"Samstag muert mehr als Montag: {sa} vs {mo}"
+
+    def test_zu_wenig_daten_nimmt_den_globalen_wert(self, tmp_path):
+        """Mit nur einer Beobachtung fuer Sonntag gilt der globale Wert -
+        lieber ein Mittelwert als gar keiner."""
+        eng = _engine(tmp_path)
+        self._lern_menge(eng, 5, 16.0)
+        self._lern_menge(eng, 0, 8.0)
+        self._lern_menge(eng, 0, 8.0)
+        # Sonntag hat nur 1 Sample -> globaler Rueckfall
+        assert eng.get_learned_zapfmenge_je_wochentag(5) == \
+            eng.get_learned_zapfmenge_l()
+
+    def test_ungueltiger_wochentag_nimmt_den_globalen_wert(self, tmp_path):
+        eng = _engine(tmp_path)
+        assert eng.get_learned_zapfmenge_je_wochentag(99) == \
+            eng.get_learned_zapfmenge_l()
+        assert eng.get_learned_zapfmenge_je_wochentag(-1) == \
+            eng.get_learned_zapfmenge_l()
+
+
 class TestVerdrahtung:
     """Von der Lernengine bis zum CalcStart - die Leitung muss existieren."""
 
@@ -180,6 +240,41 @@ class TestVerdrahtung:
         text = quelle.read_text(encoding="utf-8")
         assert "zapfmenge_l=gelernte_zapfmenge_l" in text, (
             "Die Zapfungsmenge wird nicht durchgereicht")
+
+    def test_der_wochentag_wird_verwendet(self):
+        """Die Mengen-Berechnung muss den Wochentag der ZAPFUNG
+        verwenden - nicht den heutigen."""
+        import pathlib
+        quelle = pathlib.Path(__file__).resolve().parent.parent / "priority_control_logic.py"
+        text = quelle.read_text(encoding="utf-8")
+        assert "get_learned_zapfmenge_je_wochentag" in text, (
+            "Der wochentagsspezifische Wert wird nicht verwendet")
+        assert "_zapf_wochentag" in text, (
+            "Der Wochentag der Zapfung wird nicht bestimmt")
+        # Der Wochentag muss aus dem GEPLANTEN Termin stammen, wenn
+        # einer steht - sonst wuerde die WP fuer den falschen Tag
+        # vorheizen.
+        assert "planned_date.weekday()" in text, (
+            "Der Wochentag des geplanten Termins wird nicht verwendet")
+        # Die Zuweisung muss den GEPLANTEN Termin bevorzugen. Wird
+        # stattdessen immer der heutige Wochentag genommen, faellt die
+        # Mutation "fest auf Montag" nicht auf.
+        import re
+        block = re.search(
+            r"_zapf_wochentag = now_local\.weekday\(\).*?"
+            r"(?=_get_menge)",
+            text, re.S)
+        assert block, "Die Wochentag-Bestimmung wurde nicht gefunden"
+        # Geprueft wird die ZUWEISUNG, nicht nur das Vorkommen des
+        # Wortes: eine Mutation, die den geplanten Termin UEBERGAENGT
+        # (if False:), muss auffallen.
+        zuweisung = re.search(
+            r"if planned_date is not None:.*?"
+            r"_zapf_wochentag = int\(planned_date\.weekday\(\)\)",
+            block.group(0), re.S)
+        assert zuweisung, (
+            "Der geplante Termin wird nicht fuer den Wochentag genutzt - "
+            "der Wochentag wird immer vom HEUTIGEN Tag genommen")
 
     def test_ohne_lernengine_keine_vorhaltung(self, tmp_path):
         """Ohne Lernengine (oder mit zu wenig Daten) bleibt alles neutral."""
