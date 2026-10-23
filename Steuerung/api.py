@@ -40,7 +40,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from utils import HEIZUNGSDATEN_CSV, to_naive
+from utils import HEIZUNGSDATEN_CSV, monatsarchive, to_naive
 import csv_tail
 from constants import RAM_KRITISCH_VERFUEGBAR_KB
 from log_files import generationen, tail_bytes_ueber_alle
@@ -1275,24 +1275,27 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     basis = Path(csv_path)
     dateien = []
     # Monatsarchive im Format heizungsdaten_YYYY-MM.csv einbeziehen.
-    for kandidat in basis.parent.glob(f"{basis.stem}_*.csv"):
-        monat = kandidat.stem.rsplit("_", 1)[-1]
+    #
+    # BUGFIX (23.10.2026): Die Erkennung ueber `glob` + `strptime("%Y-%m")`
+    # uebersah Kollisionsdateien ("heizungsdaten_2026-07_143000.csv", die
+    # `rotiere_csv_monatlich` bei einer Doppelrotation erzeugt) und
+    # verwarf sie still - der Vormonat fehlte dann im Mittelwert. Jetzt
+    # gilt dieselbe Definition wie beim Rotieren und Aufraeumen
+    # (utils.monatsarchive); je Monat wird die neueste Datei gelesen.
+    for monat, pfade in monatsarchive(str(basis.parent), basis.stem).items():
         try:
             monat_dt = datetime.strptime(monat, "%Y-%m")
         except ValueError:
             continue
         monats_ende = (monat_dt.replace(day=28) + timedelta(days=4)).replace(day=1)
-        if monats_ende > grenze and monat_dt <= jetzt and kandidat not in dateien:
-            dateien.append(kandidat)
+        if monats_ende > grenze and monat_dt <= jetzt and pfade:
+            dateien.append(Path(pfade[-1]))
+    # Archive chronologisch zuerst, aktuelle Datei zuletzt. Die Reihenfolge
+    # ist wichtig: die Monatsgrenze wird nur uebernommen, wenn der
+    # tatsaechliche Abstand zwischen den Dateien plausibel ist.
+    dateien.sort(key=lambda p: p.name)
     if basis not in dateien:
         dateien.append(basis)
-    # Archive zuerst, aktuelle Datei zuletzt; Cross-Month-Grenzen werden nur
-    # uebernommen, wenn der tatsaechliche Abstand plausibel ist.
-    dateien = sorted(
-        dateien,
-        key=lambda p: (0, p.stem.rsplit("_", 1)[-1])
-        if p != basis else (1, "9999-12"),
-    )
 
     tages_energie: dict = {}
     # 15 Minuten ist dasmaximum fuer einen regulaeren Takt; echte 10/14-Sekunden

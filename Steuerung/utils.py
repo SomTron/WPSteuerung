@@ -5,7 +5,7 @@ import logging
 
 import shutil
 import os
-from typing import List
+from typing import Dict, List, Tuple
 
 
 def to_naive(dt: datetime) -> datetime:
@@ -277,6 +277,57 @@ def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None, delimite
 CSV_ARCHIV_MAX_MONATE = int(os.environ.get("WPS_CSV_ARCHIV_MAX_MONATE", "24"))
 
 
+def monatsarchive(verzeichnis: str, basis: str) -> Dict[str, List[str]]:
+    """Monatsarchive als {YYYY-MM: [Pfade, aeltester -> neuester]}.
+
+    BUGFIX (23.10.2026): Auf die Frage "ist das ein Monatsarchiv?" gab es
+    drei verschiedene Antworten:
+
+      * `rotiere_csv_monatlich` erzeugt "<basis>_YYYY-MM.csv" und bei einer
+        Kollision "<basis>_YYYY-MM_HHMMSS.csv",
+      * `raeume_csv_archiv_auf` akzeptierte nur Namen der Laenge 7,
+      * die Auswertungen (`_berechne_hist_wh_qm`) parsten "%Y-%m".
+
+    Folge: Eine doppelt rotierte Datei (Kollisionsname) war fuer JEDE
+    Auswertung unsichtbar UND wurde nie aufgeraeumt - sie wuchs als Waise
+    auf der SD-Karte, und der Vormonat fehlte still in den Auswertungen.
+
+    Hier steht die Definition an EINER Stelle: "<basis>_YYYY-MM.csv" und
+    "<basis>_YYYY-MM_HHMMSS.csv". Alles andere - etwa eine Altdatei
+    "<basis>_alt.csv" - wird ignoriert. Gueltige Monate nur 01-12.
+    """
+    if not verzeichnis or not os.path.isdir(verzeichnis):
+        return {}
+    praefix = basis + "_"
+    try:
+        dateien = os.listdir(verzeichnis)
+    except OSError:
+        return {}
+    gefunden: Dict[str, List[Tuple[str, str]]] = {}
+    for datei in dateien:
+        if not datei.startswith(praefix) or not datei.endswith(".csv"):
+            continue
+        rest = datei[len(praefix):-4]
+        monat = rest[:7]
+        if len(monat) != 7 or monat[4] != "-":
+            continue
+        try:
+            datetime.strptime(monat, "%Y-%m")
+        except ValueError:
+            continue
+        # Kollisionssuffix "_HHMMSS" (aus rotiere_csv_monatlich) oder leer.
+        suffix = rest[7:]
+        if suffix and not (suffix.startswith("_") and suffix[1:].isdigit()):
+            continue
+        gefunden.setdefault(monat, []).append((suffix, os.path.join(verzeichnis, datei)))
+    # Innerhalb eines Monats chronologisch: "" < "_143000" -> die
+    # Kollisionsdatei steht hinten und gilt damit als die neueste.
+    return {
+        monat: [pfad for _suffix, pfad in sorted(eintraege)]
+        for monat, eintraege in gefunden.items()
+    }
+
+
 def raeume_csv_archiv_auf(
     verzeichnis: str, basis: str, max_monate: int = None, heute: datetime = None
 ) -> List[str]:
@@ -300,28 +351,25 @@ def raeume_csv_archiv_auf(
     grenze = heute - timedelta(days=int(max_monate) * 31)
     geloescht: List[str] = []
     try:
-        for datei in sorted(os.listdir(verzeichnis)):
-            if not datei.startswith(basis + "_") or not datei.endswith(".csv"):
-                continue
-            monat = datei[len(basis) + 1:-4]
-            # Nur echte Monatsarchive "YYYY-MM" - keine Sonderdateien.
-            if len(monat) != 7 or monat[4] != "-":
-                continue
+        # BUGFIX (23.10.2026): Was ein Monatsarchiv ist, entscheidet jetzt
+        # `monatsarchive()` - dieselbe Definition wie beim Rotieren und in
+        # den Auswertungen. Vorher wurde hier nur die Laenge 7 akzeptiert;
+        # eine Kollisionsdatei ("..._YYYY-MM_HHMMSS.csv") blieb damit fuer
+        # immer auf der SD-Karte liegen.
+        for monat, pfade in monatsarchive(verzeichnis, basis).items():
             try:
-                jahr = int(monat[:4])
-                monat_nr = int(monat[5:])
-                zeitpunkt = datetime(jahr, monat_nr, 1)
+                zeitpunkt = datetime.strptime(monat, "%Y-%m")
             except ValueError:
                 continue
             if zeitpunkt >= grenze:
                 continue
-            pfad = os.path.join(verzeichnis, datei)
-            try:
-                os.remove(pfad)
-                geloescht.append(pfad)
-                logging.info(f"Altes CSV-Archiv entfernt: {pfad}")
-            except OSError as e:
-                logging.debug(f"CSV-Archiv nicht loeschbar: {pfad}: {e}")
+            for pfad in pfade:
+                try:
+                    os.remove(pfad)
+                    geloescht.append(pfad)
+                    logging.info(f"Altes CSV-Archiv entfernt: {pfad}")
+                except OSError as e:
+                    logging.debug(f"CSV-Archiv nicht loeschbar: {pfad}: {e}")
     except Exception as e:
         logging.error(f"Fehler beim Aufraeumen der CSV-Archive: {e}")
     return geloescht
@@ -341,9 +389,12 @@ def relevante_csv_dateien(csv_path: str = None, jetzt: datetime = None) -> List[
     vormonat = (jetzt.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     verzeichnis = os.path.dirname(csv_path)
     basis = os.path.splitext(os.path.basename(csv_path))[0]
-    kandidat = os.path.join(verzeichnis, f"{basis}_{vormonat}.csv")
-    if os.path.exists(kandidat):
-        dateien.append(kandidat)
+    # BUGFIX (23.10.2026): ueber monatsarchive() - damit wird auch eine
+    # Kollisionsdatei ("..._YYYY-MM_HHMMSS.csv") des Vormonats gefunden.
+    # Vorher fehlte der Vormonat in den Charts, wenn er doppelt rotiert war.
+    pfade = monatsarchive(verzeichnis, basis).get(vormonat) or []
+    if pfade:
+        dateien.append(pfade[-1])
     if os.path.exists(csv_path):
         dateien.append(csv_path)
     return dateien
