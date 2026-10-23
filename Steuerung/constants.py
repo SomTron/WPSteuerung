@@ -57,6 +57,14 @@ MEMORY_LOG_INTERVAL_SEC: int = 3600
 # fuer den RAM-Schutz der teuren /status-Auswertungen genutzt.
 RAM_KRITISCH_VERFUEGBAR_KB: int = 60 * 1024
 
+# Wie oft die /status-Caches (PV-Profil, 14-Tage-Wh/m2) im Hintergrund neu
+# gefuellt werden. Die Caches selbst haben 30 Minuten TTL - wird erst dann
+# gerechnet, zahlt der zufaellig naechste Request die ~3 s (gemessen:
+# 4,4 s statt 1,3 s). Mit 25 Minuten ist der Cache immer schon warm, wenn
+# er ablaeuft. BUGFIX (23.10.2026): genau dieser Effekt war nach dem
+# Neustart als "/status brauchte 10,7 s" aufgefallen.
+AUSWERTUNG_CACHE_REFRESH_SEC: int = 25 * 60
+
 # --- Compressor Verification ---
 COMPRESSOR_VERIFICATION_DELAY_MIN: int = 10
 COMPRESSOR_VERIFICATION_CHECK_INTERVAL_MIN: int = 1

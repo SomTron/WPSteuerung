@@ -91,6 +91,7 @@ from constants import (
     API_FEHLER_SCHWELLE_DEFAULT,
     MEMORY_LOG_INTERVAL_SEC,
     RAM_KRITISCH_VERFUEGBAR_KB,
+    AUSWERTUNG_CACHE_REFRESH_SEC,
 )
 
 # Global objects
@@ -569,13 +570,14 @@ async def setup_application():
         task.add_done_callback(_log_task_exception)
         background_tasks.append(task)
 
-    # Die teuren /status-Auswertungen (PV-Profil, 14-Tage-Wh/m2) einmal im
-    # Hintergrund vorwaermen. BUGFIX (23.10.2026): Nach jedem Neustart waren
+    # Die teuren /status-Auswertungen (PV-Profil, 14-Tage-Wh/m2) im
+    # Hintergrund warm halten. BUGFIX (23.10.2026): Nach jedem Neustart waren
     # die 30-Minuten-Caches kalt, und die WebApp-Polls (alle 5 s) rechneten
     # dieselbe Auswertung mehrfach gleichzeitig - im Betriebslog gemessen:
     # "/status brauchte 10.7 s", die WebApp bricht nach 8 s ab und zeigt
-    # dann keine Werte. Als Task, damit der Start nicht darauf wartet.
-    warm_task = asyncio.create_task(asyncio.to_thread(erwaerme_auswertungen))
+    # dann keine Werte. Der Loop laeuft als Task, damit der Start nicht
+    # darauf wartet.
+    warm_task = asyncio.create_task(auswertung_cache_loop())
     warm_task.add_done_callback(_log_task_exception)
     background_tasks.append(warm_task)
 
@@ -619,6 +621,37 @@ def handle_day_transition(state, now):
             logging.error(f"CSV-Rotation am Tageswechsel fehlgeschlagen: {e}")
         state.stats.last_completed_cycle = None
         state.stats.last_day = current_date
+
+async def auswertung_cache_loop() -> None:
+    """Haelt die /status-Caches warm (sofort beim Start, dann alle 25 min).
+
+    BUGFIX (23.10.2026): Die Caches (PV-Profil, 14-Tage-Wh/m2) haben 30
+    Minuten TTL. Wurde erst beim Ablauf gerechnet, zahlte der zufaellig
+    naechste Request die ~3 s - gemessen: 4,4 s statt 1,3 s, und nach einem
+    Neustart mit mehreren parallelen Polls bis 10,7 s (die WebApp bricht
+    nach 8 s ab). Mit einem Refresh kurz VOR dem Ablauf gibt es keinen
+    kalten Request mehr.
+
+    Der erste Durchlauf passiert sofort - das ist das Vorwaermen nach dem
+    Start. Fehler werden geloggt, aber nie weitergegeben: eine kalte
+    Anzeige ist harmlos, ein sterbender Hintergrund-Task nicht.
+    """
+    while True:
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(erwaerme_auswertungen), timeout=120
+            )
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            logging.warning(
+                "Vorwaermen der /status-Auswertungen nach 120 s abgebrochen "
+                "(Netz/SD-Karte?)"
+            )
+        except Exception:
+            logging.exception("Vorwaermen der /status-Auswertungen fehlgeschlagen")
+        await asyncio.sleep(AUSWERTUNG_CACHE_REFRESH_SEC)
+
 
 async def solar_refresh_loop(session, state) -> None:
     """Hintergrund-Refresh für Solax; harte Deadline, nie im 10-s-Regelloop."""

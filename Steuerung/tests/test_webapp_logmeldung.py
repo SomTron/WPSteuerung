@@ -114,3 +114,32 @@ def test_vorwaermen_erzeugt_keine_falsche_langsam_warnung(caplog, monkeypatch):
     with caplog.at_level(logging.WARNING):
         api._melde_langsame_antwort("/status", 9000.0)
     assert not caplog.records
+
+
+# --- Cache warm halten -------------------------------------------------------
+
+async def test_cache_loop_waermt_sofort_und_dann_zyklisch(monkeypatch):
+    """Der Loop muss beim Start vorwaermen UND die 30-Minuten-TTL unterlaufen.
+
+    Sonst zahlt der zufaellig naechste Request die Auswertung (gemessen:
+    4,4 s statt 1,3 s - und nach einem Neustart bis 10,7 s).
+    """
+    import asyncio
+
+    import main as m
+
+    aufrufe = []
+    monkeypatch.setattr(m, "erwaerme_auswertungen", lambda: aufrufe.append(1))
+    monkeypatch.setattr(m, "AUSWERTUNG_CACHE_REFRESH_SEC", 0.01)
+
+    task = asyncio.create_task(m.auswertung_cache_loop())
+    try:
+        await asyncio.sleep(0.1)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert len(aufrufe) >= 2, f"Loop waermt nicht zyklisch vor: {aufrufe}"
