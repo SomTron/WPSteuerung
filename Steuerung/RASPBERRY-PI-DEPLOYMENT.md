@@ -357,6 +357,37 @@ bei DMA-Bedarf zurueckgeholt - das ist normal und kein Warnsignal.
 Gewinn liegt bei den UNMOVABLE-Seiten (Kernel-Allokationen) - genau die
 hatten den OOM ausgeloest.
 
+### Was sonst noch RAM haelt (gemessen 23.10.2026, `ps aux --sort=-rss`)
+
+```
+pcmanfm --desktop --profile LXDE-pi   56 MB   grafischer Desktop (headless!)
+packagekitd                           27 MB   + 10 % CPU dauerhaft
+tailscaled                            28 MB   VPN (gebraucht)
+cloudflared                           20 MB   Funnel (gebraucht)
+wf-panel-pi                           18 MB   Wayfire-Panel
+rpi-connectd (wayvnc)                 14 MB   Remote-Desktop
+main.py (Steuerung)                   28 MB   <- der Dienst selbst
+Swap: /var/swap file 512M, USED 243M          SD-Karte, sehr langsam
+```
+
+`systemctl get-default` stand auf `graphical.target`: Der Desktop faehrt
+ohne Bildschirm hoch und kostet ~100-150 MB. Fuer eine Steuerung ist
+`multi-user.target` richtig:
+
+```bash
+sudo systemctl set-default multi-user.target
+sudo systemctl disable --now packagekit
+sudo reboot
+```
+
+Achtung: `rpi-connect`/WayVNC liefert den grafischen Remote-Zugriff -
+wer den braucht, laesst den Desktop an. Per SSH ist er nicht noetig.
+
+Der SD-Swap erklaert die Traegheit im Speicherdruck (am 23.10.2026 hing
+der Hauptloop 7,5 Minuten: `Alter=85s` -> `Alter=477s`). Nach dem
+Abschalten des Desktops ist der Druck deutlich kleiner; wer mehr will,
+nutzt zram (`systemd-zram-generator`) statt des Swapfiles auf der Karte.
+
 Code-Seite (Commit 2ffa2ea): Die teuren CSV-Auswertungen in `/status`
 und `/history` lesen nur noch den Datei-Tail und verdichten beim Lesen
 (113 MB -> 6 MB Spitze), und bei < 60 MB freiem RAM werden sie
