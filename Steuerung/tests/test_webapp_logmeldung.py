@@ -116,6 +116,47 @@ def test_vorwaermen_erzeugt_keine_falsche_langsam_warnung(caplog, monkeypatch):
     assert not caplog.records
 
 
+# --- /status rechnet nie selbst ---------------------------------------------
+
+def test_gecachtes_profil_liefert_none_wenn_kalt(tmp_path):
+    """/status darf die CSV-Auswertung nicht ausloesen, sondern nur lesen."""
+    import pv_profil
+
+    p = tmp_path / "profil.csv"
+    p.write_text("Zeitstempel,PowerDC1\n", encoding="utf-8")
+    pv_profil._cache.clear()
+
+    assert pv_profil.hole_gecachtes_profil(forecast_scaling=1.0, csv_path=str(p)) is None
+
+    profil = pv_profil.berechne_profil(str(p), force_refresh=True)
+    assert pv_profil.hole_gecachtes_profil(forecast_scaling=None, csv_path=str(p)) == profil
+
+
+def test_gecachtes_wh_qm_liefert_none_wenn_kalt(tmp_path, monkeypatch):
+    import pytz
+    from datetime import datetime as dt
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        api, "shared_state",
+        SimpleNamespace(local_tz=pytz.timezone("Europe/Berlin"), clock=None),
+    )
+    api._HIST_WH_QM_CACHE["zeit"] = None
+    api._HIST_WH_QM_CACHE["wert"] = None
+    assert api._historisches_wh_qm_gecacht(str(tmp_path / "x.csv")) is None
+
+    api._HIST_WH_QM_CACHE["zeit"] = api.to_naive(dt.now())
+    api._HIST_WH_QM_CACHE["wert"] = 1234.0
+    assert api._historisches_wh_qm_gecacht(str(tmp_path / "x.csv")) == 1234.0
+
+    # Zu alt -> wieder None (dann rechnet der Hintergrund)
+    assert api._historisches_wh_qm_gecacht(
+        str(tmp_path / "x.csv"), max_alter_sek=-1
+    ) is None
+    api._HIST_WH_QM_CACHE["zeit"] = None
+    api._HIST_WH_QM_CACHE["wert"] = None
+
+
 # --- Cache warm halten -------------------------------------------------------
 
 async def test_cache_loop_waermt_sofort_und_dann_zyklisch(monkeypatch):

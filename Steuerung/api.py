@@ -908,6 +908,11 @@ HISTORY_CACHE_MAX_EINTRAEGE: int = 4
 # unter dem, was im Betrieb normal frei ist (Befund 18.-23.10.2026:
 # 60-200 MB), aber deutlich ueber dem, was eine 30-MB-Spitze braucht.
 RAM_SCHUTZ_MIN_VERFUEGBAR_KB: int = RAM_KRITISCH_VERFUEGBAR_KB
+#: Erst ab diesem Wert gilt der RAM wieder als ausreichend (Hysterese).
+#: BUGFIX (23.10.2026): Ohne Hysterese flatterte der Schutz im Sekundentakt
+#: um die 60-MB-Schwelle - Log und Telegram wurden mit "RAM knapp" /
+#: "RAM wieder ausreichend" geflutet (Betriebslog 13:32).
+RAM_SCHUTZ_ERHOLUNG_KB: int = 90 * 1024
 
 #: Merkt, ob der RAM-Schutz gerade greift - fuer eine einzige Meldung je
 #: Episode statt einer Log-Zeile alle 5 Sekunden.
@@ -994,8 +999,16 @@ def _melde_langsame_antwort(route: str, dauer_ms: float) -> None:
     )
 
 
-def _ram_knapp(min_kb: int = RAM_SCHUTZ_MIN_VERFUEGBAR_KB) -> bool:
+def _ram_knapp(
+    min_kb: int = RAM_SCHUTZ_MIN_VERFUEGBAR_KB,
+    erholung_kb: int = RAM_SCHUTZ_ERHOLUNG_KB,
+) -> bool:
     """True, wenn fuer eine CSV-Auswertung zu wenig freier RAM bleibt.
+
+    Mit Hysterese: Ist der Schutz bereits aktiv, gilt der RAM erst ab
+    `erholung_kb` wieder als ausreichend. Ohne diesen Abstand wechselte die
+    Anzeige im Sekundentakt, sobald der freie Speicher um die Schwelle
+    schwankte.
 
     Ohne ``/proc`` (Windows, Tests) wird bewusst False geliefert - der
     Schutz darf sich nicht auf Plattformen auswirken, die er nicht kennt.
@@ -1007,7 +1020,8 @@ def _ram_knapp(min_kb: int = RAM_SCHUTZ_MIN_VERFUEGBAR_KB) -> bool:
         return False
     if not isinstance(verfuegbar, (int, float)):
         return False
-    return verfuegbar < min_kb
+    schwelle = erholung_kb if _RAM_SCHUTZ_AKTIV.get("aktiv") else min_kb
+    return verfuegbar < schwelle
 
 
 def _history_cache_key(csv_path: str, hours: int):
@@ -1450,6 +1464,41 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     return sum(tages_werte) / len(tages_werte)
 
 
+def _historisches_wh_qm_gecacht(csv_path: str, max_alter_sek: Optional[float] = None):
+    """Nur den Cache lesen (KEIN Rechnen) - None, wenn kalt oder zu alt.
+
+    BUGFIX (23.10.2026): Die Berechnung dauerte im Betrieb (23-MB-CSV auf
+    der SD-Karte) mehrere Sekunden. Im Request-Pfad blockierte das die
+    gesamte /status-Antwort - gemessen 8,4 s, die WebApp bricht nach 8 s ab
+    und zeigt dann gar nichts, obwohl Temperaturen und Kompressor-Status in
+    Millisekunden bereitstehen.
+    """
+    jetzt = to_naive(now_for(shared_state) if shared_state is not None else datetime.now())
+    zeit = _HIST_WH_QM_CACHE["zeit"]
+    if isinstance(zeit, datetime) and zeit.tzinfo is not None:
+        zeit = to_naive(zeit)
+    grenze = HIST_WH_QM_TTL_SEC if max_alter_sek is None else max_alter_sek
+    if not isinstance(zeit, datetime):
+        return None
+    if (jetzt - zeit).total_seconds() >= grenze:
+        return None
+    return _HIST_WH_QM_CACHE["wert"]
+
+
+def _starte_auswertung_im_hintergrund() -> None:
+    """Stoesst das Vorwaermen an, ohne den laufenden Request zu blockieren.
+
+    Mehrfachaufrufe sind harmlos: `erwaerme_auswertungen` nimmt das
+    Single-Flight-Lock und kehrt sofort zurueck, wenn schon eine laeuft.
+    """
+    try:
+        threading.Thread(
+            target=erwaerme_auswertungen, name="pv-auswertung", daemon=True
+        ).start()
+    except Exception:
+        logging.debug("Hintergrund-Auswertung nicht startbar", exc_info=True)
+
+
 def _historisches_wh_qm(csv_path: str):
     """Gecachter 14-Tage-Mittelwert (hoechstens 1x pro HIST_WH_QM_TTL_SEC)."""
     jetzt = to_naive(now_for(shared_state) if shared_state is not None else datetime.now())
@@ -1473,6 +1522,19 @@ def _historisches_wh_qm(csv_path: str):
 
 @app.get("/status")
 def get_status():
+    """Statusantwort fuer die WebApp - rechnet NIE die CSV-Auswertungen.
+
+    BUGFIX (23.10.2026): Die teuren Zusatzwerte (PV-Profil, 14-Tage-Wh/m2)
+    werden nur noch aus dem Cache gelesen. Ist er kalt, antwortet die Route
+    sofort ohne diese Karten und stoesst die Berechnung im Hintergrund an -
+    vorher blockierte sie die GESAMTE Antwort (gemessen 8,4 s, die WebApp
+    bricht nach 8 s ab und zeigt dann gar nichts, obwohl Temperaturen und
+    Kompressor-Status laengst bereitstehen).
+    """
+    return _status_daten(rechne_auswertung=False)
+
+
+def _status_daten(rechne_auswertung: bool = False):
     _status_start = time.perf_counter()
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
@@ -1709,16 +1771,10 @@ def get_status():
     # 14-Tage-Auswertungen uebersprungen - /status darf die Steuerung nicht
     # in den OOM-Kill ziehen. Die Regelung nutzt diese Werte nicht.
     _auswertung_erlaubt = _pv_profil_modul is not None and not _ram_knapp()
-    # Single-Flight: nur eine Anfrage rechnet die teuren Zusatzwerte.
-    _auswertung_laeuft_hier = False
-    if _auswertung_erlaubt:
-        _auswertung_laeuft_hier = _auswertung_starten()
-        if not _auswertung_laeuft_hier:
-            _auswertung_erlaubt = False
-            logging.debug(
-                "PV-Auswertung laeuft bereits in einer anderen Anfrage - "
-                "dieser Durchlauf antwortet ohne Profil"
-            )
+    # Kein Single-Flight-Lock mehr im Request: gerechnet wird nur noch im
+    # Hintergrund (erwaerme_auswertungen). Der Request liest ausschliesslich
+    # den Cache - auch waehrend eine Berechnung laeuft, denn dann steht dort
+    # noch der letzte gueltige Wert.
     if _pv_profil_modul is not None:
         # Nur beim Wechsel melden - /status wird alle 5 s abgefragt.
         if not _auswertung_erlaubt and not _RAM_SCHUTZ_AKTIV["aktiv"]:
@@ -1739,7 +1795,15 @@ def get_status():
             if _pv_profil_modul is not None and hasattr(_pv_profil_modul, 'berechne_forecast_scaling'):
                 # Historischer Wert: 14-Tage-Durchschnitt der CSV. Die Funktion
                 # integriert FeedinPower zeitbasiert und liefert Wh (Gesamtanlage).
-                historische_einspeisung_wh = _historisches_wh_qm(HEIZUNGSDATEN_CSV)
+                if rechne_auswertung:
+                    historische_einspeisung_wh = _historisches_wh_qm(HEIZUNGSDATEN_CSV)
+                else:
+                    historische_einspeisung_wh = _historisches_wh_qm_gecacht(
+                        HEIZUNGSDATEN_CSV
+                    )
+                    if historische_einspeisung_wh is None:
+                        # Kalt: Antwort nicht aufhalten, im Hintergrund rechnen.
+                        _starte_auswertung_im_hintergrund()
 
             # Forecast und historische Einspeisung auf dieselbe flächenbezogene
             # Energie beziehen. FeedinPower wird dafür durch die PV-Fläche geteilt.
@@ -1769,7 +1833,19 @@ def get_status():
                 forecast_info["forecast_irradiation_wh_m2"] = round(forecast_today_wh_m2, 0)
                 forecast_info["forecast_vs_historical"] = f"{round((scaling - 1) * 100, 1)}%"
 
-            profil_total = _pv_profil_modul.berechne_profil(forecast_scaling=scaling)
+            if rechne_auswertung:
+                profil_total = _pv_profil_modul.berechne_profil(
+                    forecast_scaling=scaling
+                )
+            else:
+                profil_total = _pv_profil_modul.hole_gecachtes_profil(
+                    forecast_scaling=scaling
+                )
+                if profil_total is None:
+                    # Kalt: sofort ohne Profil antworten, im Hintergrund
+                    # rechnen. Beim naechsten Poll (5 s) ist es da.
+                    _starte_auswertung_im_hintergrund()
+                    profil_total = {}
             profil = {hour: round(value / pv_area, 1) for hour, value in profil_total.items()}
             peak = _pv_profil_modul.get_peak_leistung(profil)
 
@@ -1792,10 +1868,6 @@ def get_status():
             }
     except Exception as e:
         logging.debug(f"PV-Profil/Forecast nicht verfuegbar: {e}")
-    finally:
-        # Single-Flight-Lock immer freigeben - auch bei einer Ausnahme.
-        if _auswertung_laeuft_hier:
-            _auswertung_beenden()
 
     status_now = _api_now(shared_state)
     status_age_s = None
@@ -1990,7 +2062,9 @@ def erwaerme_auswertungen() -> None:
         return  # eine Anfrage rechnet bereits - dann ist der Cache gleich warm
     _WAERMT_VOR = True
     try:
-        get_status()
+        # WICHTIG: mit rechne_auswertung=True - die Route selbst liest nur
+        # noch den Cache und wuerde hier nichts fuellen.
+        _status_daten(rechne_auswertung=True)
     except Exception as e:
         logging.debug(f"Vorwaermen der Statusauswertung fehlgeschlagen: {e}")
     finally:

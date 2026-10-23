@@ -35,6 +35,35 @@ _PROFIL_SPALTEN = (
 )
 
 
+def _cache_key(csv_path: str, forecast_scaling: Optional[float]) -> str:
+    """Schluessel des Profil-Caches (Pfad + Forecast-Faktor)."""
+    return f"{csv_path}_{forecast_scaling}"
+
+
+def hole_gecachtes_profil(
+    forecast_scaling: Optional[float] = None,
+    csv_path: str = HEIZUNGSDATEN_CSV,
+    max_alter_sek: Optional[float] = None,
+) -> Optional[Dict[int, float]]:
+    """Liefert das gecachte Profil OHNE zu rechnen (None, wenn kalt).
+
+    BUGFIX (23.10.2026): `/status` darf nie auf die CSV-Auswertung warten -
+    sonst haengt die GESAMTE Anzeige (Temperaturen, Kompressor) mit. Im
+    Betriebslog gemessen: "/status brauchte 8.4 s", die WebApp bricht nach
+    8 s ab und zeigt dann gar nichts. Ist der Cache kalt, antwortet die
+    Route ohne Profil; die Neuberechnung laeuft im Hintergrund und ist
+    beim naechsten Poll (5 s spaeter) da.
+    """
+    eintrag = _cache.get(_cache_key(csv_path, forecast_scaling))
+    if eintrag is None:
+        return None
+    zeit, profil = eintrag
+    grenze = CACHE_TTL_SEKUNDEN if max_alter_sek is None else max_alter_sek
+    if (datetime.now() - zeit).total_seconds() > grenze:
+        return None
+    return profil
+
+
 def _parse_zeitstempel(text: Optional[str]) -> Optional[datetime]:
     """CSV-Zeitstempel als naive lokale Zeit (None bei unbrauchbarem Wert)."""
     if not text:
@@ -132,7 +161,7 @@ def berechne_profil(
     # unsinnig zugleich: korrekt ist, ihn wegzulassen, weil das
     # Modul-Level genuegt.
     jetzt = datetime.now()
-    cache_key = f"{csv_path}_{forecast_scaling}"
+    cache_key = _cache_key(csv_path, forecast_scaling)
     if not force_refresh and cache_key in _cache:
         cache_time, cache_profil = _cache[cache_key]
         if (jetzt - cache_time).total_seconds() < CACHE_TTL_SEKUNDEN:

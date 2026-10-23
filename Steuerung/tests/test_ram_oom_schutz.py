@@ -340,6 +340,34 @@ def test_ram_knapp_erkennt_knappen_speicher(monkeypatch):
     assert api._ram_knapp() is False
 
 
+def test_ram_schutz_hat_hysterese(monkeypatch):
+    """Regression: Ohne Hysterese flatterte der Schutz um die 60-MB-Schwelle.
+
+    Im Betriebslog 13:32 standen "RAM knapp" und "RAM wieder ausreichend"
+    im Sekundentakt. Jetzt gilt: rein bei < 60 MB, raus erst ab > 90 MB.
+    Das ist auch fuer Telegram wichtig - jede WARNING geht dorthin.
+    """
+    import startup_diagnose
+
+    werte = {"total_kb": 425984, "verfuegbar_kb": 40 * 1024, "rss_kb": 90000}
+    monkeypatch.setattr(
+        startup_diagnose, "speicher_werte", lambda *a, **k: dict(werte)
+    )
+    monkeypatch.setattr(api, "_RAM_SCHUTZ_AKTIV", {"aktiv": False})
+
+    # 40 MB: unter der Einschaltschwelle -> Schutz an
+    assert api._ram_knapp() is True
+    api._RAM_SCHUTZ_AKTIV["aktiv"] = True
+
+    # 70 MB: ueber der Einschalt-, aber unter der Erholungsschwelle -> bleibt an
+    werte["verfuegbar_kb"] = 70 * 1024
+    assert api._ram_knapp() is True, "Schutz darf bei 70 MB nicht abschalten"
+
+    # 100 MB: ueber der Erholungsschwelle -> Schutz aus
+    werte["verfuegbar_kb"] = 100 * 1024
+    assert api._ram_knapp() is False
+
+
 def test_ram_knapp_ohne_proc_ist_false(monkeypatch):
     """Ohne /proc (Windows, Tests) darf der Schutz nichts abschalten."""
     import startup_diagnose
