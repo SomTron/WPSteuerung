@@ -1225,9 +1225,15 @@
             try {
                 const leiste = document.getElementById('js-fehler');
                 if (!leiste) return;
+                // Dieselbe Meldung nicht wiederholen: Ein dauerhafter
+                // Timeout (alle 5 s) wuerde die Leiste sonst endlos fuellen.
+                if (leiste.textContent.indexOf(text) !== -1) return;
                 const zeit = new Date().toLocaleTimeString();
+                const zeilen = (leiste.textContent + '[' + zeit + '] ' + text + '\n')
+                    .split('\n');
+                // Nur die letzten 15 Meldungen behalten.
+                leiste.textContent = zeilen.slice(-16).join('\n');
                 leiste.style.display = 'block';
-                leiste.textContent += '[' + zeit + '] ' + text + '\n';
             } catch (_ignoriert) { /* Anzeige darf nie selbst scheitern */ }
         }
         window.addEventListener('error', function (ev) {
