@@ -1234,7 +1234,30 @@
                 // Nur die letzten 15 Meldungen behalten.
                 leiste.textContent = zeilen.slice(-16).join('\n');
                 leiste.style.display = 'block';
+                // Zusaetzlich ins STEUERUNGS-LOG melden (BUGFIX 23.10.2026):
+                // Ein Fehler im Browser war bisher nur auf dem Geraet
+                // sichtbar - auf dem Handy gibt es keine Konsole. Der Server
+                // schreibt ihn als WARNUNG ins Log (gedrosselt, s. api.py).
+                meldeAnServer(text);
             } catch (_ignoriert) { /* Anzeige darf nie selbst scheitern */ }
+        }
+
+        function meldeAnServer(text) {
+            try {
+                if (typeof API_BASE === 'undefined') return;
+                fetch(API_BASE + '/debug/clientfehler', {
+                    method: 'POST',
+                    cache: 'no-store',
+                    keepalive: true,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        meldung: String(text).slice(0, 500),
+                        typ: 'webapp',
+                        seite: String(location.pathname).slice(0, 120),
+                        version: (typeof APP_VERSION === 'undefined' ? '?' : APP_VERSION)
+                    })
+                }).catch(function () { /* Meldung ist Diagnose, kein Muss */ });
+            } catch (_ignoriert) { /* niemals selbst scheitern */ }
         }
         window.addEventListener('error', function (ev) {
             const ort = ev.filename ? ' (' + ev.filename.split('/').pop() + ':' + ev.lineno + ')' : '';

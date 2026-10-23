@@ -42,3 +42,10 @@ def test_statusabruf_meldet_fehler_in_der_leiste():
     assert re.search(r"zeigeJsFehler\('Statusabruf: '", html), (
         "Statusabruf-Fehler werden nicht sichtbar gemeldet"
     )
+
+
+def test_webapp_meldet_fehler_an_den_server():
+    """Der Fehler muss ins STEUERUNGS-Log, nicht nur auf den Bildschirm."""
+    html = _html()
+    assert "/debug/clientfehler" in html, "kein Server-Report der WebApp"
+    assert "meldeAnServer(text)" in html, "zeigeJsFehler meldet nicht an den Server"

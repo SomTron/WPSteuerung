@@ -912,6 +912,52 @@ RAM_SCHUTZ_MIN_VERFUEGBAR_KB: int = RAM_KRITISCH_VERFUEGBAR_KB
 #: Episode statt einer Log-Zeile alle 5 Sekunden.
 _RAM_SCHUTZ_AKTIV: dict = {"aktiv": False}
 
+# --- Beobachtbarkeit: langsame Antworten und Fehler der WebApp ------------
+#
+# BUGFIX (23.10.2026): Zwei Fehlerklassen waren im Steuerungs-Log UNSICHTBAR,
+# weil sie ausserhalb des Servers passieren:
+#
+#   1. Eine langsame Route. `/status` brauchte 19,7 s, die WebApp bricht
+#      nach STATUS_TIMEOUT_MS = 8000 ab - und zwar stumm (AbortError wird
+#      bewusst nicht in die Konsole geschrieben). Im Log stand nichts.
+#   2. Ein Fehler im Browser (JS/Render). Er bleibt beim Nutzer auf dem
+#      Geraet; auf dem Handy ist keine Konsole erreichbar.
+#
+# Deshalb: langsame Antworten werden serverseitig gemeldet, und die WebApp
+# meldet ihre Fehler an /debug/clientfehler. Beides gedrosselt - ein
+# Dauerzustand soll nicht das Log und nicht Telegram fluten.
+_SLOW_RESPONSE_SCHWELLE_MS: float = 3000.0
+_MELDUNG_DROSSEL_SEC: float = 300.0
+_letzte_meldung: dict = {}
+
+
+def _darf_melden(schluessel: str, intervall: float = _MELDUNG_DROSSEL_SEC) -> bool:
+    """True, wenn dieser Schluessel seit `intervall` Sekunden nicht gemeldet wurde."""
+    jetzt = time.monotonic()
+    vorher = _letzte_meldung.get(schluessel)
+    if vorher is not None and jetzt - vorher < intervall:
+        return False
+    _letzte_meldung[schluessel] = jetzt
+    return True
+
+
+def _melde_langsame_antwort(route: str, dauer_ms: float) -> None:
+    """Warnt einmalig, wenn eine Route die WebApp-Zeitgrenze reisst.
+
+    Die WebApp bricht bei 8 s ab (STATUS_TIMEOUT_MS) - eine Route, die
+    laenger braucht, liefert dem Nutzer also NIE Daten. Ohne diese Meldung
+    sieht das im Log wie ein gesunder Dienst aus.
+    """
+    if dauer_ms < _SLOW_RESPONSE_SCHWELLE_MS:
+        return
+    if not _darf_melden(f"langsam:{route}"):
+        return
+    logging.warning(
+        "%s brauchte %.1f s (Warnschwelle %.0f s) - die WebApp bricht nach "
+        "%.0f s ab und zeigt dann keine Werte",
+        route, dauer_ms / 1000.0, _SLOW_RESPONSE_SCHWELLE_MS / 1000.0, 8.0,
+    )
+
 
 def _ram_knapp(min_kb: int = RAM_SCHUTZ_MIN_VERFUEGBAR_KB) -> bool:
     """True, wenn fuer eine CSV-Auswertung zu wenig freier RAM bleibt.
@@ -1392,6 +1438,7 @@ def _historisches_wh_qm(csv_path: str):
 
 @app.get("/status")
 def get_status():
+    _status_start = time.perf_counter()
     if not shared_state:
         raise HTTPException(status_code=503, detail="System not initialized")
 
@@ -1825,7 +1872,53 @@ def get_status():
         },
     })
     validate_status_shape(response)
+    # BUGFIX (23.10.2026): Dauer messen und ins Log melden. Die WebApp
+    # bricht nach 8 s ab - eine langsamere Route liefert NIE Werte, im Log
+    # sah der Dienst bis dahin gesund aus.
+    _melde_langsame_antwort("/status", (time.perf_counter() - _status_start) * 1000.0)
     return response
+
+
+class ClientFehler(BaseModel):
+    """Fehlermeldung aus der WebApp (Browser/Handy).
+
+    Bewusst klein und ohne Personenbezug: Meldung, Typ, Seite, Version.
+    Die Laengen sind begrenzt, damit ein fehlerhafter Client das Log nicht
+    fluten oder den Dienst belasten kann.
+    """
+
+    meldung: str = Field(default="", max_length=500)
+    typ: str = Field(default="", max_length=80)
+    seite: str = Field(default="", max_length=120)
+    version: str = Field(default="", max_length=20)
+
+
+@app.post("/debug/clientfehler")
+def client_fehler(fehler: ClientFehler):
+    """Nimmt einen Fehler aus der WebApp an und schreibt ihn ins Log.
+
+    BUGFIX (23.10.2026): Ein JS-/Render-Fehler blieb bisher auf dem Geraet
+    des Nutzers - im Steuerungs-Log stand nichts, und auf dem Handy gibt es
+    keine Konsole. Genau deshalb war am 23.10.2026 stundenlang unklar, warum
+    die Oberflaeche leer blieb, obwohl /status korrekte Werte lieferte.
+
+    Der Endpunkt ist bewusst wehrlos einfach: kein API-Key (wie
+    /debug/lernstand), nie 500, gedrosselt je Meldung (5 Minuten) und ohne
+    Auswirkung auf die Regelung.
+    """
+    try:
+        text = f"{fehler.typ or 'Fehler'}: {fehler.meldung or 'ohne Meldung'}"[:400]
+        seite = fehler.seite or "unbekannt"
+        version = fehler.version or "?"
+        if not _darf_melden("client:" + text[:120]):
+            return {"ok": True, "geloggt": False, "grund": "gedrosselt"}
+        logging.warning(
+            "WebApp-Fehler (Seite %s, Version %s): %s", seite, version, text
+        )
+        return {"ok": True, "geloggt": True}
+    except Exception:
+        # Eine Meldung darf niemals einen Fehler erzeugen.
+        return {"ok": False}
 
 
 @app.get("/history/regeln")
