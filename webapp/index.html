@@ -1097,6 +1097,13 @@
 </head>
 
 <body>
+    <!-- Sichtbare Fehlerleiste: Ein Fehler im Renderpfad liess die Anzeige
+         bisher stumm leer ("alle Werte -"), waehrend der Verbindungstext
+         unveraendert stehen blieb. Ohne Browser-Konsole war die Ursache
+         nicht zu finden (Befund 23.10.2026). Jetzt steht die Meldung oben. -->
+    <div id="js-fehler" style="display:none;position:sticky;top:0;z-index:9999;
+         background:#7f1d1d;color:#fff;padding:8px 12px;font:12px/1.4 monospace;
+         white-space:pre-wrap;max-height:40vh;overflow:auto"></div>
     <div class="container">
                 <header>
             <h1>Wärmepumpen Steuerung</h1>
@@ -1207,7 +1214,32 @@
     </div>
 
         <script>
-                const API_BASE = window.location.origin;
+        // --- Sichtbare Fehleranzeige (BUGFIX 23.10.2026) ---------------------
+        // Ein Fehler im Renderpfad liess die Oberflaeche stumm leer: alle
+        // Werte blieben auf "-", waehrend der Verbindungstext unveraendert
+        // stehen blieb. In der Konsole stand die Ursache, auf dem Handy war
+        // sie nicht erreichbar. Deshalb wird JEDER unbehandelte Fehler oben
+        // in der Leiste angezeigt (und bleibt dort stehen, bis man sie
+        // schliesst). Das ist Diagnose, kein Ersatz fuer try/catch.
+        function zeigeJsFehler(text) {
+            try {
+                const leiste = document.getElementById('js-fehler');
+                if (!leiste) return;
+                const zeit = new Date().toLocaleTimeString();
+                leiste.style.display = 'block';
+                leiste.textContent += '[' + zeit + '] ' + text + '\n';
+            } catch (_ignoriert) { /* Anzeige darf nie selbst scheitern */ }
+        }
+        window.addEventListener('error', function (ev) {
+            const ort = ev.filename ? ' (' + ev.filename.split('/').pop() + ':' + ev.lineno + ')' : '';
+            zeigeJsFehler('JS-Fehler: ' + (ev.message || 'unbekannt') + ort);
+        });
+        window.addEventListener('unhandledrejection', function (ev) {
+            const g = ev.reason;
+            zeigeJsFehler('Promise-Fehler: ' + (g && g.message ? g.message : String(g)));
+        });
+
+        const API_BASE = window.location.origin;
         // EINZIGE Versionsangabe der WebApp (Badge + Dokumenttitel).
         // Vorher stand dieselbe Version doppelt im HTML und war veraltet.
         // Bei jedem Release mit dem Log-Verzeichnisnamen abgleichen.
@@ -1704,6 +1736,10 @@
                 if (error.name !== 'AbortError') {
                     console.error('Fehler beim Abrufen der Daten:', error);
                 }
+                // Auch sichtbar machen: Hier landet AUCH ein Fehler aus
+                // renderApp()/updateValues() - dann sind die Daten da, die
+                // Anzeige bleibt aber leer.
+                zeigeJsFehler('Statusabruf: ' + fehlerText);
                 updateConnectionStatus(false);
                 if (errorPanel && errorMsg) {
                     errorMsg.textContent = fehlerText;
