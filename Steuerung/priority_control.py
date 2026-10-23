@@ -2582,6 +2582,12 @@ def evaluate_legionellen(
     # BUGFIX (21.10.2026): Ausserhalb des PV-Fensters zaehlt PV nicht
     # als Quelle - auch nicht fuer die Legionellenprophylaxe.
     pv_quelle_erlaubt: bool = True,
+    # NUTZERANFORDERUNG (23.10.2026): Die Legionellenprophylaxe haelt sich
+    # an die Nachtsperre - auch eine BEREITS LAUFENDE Fahrt. Sie wird nachts
+    # nicht weitergeheizt, sondern am naechsten Tag als Nachversuch
+    # fortgesetzt. Defaults entsprechen SicherheitConfig (19-8 Uhr).
+    nachtsperre_start: int = 19,
+    nachtsperre_ende: int = 8,
 ):
     """Bewertet, ob die Legionellenprophylaxe durchgefuehrt werden soll."""
     result = RegelErgebnis(
@@ -2597,6 +2603,28 @@ def evaluate_legionellen(
     if t_unten is None:
         result.aktiv = False
         result.grund = "Sensordaten nicht verfuegbar"
+        return result
+    # Nachtsperre (Nutzeranforderung 23.10.2026): Die Prophylaxe respektiert
+    # die Nachtsperre wie jede andere Regel - auch eine laufende Fahrt.
+    # Der Grund steht VOR allen anderen Zweigen, weil die Sperre sonst von
+    # "Legionellen aktiv ... heize weiter" ueberstimmt wuerde (die Regel ist
+    # mit Prio 90 Gewinner und lief frueher die ganze Nacht durch).
+    # Der Hardware-Stopp merkt den Lauf als `legionellen_unvollstaendig` vor;
+    # der Plan bleibt stehen und der Nachversuch startet am naechsten Tag.
+    if _is_nachtsperre(
+        int(now.hour), int(nachtsperre_start), int(nachtsperre_ende)
+    ):
+        result.aktiv = False
+        result.einschalten = None
+        result.grund = (
+            f"Nachtsperre aktiv ({int(nachtsperre_start)}-"
+            f"{int(nachtsperre_ende)} Uhr) - Legionellenprophylaxe pausiert"
+            + (
+                "; Nachversuch am naechsten Tag"
+                if (legionellen_aktiv or legionellen_unvollstaendig)
+                else ""
+            )
+        )
         return result
     if legionellen_aktiv:
         if t_unten >= legionellen_cfg.target_temp_c:
@@ -2672,7 +2700,16 @@ def evaluate_legionellen(
         int(legionellen_cfg.bevorzugter_tag),
         int(legionellen_cfg.letzter_tag) + 1,
     )
-    if legionellen_planned_date is not None and now.date() < legionellen_planned_date:
+    # NUTZERANFORDERUNG (23.10.2026): Ein offener Nachversuch darf NICHT auf
+    # einen spaeter geplanten Termin warten. Genau das passierte nach einer
+    # Nachtunterbrechung: die Tagesplanung setzte den Plan auf den naechsten
+    # besten PV-Tag (z.B. Sonntag), und dieser Zweig blockierte die
+    # Fortsetzung am Folgetag. Der Nachversuch setzt daher vor dem Plan an.
+    if (
+        legionellen_planned_date is not None
+        and now.date() < legionellen_planned_date
+        and not nachversuch
+    ):
         result.aktiv = True
         result.einschalten = None
         result.grund = (
@@ -3110,6 +3147,10 @@ def bewerte_alle_regeln(
         battery_power=battery_power,
         soc=soc,
         solar_stale=solar_stale,
+        # Nutzeranforderung 23.10.2026: Die Prophylaxe respektiert die
+        # Nachtsperre aus derselben Config wie alle anderen Regeln.
+        nachtsperre_start=nachtsperre_start,
+        nachtsperre_ende=nachtsperre_ende,
     )
     ergebnisse.append(ergebnis)
 

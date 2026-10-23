@@ -25,6 +25,13 @@ PLAN_FIELDS = (
     "legionellen_plan_revision",
     "legionellen_plan_created_at",
     "legionellen_planned_reason",
+    # NUTZERANFORDERUNG (23.10.2026): Ein vor dem Ziel abgebrochener Lauf
+    # (z.B. wegen der Nachtsperre) muss am naechsten Tag weiterlaufen - auch
+    # ueber einen Service-Neustart hinweg. Das Flag gehoert deshalb in die
+    # persistente Planung; ohne es startete die Regel nach einem Neustart
+    # wieder im normalen Wochentags-/Zeitfenster und der angefangene Lauf
+    # waere verloren.
+    "legionellen_unvollstaendig",
 )
 
 
@@ -39,6 +46,11 @@ def _parse_value(field: str, value: Any) -> Any:
         return int(value)
     if field == "legionellen_planned_forecast_wh":
         return float(value)
+    if field == "legionellen_unvollstaendig":
+        # JSON liefert bool; defensiv auch "true"/"false"/"1"/"0" akzeptieren.
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "ja", "yes"}
+        return bool(value)
     return str(value)
 
 

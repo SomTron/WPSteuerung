@@ -69,6 +69,25 @@ sys.modules["RPLCD.i2c"] = mock_rplcd
 # Mock w1thermsensor (just in case)
 sys.modules["w1thermsensor"] = MagicMock()
 
+
+@pytest.fixture(autouse=True)
+def isolate_legionellenplan(tmp_path, monkeypatch):
+    """Unit-Tests duerfen niemals den echten Legionellenplan ueberschreiben.
+
+    `determine_mode_and_setpoints` verwirft bei veralteten Forecast-Daten den
+    Plan (`_invalidate_legionellen_plan` -> `save_plan`). Mit Mock-States
+    schrieb das bisher in die produktive `legionellen_plan.json` im
+    Arbeitsverzeichnis. Seit 23.10.2026 persistiert zusaetzlich der
+    Abbruchpfad den Nachversuch (`legionellen_unvollstaendig`) - ohne
+    Isolation wuerde jeder Lifecycle-Test die Datei ersetzen.
+    """
+    import legionellen_plan
+
+    monkeypatch.setattr(
+        legionellen_plan, "PLAN_FILE", str(tmp_path / "legionellen_plan.json")
+    )
+
+
 @pytest.fixture(autouse=True)
 def isolate_entscheidungslog(tmp_path, monkeypatch):
     """Unit-Tests duerfen niemals in den echten Entscheidungslog schreiben."""

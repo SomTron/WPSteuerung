@@ -434,7 +434,9 @@ je einen eigenen Zweck:
   `max_duration_hours` (Standard 24 h, 0 = aufgehoben) ist nur der Notausstieg
   gegen einen endlos laufenden Lauf; ein Abbruch daran gilt als
   „unvollständig" und lässt einen Nachversuch zu (Kap. 5.3 in
-  `STEUERUNGSMODI.md`).
+  `STEUERUNGSMODI.md`). Die Prophylaxe respektiert die **Nachtsperre** (19–8
+  Uhr) auch während einer laufenden Fahrt: nachts pausiert sie, der
+  Nachversuch läuft am nächsten Tag weiter (persistiert im Legionellenplan).
 
 ## 4. Übergreifende Mechanismen
 
@@ -451,7 +453,11 @@ Blockiert alle *Einschaltpunkte*. Bewusste Ausnahmen (Garantien):
      Abend-Duschen kein Nacht-Heizen ohne PV mehr passiert.
 
 Laufende Heizzyklen werden nicht hart unterbrochen; die Abschaltlogik arbeitet
-weiter mit dem Ausschaltpunkt der Gewinner-Regel.
+weiter mit dem Ausschaltpunkt der Gewinner-Regel. **Ausnahme Legionellen:**
+Die Prophylaxe ist selbst die Gewinner-Regel (Prio 90) und liefert ab
+Sperrenbeginn `einschalten=None` — sie heizt nachts nicht weiter, wird als
+`legionellen_unvollstaendig` vorgemerkt und am nächsten Tag fortgesetzt
+(Kap. 3.11).
 
 ### 4.2 Sommermodus (Dauer-Sonne)
 

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 import priority_control_logic as pcl
 from clock import now_for
-from legionellen_plan import clear_plan
+from legionellen_plan import clear_plan, save_plan
 from utils import safe_timedelta
 
 
@@ -65,6 +65,15 @@ def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
         # Jetzt: als unvollstaendig vormerken, Plan BEHALTEN. Nur so ist ein
         # erneuter Start moeglich (Ausnahme in evaluate_legionellen).
         state.legionellen_unvollstaendig = True
+        # NUTZERANFORDERUNG (23.10.2026): Der offene Nachversuch wird sofort
+        # mitsamt Plan persistiert. Bricht die Fahrt an der Nachtsperre ab und
+        # startet der Dienst ueber Nacht neu, kennt die Regel den Nachversuch
+        # trotzdem und macht am naechsten Tag weiter (statt den Lauf zu
+        # verlieren und erst in der naechsten Kalenderwoche neu zu beginnen).
+        try:
+            save_plan(state)
+        except Exception:
+            logging.debug("Legionellenplan konnte beim Abbruch nicht gespeichert werden", exc_info=True)
         logging.warning(
             "Legionellenlauf vor dem Ziel abgebrochen (%s, Ziel %.0fC nicht erreicht) - "
             "unvollstaendig vorgemerkt, erneuter Anlauf zulaessig.",
@@ -251,6 +260,15 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
             state.legionellen_end_time = now
             state.legionellen_unvollstaendig = True
             state._last_was_legionellen = True
+            # Auch dieser Abbruch muss den Nachversuch ueber einen Neustart
+            # hinweg sichern (siehe _beende_legionellenlauf_if_needed).
+            try:
+                save_plan(state)
+            except Exception:
+                logging.debug(
+                    "Legionellenplan konnte am Zeitlimit nicht gespeichert werden",
+                    exc_info=True,
+                )
             _t_unten = getattr(getattr(state, "sensors", None), "t_unten", None)
             _t_unten_txt = (
                 f"{float(_t_unten):.1f}C"

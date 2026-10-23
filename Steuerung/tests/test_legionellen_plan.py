@@ -204,8 +204,10 @@ class TestAbbruchVorZiel:
             spaeteste_start_uhr=12, pv_start_min_watt=500.0,
             batterie_start_min_watt=50.0, batterie_start_min_soc_prozent=90.0,
         )
-        # Mittwoch, 21 Uhr: ausserhalb Wochentagsfenster UND Startfenster
-        now = datetime(2026, 9, 23, 21, 0)
+        # Mittwoch, 17 Uhr: ausserhalb Wochentagsfenster UND Startfenster
+        # (aber ausdruecklich VOR der Nachtsperre 19-8 Uhr - nachts bleibt der
+        # Nachversuch gesperrt, siehe test_legionellen_mode.py).
+        now = datetime(2026, 9, 23, 17, 0)
         temps = {"unten": 40.0, "oben": 45.0, "mittig": 42.0}
 
         # Ohne Nachversuch: kein Start (Wochentag + spaetester Start verpasst)
@@ -220,6 +222,53 @@ class TestAbbruchVorZiel:
         assert mit.einschalten is True, (
             f"Nachversuch wurde durch das Wochentags-Gate blockiert: {mit.grund}"
         )
+
+    def test_nachtunterbrechung_persistiert_den_nachversuch(self):
+        """Nutzeranforderung 23.10.2026: Die an der Nachtsperre unterbrochene
+        Fahrt muss am naechsten Tag weiterlaufen - auch nach einem Neustart.
+
+        Der Abbruchpfad schreibt das Flag `legionellen_unvollstaendig` in die
+        persistente Planung. Der verstrichene Plantag wird beim Laden
+        verworfen; der offene Nachversuch bleibt erhalten.
+        """
+        st = _state()
+        jetzt = datetime.now(TZ)
+        gestern = jetzt.date() - timedelta(days=1)
+        st.legionellen_planned_day = "Testtag"
+        st.legionellen_planned_tag = gestern.weekday()
+        st.legionellen_planned_date = gestern
+        st.legionellen_planned_forecast_wh = 2500.0
+        st.legionellen_plan_created_at = jetzt
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = jetzt - timedelta(hours=3)
+
+        _beende_legionellenlauf_if_needed(st, jetzt, "Nachtsperre")
+
+        assert st.legionellen_unvollstaendig is True
+        neu = _state()
+        legionellen_plan.load_plan(neu, path=legionellen_plan.PLAN_FILE)
+        assert neu.legionellen_unvollstaendig is True, (
+            "Der Nachversuch muss den Neustart ueberstehen"
+        )
+        assert neu.legionellen_planned_date is None, (
+            "Der verstrichene Plantag wird verworfen - der Nachversuch bleibt"
+        )
+
+    def test_erfolgreicher_abschluss_loescht_den_nachversuch(self):
+        """Gegenprobe: Nach dem Erfolg ist kein Nachversuch mehr gespeichert."""
+        st = _state()
+        jetzt = datetime.now(TZ)
+        st.legionellen_plan_created_at = jetzt
+        st.legionellen_planned_date = jetzt.date()
+        st.legionellen_planned_tag = jetzt.weekday()
+        st.legionellen_planned_forecast_wh = 2500.0
+        st.legionellen_unvollstaendig = True
+
+        _complete_legionellen_lifecycle(st, jetzt)
+
+        neu = _state()
+        legionellen_plan.load_plan(neu, path=legionellen_plan.PLAN_FILE)
+        assert neu.legionellen_unvollstaendig is False
 
     def test_nachversuch_respektiert_erst_erfolg_im_kw(self):
         """Ohne offene Fahrt bleibt 'Bereits in KW erledigt' bestehen."""

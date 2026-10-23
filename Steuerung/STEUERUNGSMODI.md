@@ -467,12 +467,16 @@ Konfigurationsschlüsseln.
 - **Logik** (`evaluate_legionellen`):
   1. Config inaktiv → inaktiv.
   2. `t_unten` fehlt → inaktiv.
-  3. **Prophylaxe läuft bereits** (`legionellen_aktiv=true`):
+  3. **Nachtsperre** (`sicherheit.nachtsperre_start`..`nachtsperre_ende`,
+     Standard 19–8 Uhr) → inaktiv (`einschalten=None`, Grund
+     „Nachtsperre aktiv … pausiert"), **auch für eine laufende Fahrt**.
+     Siehe „Nachtsperre / Fortsetzung am nächsten Tag" unten.
+  4. **Prophylaxe läuft bereits** (`legionellen_aktiv=true`):
      - `t_unten < target_temp_c` → `EIN` („heize weiter").
      - `t_unten >= target_temp_c`: Probezeit seit `legionellen_target_reached_at`
        abgelaufen → `AUS` (Ziel erreicht + Probezeit gehalten); sonst `EIN`
        (Ziel erreicht, warte Probezeit).
-  4. **Neue Prophylaxe:**
+  5. **Neue Prophylaxe:**
      - Bereits in dieser Kalenderwoche erledigt → inaktiv.
      - Nur **exakt zur Startzeit** (`now.hour == start_h` und
        `now.minute >= start_m`) aktiv; sonst inaktiv.
@@ -485,7 +489,8 @@ Konfigurationsschlüsseln.
   `legionellen_target_reached_at` gesetzt (Probezeit-Start). Liefert die Regel
   `AUS` und die Probezeit ist abgelaufen → `legionellen_last_done=heute`,
   `legionellen_aktiv=false`, Override gelöscht, Telegram-Erfolgsmeldung.
-  Ohne Zielerreichung → Abbruch der Prophylaxe.
+  Ohne Zielerreichung (z. B. an der Nachtsperre) → Abbruch als
+  `legionellen_unvollstaendig`; Plan und Nachversuch bleiben erhalten.
 - **Zeitlimit (`legionellen.max_duration_hours`):** Notausstieg gegen einen
   endlos laufenden Lauf, **nicht** die Regelgrenze – die Fahrt endet am
   Boiler-Maximum (65 °C) bzw. am Ziel + Probezeit. Standard **24 h**, `0` hebt
@@ -494,7 +499,23 @@ Konfigurationsschlüsseln.
   die kurz vor dem Ziel stand. Ein Abbruch am Limit gilt wie jeder Abbruch vor
   dem Ziel als `legionellen_unvollstaendig`: Plan bleibt stehen, Nachversuch
   ist zulässig (vorher fiel die Prophylaxe für die ganze KW still aus).
-- **Nachtsperre:** Regel kennt keine Nachtsperre (Startzeit 8 Uhr liegt außerhalb).
+- **Nachtsperre / Fortsetzung am nächsten Tag (Nutzeranforderung 23.10.2026):**
+  Die Prophylaxe hält sich an die Nachtsperre wie jede andere Regel — auch
+  eine **laufende** Fahrt. Mit Sperrenbeginn (19 Uhr) liefert die Regel
+  `einschalten=None`; der Kompressor geht über die normale Abschaltlogik aus
+  (Mindestlaufzeit bleibt als Hardware-Schutz wirksam). Der Hardware-Stopp
+  merkt den Lauf über `_beende_legionellenlauf_if_needed` als
+  `legionellen_unvollstaendig` vor:
+  - Der **Plan bleibt stehen** (kein „Kalenderwoche ausgefallen").
+  - Das Flag wird **persistiert** (`legionellen_plan.json`, Feld
+    `legionellen_unvollstaendig`) — der Nachversuch übersteht einen
+    Service-Neustart.
+  - Am nächsten Tag überspringt der Nachversuch Wochentags-Gate,
+    Startfenster und einen später geplanten PV-Termin. Er startet, sobald
+    die Quelle (PV/Batterie) verfügbar ist und die Nachtsperre endet.
+  - Erst der erfolgreiche Abschluss (Ziel + Probezeit) löscht das Flag.
+  Damit gilt: Was an einem Tag nicht fertig wird, wird am nächsten Tag
+  fortgesetzt statt verworfen.
 - **Wochentags-Gate (Start nur Freitag–Sonntag):** Die Prophylaxe startet
   **nur** an einem der erlaubten Tage (`bevorzugter_tag`..`letzter_tag`,
   Standard **Freitag 4 – Sonntag 6**), und zwar am **geplanten besten

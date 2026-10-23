@@ -676,9 +676,183 @@ def test_zukunftsplan_ist_kein_quellenwarten():
     result = evaluate_legionellen(
         cfg,
         {"oben": 48.5, "unten": 19.4, "mittig": 40.2},
-        datetime(2026, 10, 14, 21, 44),  # Mittwoch
+        # Mittwoch 15:44 - tagsueber, damit der Zukunftsplan-Grund greift
+        # (waehrend der Nachtsperre hat diese Pruefung keinen Vorrang mehr).
+        datetime(2026, 10, 14, 15, 44),
         legionellen_planned_date=date(2026, 10, 16),  # Freitag (in 2 Tagen)
     )
     assert result.aktiv is True
     assert result.einschalten is None
     assert result.reason_code == "planned_future"
+
+
+def test_zukunftsplan_blockiert_keinen_offenen_nachversuch():
+    """Nutzeranforderung 23.10.2026: Nach einer Nachtunterbrechung darf ein
+    neu geplanter, spaeterer PV-Tag die Fortsetzung am Folgetag nicht
+    blockieren.
+
+    Die Tagesplanung setzt den Plan nach einem Abbruch neu (hier: Samstag).
+    Der offene Nachversuch (`legionellen_unvollstaendig`) muss trotzdem
+    heute starten duerfen.
+    """
+    from priority_control import evaluate_legionellen
+
+    cfg = LegionellenConfig(
+        aktiv=True, target_temp_c=60.0, legionellen_max_temp_c=65.0,
+        bevorzugter_tag=4, letzter_tag=6, start_uhr=8.0,
+        spaeteste_start_uhr=12, pv_start_min_watt=500.0,
+    )
+    result = evaluate_legionellen(
+        cfg,
+        {"oben": 45.0, "unten": 35.0, "mittig": 40.0},
+        datetime(2026, 10, 16, 10, 0),  # Freitag, tagsueber
+        legionellen_planned_date=date(2026, 10, 17),  # Samstag
+        legionellen_unvollstaendig=True,
+        pv_leistung=800.0,
+        pv_acpower=800.0,
+    )
+    assert result.einschalten is True, (
+        f"Nachversuch wurde durch den Zukunftsplan blockiert: {result.grund}"
+    )
+
+
+# ============================================================
+# Nachtsperre (Nutzeranforderung 23.10.2026)
+# ============================================================
+class TestLegionellenNachtsperre:
+    """Die Prophylaxe haelt sich an die Nachtsperre - auch eine laufende Fahrt.
+
+    Nutzeranforderung: "die Legionellenprophylaxe muss sich auch an die
+    Nachtsperre halten, wenn sie es an einen Tag nicht schafft muss sie es am
+    naechsten Tag weiter machen."
+    """
+
+    @staticmethod
+    def _cfg(**kwargs):
+        basis = dict(
+            aktiv=True, prioritaet=90, target_temp_c=60.0,
+            legionellen_max_temp_c=65.0, probezeit_minuten=30,
+            bevorzugter_tag=4, letzter_tag=6, start_uhr=8,
+            spaeteste_start_uhr=16, pv_start_min_watt=500.0,
+        )
+        basis.update(kwargs)
+        return LegionellenConfig(**basis)
+
+    TEMPS = {"oben": 48.0, "unten": 44.0, "mittig": 46.0}
+
+    def test_laufende_fahrt_wird_nachts_pausiert(self):
+        """Kernfix: Die Regel ist nachts nicht mehr Gewinner mit 'heize weiter'."""
+        from priority_control import evaluate_legionellen
+
+        ergebnis = evaluate_legionellen(
+            self._cfg(), self.TEMPS,
+            datetime(2025, 6, 13, 20, 0),  # Freitag 20 Uhr
+            legionellen_aktiv=True,
+            legionellen_started_at=datetime(2025, 6, 13, 15, 0),
+        )
+        assert ergebnis.einschalten is None
+        assert ergebnis.aktiv is False
+        assert "Nachtsperre" in ergebnis.grund
+        assert ergebnis.reason_code == "nachtsperre"
+
+    def test_nachtsperre_gilt_auch_fuer_die_probezeit(self):
+        """Ziel erreicht, Probezeit laeuft: nachts trotzdem kein Weiterheizen."""
+        from priority_control import evaluate_legionellen
+
+        ergebnis = evaluate_legionellen(
+            self._cfg(), {"oben": 62.0, "unten": 60.5, "mittig": 61.0},
+            datetime(2025, 6, 13, 23, 30),
+            legionellen_aktiv=True,
+            legionellen_started_at=datetime(2025, 6, 13, 15, 0),
+            legionellen_target_reached_at=datetime(2025, 6, 13, 18, 50),
+        )
+        assert ergebnis.einschalten is None
+        assert "Nachtsperre" in ergebnis.grund
+
+    def test_nachts_kein_start_trotz_pv(self):
+        """Auch mit PV und faelliger Prophylaxe: nachts kein Start."""
+        from priority_control import evaluate_legionellen
+
+        ergebnis = evaluate_legionellen(
+            self._cfg(), {"oben": 40.0, "unten": 30.0, "mittig": 35.0},
+            datetime(2025, 6, 13, 22, 15),  # Freitag nachts
+            pv_leistung=3000.0, pv_acpower=3000.0, soc=95.0,
+        )
+        assert ergebnis.einschalten is None
+        assert "Nachtsperre" in ergebnis.grund
+
+    def test_nachts_kein_start_trotz_hygiene_notfall(self):
+        """Die Nachtsperre ist keine Ausnahme - auch die Hygiene-Frist nicht."""
+        from priority_control import evaluate_legionellen
+
+        ergebnis = evaluate_legionellen(
+            self._cfg(max_tage_ohne_lauf=14),
+            {"oben": 40.0, "unten": 30.0, "mittig": 35.0},
+            datetime(2025, 6, 13, 3, 0),
+            legionellen_last_done=date(2025, 5, 1),
+        )
+        assert ergebnis.einschalten is None
+        assert "Nachtsperre" in ergebnis.grund
+
+    def test_fortsetzung_nach_der_nachtsperre(self):
+        """Am naechsten Morgen (8 Uhr) laeuft der Nachversuch wieder an."""
+        from priority_control import evaluate_legionellen
+
+        ergebnis = evaluate_legionellen(
+            self._cfg(), {"oben": 40.0, "unten": 40.0, "mittig": 42.0},
+            datetime(2025, 6, 14, 8, 0),  # Samstag 8 Uhr (Sperre endet)
+            legionellen_unvollstaendig=True,
+            pv_leistung=800.0, pv_acpower=800.0,
+        )
+        assert ergebnis.einschalten is True, ergebnis.grund
+        assert "Nachtsperre" not in ergebnis.grund
+
+    def test_konfigurierte_sperrzeit_wird_verwendet(self):
+        """Eine abweichende Config (22-6) verschiebt die Grenzen mit."""
+        from priority_control import evaluate_legionellen
+
+        cfg = self._cfg()
+        vorher = evaluate_legionellen(
+            cfg, self.TEMPS, datetime(2025, 6, 13, 21, 0),
+            legionellen_aktiv=True,
+            legionellen_started_at=datetime(2025, 6, 13, 15, 0),
+            nachtsperre_start=22, nachtsperre_ende=6,
+        )
+        assert vorher.einschalten is True, "21 Uhr liegt noch vor der Sperre"
+
+        nachher = evaluate_legionellen(
+            cfg, self.TEMPS, datetime(2025, 6, 13, 23, 0),
+            legionellen_aktiv=True,
+            legionellen_started_at=datetime(2025, 6, 13, 15, 0),
+            nachtsperre_start=22, nachtsperre_ende=6,
+        )
+        assert nachher.einschalten is None
+        assert "Nachtsperre" in nachher.grund
+
+    def test_bewerte_alle_regeln_reicht_die_sperrzeit_durch(self):
+        """Die Sperrzeit kommt aus der Sicherheit-Config, nicht aus Defaults."""
+        import priority_control as pc
+        from json_config import WPSteuerungConfig
+
+        config = WPSteuerungConfig(beschreibung="Test", legionellen=self._cfg())
+        config.sicherheit.nachtsperre_start = 22
+        config.sicherheit.nachtsperre_ende = 6
+        config.wochenende.aktiv = False
+
+        def _legionellen(now):
+            _gewinner, ergebnisse = pc.bewerte_alle_regeln(
+                config=config, temp_dict=self.TEMPS, pv_leistung=900.0,
+                kompressor_ein=False, now=now, pv_acpower=900.0,
+                # Nachversuch: umgeht das Startfenster (8-16 Uhr), damit hier
+                # ausschliesslich die Nachtsperre geprueft wird.
+                legionellen_unvollstaendig=True,
+            )
+            return next(e for e in ergebnisse if e.name == "Legionellen")
+
+        vor_sperre = _legionellen(datetime(2025, 6, 13, 21, 0))
+        assert vor_sperre.einschalten is True, vor_sperre.grund
+
+        in_sperre = _legionellen(datetime(2025, 6, 13, 23, 0))
+        assert in_sperre.einschalten is None
+        assert "Nachtsperre" in in_sperre.grund
+
