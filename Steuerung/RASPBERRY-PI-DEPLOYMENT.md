@@ -293,6 +293,62 @@ git remote set-url origin https://github.com/SomTron/WPSteuerung.git
 chmod +x ~/WPSteuerung/WPSteuerung/rpi-deploy.sh
 ```
 
+### Problem: Dienst wird vom Kernel beendet ("Out of memory")
+
+Symptom im Steuerungs-Log, direkt nach einem Neustart:
+
+```
+WARNING - Kernel-Log: ... kernel: Out of memory: Killed process 18317 (python)
+          total-vm:1815444kB, anon-rss:178428kB ... -> Verdacht: OOM-Kill
+```
+
+Das ist kein Absturz im Code: Der Kernel beendet den groessten
+Speicherverbraucher, weil der **nutzbare** freie Speicher unter die
+Wassermarke `min` gefallen ist. Auf diesem Pi (416 MB) ist der Deckel
+kleiner als die RAM-Groesse vermuten laesst - der OOM-Block vom
+23.10.2026 zeigt:
+
+```
+free:23988 (96 MB)  free_cma:17599 (70 MB)  min:53248 (52 MB)
+cma reserved: 65536 pages = 256 MB   <- CmaTotal: 262144 kB
+```
+
+Von 96 MB "frei" sind 70 MB CMA. CMA-Seiten koennen nur fuer *movable*
+Allokationen (Page-Cache, anon) genutzt werden - die order-0-Allokation
+eines Kernel-Workers (`GFP_KERNEL`, also unmovable), die den OOM
+ausgeloest hat, kann das nicht. Effektiv standen also ~25 MB zur
+Verfuegung, unter `min`.
+
+Pruefen:
+```bash
+grep -i cma /proc/meminfo; vcgencmd get_mem gpu
+grep -iE "dtoverlay|gpu_mem|vc4" /boot/firmware/config.txt
+cat /proc/cmdline                      # enthaelt ggf. cma=256M
+dmesg | grep -i cma                    # "cma: Reserved 256 MiB ..."
+```
+
+Abhilfe (headless-Betrieb, also kein HDMI-Desktop noetig) - ergibt rund
+190 MB mehr nutzbaren RAM, mehr als jede Code-Optimierung:
+
+```bash
+sudo cp /boot/firmware/config.txt /boot/firmware/config.txt.bak
+# gpu_mem=64  -> gpu_mem=16
+# dtoverlay=vc4-kms-v3d  -> entweder auskommentieren oder mit cma-64:
+#   dtoverlay=vc4-kms-v3d,cma-64
+sudo reboot
+```
+
+Danach muss `CmaTotal` deutlich kleiner sein (z. B. 65536 kB) und
+`MemAvailable` entsprechend groesser.
+
+Code-Seite (Commit 2ffa2ea): Die teuren CSV-Auswertungen in `/status`
+und `/history` lesen nur noch den Datei-Tail und verdichten beim Lesen
+(113 MB -> 6 MB Spitze), und bei < 60 MB freiem RAM werden sie
+uebersprungen. Kontrollwert im stuendlichen Log ist
+`Speicher: RSS=.. | Spitze=.. | verfuegbar=..` - `Spitze` ist VmHWM, also
+die Spitze der **belegten** Seiten (nicht VmPeak, das ist nur der
+Adressraum).
+
 ## Tipps
 - **Backup vor großen Änderungen**: `git branch backup-$(date +%Y%m%d)`
 - **Logs regelmäßig checken**: `sudo journalctl -u wpsteuerung -f`
