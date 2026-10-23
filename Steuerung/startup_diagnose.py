@@ -291,22 +291,26 @@ def speicher_werte(
 
 
 def spitze_kb(status_pfad: str = "/proc/self/status") -> Optional[int]:
-    """Hoechststand der RSS seit Prozessstart (VmPeak) in kB.
+    """Hoechststand der belegten Seiten (VmHWM) seit Prozessstart, in kB.
 
-    BUGFIX (23.10.2026): Bei einem OOM-Kill (23.10.2026,
-    anon-rss:178 MB bei 416 MB Gesamt-RAM) war aus dem stuendlichen
-    "Speicher: RSS=..."-Log nicht ablesbar, ob der Dienst langsam
-    gewachsen ist (Leck) oder ob eine einzelne Auswertung kurzzeitig
-    explodiert ist (Spitze). VmPeak beantwortet genau das: liegt die
-    Spitze weit ueber der aktuellen RSS, war es ein Ausschlag; naehert
-    sich die RSS der Spitze an, ist es ein Leck.
+    BUGFIX (23.10.2026): Bei einem OOM-Kill (anon-rss:178 MB bei 416 MB
+    Gesamt-RAM) war aus dem stuendlichen "Speicher: RSS=..."-Log nicht
+    ablesbar, ob der Dienst langsam gewachsen ist (Leck) oder ob eine
+    einzelne Auswertung kurzzeitig explodiert ist (Spitze).
+
+    Wichtig - richtiges Feld: VmHWM ("high water mark") ist die Spitze der
+    RESIDENTEN Seiten, also der tatsaechlich belegten. VmPeak ist dagegen
+    die Spitze des VIRTUELLEN Speichers und fuer diese Frage wertlos: Auf
+    dem Pi stand dort "Spitze=440 MB" bei 65 MB RSS - das ist nur der
+    Adressraum (Threads, mmap, glibc-Arenen), kein belegter Speicher.
+    Mit VmPeak haette man einen OOM grundlos gesucht.
 
     Nicht verfuegbar (Windows, aeltere Kernel) -> None.
     """
     try:
         with open(status_pfad, "r", encoding="utf-8") as f:
             for zeile in f:
-                if zeile.startswith("VmPeak:"):
+                if zeile.startswith("VmHWM:"):
                     return int(zeile.split()[1])
     except (OSError, ValueError, IndexError):
         pass

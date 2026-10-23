@@ -351,14 +351,23 @@ def test_ram_knapp_ohne_proc_ist_false(monkeypatch):
     assert api._ram_knapp() is False
 
 
-# --- Speicher-Diagnose: Spitze (VmPeak) ------------------------------------
+# --- Speicher-Diagnose: Spitze (VmHWM, NICHT VmPeak) ------------------------
 
-def test_vmpeak_wird_gelesen_und_formatiert(tmp_path):
+def test_spitze_liest_vmhwm_und_nicht_vmpeak(tmp_path):
+    """Regression: VmPeak ist der VIRTUELLE Speicher und war irrefuehrend.
+
+    Im Betrieb stand damit "Spitze=440 MB" bei 65 MB RSS - das ist nur der
+    Adressraum (Threads, mmap, Arenen). Fuer die Frage "Leck oder
+    Ausschlag" ist die Spitze der belegten Seiten massgeblich (VmHWM).
+    """
     import startup_diagnose as sd
 
     status = tmp_path / "status"
     status.write_text(
-        "Name:\tpython\nVmPeak:\t  194560 kB\nVmRSS:\t       66560 kB\n",
+        "Name:\tpython\n"
+        "VmPeak:\t  450560 kB\n"   # virtuell - darf NICHT verwendet werden
+        "VmHWM:\t  194560 kB\n"    # Spitze der residenten Seiten
+        "VmRSS:\t   66560 kB\n",
         encoding="utf-8",
     )
     assert sd.spitze_kb(str(status)) == 194560
