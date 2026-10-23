@@ -341,6 +341,22 @@ sudo reboot
 Danach muss `CmaTotal` deutlich kleiner sein (z. B. 65536 kB) und
 `MemAvailable` entsprechend groesser.
 
+Gemessen auf diesem Pi (23.10.2026, `dtoverlay=vc4-kms-v3d,cma-64`):
+
+```
+vorher: Memory: 140956K/458752K available (262144K cma-reserved)
+nachher: Memory: 337028K/458752K available ( 65536K cma-reserved)
+```
+
+Das sind +192 MB fuer das System. `CmaFree` schwankt dabei stark (mal
+einige kB, mal 20 MB): Der Pool wird als movable Speicher mitgenutzt und
+bei DMA-Bedarf zurueckgeholt - das ist normal und kein Warnsignal.
+
+`free -m` zeigt danach nicht zwangslaeufig ein viel groesseres
+"available", weil der zusaetzliche Platz in den Page-Cache laeuft. Der
+Gewinn liegt bei den UNMOVABLE-Seiten (Kernel-Allokationen) - genau die
+hatten den OOM ausgeloest.
+
 Code-Seite (Commit 2ffa2ea): Die teuren CSV-Auswertungen in `/status`
 und `/history` lesen nur noch den Datei-Tail und verdichten beim Lesen
 (113 MB -> 6 MB Spitze), und bei < 60 MB freiem RAM werden sie
