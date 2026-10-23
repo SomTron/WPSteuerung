@@ -87,3 +87,30 @@ def test_clientfehler_ohne_inhalt_crasht_nicht(caplog):
         antwort = api.client_fehler(api.ClientFehler())
     assert antwort["ok"] is True
     assert "ohne Meldung" in " ".join(r.getMessage() for r in caplog.records)
+
+
+# --- Single-Flight: keine parallele Lawine ----------------------------------
+
+def test_auswertung_laeuft_nur_einmal_gleichzeitig():
+    """Nach einem Neustart sind die Caches kalt - die WebApp pollt alle 5 s.
+
+    Ohne Single-Flight rechnen mehrere Anfragen dieselbe Auswertung
+    gleichzeitig (gemessen: 10,7 s, WebApp bricht nach 8 s ab).
+    """
+    assert api._auswertung_starten() is True
+    try:
+        assert api._auswertung_starten() is False, "zweite Anfrage rechnet parallel"
+        assert api._auswertung_starten() is False
+    finally:
+        api._auswertung_beenden()
+    # Nach der Freigabe darf wieder genau einer rechnen.
+    assert api._auswertung_starten() is True
+    api._auswertung_beenden()
+
+
+def test_vorwaermen_erzeugt_keine_falsche_langsam_warnung(caplog, monkeypatch):
+    """Beim Vorwaermen ist eine lange Dauer normal - keine WARNING."""
+    monkeypatch.setattr(api, "_WAERMT_VOR", True)
+    with caplog.at_level(logging.WARNING):
+        api._melde_langsame_antwort("/status", 9000.0)
+    assert not caplog.records

@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import math
+import threading
 
 try:
     import boiler_modell
@@ -930,6 +931,37 @@ _SLOW_RESPONSE_SCHWELLE_MS: float = 3000.0
 _MELDUNG_DROSSEL_SEC: float = 300.0
 _letzte_meldung: dict = {}
 
+# --- Single-Flight fuer die teuren /status-Zusatzauswertungen -------------
+#
+# BUGFIX (23.10.2026): Nach jedem Neustart sind die 30-Minuten-Caches
+# (PV-Profil, 14-Tage-Wh/m2) kalt. Die WebApp pollt alle 5 s - dadurch
+# rechneten bis zu vier Anfragen dieselbe Auswertung GLEICHZEITIG.
+# Gemessen im Betriebslog: "/status brauchte 10.7 s" direkt nach dem
+# Deploy, die WebApp bricht nach 8 s ab. Jetzt rechnet nur EINE Anfrage;
+# die anderen liefern in dieser Zeit ohne Profil (die Werte kommen mit dem
+# naechsten Poll aus dem dann gefuellten Cache).
+_auswertung_lock = threading.Lock()
+#: True, waehrend die Caches im Hintergrund vorgewaermt werden. Dann ist
+#: eine lange Dauer normal und darf keine Warnung erzeugen.
+_WAERMT_VOR: bool = False
+
+
+def _auswertung_starten() -> bool:
+    """True, wenn dieser Aufrufer die Auswertung rechnen darf.
+
+    Nicht blockierend: Laeuft bereits eine, gibt es False - der Aufrufer
+    antwortet dann ohne die Zusatzwerte, statt parallel dasselbe zu rechnen.
+    """
+    return _auswertung_lock.acquire(blocking=False)
+
+
+def _auswertung_beenden() -> None:
+    """Gibt das Single-Flight-Lock frei (nur nach erfolgreichem Start)."""
+    try:
+        _auswertung_lock.release()
+    except RuntimeError:
+        logging.debug("Auswertungs-Lock war nicht belegt", exc_info=True)
+
 
 def _darf_melden(schluessel: str, intervall: float = _MELDUNG_DROSSEL_SEC) -> bool:
     """True, wenn dieser Schluessel seit `intervall` Sekunden nicht gemeldet wurde."""
@@ -948,6 +980,9 @@ def _melde_langsame_antwort(route: str, dauer_ms: float) -> None:
     laenger braucht, liefert dem Nutzer also NIE Daten. Ohne diese Meldung
     sieht das im Log wie ein gesunder Dienst aus.
     """
+    if _WAERMT_VOR:
+        # Beim Vorwaermen ist eine lange Dauer gewollt - keine Warnung.
+        return
     if dauer_ms < _SLOW_RESPONSE_SCHWELLE_MS:
         return
     if not _darf_melden(f"langsam:{route}"):
@@ -1674,6 +1709,16 @@ def get_status():
     # 14-Tage-Auswertungen uebersprungen - /status darf die Steuerung nicht
     # in den OOM-Kill ziehen. Die Regelung nutzt diese Werte nicht.
     _auswertung_erlaubt = _pv_profil_modul is not None and not _ram_knapp()
+    # Single-Flight: nur eine Anfrage rechnet die teuren Zusatzwerte.
+    _auswertung_laeuft_hier = False
+    if _auswertung_erlaubt:
+        _auswertung_laeuft_hier = _auswertung_starten()
+        if not _auswertung_laeuft_hier:
+            _auswertung_erlaubt = False
+            logging.debug(
+                "PV-Auswertung laeuft bereits in einer anderen Anfrage - "
+                "dieser Durchlauf antwortet ohne Profil"
+            )
     if _pv_profil_modul is not None:
         # Nur beim Wechsel melden - /status wird alle 5 s abgefragt.
         if not _auswertung_erlaubt and not _RAM_SCHUTZ_AKTIV["aktiv"]:
@@ -1747,6 +1792,10 @@ def get_status():
             }
     except Exception as e:
         logging.debug(f"PV-Profil/Forecast nicht verfuegbar: {e}")
+    finally:
+        # Single-Flight-Lock immer freigeben - auch bei einer Ausnahme.
+        if _auswertung_laeuft_hier:
+            _auswertung_beenden()
 
     status_now = _api_now(shared_state)
     status_age_s = None
@@ -1919,6 +1968,34 @@ def client_fehler(fehler: ClientFehler):
     except Exception:
         # Eine Meldung darf niemals einen Fehler erzeugen.
         return {"ok": False}
+
+
+def erwaerme_auswertungen() -> None:
+    """Fuellt die /status-Caches einmal im Hintergrund (nach dem Start).
+
+    BUGFIX (23.10.2026): Nach jedem Neustart sind PV-Profil und Wh/m2-Mittel
+    kalt; die WebApp pollt aber alle 5 s. Gemessen im Betriebslog:
+    "/status brauchte 10.7 s" direkt nach dem Deploy - die WebApp bricht
+    nach 8 s ab. Hier laeuft die komplette Statusauswertung EINMAL im
+    Hintergrund (ueber den Thread-Pool), damit der erste echte Poll den
+    Cache vorfindet.
+
+    Aufzurufen aus dem Startpfad (main.setup_application), nicht aus einer
+    Route: ein Request darf nie auf das Vorwaermen warten.
+    """
+    global _WAERMT_VOR
+    if shared_state is None:
+        return
+    if not _auswertung_starten():
+        return  # eine Anfrage rechnet bereits - dann ist der Cache gleich warm
+    _WAERMT_VOR = True
+    try:
+        get_status()
+    except Exception as e:
+        logging.debug(f"Vorwaermen der Statusauswertung fehlgeschlagen: {e}")
+    finally:
+        _WAERMT_VOR = False
+        _auswertung_beenden()
 
 
 @app.get("/history/regeln")

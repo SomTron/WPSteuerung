@@ -49,7 +49,7 @@ from telegram_ui import send_welcome_message, escape_markdown
 from telegram_api import start_healthcheck_task, create_robust_aiohttp_session
 from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
-from api import app, init_api, update_status_snapshot
+from api import app, erwaerme_auswertungen, init_api, update_status_snapshot
 from blocking_codes import (  # noqa: F401  (Re-Export fuer Aufrufer/Tests)
     INFO_BLOCKING_CODES,
     INFO_BLOCKING_MELDUNGEN as _INFO_MELDUNGEN,
@@ -568,7 +568,17 @@ async def setup_application():
     for task in (tg_task, hc_task, solar_task):
         task.add_done_callback(_log_task_exception)
         background_tasks.append(task)
-    
+
+    # Die teuren /status-Auswertungen (PV-Profil, 14-Tage-Wh/m2) einmal im
+    # Hintergrund vorwaermen. BUGFIX (23.10.2026): Nach jedem Neustart waren
+    # die 30-Minuten-Caches kalt, und die WebApp-Polls (alle 5 s) rechneten
+    # dieselbe Auswertung mehrfach gleichzeitig - im Betriebslog gemessen:
+    # "/status brauchte 10.7 s", die WebApp bricht nach 8 s ab und zeigt
+    # dann keine Werte. Als Task, damit der Start nicht darauf wartet.
+    warm_task = asyncio.create_task(asyncio.to_thread(erwaerme_auswertungen))
+    warm_task.add_done_callback(_log_task_exception)
+    background_tasks.append(warm_task)
+
     return session
 
 def handle_day_transition(state, now):
