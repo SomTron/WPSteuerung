@@ -199,10 +199,19 @@ def test_shellskripte_sind_ausfuehrbar():
     import subprocess
 
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    ls = subprocess.run(['git', 'ls-files', '-s', '*.sh'],
+    # BUGFIX (23.10.2026): `ls-files -s` liest den INDEX. Der haengt davon
+    # ab, mit welchem core.fileMode der Arbeitsbaum angelegt wurde - im
+    # CI-Checkout kann das anders sein als in einem frischen Clone. Geprueft
+    # werden soll der COMMIT: das ist der Modus, den ein `git clone` auf dem
+    # Pi anlegt.
+    #
+    # WICHTIG: kein `-- '*.sh'` als Pathspec - das matcht bei `ls-tree -r`
+    # NICHT rekursiv (gemessen: 0 Zeilen). Der Test wurde damit still
+    # wertlos. Deshalb die vollstaendige Liste holen und in Python filtern.
+    ls = subprocess.run(['git', 'ls-tree', '-r', 'HEAD'],
                         capture_output=True, text=True, cwd=repo, check=True)
-    zeilen = [z for z in ls.stdout.splitlines() if z.strip()]
-    assert zeilen, "keine Shell-Skripte im Index gefunden"
+    zeilen = [z for z in ls.stdout.splitlines() if z.strip().endswith('.sh')]
+    assert zeilen, "keine Shell-Skripte im Commit gefunden"
     nicht_ausfuehrbar = []
     for z in zeilen:
         modus, rest = z.split(' ', 1)
