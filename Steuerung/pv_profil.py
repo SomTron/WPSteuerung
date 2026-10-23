@@ -14,52 +14,84 @@ Das Profil wird auf den maximalen Wert der letzten 7 Tage normalisiert
 und kann mit der heutigen Solax-Prognose skaliert werden.
 """
 import asyncio
-import csv
 import logging
 import math
-import os
-from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
+from csv_tail import streame_tail
 from utils import HEIZUNGSDATEN_CSV, to_naive
 
 
 _cache: Dict[str, tuple] = {}
 CACHE_TTL_SEKUNDEN = 1800  # 30 Minuten
+#: Der Cache-Schluessel enthaelt den Forecast-Skalierungsfaktor, der sich mit
+#: jeder Prognose aendert. Ohne Deckel waechst das Dict ueber Wochen mit.
+CACHE_MAX_EINTRAEGE = 4
+
+#: Spalten in der Reihenfolge, in der ``_stundenwerte`` sie liest.
+_PROFIL_SPALTEN = (
+    "Zeitstempel", "PowerDC1", "PowerDC2", "ACPower", "FeedinPower",
+)
 
 
-def _lies_csv_letzte_tage(
-    csv_path: str = HEIZUNGSDATEN_CSV,
-    tage: int = 14,
-) -> List[dict]:
-    """Liest CSV-Zeilen der letzten tage. Toleriert fehlende Datei + leere Zeilen."""
-    if not os.path.exists(csv_path):
-        return []
-    grenze = to_naive(datetime.now() - timedelta(days=tage))
-    zeilen = []
+def _parse_zeitstempel(text: Optional[str]) -> Optional[datetime]:
+    """CSV-Zeitstempel als naive lokale Zeit (None bei unbrauchbarem Wert)."""
+    if not text:
+        return None
     try:
-        from collections import deque
-        # Ca. 1 Zeile pro Minute fuer `tage` Tage (z.B. 14*24*60 = 20.160 Zeilen)
-        max_rows = max(1000, tage * 24 * 60 + 1000)
-        with open(csv_path, "r", encoding="utf-8") as f:
-            header_line = f.readline()
-            if not header_line.strip():
-                return []
-            tail_lines = list(deque(f, maxlen=max_rows))
-            reader = csv.DictReader([header_line] + tail_lines)
-            for row in reader:
-                try:
-                    ts = to_naive(datetime.fromisoformat(row.get("Zeitstempel", "")))
-                except (ValueError, TypeError):
-                    continue
-                if ts < grenze:
-                    continue
-                zeilen.append(row)
-    except Exception as e:
-        logging.warning(f"PV-Profil: CSV-Lesen fehlgeschlagen: {e}")
-        return []
-    return zeilen
+        return to_naive(datetime.fromisoformat(text))
+    except (ValueError, TypeError):
+        return None
+
+
+def _stundenwerte(
+    csv_path: str,
+    grenze: datetime,
+    tage: int,
+) -> tuple:
+    """Summiert die PV-Erzeugung stundenweise, ohne Zeilen zu halten.
+
+    BUGFIX (23.10.2026): Vorher wurde der CSV-Tail als Liste von Dicts mit
+    ALLEN Spalten gehalten (bis 21.160 Zeilen, gemessen 30 MB Spitze) - und
+    zwar bei jedem Cache-Miss von ``/status``, also potenziell alle 30
+    Minuten. Auf dem Pi (416 MB) hat das am 23.10.2026 mit zum OOM-Kill
+    beigetragen. Jetzt laufen nur Summe und Zaehler je Stunde mit.
+
+    Rueckgabe: (summen, counts) - je 24 Eintraege, Index = Stunde.
+    """
+    summen = [0.0] * 24
+    counts = [0] * 24
+
+    def _verarbeite(row):
+        ts = _parse_zeitstempel(row[0])
+        if ts is None or ts < grenze:
+            return
+        # Die Erzeugung steht auf der Gleichstromseite: powerdc1 + powerdc2.
+        erzeugung = _parse_float(row[1])
+        dc2 = _parse_float(row[2])
+        if dc2 is not None:
+            erzeugung = (erzeugung or 0.0) + dc2
+        if erzeugung is None:
+            # Aeltere CSV-Dateien ohne DC-Spalten: ACPower als Notnagel.
+            erzeugung = _parse_float(row[3])
+        if erzeugung is None:
+            erzeugung = _parse_float(row[4])
+        if erzeugung is None or erzeugung < 0:
+            return
+        stunde = ts.hour
+        summen[stunde] += erzeugung
+        counts[stunde] += 1
+
+    # Ca. 1 Zeile pro Minute fuer `tage` Tage (z.B. 14*24*60 = 20.160 Zeilen)
+    max_rows = max(1000, tage * 24 * 60 + 1000)
+    try:
+        streame_tail(csv_path, max_rows, _PROFIL_SPALTEN, _verarbeite)
+    except OSError as exc:
+        # Wie bisher: ein Lesefehler ergibt ein leeres Profil, keine Ausnahme
+        # bis in die API (die Anzeige darf am Profil nicht scheitern).
+        logging.warning(f"PV-Profil: CSV-Lesen fehlgeschlagen: {exc}")
+    return summen, counts
 
 
 def _parse_float(val) -> Optional[float]:
@@ -106,59 +138,26 @@ def berechne_profil(
         if (jetzt - cache_time).total_seconds() < CACHE_TTL_SEKUNDEN:
             return cache_profil
 
-    zeilen = _lies_csv_letzte_tage(csv_path, tage=tage)
-
-    # Pro Stunde sammeln
-    summen: Dict[int, float] = defaultdict(float)
-    counts: Dict[int, int] = defaultdict(int)
-
-    for row in zeilen:
-        try:
-            ts = datetime.fromisoformat(row.get("Zeitstempel", ""))
-        except (ValueError, TypeError):
-            continue
-        # Die Erzeugung steht auf der Gleichstromseite: powerdc1 + powerdc2.
-        #
-        # Bis September stand hier ACPower mit der Begruendung, das sei die
-        # Erzeugung. Ist es nicht: ACPower ist der Wechselstromausgang des
-        # Wechselrichter, also Haus + Netz. Gemessen auf dem Pi, Stundenmittel
-        # ueber die Betriebsdaten:
-        #
-        #     Stunde   DC (W)   AC (W)
-        #     0-4          0    224-250     Nacht: keine Sonne, AC trotzdem
-        #     9         2914      352     2562 W wandern in den Speicher
-        #     12        6881     6749
-        #
-        # Nachts liefert nur die DC-Seite 0. Ein Profil aus ACPower enthielt
-        # darum rund 250-950 W phantomhafte Nachtproduktion - und mittags
-        # deutlich zu wenig, weil ein großer Teil in die Batterie lief.
-        # Genau daraus entstand die wiederholte Nachjustierung des
-        # Prognosefaktors.
-        #
-        # FeedinPower taugt als Ersatz nicht: das ist die Einspeisung, und die
-        # ist bei wechselrichtergekoppeltem Betrieb ueber den groessen Teil
-        # des Tages null, weil der Ueberschuss zuerst in die Batterie laeuft.
-        erzeugung = _parse_float(row.get("PowerDC1"))
-        dc2 = _parse_float(row.get("PowerDC2"))
-        if dc2 is not None:
-            erzeugung = (erzeugung or 0.0) + dc2
-        if erzeugung is None:
-            # Aeltere CSV-Dateien ohne DC-Spalten: ACPower als Notnagel. Das
-            # ist der Hausverbrauch und damit keine Erzeugung - aber besser
-            # als ein leeres Profil. Wird im Diagnosetext benannt.
-            erzeugung = _parse_float(row.get("ACPower"))
-        if erzeugung is None:
-            erzeugung = _parse_float(row.get("FeedinPower"))
-        if erzeugung is None or erzeugung < 0:
-            continue
-        h = ts.hour
-        summen[h] += erzeugung
-        counts[h] += 1
+    # BUGFIX (23.10.2026): Die Berechnung der Erzeugung ist fachlich
+    # unveraendert, laeuft aber jetzt WAEHREND des Lesens (siehe
+    # _stundenwerte). Vorher wurde der Tail als Dict-Liste gehalten:
+    # gemessen 30 MB Spitze - bei jedem Cache-Miss von /status.
+    #
+    # Grundlage bleibt die Gleichstromseite (powerdc1 + powerdc2), NICHT
+    # ACPower: ACPower ist der Wechselstromausgang (Haus + Netz) und
+    # meldet nachts 224-250 W, obwohl die Sonne nichts liefert. Historisch
+    # fuehrte das zu rund 250-950 W phantomhafter Nachtproduktion und
+    # mittags zu deutlich zu niedrigen Werten (ein grosser Teil lief in
+    # die Batterie). FeedinPower taugt ebenfalls nicht: bei
+    # wechselrichtergekoppeltem Betrieb ist die Einspeisung ueber weite
+    # Tagesabschnitte null.
+    grenze = to_naive(jetzt - timedelta(days=max(1, int(tage))))
+    summen, counts = _stundenwerte(csv_path, grenze, tage)
 
     # Durchschnitt pro Stunde
     profil: Dict[int, float] = {}
     for h in range(24):
-        if counts.get(h, 0) > 0:
+        if counts[h] > 0:
             profil[h] = round(summen[h] / counts[h], 1)
         else:
             profil[h] = 0.0
@@ -169,6 +168,9 @@ def berechne_profil(
             profil[h] = round(profil[h] * forecast_scaling, 1)
 
     _cache[cache_key] = (jetzt, profil)
+    # Deckel gegen unbegrenztes Wachstum (aeltester Eintrag faellt raus).
+    while len(_cache) > CACHE_MAX_EINTRAEGE:
+        _cache.pop(next(iter(_cache)))
     return profil
 
 

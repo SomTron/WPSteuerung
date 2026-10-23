@@ -41,6 +41,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from utils import HEIZUNGSDATEN_CSV, to_naive
+import csv_tail
+from constants import RAM_KRITISCH_VERFUEGBAR_KB
 from log_files import generationen, tail_bytes_ueber_alle
 from clock import now_for
 from logic_utils import forecast_kwh_m2_to_wh_m2
@@ -890,6 +892,42 @@ _HISTORY_CACHE: "OrderedDict[int, tuple]" = OrderedDict()
 HISTORY_CACHE_TTL_SEC: int = 30
 HISTORY_CACHE_MAX_EINTRAEGE: int = 4
 
+# --- RAM-Schutz fuer die teuren /status-Zusatzauswertungen ----------------
+#
+# BUGFIX (23.10.2026): /status wird vom Dashboard alle 5 s abgefragt. Bei
+# jedem Cache-Miss wurden dabei das 14-Tage-PV-Profil (~30 MB Spitze) und
+# der historische Wh/m2-Mittelwert (~27 MB Spitze) berechnet. Auf dem Pi
+# (416 MB total, nach dem Start ~200 MB frei) addiert sich das zu den
+# gleichzeitigen /history-Lesevorgaengen - am 23.10.2026 hat der Kernel den
+# Prozess mit "Out of memory" beendet.
+#
+# Die Zusatzauswertungen sind Anzeige-Komfort, keine Regelgroesse. Ist der
+# freie Speicher knapp, werden sie uebersprungen (fail-open: die Karte in
+# der WebApp bleibt fuer diesen Durchlauf leer). Die Grenze liegt bewusst
+# unter dem, was im Betrieb normal frei ist (Befund 18.-23.10.2026:
+# 60-200 MB), aber deutlich ueber dem, was eine 30-MB-Spitze braucht.
+RAM_SCHUTZ_MIN_VERFUEGBAR_KB: int = RAM_KRITISCH_VERFUEGBAR_KB
+
+#: Merkt, ob der RAM-Schutz gerade greift - fuer eine einzige Meldung je
+#: Episode statt einer Log-Zeile alle 5 Sekunden.
+_RAM_SCHUTZ_AKTIV: dict = {"aktiv": False}
+
+
+def _ram_knapp(min_kb: int = RAM_SCHUTZ_MIN_VERFUEGBAR_KB) -> bool:
+    """True, wenn fuer eine CSV-Auswertung zu wenig freier RAM bleibt.
+
+    Ohne ``/proc`` (Windows, Tests) wird bewusst False geliefert - der
+    Schutz darf sich nicht auf Plattformen auswirken, die er nicht kennt.
+    """
+    try:
+        import startup_diagnose
+        verfuegbar = startup_diagnose.speicher_werte().get("verfuegbar_kb")
+    except Exception:
+        return False
+    if not isinstance(verfuegbar, (int, float)):
+        return False
+    return verfuegbar < min_kb
+
 
 def _history_cache_key(csv_path: str, hours: int):
     """Cache-Key aus Zeitfenster und CSV-Stand (Groesse + mtime).
@@ -974,64 +1012,49 @@ def _to_float(val):
     return number if math.isfinite(number) else None
 
 
+#: Spalten der /history-Antwort in genau der Reihenfolge, in der die Route
+#: sie liest (Index 0 = Zeitstempel, 5 = Kompressor).
+HISTORY_SPALTEN = (
+    "Zeitstempel", "T_Oben", "T_Mittig", "T_Unten", "T_Verd",
+    "Kompressor", "Einschaltpunkt", "Ausschaltpunkt",
+)
+
+#: Feinste Sampling-Stufe aus ``_history_sampling_seconds``. Beim Einlesen
+#: wird darauf vorverdichtet, damit die Zeilen nicht alle im RAM landen.
+HISTORY_MIN_SAMPLING_SEC = 60
+
+
 def _read_csv_tail(csv_path: str, max_rows: int = 25000, spalten=None):
-    """Liest einen CSV-Tail robust und zaehlt unvollstaendige/versehrte Zeilen.
+    """Liest einen CSV-Tail als Liste von Tupeln (nur benoetigte Spalten).
 
-    WICHTIG fuer den RAM auf dem Pi: es wird ein echter Tail gelesen, nicht
-    die ganze Datei. Ein `deque(reader, maxlen=N)` ueber die komplette Datei
-    liest die ganze Datei durch und haelt alle N Zeilen im RAM.
+    BUGFIX (23.10.2026): Die Funktion las die KOMPLETTE Datei Zeile fuer
+    Zeile ein (`deque(reader, maxlen=N)` ueber den ganzen Leser) und hielt
+    die letzten N Zeilen zusaetzlich als Liste mit allen Spalten. Bei
+    `/history?hours=168` (max_rows=100.000) waren das gemessen 113 MB
+    Spitze - auf dem Pi der Weg in den OOM-Kill (23.10.2026,
+    anon-rss:178 MB bei 416 MB Gesamt-RAM).
 
-    Zusaetzlich werden nur die BENOETIGTEN Spalten als kompaktes Tupel
-    gehalten statt als Dict mit allen 21 Spalten. Gemessen auf der
-    17-MB-CSV mit 100.000 Tailzeilen: 121 MB (Dicts) gegen 44 MB (Tupel
-    mit 8 Spalten) - auf dem Pi mit wenig RAM ist das der Unterschied
-    zwischen "laeuft noch" und "wird gekillt".
+    Jetzt wird der Tail ueber ``csv_tail`` gelesen: erst der Byte-Offset
+    der letzten N Zeilen (Rueckwaertslesen in Bloecken), dann wird
+    gestreamt und sofort auf die angeforderten Spalten projiziert. Die
+    vorderen Dateiteile werden nie gelesen.
 
-    Rueckgabe: Liste von Tupeln in der Reihenfolge der angeforderten
-    Spalten (siehe ``spalten``). Fehlt eine Spalte in der Datei, steht an
-    ihrer Stelle None.
+    Rueckgabe: (rows, quality) - Liste von Tupeln in der Reihenfolge der
+    angeforderten Spalten (fehlende Spalte -> None) und die Qualitaet
+    (invalid_rows, null_bytes, header, rows).
+
+    Hinweis: Fuer die grossen Zeitfenster wird diese Funktion nicht mehr
+    benutzt - /history verdichtet beim Lesen (``_sammle_history``) und das
+    historische PV-Mittel summiert direkt (``csv_tail.streame_tail``).
+    Sie bleibt als Listen-Variante fuer kleine Auswertungen und als
+    Referenz in den Tests erhalten (dort wird der Speichergewinn gegen
+    genau diese Materialisierung gemessen).
     """
-    from collections import deque
-
     if spalten is None:
-        spalten = (
-            "Zeitstempel", "T_Oben", "T_Mittig", "T_Unten", "T_Verd",
-            "Kompressor", "Einschaltpunkt", "Ausschaltpunkt",
-        )
-    import csv
-
-    with open(csv_path, "r", encoding="utf-8", errors="replace", newline="") as handle:
-        reader = csv.reader(handle)
-        header = next(reader, [])
-        if not header:
-            return [], {"invalid_rows": 0, "null_bytes": 0, "header": []}
-        # Spalten-Indexe bestimmen. Fehlt eine Spalte, wird sie auf None
-        # gesetzt (der Wert fehlt dann, statt dass die Route abstuerzt).
-        index = [header.index(name) if name in header else None for name in spalten]
-        spalten_anzahl = len(header)
-
-        raw_tail = deque(maxlen=max_rows)
-        for fields in reader:
-            raw_tail.append(fields)
-
+        spalten = HISTORY_SPALTEN
     rows = []
-    invalid_rows = 0
-    null_bytes = 0
-    for fields in raw_tail:
-        if any("\x00" in field for field in fields):
-            null_bytes += 1
-            invalid_rows += 1
-            continue
-        if len(fields) != spalten_anzahl:
-            invalid_rows += 1
-            continue
-        # Kompaktes Tupel statt Dict: nur die benoetigten Spalten.
-        rows.append(tuple(fields[i] if i is not None else None for i in index))
-    return rows, {
-        "invalid_rows": invalid_rows,
-        "null_bytes": null_bytes,
-        "header": header,
-    }
+    quality = csv_tail.streame_tail(csv_path, max_rows, spalten, rows.append)
+    return rows, quality
 
 
 def _read_csv_tail_rows(csv_path: str, max_rows: int, spalten: int):
@@ -1093,6 +1116,62 @@ def _read_csv_tail_rows(csv_path: str, max_rows: int, spalten: int):
         except (StopIteration, _csv.Error):
             continue
     return raw
+
+
+def _sammle_history(csv_path: str, cutoff: datetime, max_rows: int):
+    """Liest den CSV-Tail und verdichtet ihn beim Lesen auf Minutenwerte.
+
+    BUGFIX (23.10.2026): Vorher wurden erst ALLE Tailzeilen materialisiert
+    (bei 7 Tagen 100.000 Tupel = 113 MB Spitze) und erst danach
+    heruntergerechnet. Jetzt wird waehrend des Lesens nur die erste Zeile
+    je Minute behalten - hoechstens 60 * 24 * 7 = 10.080 Zeilen.
+
+    Das Ergebnis ist identisch zur spaeteren Auswahl in
+    ``_downsample_history``: deren Buckets (60/300/600/900/1800 s) sind
+    ganzzahlige Vielfache einer Minute, und "erste Zeile je Bucket" bleibt
+    beim Vorschichten erhalten.
+
+    Rueckgabe: (zeilen, quality, anzahl_im_zeitraum, letzte_verfuegbar)
+      zeilen              - [(ts, tupel)] chronologisch, 1 Zeile je Minute
+      quality             - Qualitaet aus ``csv_tail.streame_tail``
+      anzahl_im_zeitraum  - echte Zeilenzahl im Zeitraum (fuer quality)
+      letzte_verfuegbar   - neuester Zeitstempel der Datei (auch ausserhalb
+                            des Zeitraums) - daraus erkennt die Route eine
+                            veraltete CSV ("stale_end_s")
+    """
+    zwischen = []
+    zaehler = {"in_range": 0}
+    letzter_bucket = None
+    letzte_verfuegbar = None
+    letzte_in_range = None
+
+    def _verarbeite(row):
+        nonlocal letzter_bucket, letzte_verfuegbar, letzte_in_range
+        ts = _parse_zeitstempel(row[0])
+        if ts is None:
+            return
+        if letzte_verfuegbar is None or ts > letzte_verfuegbar:
+            letzte_verfuegbar = ts
+        if ts < cutoff:
+            return
+        zaehler["in_range"] += 1
+        letzte_in_range = (ts, row)
+        bucket = int(ts.timestamp() // HISTORY_MIN_SAMPLING_SEC)
+        if bucket != letzter_bucket:
+            zwischen.append((ts, row))
+            letzter_bucket = bucket
+
+    quality = csv_tail.streame_tail(csv_path, max_rows, HISTORY_SPALTEN, _verarbeite)
+
+    if letzte_in_range is not None and (
+        not zwischen or zwischen[-1][0] != letzte_in_range[0]
+    ):
+        # Die Auswahl der Route haengt die JUENGSTE Zeile immer an (siehe
+        # _downsample_history). Ohne sie hier waere der letzte Punkt der
+        # Minutenanfang statt des echten letzten Messwerts.
+        zwischen.append(letzte_in_range)
+
+    return zwischen, quality, zaehler["in_range"], letzte_verfuegbar
 
 
 def _history_sampling_seconds(hours: int) -> int:
@@ -1221,48 +1300,57 @@ def _berechne_hist_wh_qm(csv_path: str, tage: int = 14, jetzt: datetime = None):
     max_gap_sec = 900.0
     previous = None
     letzte_delta_sec = None
+
+    def _integriere(row):
+        """Ein Sample in die Tagesbilanz einrechnen (Streaming, ohne Liste).
+
+        BUGFIX (23.10.2026): Vorher wurde der Tail erst als Liste von
+        25.000 Tupeln materialisiert (27 MB Spitze, siehe csv_tail). Die
+        Rechnung ist 1:1 dieselbe - sie laeuft jetzt waehrend des Lesens.
+        """
+        nonlocal previous, letzte_delta_sec
+        ts = _parse_zeitstempel(row[0])
+        feedin = _to_float(row[1])
+        if ts is None or feedin is None:
+            previous = None
+            letzte_delta_sec = None
+            return
+        if previous is not None:
+            previous_ts, previous_feedin = previous
+            delta_sec = (ts - previous_ts).total_seconds()
+            tag = previous_ts.date()
+            if previous_ts.date() != ts.date():
+                # Letztes Sample des Vortages noch mit dem
+                # plausiblen letzten Intervall abschliessen.
+                if 0 < delta_sec <= max_gap_sec:
+                    wh = max(0.0, previous_feedin) * delta_sec / 3600.0
+                    tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
+                elif delta_sec > max_gap_sec and letzte_delta_sec is not None:
+                    wh = max(0.0, previous_feedin) * letzte_delta_sec / 3600.0
+                    tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
+                letzte_delta_sec = None
+            elif 0 < delta_sec <= max_gap_sec:
+                letzte_delta_sec = delta_sec
+                # Nur tatsaechliche Einspeisung; negative Werte
+                # sind Netzbezug und keine PV-Erzeugung.
+                wh = max(0.0, previous_feedin) * delta_sec / 3600.0
+                tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
+            elif delta_sec > max_gap_sec:
+                letzte_delta_sec = None
+        previous = (ts, feedin)
+
     for datei in dateien:
         try:
-            try:
-                rows, _quality = _read_csv_tail(
-                    str(datei), max_rows=25000,
-                    spalten=("Zeitstempel", "FeedinPower"),
-                )
-            except OSError as exc:
-                logging.debug("PV-Historie: %s nicht lesbar (%s)", datei, exc)
-                continue
-            for row in rows:
-                    ts = _parse_zeitstempel(row[0])
-                    feedin = _to_float(row[1])
-                    if ts is None or feedin is None:
-                        previous = None
-                        letzte_delta_sec = None
-                        continue
-                    if previous is not None:
-                        previous_ts, previous_feedin = previous
-                        delta_sec = (ts - previous_ts).total_seconds()
-                        tag = previous_ts.date()
-                        if previous_ts.date() != ts.date():
-                            # Letztes Sample des Vortages noch mit dem
-                            # plausiblen letzten Intervall abschliessen.
-                            if 0 < delta_sec <= max_gap_sec:
-                                wh = max(0.0, previous_feedin) * delta_sec / 3600.0
-                                tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
-                            elif delta_sec > max_gap_sec and letzte_delta_sec is not None:
-                                wh = max(0.0, previous_feedin) * letzte_delta_sec / 3600.0
-                                tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
-                            letzte_delta_sec = None
-                        elif 0 < delta_sec <= max_gap_sec:
-                            letzte_delta_sec = delta_sec
-                            # Nur tatsaechliche Einspeisung; negative Werte
-                            # sind Netzbezug und keine PV-Erzeugung.
-                            wh = max(0.0, previous_feedin) * delta_sec / 3600.0
-                            tages_energie[tag] = tages_energie.get(tag, 0.0) + wh
-                        elif delta_sec > max_gap_sec:
-                            letzte_delta_sec = None
-                    previous = (ts, feedin)
+            csv_tail.streame_tail(
+                str(datei), 25000,
+                spalten=("Zeitstempel", "FeedinPower"),
+                verarbeite=_integriere,
+            )
         except OSError as exc:
             logging.debug("PV-Historie: %s nicht lesbar (%s)", datei, exc)
+            # Wie bisher: eine unlesbare Datei bekommt keine
+            # Intervallschaetzung am Ende.
+            continue
 
         # Zwischen zwei Monatsdateien wird der letzte Wert nicht kuenstlich
         # verlaengert. Nur der allerletzte Wert der gesamten Zeitreihe bekommt
@@ -1532,8 +1620,24 @@ def get_status():
 
     pv_profil_info: dict = {}
     forecast_info: dict = {}
+    # RAM-Schutz (BUGFIX 23.10.2026): bei knappem Speicher werden die
+    # 14-Tage-Auswertungen uebersprungen - /status darf die Steuerung nicht
+    # in den OOM-Kill ziehen. Die Regelung nutzt diese Werte nicht.
+    _auswertung_erlaubt = _pv_profil_modul is not None and not _ram_knapp()
+    if _pv_profil_modul is not None:
+        # Nur beim Wechsel melden - /status wird alle 5 s abgefragt.
+        if not _auswertung_erlaubt and not _RAM_SCHUTZ_AKTIV["aktiv"]:
+            _RAM_SCHUTZ_AKTIV["aktiv"] = True
+            logging.warning(
+                "RAM knapp (< %d MB frei) - PV-Profil und PV-Historie in "
+                "/status werden bis zur Erholung uebersprungen",
+                RAM_SCHUTZ_MIN_VERFUEGBAR_KB // 1024,
+            )
+        elif _auswertung_erlaubt and _RAM_SCHUTZ_AKTIV["aktiv"]:
+            _RAM_SCHUTZ_AKTIV["aktiv"] = False
+            logging.info("RAM wieder ausreichend - /status rechnet PV-Werte wieder")
     try:
-        if _pv_profil_modul is not None:
+        if _auswertung_erlaubt:
             # Forecast-Scaling berechnen (heute vs historisch)
             forecast_today = getattr(shared_state.solar, 'forecast_today', None)
             historische_einspeisung_wh = None
@@ -2102,9 +2206,22 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
         # Fuer 7 Tage reicht der Tail nicht bei 14-Sekunden-Samples.
         # großzügiger Tail plus zeitbasiertes Downsampling hält RAM und Antwort klein.
         max_rows = max(25000, int(hours * 3600 / 5) + 5000)
-        rows, quality = _read_csv_tail(csv_path, max_rows=min(max_rows, 100000))
         cutoff = to_naive(now_for(shared_state)) - timedelta(hours=hours)
-        rows, coverage = _downsample_history(rows, cutoff, max_points=5000)
+        # BUGFIX (23.10.2026): erst beim Lesen auf Minutenwerte verdichten
+        # (hoechstens 10.080 Zeilen) statt 100.000 Tailzeilen zu halten.
+        zwischen, quality, anzahl_im_zeitraum, letzte_verfuegbar = _sammle_history(
+            csv_path, cutoff, min(max_rows, 100000)
+        )
+        rows, coverage = _downsample_history(
+            [row for _ts, row in zwischen], cutoff, max_points=5000
+        )
+        # Die Vorverdichtung darf die gemeldete Rohzeilenzahl nicht kleiner
+        # machen - die WebApp zeigt sie als Abdeckungs-Hinweis.
+        coverage["raw_rows_in_range"] = anzahl_im_zeitraum
+        # Liegt gar keine Zeile im Zeitraum, nennt die Qualitaet wie bisher den
+        # letzten Stand der DATEI (Grundlage fuer "stale_end_s").
+        if coverage.get("coverage_end") is None and letzte_verfuegbar is not None:
+            coverage["coverage_end"] = letzte_verfuegbar.strftime("%Y-%m-%d %H:%M:%S")
         quality.update(coverage)
         quality["requested_hours"] = hours
         now = to_naive(now_for(shared_state))

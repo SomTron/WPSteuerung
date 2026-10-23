@@ -51,6 +51,11 @@ WEATHER_UPDATE_INTERVAL_MIN: int = 60
 # (Kernel-Kill, status=9/KILL) im Steuerungs-Log nachvollziehbar - vorher
 # waren sie nur im Kernel-Journal sichtbar.
 MEMORY_LOG_INTERVAL_SEC: int = 3600
+# Ab wie wenig freiem RAM die Steuerung von "knapp" spricht: Vorstufe zum
+# OOM-Kill (Befund 15.09. und 23.10.2026 - beide Male killte der Kernel den
+# Prozess bei 416 MB Gesamt-RAM). Wird fuer die Warnung im Hauptloop UND
+# fuer den RAM-Schutz der teuren /status-Auswertungen genutzt.
+RAM_KRITISCH_VERFUEGBAR_KB: int = 60 * 1024
 
 # --- Compressor Verification ---
 COMPRESSOR_VERIFICATION_DELAY_MIN: int = 10

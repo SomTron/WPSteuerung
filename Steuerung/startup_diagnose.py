@@ -290,6 +290,36 @@ def speicher_werte(
     return werte
 
 
+def spitze_kb(status_pfad: str = "/proc/self/status") -> Optional[int]:
+    """Hoechststand der RSS seit Prozessstart (VmPeak) in kB.
+
+    BUGFIX (23.10.2026): Bei einem OOM-Kill (23.10.2026,
+    anon-rss:178 MB bei 416 MB Gesamt-RAM) war aus dem stuendlichen
+    "Speicher: RSS=..."-Log nicht ablesbar, ob der Dienst langsam
+    gewachsen ist (Leck) oder ob eine einzelne Auswertung kurzzeitig
+    explodiert ist (Spitze). VmPeak beantwortet genau das: liegt die
+    Spitze weit ueber der aktuellen RSS, war es ein Ausschlag; naehert
+    sich die RSS der Spitze an, ist es ein Leck.
+
+    Nicht verfuegbar (Windows, aeltere Kernel) -> None.
+    """
+    try:
+        with open(status_pfad, "r", encoding="utf-8") as f:
+            for zeile in f:
+                if zeile.startswith("VmPeak:"):
+                    return int(zeile.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def formatiere_spitze(peak_kb: Optional[int]) -> str:
+    """' | Spitze=190 MB' - leer, wenn kein VmPeak verfuegbar ist."""
+    if not isinstance(peak_kb, (int, float)):
+        return ""
+    return f" | Spitze={peak_kb / 1024:.0f} MB"
+
+
 def formatiere_speicher(werte: dict) -> str:
     """z. B. 'RSS=53 MB | verfuegbar=232 MB | total=416 MB'."""
     def _mb(wert):

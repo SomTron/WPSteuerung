@@ -198,6 +198,75 @@ _lies_cache_pfad: Optional[str] = None
 _lies_cache_key = None
 _lies_cache_zeilen: List[Dict] = []
 
+# BUGFIX (23.10.2026): Der Cache wurde nach JEDEM Schreibvorgang verworfen
+# (siehe `schreibe_eintrag`). Im laufenden Betrieb wird das Log aber alle
+# 75 s geschrieben (Herzschlag) - und /status fragt alle 5 s. Damit wurde
+# alle 75 s die komplette Historie neu von der SD-Karte gelesen und
+# JSON-geparst: gemessen 40 MB Spitze und +45 MB RSS je Durchlauf bei
+# 20.000 Eintraegen. Das war der groesste wiederkehrende Speicher-Ausschlag
+# des Dienstes und hat am 23.10.2026 mit zum OOM-Kill gefuehrt.
+#
+# Jetzt wird der Cache FORTGESCHRIEBEN: nur die neuen Bytes der juengsten
+# Datei werden gelesen. `offset` ist der Byte-Stand, bis zu dem die
+# juengste Datei bereits eingelesen ist (immer auf einer Zeilengrenze),
+# `aeltere` die Signatur aller aelteren Generationen - aendert sie sich
+# (Rotation), wird vollstaendig gelesen.
+_lies_cache_stand: Dict = {"offset": 0, "aeltere": ()}
+
+#: Felder, die der Dienst aus dem Entscheidungslog liest. Alles andere
+#: (Schema, Revision, Roh-Temperaturen, Diagnose-Ballast) wird beim
+#: Einlesen verworfen - es macht den Grossteil der 40 MB aus und wird hier
+#: nie gebraucht. Die DATEI bleibt vollstaendig; wer alle Felder braucht,
+#: liest sie direkt (Updater/manager_status.py, Analyse/*).
+_LESE_FELDER = (
+    "ts", "gewinner", "grund", "reason_code", "soll_einschalten",
+    "kompressor_laeuft", "regel_empfehlung", "handlung_override",
+    "feedin_w", "batpower_w",
+)
+
+
+def _reduziere(eintrag: Dict) -> Dict:
+    """Behaelt nur die Felder, die der Dienst tatsaechlich auswertet."""
+    reduziert = {feld: eintrag[feld] for feld in _LESE_FELDER if feld in eintrag}
+    # Aus den Diagnosedaten wird nur der Grund-Code gebraucht (API-Anzeige).
+    diag = eintrag.get("diagnostics")
+    if isinstance(diag, dict) and "reason_code" in diag:
+        reduziert["diagnostics"] = {"reason_code": diag["reason_code"]}
+    return reduziert
+
+
+def _lies_zeilen_ab(pfad: str, offset: int):
+    """Liest JSONL-Zeilen ab ``offset`` bis zum letzten vollstaendigen Ende.
+
+    Rueckgabe: (zeilen, neuer_offset). Ein angebrochener letzter Eintrag
+    (Schreibvorgang laeuft gerade) wird NICHT uebernommen und der Offset
+    bleibt vor dieser Zeile stehen - so geht sie beim naechsten Lesen
+    nicht verloren.
+    """
+    zeilen: List[Dict] = []
+    try:
+        with open(pfad, "rb") as f:
+            f.seek(offset)
+            roh = f.read()
+    except OSError:
+        return zeilen, offset
+    if not roh:
+        return zeilen, offset
+    ende = roh.rfind(b"\n")
+    if ende < 0:
+        return zeilen, offset
+    for zeile in roh[: ende + 1].split(b"\n"):
+        zeile = zeile.strip()
+        if not zeile:
+            continue
+        try:
+            eintrag = json.loads(zeile.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            continue  # abgebrochene Zeile tolerieren
+        if isinstance(eintrag, dict):
+            zeilen.append(_reduziere(eintrag))
+    return zeilen, offset + ende + 1
+
 
 def _letzte_logzeile() -> Optional[Dict]:
     """Letzte geschriebene Logzeile oder None (liest nur das Dateiende)."""
@@ -449,7 +518,7 @@ def schreibe_eintrag(
     }
     try:
         global _cache_pfad, _cache_zeile, _pending_pfad, _pending_regelwechsel
-        global _letzte_schreib_ts, _lies_cache_key
+        global _letzte_schreib_ts, _lies_cache_key, _lies_cache_stand
         if _pending_pfad != LOG_DATEI:
             _pending_pfad = LOG_DATEI
             _pending_regelwechsel = []
@@ -492,15 +561,19 @@ def schreibe_eintrag(
             # Nach der Rotation hat sich der Dateisatz geaendert -> Lese-Cache
             # verwerfen, damit die naechste Abfrage die neue Aufteilung sieht.
             _lies_cache_key = None
+            _lies_cache_stand = {"offset": 0, "aeltere": ()}
         with open(LOG_DATEI, "a", encoding="utf-8") as f:
             f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
         _cache_pfad = LOG_DATEI
         _cache_zeile = eintrag
         _letzte_schreib_ts = _parse_log_datetime(eintrag.get("ts"))
         # Die angehaengte Zeile muss die naechste Abfrage erreichen. Der
-        # mtime/size-Schluessel aendert sich zwar ohnehin, aber die explizite
-        # Invalidierung schuetzt auch bei grober Zeitaufloesung des Dateisystems.
-        _lies_cache_key = None
+        # BUGFIX (23.10.2026): Hier wurde der Lese-Cache bisher VERWORFEN.
+        # Damit wurde nach jedem Herzschlag (alle 75 s) die komplette
+        # Historie neu gelesen und geparst (~40 MB Spitze). Der Cache wird
+        # jetzt fortgeschrieben: `_lies_zeilen()` liest nur die Bytes ab
+        # `offset` nach. Die eben geschriebene Zeile ist damit sofort
+        # sichtbar, ohne dass etwas neu aufgebaut wird.
         return True
     except OSError as e:
         # Logging darf den Regelbetrieb niemals stoeren. Ein Schreibfehler
@@ -571,31 +644,65 @@ def _lies_zeilen() -> List[Dict]:
     Liest die Generationen von der JUENGSTEN zur aeltesten und bricht ab,
     sobald MAX_EINTRAEGE_LESEN Eintraege zusammen sind. Ein 8-Tage-Fenster
     umfasst im Worst Case ~9.200 Zeilen - der Deckel schuetzt davor, alle
-    Generationen vollstaendig einzulesen. Das Ergebnis wird gecacht, damit die
-    5-Sekunden-Statusabfrage (Entscheidungen + KPIs = zwei Aufrufe) die Dateien
-    nicht jedes Mal neu von der SD-Karte liest und JSON parst.
+    Generationen vollstaendig einzulesen.
+
+    BUGFIX (23.10.2026): Wurde die juengste Datei nur FORTGESCHRIEBEN
+    (Normalfall: jeder Herzschlag), werden ausschliesslich die neuen Bytes
+    gelesen und an den Cache angehaengt. Vorher wurde die komplette
+    Historie neu geparst - alle 75 s, gemessen 40 MB Spitze. Vollstaendig
+    gelesen wird nur noch bei Rotation, bei einer gekuerzten Datei und
+    beim ersten Aufruf.
     """
-    global _lies_cache_pfad, _lies_cache_key, _lies_cache_zeilen
+    global _lies_cache_pfad, _lies_cache_key, _lies_cache_zeilen, _lies_cache_stand
     pfade = [p for p in _alle_logpfade() if os.path.exists(p)]
     schluessel = _lese_schluessel(pfade)
-    if _lies_cache_pfad == LOG_DATEI and _lies_cache_key == schluessel:
+
+    juengste_ist_aktuell = bool(pfade) and pfade[-1] == LOG_DATEI
+    stand = _lies_cache_stand
+    offset = stand.get("offset", 0) if isinstance(stand, dict) else 0
+    aeltere = stand.get("aeltere", ()) if isinstance(stand, dict) else ()
+    if (
+        juengste_ist_aktuell
+        and _lies_cache_pfad == LOG_DATEI
+        and offset > 0
+        and aeltere == tuple(schluessel[:-1])
+        and schluessel[-1][1] is not None
+        and schluessel[-1][1] >= offset
+    ):
+        neue, neuer_offset = _lies_zeilen_ab(LOG_DATEI, offset)
+        if neuer_offset != offset:
+            _lies_cache_zeilen = (_lies_cache_zeilen + neue)[-MAX_EINTRAEGE_LESEN:]
+            _lies_cache_stand = {
+                "offset": neuer_offset,
+                "aeltere": tuple(schluessel[:-1]),
+            }
+        _lies_cache_key = schluessel
         return list(_lies_cache_zeilen)
+
     bloecke: List[List[Dict]] = []
+    aktueller_offset = 0
     for pfad in reversed(pfade):  # juengste Datei zuerst
-        zeilen: List[Dict] = []
-        try:
-            with open(pfad, encoding="utf-8") as f:
-                for z in f:
-                    z = z.strip()
-                    if not z:
-                        continue
-                    try:
-                        zeilen.append(json.loads(z))
-                    except json.JSONDecodeError:
-                        continue  # abgebrochene letzte Zeile tolerieren
-        except OSError as e:
-            logging.debug(f"Entscheidungslog nicht lesbar ({pfad}): {e}")
-            continue
+        if pfad == LOG_DATEI:
+            # Byte-Stand merken, damit der naechste Aufruf inkrementell
+            # weiterlesen kann.
+            zeilen, aktueller_offset = _lies_zeilen_ab(pfad, 0)
+        else:
+            zeilen = []
+            try:
+                with open(pfad, "rb") as f:
+                    for roh in f:
+                        roh = roh.strip()
+                        if not roh:
+                            continue
+                        try:
+                            eintrag = json.loads(roh.decode("utf-8", errors="replace"))
+                        except json.JSONDecodeError:
+                            continue  # abgebrochene letzte Zeile tolerieren
+                        if isinstance(eintrag, dict):
+                            zeilen.append(_reduziere(eintrag))
+            except OSError as e:
+                logging.debug(f"Entscheidungslog nicht lesbar ({pfad}): {e}")
+                continue
         if zeilen:
             # Die Datei wird von vorn gelesen, enthaelt also bereits
             # aelteres zuerst - die Reihenfolge bleibt unveraendert.
@@ -608,6 +715,16 @@ def _lies_zeilen() -> List[Dict]:
     _lies_cache_pfad = LOG_DATEI
     _lies_cache_key = schluessel
     _lies_cache_zeilen = ergebnis
+    # Byte-Stand nur merken, wenn die juengste Datei zuerst gelesen wurde
+    # (sonst ist der Deckel schon von den Generationen erreicht worden und
+    # ein inkrementelles Weiterlesen wuerde Zeilen ueberspringen).
+    if juengste_ist_aktuell and bloecke:
+        _lies_cache_stand = {
+            "offset": aktueller_offset,
+            "aeltere": tuple(schluessel[:-1]),
+        }
+    else:
+        _lies_cache_stand = {"offset": 0, "aeltere": ()}
     return list(ergebnis)
 
 

@@ -83,6 +83,11 @@ def isolate_entscheidungslog(tmp_path, monkeypatch):
     monkeypatch.setattr(entscheidungs_log, "_lies_cache_pfad", None)
     monkeypatch.setattr(entscheidungs_log, "_lies_cache_key", None)
     monkeypatch.setattr(entscheidungs_log, "_lies_cache_zeilen", [])
+    # Byte-Stand des inkrementellen Lese-Caches (BUGFIX 23.10.2026) - ohne
+    # Ruecksetzen wuerde ein Test die Zeilen des vorherigen wiederverwenden.
+    monkeypatch.setattr(
+        entscheidungs_log, "_lies_cache_stand", {"offset": 0, "aeltere": ()}
+    )
     # Auch der Sammel-Zustand fuer Regelwechsel ohne Handlungswechsel muss pro
     # Test zurueckgesetzt werden, sonst wandert er in den naechsten Test.
     monkeypatch.setattr(entscheidungs_log, "_pending_pfad", None)
@@ -97,6 +102,7 @@ def isolate_entscheidungslog(tmp_path, monkeypatch):
     entscheidungs_log._lies_cache_pfad = None
     entscheidungs_log._lies_cache_key = None
     entscheidungs_log._lies_cache_zeilen = []
+    entscheidungs_log._lies_cache_stand = {"offset": 0, "aeltere": ()}
     entscheidungs_log._pending_pfad = None
     entscheidungs_log._pending_regelwechsel = []
     entscheidungs_log._letzte_schreib_ts = None

@@ -109,15 +109,17 @@ def test_history_cache_liefert_beim_zweiten_aufruf_dieselben_daten(tmp_path, mon
     )
     api._history_cache_clear()
 
-    # Lesezaehler: zaehlt die tatsaechlichen CSV-Zugriffe.
+    # Lesezaehler: zaehlt die tatsaechlichen CSV-Zugriffe. Seit dem
+    # RAM-Umbau (23.10.2026) liest die Route ueber `_sammle_history`
+    # (Streaming + Minuten-Verdichtung) statt ueber `_read_csv_tail`.
     aufrufe = {"n": 0}
-    original = api._read_csv_tail
+    original = api._sammle_history
 
-    def spion(pfad, *args, **kwargs):
+    def spion(*args, **kwargs):
         aufrufe["n"] += 1
-        return original(pfad, *args, **kwargs)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(api, "_read_csv_tail", spion)
+    monkeypatch.setattr(api, "_sammle_history", spion)
 
     erste = api.get_history(hours=24)
     assert aufrufe["n"] == 1

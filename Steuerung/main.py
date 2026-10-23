@@ -90,6 +90,7 @@ from constants import (
     API_FEHLER_SCHWELLE,
     API_FEHLER_SCHWELLE_DEFAULT,
     MEMORY_LOG_INTERVAL_SEC,
+    RAM_KRITISCH_VERFUEGBAR_KB,
 )
 
 # Global objects
@@ -2081,10 +2082,59 @@ def _logge_speicher(state, letzter_log):
         return letzter_log
     try:
         werte = startup_diagnose.speicher_werte()
-        logging.info(f"Speicher: {startup_diagnose.formatiere_speicher(werte)}")
+        # VmPeak (Hoechststand seit Prozessstart) unterscheidet ein Leck von
+        # einem einmaligen Ausschlag - genau die Frage, die nach dem
+        # OOM-Kill am 23.10.2026 offen war.
+        spitze = startup_diagnose.spitze_kb()
+        logging.info(
+            f"Speicher: {startup_diagnose.formatiere_speicher(werte)}"
+            f"{startup_diagnose.formatiere_spitze(spitze)}"
+        )
     except Exception:
         pass
     return jetzt
+
+
+def _pruefe_ram_schwelle(state) -> None:
+    """Warnt, wenn der freie RAM unter die OOM-Vorstufe faellt (1x je Episode).
+
+    BUGFIX (23.10.2026): Bisher wurde nur stuendlich geloggt. Der OOM-Kill
+    trifft aber innerhalb von Minuten (Log 23.10.: letzter Status 08:22,
+    Kill 08:26) - im Log stand dazu nichts. Jetzt gibt es eine WARNUNG beim
+    Unterschreiten und eine INFO bei Erholung, dazu ein gc-Lauf, der nicht
+    mehr erreichbare Objekte sofort freigibt.
+    """
+    jetzt = _state_monotonic(state)
+    letzte_pruefung = getattr(state, "_ram_schwelle_ts", None)
+    if isinstance(letzte_pruefung, (int, float)) and jetzt - letzte_pruefung < 60:
+        return
+    state._ram_schwelle_ts = jetzt
+    try:
+        verfuegbar = startup_diagnose.speicher_werte().get("verfuegbar_kb")
+    except Exception:
+        return
+    if not isinstance(verfuegbar, (int, float)):
+        return
+    knapp = verfuegbar < RAM_KRITISCH_VERFUEGBAR_KB
+    aktiv = bool(getattr(state, "_ram_knapp_aktiv", False))
+    if knapp and not aktiv:
+        state._ram_knapp_aktiv = True
+        logging.warning(
+            "RAM knapp: nur %d MB frei (Schwelle %d MB) - OOM-Gefahr. "
+            "Teure /status-Auswertungen sind pausiert.",
+            verfuegbar // 1024, RAM_KRITISCH_VERFUEGBAR_KB // 1024,
+        )
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            logging.debug("gc.collect bei knappem RAM fehlgeschlagen", exc_info=True)
+    elif not knapp and aktiv:
+        state._ram_knapp_aktiv = False
+        logging.info(
+            "RAM wieder ausreichend (%d MB frei) - OOM-Gefahr vorbei",
+            verfuegbar // 1024,
+        )
 
 
 def _markiere_sensor_update_fehler(state) -> None:
@@ -2262,6 +2312,7 @@ async def main_loop():
             last_vpn_check = await _run_periodic_phase(session, state, last_vpn_check)
             try:
                 letzter_speicher_log = _logge_speicher(state, letzter_speicher_log)
+                _pruefe_ram_schwelle(state)
             except Exception:
                 logging.exception("Fehler in der Speicher-Diagnosephase")
             await _run_api_health_phase(session, state)
