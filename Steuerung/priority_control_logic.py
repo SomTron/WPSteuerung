@@ -593,22 +593,13 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # an, damit die Reserve VOR der Zapfung im Speicher liegt.
         gelernte_zapfmenge_l = 0.0
         zapf_vorhaltung_k = 0.0
-        # BUGFIX (22.10.2026): Der Wochentag der ZAPFUNG zaehlt, nicht
-        # der heutige. Die WP heizt fuer die Zapfung am geplanten Tag -
-        # an einem Sonntag wird mehr gebraucht (Baden) als unter der
-        # Woche (Dusche). Deshalb wird der Wochentag des geplanten
-        # Termins verwendet (bzw. der heute, wenn kein Termin steht).
+        # BUGFIX (24.10.2026): Fuer die taegliche Zapfungs-Vorhaltung zaehlt
+        # IMMER der heutige Wochentag. Frueher wurde hier der Wochentag des
+        # geplanten Legionellen-Termins eingesetzt. Stand der Plan z. B. auf
+        # Sonntag, rechnete die Regel die GANZE Woche mit dem hohen
+        # Sonntagsverbrauch (Baden) statt mit dem Werktagswert (Duschen) -
+        # das Wochentags-Lernen war damit unter der Woche ausgehebelt.
         _zapf_wochentag = now_local.weekday()
-        if planned_date is not None:
-            # Legionellenplan-Schutz (Befund 24.10.2026): Ein zukuenftiger Termin
-            # (z. B. Sonntag) darf unter der Woche nicht dazu fuehren, dass
-            # montags mit dem Sonntags-Verbrauch gerechnet wird. Der geplante
-            # Wochentag gilt nur, wenn der Termin heute faellig ist.
-            if planned_date == now_local.date():
-                try:
-                    _zapf_wochentag = int(planned_date.weekday())
-                except (AttributeError, TypeError, ValueError):
-                    pass
         _get_menge = getattr(
             learning_engine, "get_learned_zapfmenge_je_wochentag", None)
         if callable(_get_menge):

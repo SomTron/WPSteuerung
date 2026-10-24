@@ -124,3 +124,20 @@ Steuerung/backup/
 # 4) Python-Cache in Unterordnern (lag bereits in archive/).
 Steuerung/archive/__pycache__/
 Steuerung/simulation/__pycache__/
+
+# ---------------------------------------------------------------------------
+# BUGFIX (24.10.2026): Laufzeit-Artefakte aus dem Repo-ROOT.
+#
+# Das unfertige Skript test_header_fix.py prueft utils.check_and_fix_csv_header
+# im Root und legt dabei "backup/" und "csv log/" an - beides landete im
+# Commit. Im Betrieb laeuft der Dienst in Steuerung/ (dort sind die Ordner
+# bereits ignoriert); ein Test im Root darf dieselbe Falle nicht erneut
+# ausloesen.
+backup/
+csv log/
+csv\ log/
+
+# Sicherheitsbackups von utils.backup_csv() (z.B. heizungsdaten.csv_20260214_114549.bak)
+# und manuelle .bak-Kopien von Deploy-Skripten.
+*.csv_*.bak
+Updater/*.bak

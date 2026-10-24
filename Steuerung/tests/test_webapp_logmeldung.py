@@ -32,7 +32,12 @@ def test_langsame_antwort_wird_gemeldet(caplog):
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "/status" in text
     assert "19.7" in text, f"die Dauer fehlt in der Meldung: {text}"
-    assert "8" in text, "der WebApp-Abbruch muss benannt sein"
+    # Die Grenze kommt aus der Konstante (24.10.2026: 8 -> 12 s). Ein fester
+    # Wert im Test wuerde die Kopplung an die WebApp nicht absichern.
+    grenze = f"{api.WEBAPP_STATUS_TIMEOUT_SEC:.0f} s"
+    assert grenze in text, (
+        f"der WebApp-Abbruch ({grenze}) muss in der Meldung stehen: {text}"
+    )
 
 
 def test_schnelle_antwort_wird_nicht_gemeldet(caplog):

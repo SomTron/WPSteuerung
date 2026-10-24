@@ -571,22 +571,84 @@ def test_status_entscheidungen_kpi_cache_vermeidet_wiederholtes_lesen(monkeypatc
     mock_log.kpis.return_value = {"strom_kwh": 1.2}
 
     monkeypatch.setattr(api, "entscheidungs_log", mock_log)
-    monkeypatch.setattr(api, "_ENTSCHEIDUNGEN_KPI_CACHE", {"zeit": 0.0, "entscheidungen": [], "kpi": {}})
+    monkeypatch.setattr(api, "_ENTSCHEIDUNGEN_KPI_CACHE", {"zeit": None, "entscheidungen": [], "kpi": {}})
 
     pc = MagicMock()
     st = MagicMock()
     st.priority_config = pc
 
-    # 1. Aufruf: Cache ist kalt -> liest aus dem Modul
-    entscheidungen1, kpis1 = api._hole_entscheidungen_und_kpis(pc, st)
+    # 1. Aufruf: Vorwaerme-Pfad (rechne_auswertung=True) -> liest aus dem Modul
+    entscheidungen1, kpis1 = api._hole_entscheidungen_und_kpis(
+        pc, st, rechne_auswertung=True)
     assert mock_log.historie.call_count == 1
     assert mock_log.kpis.call_count == 1
     assert len(entscheidungen1) == 1
     assert kpis1 == {"strom_kwh": 1.2}
 
-    # 2. Aufruf direkt danach: Cache ist warm -> kein erneuter Aufruf
+    # 2. Aufruf direkt danach (/status-Request): Cache ist warm -> kein Lesen
     entscheidungen2, kpis2 = api._hole_entscheidungen_und_kpis(pc, st)
     assert mock_log.historie.call_count == 1
     assert mock_log.kpis.call_count == 1
     assert entscheidungen1 == entscheidungen2
     assert kpis1 == kpis2
+
+
+def test_status_request_rechnet_entscheidungen_nie_selbst(monkeypatch):
+    """Abgelaufener Cache: Der Request liefert den alten Stand, rechnet aber nicht.
+
+    Auf dem Pi kostet das Einlesen 2-4 s - genau die Ursache der
+    /status-Timeouts (Befund 24.10.2026). Die Neuberechnung laeuft nur im
+    Hintergrund (stale-while-revalidate).
+    """
+    from unittest.mock import MagicMock
+    mock_log = MagicMock()
+    mock_log.historie.return_value = []
+    mock_log.kpis.return_value = {}
+
+    monkeypatch.setattr(api, "entscheidungs_log", mock_log)
+    monkeypatch.setattr(api, "_ENTSCHEIDUNGEN_KPI_CACHE", {
+        "zeit": api.time.monotonic() - (api._ENTSCHEIDUNGEN_KPI_TTL_SEC + 1.0),
+        "entscheidungen": [{"ts": "alt"}],
+        "kpi": {"strom_kwh": 0.5},
+    })
+    gestartet = []
+    monkeypatch.setattr(
+        api, "_starte_entscheidungen_refresh",
+        lambda pc, st: gestartet.append(True),
+    )
+
+    entscheidungen, kpis = api._hole_entscheidungen_und_kpis(MagicMock(), MagicMock())
+
+    assert mock_log.historie.call_count == 0, "Request darf das Log nicht lesen"
+    assert mock_log.kpis.call_count == 0, "Request darf die KPIs nicht rechnen"
+    assert gestartet == [True], "Abgelaufener Cache muss den Hintergrund-Refresh starten"
+    # Stale-while-revalidate: der letzte gueltige Stand bleibt sichtbar.
+    assert entscheidungen == [{"ts": "alt"}]
+    assert kpis == {"strom_kwh": 0.5}
+
+
+def test_status_refresh_ist_single_flight(monkeypatch):
+    """Laeuft schon ein Refresh, startet kein zweiter Thread."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(api, "_entscheidungen_refresh_laeuft", False)
+    gestartet = []
+
+    class _FakeThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            gestartet.append(name)
+
+        def start(self):
+            pass
+
+    # Nur das Modul-Attribut patchen, nicht das globale threading-Modul.
+    monkeypatch.setattr(
+        api, "threading",
+        SimpleNamespace(Thread=_FakeThread, Lock=api.threading.Lock),
+    )
+
+    api._starte_entscheidungen_refresh(MagicMock(), MagicMock())
+    api._starte_entscheidungen_refresh(MagicMock(), MagicMock())
+
+    assert gestartet == ["entscheidungen-kpi"]

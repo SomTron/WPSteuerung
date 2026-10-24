@@ -89,6 +89,27 @@ def isolate_legionellenplan(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_status_caches():
+    """Der /status-Cache (Entscheidungen/KPIs) startet in jedem Test kalt.
+
+    Seit 24.10.2026 haelt api._ENTSCHEIDUNGEN_KPI_CACHE die teure
+    Entscheidungs-Historie 30 s lang. Ohne Reset wuerde ein Test die Werte
+    des vorherigen sehen (Mock-Log, andere Uhrzeit, andere KPIs).
+    """
+    try:
+        import api
+    except Exception:  # pragma: no cover - nur bei kaputter Testumgebung
+        yield
+        return
+
+    api._ENTSCHEIDUNGEN_KPI_CACHE["zeit"] = None
+    api._ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"] = []
+    api._ENTSCHEIDUNGEN_KPI_CACHE["kpi"] = {}
+    api._entscheidungen_refresh_laeuft = False
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolate_entscheidungslog(tmp_path, monkeypatch):
     """Unit-Tests duerfen niemals in den echten Entscheidungslog schreiben."""
     import entscheidungs_log

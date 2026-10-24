@@ -97,13 +97,30 @@ def test_touch_ziele_und_chart_hinweis_sind_vorhanden():
 
 def test_status_polling_hat_timeout_und_verhindert_ueberlappung():
     html = (WEBAPP / "index.html").read_text(encoding="utf-8")
-    assert "const STATUS_TIMEOUT_MS = 8000" in html
+    # Befund 24.10.2026: 8 s lagen unter der realen /status-Dauer auf dem Pi
+    # (Warnschwelle der API 3 s, gemessen 3,7 s) - die WebApp brach ab,
+    # obwohl die Werte kurz darauf bereitstanden. 12 s puffern Spitzen.
+    assert "const STATUS_TIMEOUT_MS = 12000" in html
     assert "if (statusRequestActive) return" in html
     assert "if (analysisRequestActive) return" in html
     assert "analysisRequestActive = false" in html
     assert "new AbortController()" in html
     assert "cache: 'no-store'" in html
     assert "API_CACHE_BUST" not in html
+
+
+def test_server_meldet_dieselbe_webapp_grenze():
+    """Die API-Warnung nennt exakt den Timeout, den die WebApp nutzt.
+
+    Ohne diesen Abgleich driftet `WEBAPP_STATUS_TIMEOUT_SEC` (Logtext) vom
+    `STATUS_TIMEOUT_MS` in index.html weg - das Log wuerde dann eine Grenze
+    nennen, die der Client gar nicht mehr hat.
+    """
+    from api import WEBAPP_STATUS_TIMEOUT_SEC
+
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    millisekunden = int(WEBAPP_STATUS_TIMEOUT_SEC * 1000)
+    assert f"const STATUS_TIMEOUT_MS = {millisekunden}" in html
 
 
 def test_live_api_und_service_worker_cache_vertraege():

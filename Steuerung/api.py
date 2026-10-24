@@ -935,6 +935,10 @@ _RAM_SCHUTZ_AKTIV: dict = {"aktiv": False}
 _SLOW_RESPONSE_SCHWELLE_MS: float = 3000.0
 _MELDUNG_DROSSEL_SEC: float = 300.0
 _letzte_meldung: dict = {}
+#: Abbruchgrenze der WebApp (`STATUS_TIMEOUT_MS` in webapp/index.html).
+#: Befund 24.10.2026: von 8 auf 12 s angehoben - die Meldung muss mitgehen,
+#: sonst nennt das Log eine Grenze, die der Client gar nicht mehr hat.
+WEBAPP_STATUS_TIMEOUT_SEC: float = 12.0
 
 # --- Single-Flight fuer die teuren /status-Zusatzauswertungen -------------
 #
@@ -981,9 +985,10 @@ def _darf_melden(schluessel: str, intervall: float = _MELDUNG_DROSSEL_SEC) -> bo
 def _melde_langsame_antwort(route: str, dauer_ms: float) -> None:
     """Warnt einmalig, wenn eine Route die WebApp-Zeitgrenze reisst.
 
-    Die WebApp bricht bei 8 s ab (STATUS_TIMEOUT_MS) - eine Route, die
-    laenger braucht, liefert dem Nutzer also NIE Daten. Ohne diese Meldung
-    sieht das im Log wie ein gesunder Dienst aus.
+    Die WebApp bricht nach `WEBAPP_STATUS_TIMEOUT_SEC` ab
+    (STATUS_TIMEOUT_MS in index.html) - eine Route, die laenger braucht,
+    liefert dem Nutzer also NIE Daten. Ohne diese Meldung sieht das im Log
+    wie ein gesunder Dienst aus.
     """
     if _WAERMT_VOR:
         # Beim Vorwaermen ist eine lange Dauer gewollt - keine Warnung.
@@ -995,7 +1000,8 @@ def _melde_langsame_antwort(route: str, dauer_ms: float) -> None:
     logging.warning(
         "%s brauchte %.1f s (Warnschwelle %.0f s) - die WebApp bricht nach "
         "%.0f s ab und zeigt dann keine Werte",
-        route, dauer_ms / 1000.0, _SLOW_RESPONSE_SCHWELLE_MS / 1000.0, 8.0,
+        route, dauer_ms / 1000.0, _SLOW_RESPONSE_SCHWELLE_MS / 1000.0,
+        WEBAPP_STATUS_TIMEOUT_SEC,
     )
 
 
@@ -1521,27 +1527,29 @@ def _historisches_wh_qm(csv_path: str):
 
 
 _ENTSCHEIDUNGEN_KPI_CACHE: dict = {
-    "zeit": 0.0,
+    # None = noch nie berechnet. time.monotonic() als Uhr, damit ein
+    # NTP-Zeitsprung den Cache nicht dauerhaft "frisch" macht.
+    "zeit": None,
     "entscheidungen": [],
     "kpi": {},
 }
-_ENTSCHEIDUNGEN_KPI_TTL_SEC = 10.0
+#: Die Entscheidungs-Historie und die KPIs aendern sich mit dem Regelzyklus,
+#: nicht mit dem 5-s-Poll der WebApp. 30 s halten die SD-Karte ruhig; ein
+#: 10-s-Cache haette bei 5-s-Poll noch jeden zweiten Request rechnen lassen
+#: (2-4 s auf dem Pi = genau die Timeout-Ursache).
+_ENTSCHEIDUNGEN_KPI_TTL_SEC = 30.0
+#: Single-Flight fuer den Hintergrund-Refresh (nur ein Thread gleichzeitig).
+_entscheidungen_refresh_laeuft: bool = False
+_entscheidungen_refresh_lock = threading.Lock()
 
 
-def _hole_entscheidungen_und_kpis(pc, state) -> tuple:
-    """Gecachte Entscheidungs-Historie und KPIs fuer /status.
+def _berechne_entscheidungen_und_kpis(pc, state) -> tuple:
+    """Liest Entscheidungs-Historie + KPIs und fuellt den Cache.
 
-    BUGFIX (24.10.2026): Auf dem Raspberry Pi kostete das Einlesen und
-    Parsen der Entscheidungs-Historie (entscheidungs_log.jsonl) bei jedem
-    5-Sekunden-Poll 2-4 Sekunden. Wenn zeitgleich Sensor- oder Netzarbeiten
-    liefen, ueberschritt /status die 3-Sekunden-Warnschwelle oder riss das
-    8-Sekunden-Timeout der WebApp. Ein 10-Sekunden-Cache liefert die Werte
-    in < 1 ms aus dem Speicher.
+    Das ist der teure Pfad (SD-Karte: 2-4 s auf dem Pi). Er laeuft nur beim
+    Vorwaermen (`erwaerme_auswertungen`) oder in einem Hintergrund-Thread -
+    niemals direkt im /status-Request.
     """
-    jetzt = time.time()
-    if jetzt - _ENTSCHEIDUNGEN_KPI_CACHE["zeit"] < _ENTSCHEIDUNGEN_KPI_TTL_SEC:
-        return _ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"], _ENTSCHEIDUNGEN_KPI_CACHE["kpi"]
-
     entscheidungen_info: list = []
     kpi_info: dict = {}
     try:
@@ -1568,10 +1576,84 @@ def _hole_entscheidungen_und_kpis(pc, state) -> tuple:
     except Exception as e:
         logging.warning(f"Entscheidungen/KPIs nicht verfuegbar: {e}")
 
-    _ENTSCHEIDUNGEN_KPI_CACHE["zeit"] = jetzt
+    _ENTSCHEIDUNGEN_KPI_CACHE["zeit"] = time.monotonic()
     _ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"] = entscheidungen_info
     _ENTSCHEIDUNGEN_KPI_CACHE["kpi"] = kpi_info
     return entscheidungen_info, kpi_info
+
+
+def _starte_entscheidungen_refresh(pc, state) -> None:
+    """Rechnet Historie/KPIs im Hintergrund neu (Single-Flight).
+
+    Mehrfachaufrufe sind harmlos: laeuft schon ein Refresh, kehrt diese
+    Funktion sofort zurueck. Der Request wartet nie auf den Thread.
+    """
+    global _entscheidungen_refresh_laeuft
+    with _entscheidungen_refresh_lock:
+        if _entscheidungen_refresh_laeuft:
+            return
+        _entscheidungen_refresh_laeuft = True
+
+    def _job() -> None:
+        global _entscheidungen_refresh_laeuft
+        try:
+            _berechne_entscheidungen_und_kpis(pc, state)
+        except Exception:
+            logging.debug(
+                "Hintergrund-Refresh Entscheidungen/KPIs fehlgeschlagen",
+                exc_info=True,
+            )
+        finally:
+            with _entscheidungen_refresh_lock:
+                _entscheidungen_refresh_laeuft = False
+
+    try:
+        threading.Thread(
+            target=_job, name="entscheidungen-kpi", daemon=True
+        ).start()
+    except Exception:
+        with _entscheidungen_refresh_lock:
+            _entscheidungen_refresh_laeuft = False
+        logging.debug("Entscheidungen/KPI-Refresh nicht startbar", exc_info=True)
+
+
+def _hole_entscheidungen_und_kpis(
+    pc, state, *, rechne_auswertung: bool = False
+) -> tuple:
+    """Gecachte Entscheidungs-Historie und KPIs fuer /status.
+
+    BUGFIX (24.10.2026): Auf dem Raspberry Pi kostete das Einlesen und
+    Parsen der Entscheidungs-Historie (entscheidungs_log.jsonl) bei jedem
+    5-Sekunden-Poll 2-4 Sekunden. Wenn zeitgleich Sensor- oder Netzarbeiten
+    liefen, ueberschritt /status die 3-Sekunden-Warnschwelle oder riss das
+    WebApp-Timeout. Der Cache liefert die Werte in < 1 ms aus dem Speicher.
+
+    Stale-while-revalidate: Der Request (`rechne_auswertung=False`) liest
+    AUSSCHLIESSLICH den Cache. Ist er abgelaufen, wird die Neuberechnung im
+    Hintergrund angestossen und der letzte gueltige Stand zurueckgegeben -
+    genau wie bei den uebrigen teuren /status-Werten. Nur der Vorwaerme-Pfad
+    (`rechne_auswertung=True`) rechnet synchron.
+    """
+    jetzt = time.monotonic()
+    zeit = _ENTSCHEIDUNGEN_KPI_CACHE["zeit"]
+    if (
+        isinstance(zeit, (int, float))
+        and not isinstance(zeit, bool)
+        and (jetzt - zeit) < _ENTSCHEIDUNGEN_KPI_TTL_SEC
+    ):
+        return (
+            _ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"],
+            _ENTSCHEIDUNGEN_KPI_CACHE["kpi"],
+        )
+
+    if rechne_auswertung:
+        return _berechne_entscheidungen_und_kpis(pc, state)
+
+    _starte_entscheidungen_refresh(pc, state)
+    return (
+        _ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"],
+        _ENTSCHEIDUNGEN_KPI_CACHE["kpi"],
+    )
 
 
 @app.get("/status")
@@ -1724,8 +1806,11 @@ def _status_daten(rechne_auswertung: bool = False):
                 "regel_dict": getattr(e, "regel_dict", None),
             })
 
-    # Entscheidungs-Historie + KPIs (gecacht fuer schnelle Antwortzeiten auf dem Pi)
-    entscheidungen_info, kpi_info = _hole_entscheidungen_und_kpis(pc, shared_state)
+    # Entscheidungs-Historie + KPIs (gecacht fuer schnelle Antwortzeiten auf dem Pi).
+    # Nur der Vorwaerme-/Hintergrundpfad rechnet, der Request liest den Cache.
+    entscheidungen_info, kpi_info = _hole_entscheidungen_und_kpis(
+        pc, shared_state, rechne_auswertung=rechne_auswertung
+    )
 
     # Boiler-Fuellstand + Taktschutz + Komfort (Punkte A/B/D)
     boiler_info: dict = {}
@@ -2020,8 +2105,8 @@ def _status_daten(rechne_auswertung: bool = False):
     })
     validate_status_shape(response)
     # BUGFIX (23.10.2026): Dauer messen und ins Log melden. Die WebApp
-    # bricht nach 8 s ab - eine langsamere Route liefert NIE Werte, im Log
-    # sah der Dienst bis dahin gesund aus.
+    # bricht nach WEBAPP_STATUS_TIMEOUT_SEC ab - eine langsamere Route
+    # liefert NIE Werte, im Log sah der Dienst bis dahin gesund aus.
     _melde_langsame_antwort("/status", (time.perf_counter() - _status_start) * 1000.0)
     return response
 

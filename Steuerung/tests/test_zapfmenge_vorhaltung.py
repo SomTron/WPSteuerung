@@ -241,40 +241,26 @@ class TestVerdrahtung:
         assert "zapfmenge_l=gelernte_zapfmenge_l" in text, (
             "Die Zapfungsmenge wird nicht durchgereicht")
 
-    def test_der_wochentag_wird_verwendet(self):
-        """Die Mengen-Berechnung muss den Wochentag der ZAPFUNG
-        verwenden - nicht den heutigen."""
+    def test_der_wochentag_ist_immer_der_heutige(self):
+        """Die Mengen-Berechnung verwendet IMMER den heutigen Wochentag.
+
+        Befund 24.10.2026: Frueher wurde der Wochentag des geplanten
+        Legionellen-Termins eingesetzt. Stand der Plan z. B. auf Sonntag,
+        rechnete CalcStart die GANZE Woche mit dem Sonntagswert (Baden)
+        statt mit dem Werktagswert (Duschen) - das Wochentags-Lernen war
+        unter der Woche ausgehebelt.
+        """
         import pathlib
         quelle = pathlib.Path(__file__).resolve().parent.parent / "priority_control_logic.py"
         text = quelle.read_text(encoding="utf-8")
         assert "get_learned_zapfmenge_je_wochentag" in text, (
             "Der wochentagsspezifische Wert wird nicht verwendet")
-        assert "_zapf_wochentag" in text, (
-            "Der Wochentag der Zapfung wird nicht bestimmt")
-        # Der Wochentag muss aus dem GEPLANTEN Termin stammen, wenn
-        # einer steht - sonst wuerde die WP fuer den falschen Tag
-        # vorheizen.
-        assert "planned_date.weekday()" in text, (
-            "Der Wochentag des geplanten Termins wird nicht verwendet")
-        # Die Zuweisung muss den GEPLANTEN Termin bevorzugen. Wird
-        # stattdessen immer der heutige Wochentag genommen, faellt die
-        # Mutation "fest auf Montag" nicht auf.
-        import re
-        block = re.search(
-            r"_zapf_wochentag = now_local\.weekday\(\).*?"
-            r"(?=_get_menge)",
-            text, re.S)
-        assert block, "Die Wochentag-Bestimmung wurde nicht gefunden"
-        # Geprueft wird die ZUWEISUNG, nicht nur das Vorkommen des
-        # Wortes: eine Mutation, die den geplanten Termin UEBERGAENGT
-        # (if False:), muss auffallen.
-        zuweisung = re.search(
-            r"if planned_date is not None:.*?"
-            r"_zapf_wochentag = int\(planned_date\.weekday\(\)\)",
-            block.group(0), re.S)
-        assert zuweisung, (
-            "Der geplante Termin wird nicht fuer den Wochentag genutzt - "
-            "der Wochentag wird immer vom HEUTIGEN Tag genommen")
+        assert "_zapf_wochentag = now_local.weekday()" in text, (
+            "Der Wochentag wird nicht vom heutigen Tag genommen")
+        # Der geplante Legionellen-Termin darf den Wochentag NICHT mehr
+        # ueberschreiben - genau das war der Fehler.
+        assert "planned_date.weekday()" not in text, (
+            "Der geplante Termin ueberschreibt weiterhin den Wochentag")
 
     def test_ohne_lernengine_keine_vorhaltung(self, tmp_path):
         """Ohne Lernengine (oder mit zu wenig Daten) bleibt alles neutral."""
