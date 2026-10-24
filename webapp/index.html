@@ -1272,13 +1272,19 @@
         // EINZIGE Versionsangabe der WebApp (Badge + Dokumenttitel).
         // Vorher stand dieselbe Version doppelt im HTML und war veraltet.
         // Bei jedem Release mit dem Log-Verzeichnisnamen abgleichen.
-        const APP_VERSION = '1.10.27';
+        const APP_VERSION = '1.10.28';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
             if (versionBadge) versionBadge.textContent = 'v' + APP_VERSION;
         });
         const STATUS_TIMEOUT_MS = 12000;
+        const STATUS_INTERVAL_MS = 5000;
+        // W1 (24.10.2026): Ist der Tab versteckt oder das Geraet offline,
+        // wird nicht alle 5 s aufgewacht - ein Request faellt dort ohnehin
+        // aus. Der 30-s-Takt spart Timer-Wakeups, Akku und Pi-Last; beim
+        // Zurueckkehren aktualisiert `visibilitychange` sofort.
+        const HIDDEN_POLL_INTERVAL_MS = 30000;
         // 7-Tage-Fenster liest bis zu 100.000 CSV-Zeilen - auf dem Pi
         // ueber eine langsame SD-Karte kann das dauern. 20 s sind grosszuegig,
         // aber endlich: danach bricht der Request ab, statt endlos zu haengen.
@@ -3573,7 +3579,7 @@
             }, delay);
         }
 
-        function startStatusPolling(delay = 5000) {
+        function startStatusPolling(delay = STATUS_INTERVAL_MS) {
             window.clearTimeout(statusPollTimer);
             if (document.hidden || !navigator.onLine) {
                 showOfflineState(navigator.onLine);
@@ -3584,7 +3590,10 @@
                 // stirbt die Schleife hier endgueltig: die Anzeige bleibt beim
                 // letzten Stand stehen und aktualisiert sich nie wieder.
                 // (startAnalysisPolling verhielt sich schon richtig.)
-                statusPollTimer = window.setTimeout(() => startStatusPolling(), delay);
+                // Im Hintergrund/Offline reicht der lange Takt: es wird kein
+                // Request gemacht, nur seltener nachgesehen.
+                statusPollTimer = window.setTimeout(
+                    () => startStatusPolling(), HIDDEN_POLL_INTERVAL_MS);
                 return;
             }
             // try/finally ist hier Pflicht, nicht Kosmetik. Ein Fehler in
@@ -3641,7 +3650,15 @@
         });
 
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && navigator.onLine) {
+            if (document.hidden) {
+                // W1 (24.10.2026): Beim Verstecken sofort auf den langen
+                // Hintergrund-Takt umplanen - sonst laeuft der 5-s-Timer
+                // noch bis zu einmal weiter, bevor er auf 30 s umstellt.
+                startStatusPolling();
+                startAnalysisPolling();
+                return;
+            }
+            if (navigator.onLine) {
                 fetchStatus();
                 startStatusPolling();
                 startAnalysisPolling();
@@ -3654,7 +3671,11 @@
             startAnalysisPolling();
             fetchErrors(true);
         });
-        window.addEventListener('offline', () => showOfflineState(false));
+        window.addEventListener('offline', () => {
+            showOfflineState(false);
+            // Sofort auf den langen Takt umplanen (kein Request solange offline).
+            startStatusPolling();
+        });
 
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {

@@ -467,10 +467,44 @@ def test_status_polling_plant_sich_auch_offline_neu():
     m = re.search(r"\n\s*function\s+\w+\s*\(", rest)
     block = rest[: m.start()] if m else rest
     assert "!navigator.onLine" in block
-    assert "statusPollTimer = window.setTimeout(() => startStatusPolling(), delay)" in block, (
+    assert re.search(
+        r"statusPollTimer = window\.setTimeout\(\s*\(\) => startStatusPolling\(\),",
+        block,
+    ), (
         "startStatusPolling muss sich nach dem Offline-Zweig neu planen, "
         "sonst stirbt die Schleife endgueltig"
     )
+
+
+def test_polling_wird_im_hintergrund_gedrosselt():
+    """W1 (24.10.2026): Versteckter Tab/offline -> 30-s-Takt statt 5 s.
+
+    Bei `document.hidden` wurde zwar kein Request gemacht, der 5-s-Timer
+    weckte Browser und Handy aber weiter auf. Jetzt plant der Offline-/
+    Hintergrund-Zweig mit `HIDDEN_POLL_INTERVAL_MS`; beim Verstecken wird
+    sofort umgeplant, beim Zurueckkehren aktualisiert `visibilitychange`.
+    """
+    html = (WEBAPP / "index.html").read_text(encoding="utf-8")
+    assert "const STATUS_INTERVAL_MS = 5000" in html
+    assert "const HIDDEN_POLL_INTERVAL_MS = 30000" in html
+
+    # startStatusPolling muss den langen Takt im Hintergrund-Zweig nutzen.
+    start = html.index("function startStatusPolling")
+    rest = html[start + 10:]
+    m = re.search(r"\n\s*function\s+\w+\s*\(", rest)
+    block = rest[: m.start()] if m else rest
+    assert "HIDDEN_POLL_INTERVAL_MS" in block, (
+        "Im Hintergrund/Offline muss der 30-s-Takt verwendet werden"
+    )
+
+    # Beim Verstecken wird sofort umgeplant (nicht erst nach dem 5-s-Timer).
+    handler_start = html.index("addEventListener('visibilitychange'")
+    handler_ende = html.index("window.addEventListener('online'", handler_start)
+    handler = html[handler_start:handler_ende]
+    assert "if (document.hidden)" in handler, (
+        "Beim Verstecken muss sofort neu geplant werden"
+    )
+    assert "startStatusPolling()" in handler
 
 
 def test_update_values_bricht_bei_fehlendem_element_nicht_ab():

@@ -62,21 +62,34 @@ async def _ensure_forecast_csv_header(csv_file):
 async def get_solar_forecast(session: aiohttp.ClientSession, config=None, csv_path=None):
     """
     Fetches solar radiation forecast from Open-Meteo.
-    Returns: (rad_today, rad_tomorrow, rad_day2, sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow, hourly_today_wm2)
-        Radiation in kWh/m², times as strings "HH:MM", hourly_today_wm2 is Dict[hour: W/m²].
-    Vertrag: IMMER genau 8 Werte liefern (Fehlerpfade inklusive).
 
-    BUGFIX/ERWEITERUNG (Befund 21.10.2026): Die Abfrage holt jetzt 7 Tage
-    statt 3. Die Legionellenplanung soll den BESTEN der drei Tage
-    Freitag/Samstag/Sonntag nach Prognose waehlen - mit einer 3-Tage-Prognose
-    war das nicht moeglich: von Montag bis Mittwoch liegen die drei
-    prognostizierten Tage ausserhalb des Wochenendes, es gab also gar keine
-    Auswahlbasis (nur der Freitag ab Donnerstag war absehbar).
+    Returns (9 Werte, in dieser Reihenfolge):
+        rad_today, rad_tomorrow, rad_day2,
+        sunrise_today, sunset_today, sunrise_tomorrow, sunset_tomorrow,
+        hourly_today_wm2, forecast_tage
 
-    Die tägliche Strahlungs-Summe wird deshalb fuer alle 7 Tage berechnet
-    und als `daily_totals` im hourly-Pfad mitgefuehrt. Die ersten drei
-    Tage bleiben unveraendert (rad_today/rad_tomorrow/rad_day2), damit der
-    8-Werte-Vertrag und alle bestehenden Aufrufer unangetastet bleiben.
+        Radiation in kWh/m², Zeiten als Strings "HH:MM",
+        ``hourly_today_wm2`` ist Dict[Stunde: W/m²],
+        ``forecast_tage`` ist Dict[ISO-Datum: Wh/m²] fuer die 7 Tage
+        (Tagesprognose der kommenden Woche, Basis der Legionellen-Planung).
+
+    Vertrag: IMMER genau 9 Werte liefern (Fehlerpfade inklusive).
+    BUGFIX (24.10.2026): Der Docstring nannte noch 8 Werte - der 9.
+    (`forecast_tage`, seit dem 7-Tage-Upgrade am 21.10.2026) fehlte.
+    `tests/test_weather_forecast.py` nagelt die Tupellaenge an allen
+    Erfolgs- und Fehlerpfaden fest.
+
+    ERWEITERUNG (Befund 21.10.2026): Die Abfrage holt 7 Tage statt 3. Die
+    Legionellenplanung soll den BESTEN der drei Tage Freitag/Samstag/Sonntag
+    nach Prognose waehlen - mit einer 3-Tage-Prognose war das nicht moeglich:
+    von Montag bis Mittwoch liegen die drei prognostizierten Tage ausserhalb
+    des Wochenendes, es gab also gar keine Auswahlbasis (nur der Freitag ab
+    Donnerstag war absehbar).
+
+    Die taegliche Strahlungs-Summe wird deshalb fuer alle 7 Tage berechnet
+    und als `forecast_tage` mitgegeben. Die ersten drei Tage bleiben
+    unveraendert (rad_today/rad_tomorrow/rad_day2), damit alle bestehenden
+    Aufrufer weiter funktionieren.
     """
     # Use config values or defaults
     lat = config.Wetterprognose.LATITUDE if config else 46.7142

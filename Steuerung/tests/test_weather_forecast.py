@@ -3,9 +3,11 @@
 Tests fuer weather_forecast.py.
 
 Abgedeckt:
-1. Vertrag: get_solar_forecast() liefert IMMER genau 8 Werte - auch an den
+1. Vertrag: get_solar_forecast() liefert IMMER genau 9 Werte - auch an den
    Fehlerpfaden (Historischer Bug 1: 6 statt 7; Regression 2: Erfolgsfall 8,
    Fehlerfall nur 7 -> main.py-Unpack 'expected 8, got 7' crashte im Pi-Log).
+   Der 9. Wert ist `forecast_tage` (seit dem 7-Tage-Upgrade 21.10.2026);
+   BUGFIX 24.10.2026: Der Docstring der Funktion nannte noch 8.
 2. Test-Isolation: CSV-Writes gehen NUR in injizierte temporaere Pfade.
    (Regression: Vorher schrieben Tests in die Produktions-sonnen_prognose.csv!)
 3. Header-Migration: alte 7-Spalten-Dateien werden einmalig auf 8 Spalten

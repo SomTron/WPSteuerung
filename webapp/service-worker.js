@@ -3,9 +3,9 @@
  * - cachel nur die statische App-Hülle
  * - /status, /history und Steuernachrichten bleiben immer live im Netz
  */
-// v7 (24.10.2026): Status-Timeout der WebApp auf 12 s angehoben - die
-// Huelle muss beim naechsten Besuch neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v7';
+// v8 (24.10.2026): Hintergrund-Polling auf 30 s gedrosselt - die Huelle
+// muss beim naechsten Besuch neu geladen werden.
+const CACHE_NAME = 'wp-webapp-shell-v8';
 const APP_SHELL = [
     './',
     './index.html',

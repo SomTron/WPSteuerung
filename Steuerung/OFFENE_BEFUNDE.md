@@ -1,7 +1,8 @@
 # Befunde, Warnungen und offene Punkte
 
 Stand: 24.10.2026 (Branch `entwicklung`, Basis-Commit `2019248`
-„unfertige api und zapfraten fix").
+„unfertige api und zapfraten fix"; Nacharbeit in `fd72bc9` und im
+Folge-Commit zu W1/B5).
 
 Diese Liste sammelt die gemeldeten Fehler/Schwachstellen, den jeweiligen
 Bearbeitungsstand und die Analyse der beiden Log-Warnungen
@@ -15,8 +16,8 @@ nächsten Schritte – **nicht** eine Beschreibung des Soll-Zustands.
 | B1 | hoch | `main.py`, Legionellen-Planung | Die 7-Tage-Schleife (`range(0, 8)`) plante auch Tage der **nächsten Kalenderwoche**. War der nächste Freitag besser als das aktuelle Wochenende, wurde die Fahrt still um eine Woche verschoben; am Montag schlug dann der Hygiene-Notfall an. | **erledigt** (`2019248`, Test `test_naechste_kalenderwoche_wird_nicht_geplant`) |
 | B2 | mittel | `priority_control_logic.py`, Zapf-Vorhaltung | `planned_date` (Legionellen-Termin) überschrieb den Wochentag der gelernten Zapfmenge. Stand der Plan z. B. auf Sonntag, rechnete CalcStart die ganze Woche mit dem Sonntagsverbrauch (Baden) statt mit dem Werktagswert (Duschen). | **erledigt** (`2019248` + Test; Code/Kommentar hier auf „immer heute" bereinigt) |
 | B3 | mittel | `api.py`, `/status` | Entscheidungs-Historie und KPIs wurden bei jedem 5-s-Poll neu von der SD-Karte gelesen (2–4 s auf dem Pi) → `/status` über der 3-s-Warnschwelle, WebApp-Timeout. Der erste Cache-Ansatz (10 s, Berechnung im Request) ließ bei 5-s-Poll noch jeden zweiten Request rechnen. | **erledigt** (hier fertiggestellt: 30 s TTL, stale-while-revalidate, Single-Flight-Hintergrund-Refresh, Tests) |
-| B4 | niedrig | `richtige_config.ini` / Tests | Doppelte Sektion `[Wetterprognose]` ließ `configparser` mit `DuplicateSectionError` abbrechen. Datei ist lokal (gitignored); `test_telegram_handler.py` liest sie jetzt fehlertolerant. | **teilweise erledigt** – die Datei selbst wird nicht mehr versioniert; eine dauerhafte Prüfung auf Duplikate fehlt (siehe Backlog) |
-| B5 | niedrig | `weather_forecast.py` | Docstring behauptet „IMMER genau 8 Werte", geliefert werden seit dem 7-Tage-Upgrade 9 (`forecast_tage`). | **offen** (Backlog) |
+| B4 | – | `richtige_config.ini` | **Kein Bug:** lokale Altversion der Config mit echten Zugangsdaten/Keys. Sie ist per `.gitignore` ausgeschlossen und wird bewusst **nicht** auf GitHub veröffentlicht; maßgeblich ist die Config auf dem RPi (nicht identisch mit dieser Altdatei). | **kein Handlungsbedarf** – `git ls-files` bestätigt: nicht versioniert (nur `Steuerung/config.ini.example`); `test_telegram_handler.py` liest sie fehlertolerant |
+| B5 | niedrig | `weather_forecast.py` | Docstring behauptete „IMMER genau 8 Werte", geliefert werden seit dem 7-Tage-Upgrade 9 (`forecast_tage`). | **erledigt** – Docstring nennt jetzt 9 Werte inkl. `forecast_tage`; die Tests nageln `len(result) == 9` an allen Erfolgs- und Fehlerpfaden fest |
 | B6 | mittel | `webapp/index.html`, `service-worker.js` | WebApp-Timeout `STATUS_TIMEOUT_MS` war 8 s und lag damit unter der realen `/status`-Dauer auf dem Pi. | **erledigt** (`2019248`: 12 s; hier Version `1.10.27` + Shell-Cache `v7`, damit die neue Hülle geladen wird) |
 | B7 | niedrig | Repo-Hygiene | Der unfertige Commit enthielt 28 Backup-CSVs (`backup/`), `csv log/heizungsdaten.csv`, `Updater/wp-manager.sh.bak`, `Steuerung/test_config.ini` und das Wegwerf-Skript `test_header_fix.py` (nur `print`, keine Assertions, legte `backup/` im Root an). | **erledigt** (entfernt, `.gitignore` ergänzt, echter Test `tests/test_csv_header_fix.py`) |
 
@@ -80,8 +81,15 @@ standen längst bereit. Es war reine I/O-Last.
   gedrosselt auf 5 min). Er ist das Frühwarnsystem, falls wieder etwas
   Teures in den Request-Pfad gerät.
 
-**Noch sinnvoll (Backlog):** Poll-Intervall im Browser bei verstecktem Tab
-drosseln und prüfen, ob 12 s Timeout reichen (Log weiter beobachten).
+**Umgesetzt (W1, 24.10.2026):** Das Status-Polling plant bei verstecktem Tab
+oder offline sofort auf `HIDDEN_POLL_INTERVAL_MS = 30 s` um. Vorher lief der
+5-s-Timer weiter, obwohl gar kein Request gemacht wurde (Timer-Wakeups,
+Akku). Beim Sichtbarwerden aktualisiert `visibilitychange` sofort und stellt
+den 5-s-Takt wieder her. Vertragstest:
+`test_polling_wird_im_hintergrund_gedrosselt`.
+
+**Weiter beobachten:** Timeout 12 s gegen die real gemessene
+`/status`-Dauer im Log prüfen (Ziel < 500 ms nach dem Cache-Fix).
 
 ### W2 – `Info: Start-Antizipation: hub zur Obergrenze nur 5.5K (...)`
 
@@ -106,18 +114,10 @@ von CalcStart oder die Schichtungsgrenze – nicht die Antizipation selbst.
 
 ## 3. Backlog (Reihenfolge = Vorschlag)
 
-1. **B5** – Docstring in `weather_forecast.py` auf 9 Rückgabewerte
-   korrigieren (inkl. `forecast_tage`) und einen Test ergänzen, der die
-   Tupellänge festnagelt (verhindert den nächsten stillen Bruch).
-2. **B4** – Config-Duplikate dauerhaft verhindern: `configparser` mit
-   `strict=True` ist Standard; besser eine Prüfung in `config_manager`
-   (z. B. beim Laden `DuplicateSectionError` klar loggen und mit klarer
-   Meldung abbrechen) + ein Test, der die ausgelieferte Beispiel-Config
-   prüft.
-3. **W1** – WebApp: Poll bei `document.hidden` auf 30–60 s drosseln
-   (spart Pi-Last und Mobilfunk-Traffic); Timeout-Beobachtung im Log
-   (`_melde_langsame_antwort`) auswerten.
-4. **B3** – Nach dem Deploy die tatsächliche `/status`-Dauer im Log prüfen
-   (Ziel < 500 ms). Falls die KPIs weiterhin auffallen: TTL auf 60 s.
-5. Optional: `/status`-Antwortzeit als eigene Kennzahl in der Diagnose
+1. **B3 (Beobachtung)** – Nach dem Deploy die tatsächliche `/status`-Dauer
+   im Log prüfen (Ziel < 500 ms). Falls die KPIs weiterhin auffallen: TTL
+   auf 60 s.
+2. Optional: `/status`-Antwortzeit als eigene Kennzahl in der Diagnose
    (P95 statt Einzelwarnung), damit „langsam" vor dem Timeout sichtbar wird.
+3. Optional: WebApp-Poll nach sehr langer Inaktivität (z. B. > 1 h
+   versteckt) ganz aussetzen und erst beim Sichtbarwerden neu starten.
