@@ -280,3 +280,47 @@ class TestVerdrahtung:
         """Ohne Lernengine (oder mit zu wenig Daten) bleibt alles neutral."""
         eng = _engine(tmp_path)
         assert eng.get_learned_zapfmenge_l() == 0.0
+
+    @pytest.mark.asyncio
+    async def test_zukuenftiger_termin_ueberschreibt_heutigen_wochentag_nicht(self, tmp_path):
+        """BUGFIX (24.10.2026): Ein geplanter Termin in der Zukunft (z. B. Sonntag)
+        darf an einem Montag nicht dazu fuehren, dass mit dem Sonntags-Verbrauch gerechnet wird.
+        """
+        import pytz
+        from unittest.mock import MagicMock, patch
+        import priority_control_logic as pcl
+        from json_config import WPSteuerungConfig
+        from types import SimpleNamespace
+
+        eng = _engine(tmp_path)
+        eng.get_learned_zapfmenge_je_wochentag = MagicMock(return_value=50.0)
+
+        # Montag, 19.10.2026
+        jetzt = pytz.timezone("Europe/Berlin").localize(datetime(2026, 10, 19, 12, 0))
+        cfg = WPSteuerungConfig()
+
+        state = SimpleNamespace(
+            local_tz=pytz.timezone("Europe/Berlin"),
+            sensors=SimpleNamespace(t_oben=45.0, t_mittig=40.0, t_unten=35.0, t_verd=15.0, t_boiler=40.0),
+            solar=SimpleNamespace(feedinpower=0.0, forecast_tomorrow=None, forecast_today=None,
+                                  forecast_hourly_wm2=None, acpower=None, pv_erzeugung=None,
+                                  soc=None, hausverbrauch=None),
+            control=SimpleNamespace(kompressor_ein=False, alle_ergebnisse=[],
+                                    schichtung_oben_start=None, schichtung_oben_max=None),
+            priority_config=cfg,
+            bademodus_aktiv=False,
+            urlaubsmodus_aktiv=False,
+            # Termin liegt am Sonntag (Zukunft!)
+            legionellen_planned_date=datetime(2026, 10, 25).date(),
+            legionellen_planned_tag=6,
+            legionellen_last_done=None,
+            legionellen_started_at=None,
+            legionellen_aktiv=False,
+        )
+
+        with patch("priority_control_logic._now_for_state", return_value=jetzt):
+            await pcl.determine_mode_and_setpoints(state, 35.0, 40.0, learning_engine=eng)
+
+        # Es muss Wochentag 0 (Montag) abgefragt worden sein, NICHT 6 (Sonntag)!
+        eng.get_learned_zapfmenge_je_wochentag.assert_called_with(0)
+

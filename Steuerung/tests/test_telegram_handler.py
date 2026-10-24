@@ -25,9 +25,12 @@ RICHTIGE_CONFIG = os.path.join(os.path.dirname(__file__), '..', 'richtige_config
 
 def _lese_telegram_config():
     config = configparser.ConfigParser()
-    config.read(RICHTIGE_CONFIG)
-    return (config.get('Telegram', 'BOT_TOKEN', fallback=None),
-            config.get('Telegram', 'CHAT_ID', fallback=None))
+    try:
+        config.read(RICHTIGE_CONFIG)
+        return (config.get('Telegram', 'BOT_TOKEN', fallback=None),
+                config.get('Telegram', 'CHAT_ID', fallback=None))
+    except Exception:
+        return (None, None)
 
 
 BOT_TOKEN, CHAT_ID = _lese_telegram_config()

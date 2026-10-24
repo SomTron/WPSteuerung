@@ -1,0 +1,2 @@
+Zeitstempel,T_Oben,T_Unten,T_Mittig,T_Boiler,T_Verd,Kompressor,ACPower,FeedinPower,BatPower,SOC,PowerDC1,PowerDC2,ConsumeEnergy,Einschaltpunkt,Ausschaltpunkt,Solarüberschuss,Urlaubsmodus,PowerSource,Prognose_Morgen,Einschaltgrund
+2025-12-21 21:29:28,30.5,31.2,30.8,30.0,5.5,1,0,0,0,50,0,0,0,40,45,0,0,Netz,0,None

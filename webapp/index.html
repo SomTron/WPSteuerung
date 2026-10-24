@@ -1278,7 +1278,7 @@
             const versionBadge = document.getElementById('app-version');
             if (versionBadge) versionBadge.textContent = 'v' + APP_VERSION;
         });
-        const STATUS_TIMEOUT_MS = 8000;
+        const STATUS_TIMEOUT_MS = 12000;
         // 7-Tage-Fenster liest bis zu 100.000 CSV-Zeilen - auf dem Pi
         // ueber eine langsame SD-Karte kann das dauern. 20 s sind grosszuegig,
         // aber endlich: danach bricht der Request ab, statt endlos zu haengen.

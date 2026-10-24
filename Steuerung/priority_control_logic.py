@@ -600,10 +600,15 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # Termins verwendet (bzw. der heute, wenn kein Termin steht).
         _zapf_wochentag = now_local.weekday()
         if planned_date is not None:
-            try:
-                _zapf_wochentag = int(planned_date.weekday())
-            except (AttributeError, TypeError, ValueError):
-                pass
+            # Legionellenplan-Schutz (Befund 24.10.2026): Ein zukuenftiger Termin
+            # (z. B. Sonntag) darf unter der Woche nicht dazu fuehren, dass
+            # montags mit dem Sonntags-Verbrauch gerechnet wird. Der geplante
+            # Wochentag gilt nur, wenn der Termin heute faellig ist.
+            if planned_date == now_local.date():
+                try:
+                    _zapf_wochentag = int(planned_date.weekday())
+                except (AttributeError, TypeError, ValueError):
+                    pass
         _get_menge = getattr(
             learning_engine, "get_learned_zapfmenge_je_wochentag", None)
         if callable(_get_menge):

@@ -1074,6 +1074,9 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                     kandidaten = []
                     for tage_voraus in range(0, 8):
                         datum = now_local.date() + timedelta(days=tage_voraus)
+                        # Nur Tage der aktuellen Kalenderwoche berücksichtigen
+                        if datum.isocalendar()[:2] != now_local.isocalendar()[:2]:
+                            continue
                         wochentag = datum.weekday()
                         if wochentag < legionellen_cfg.bevorzugter_tag:
                             continue

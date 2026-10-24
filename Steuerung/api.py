@@ -1520,6 +1520,60 @@ def _historisches_wh_qm(csv_path: str):
     return wert
 
 
+_ENTSCHEIDUNGEN_KPI_CACHE: dict = {
+    "zeit": 0.0,
+    "entscheidungen": [],
+    "kpi": {},
+}
+_ENTSCHEIDUNGEN_KPI_TTL_SEC = 10.0
+
+
+def _hole_entscheidungen_und_kpis(pc, state) -> tuple:
+    """Gecachte Entscheidungs-Historie und KPIs fuer /status.
+
+    BUGFIX (24.10.2026): Auf dem Raspberry Pi kostete das Einlesen und
+    Parsen der Entscheidungs-Historie (entscheidungs_log.jsonl) bei jedem
+    5-Sekunden-Poll 2-4 Sekunden. Wenn zeitgleich Sensor- oder Netzarbeiten
+    liefen, ueberschritt /status die 3-Sekunden-Warnschwelle oder riss das
+    8-Sekunden-Timeout der WebApp. Ein 10-Sekunden-Cache liefert die Werte
+    in < 1 ms aus dem Speicher.
+    """
+    jetzt = time.time()
+    if jetzt - _ENTSCHEIDUNGEN_KPI_CACHE["zeit"] < _ENTSCHEIDUNGEN_KPI_TTL_SEC:
+        return _ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"], _ENTSCHEIDUNGEN_KPI_CACHE["kpi"]
+
+    entscheidungen_info: list = []
+    kpi_info: dict = {}
+    try:
+        if entscheidungs_log is not None:
+            entscheidungen_info = [
+                {
+                    "ts": e.get("ts"), "gewinner": e.get("gewinner") or "",
+                    "grund": e.get("grund") or "",
+                    "reason_code": e.get("reason_code") or (e.get("diagnostics") or {}).get("reason_code"),
+                    "soll_einschalten": bool(e.get("soll_einschalten")),
+                    "laeuft": bool(e.get("kompressor_laeuft")),
+                    "regel_empfehlung": e.get("regel_empfehlung"),
+                    "handlung_override": e.get("handlung_override"),
+                }
+                for e in entscheidungs_log.historie(stunden=12, limit=30)
+            ]
+            wp_leistung_watt = float(getattr(pc, "wp", None) is not None and pc.wp.leistung_watt or 600.0)
+            strompreis = float(
+                getattr(getattr(state, 'priority_config', None), 'kpi', None)
+                and getattr(state.priority_config.kpi, 'strompreis_eur_kwh', 0.35)
+                or 0.35
+            )
+            kpi_info = entscheidungs_log.kpis(wp_leistung_watt, strompreis)
+    except Exception as e:
+        logging.warning(f"Entscheidungen/KPIs nicht verfuegbar: {e}")
+
+    _ENTSCHEIDUNGEN_KPI_CACHE["zeit"] = jetzt
+    _ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"] = entscheidungen_info
+    _ENTSCHEIDUNGEN_KPI_CACHE["kpi"] = kpi_info
+    return entscheidungen_info, kpi_info
+
+
 @app.get("/status")
 def get_status():
     """Statusantwort fuer die WebApp - rechnet NIE die CSV-Auswertungen.
@@ -1670,36 +1724,8 @@ def _status_daten(rechne_auswertung: bool = False):
                 "regel_dict": getattr(e, "regel_dict", None),
             })
 
-    # Entscheidungs-Historie + KPIs (Fehler hier duerfen /status nie killen)
-    entscheidungen_info: list = []
-    kpi_info: dict = {}
-    try:
-        if entscheidungs_log is not None:
-            entscheidungen_info = [
-                {
-                    "ts": e.get("ts"), "gewinner": e.get("gewinner") or "",
-                    "grund": e.get("grund") or "",
-                    "reason_code": e.get("reason_code") or (e.get("diagnostics") or {}).get("reason_code"),
-                    "soll_einschalten": bool(e.get("soll_einschalten")),
-                    "laeuft": bool(e.get("kompressor_laeuft")),
-                    # EIN/AUS-Empfehlung der Gewinner-Regel und der Override-
-                    # Hinweis, falls die Handlung davon abwich (Mindestlaufzeit,
-                    # Mindestpause, Debounce, Sicherheit). Die WebApp kann damit
-                    # eine Zeile "-> AUS" bei soll_einschalten=true erklaeren.
-                    "regel_empfehlung": e.get("regel_empfehlung"),
-                    "handlung_override": e.get("handlung_override"),
-                }
-                for e in entscheidungs_log.historie(stunden=12, limit=30)
-            ]
-            wp_leistung_watt = float(getattr(pc, "wp", None) is not None and pc.wp.leistung_watt or 600.0)
-            strompreis = float(
-                getattr(getattr(shared_state, 'priority_config', None), 'kpi', None)
-                and getattr(shared_state.priority_config.kpi, 'strompreis_eur_kwh', 0.35)
-                or 0.35
-            )
-            kpi_info = entscheidungs_log.kpis(wp_leistung_watt, strompreis)
-    except Exception as e:
-        logging.warning(f"Entscheidungen/KPIs nicht verfuegbar: {e}")
+    # Entscheidungs-Historie + KPIs (gecacht fuer schnelle Antwortzeiten auf dem Pi)
+    entscheidungen_info, kpi_info = _hole_entscheidungen_und_kpis(pc, shared_state)
 
     # Boiler-Fuellstand + Taktschutz + Komfort (Punkte A/B/D)
     boiler_info: dict = {}

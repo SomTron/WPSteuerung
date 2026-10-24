@@ -561,3 +561,32 @@ def test_fehler_historie_ohne_eintraege_hat_keinen_zeitraum(tmp_path, monkeypatc
     daten = api.fehler_historie(limit=10)
     assert daten["zeitraum_von"] is None
     assert daten["zeitraum_bis"] is None
+
+
+def test_status_entscheidungen_kpi_cache_vermeidet_wiederholtes_lesen(monkeypatch):
+    """Zwei /status Aufrufe innerhalb der TTL duerfen das Log nicht erneut einlesen."""
+    from unittest.mock import MagicMock
+    mock_log = MagicMock()
+    mock_log.historie.return_value = [{"ts": "2026-10-24 12:00:00", "gewinner": "AdaptivePV"}]
+    mock_log.kpis.return_value = {"strom_kwh": 1.2}
+
+    monkeypatch.setattr(api, "entscheidungs_log", mock_log)
+    monkeypatch.setattr(api, "_ENTSCHEIDUNGEN_KPI_CACHE", {"zeit": 0.0, "entscheidungen": [], "kpi": {}})
+
+    pc = MagicMock()
+    st = MagicMock()
+    st.priority_config = pc
+
+    # 1. Aufruf: Cache ist kalt -> liest aus dem Modul
+    entscheidungen1, kpis1 = api._hole_entscheidungen_und_kpis(pc, st)
+    assert mock_log.historie.call_count == 1
+    assert mock_log.kpis.call_count == 1
+    assert len(entscheidungen1) == 1
+    assert kpis1 == {"strom_kwh": 1.2}
+
+    # 2. Aufruf direkt danach: Cache ist warm -> kein erneuter Aufruf
+    entscheidungen2, kpis2 = api._hole_entscheidungen_und_kpis(pc, st)
+    assert mock_log.historie.call_count == 1
+    assert mock_log.kpis.call_count == 1
+    assert entscheidungen1 == entscheidungen2
+    assert kpis1 == kpis2

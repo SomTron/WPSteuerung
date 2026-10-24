@@ -736,6 +736,30 @@ class TestLegionellenBesterTagNachPrognose:
             f"gewaehlt: {state.legionellen_planned_day}"
         )
 
+    @pytest.mark.asyncio
+    async def test_naechste_kalenderwoche_wird_nicht_geplant(self):
+        """BUGFIX (24.10.2026): Am Freitag darf der naechste Freitag (KW+1)
+        nicht gewaehlt werden, selbst wenn er mehr PV-Ertrag verspricht.
+        Die Planung bleibt auf die aktuelle Kalenderwoche begrenzt.
+        """
+        jetzt = pytz.timezone("Europe/Berlin").localize(
+            datetime(2026, 10, 23, 10, 0))   # Freitag (KW 43)
+        # Fr 23.10 (KW43): 1000 Wh, Sa 24.10: 1200 Wh, So 25.10: 1100 Wh
+        # Naechster Fr 30.10 (KW44): 4000 Wh (viel besser!)
+        prognose = {}
+        for i in range(8):
+            d = (jetzt + timedelta(days=i)).date()
+            prognose[d.isoformat()] = 1000.0 if i == 0 else (1200.0 if i == 1 else (1100.0 if i == 2 else 4000.0))
+
+        state = await self._plane(jetzt, prognose)
+
+        # Naechster Freitag (KW 44, 30.10) darf NICHT gewaehlt werden!
+        # Samstag 24.10 (KW 43) muss gewaehlt werden (bester Tag DIESER Woche).
+        assert state.legionellen_planned_date == datetime(2026, 10, 24).date(), (
+            f"Erwartet Samstag der aktuellen KW, gewaehlt: {state.legionellen_planned_date}"
+        )
+        assert state.legionellen_planned_tag == 5
+
 
 class TestCheckPeriodicTasks:
         """Test ob main.py check_periodic_tasks() mit 7 Werten umgehen kann."""
