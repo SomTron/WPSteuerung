@@ -851,7 +851,7 @@ Schlüssel nehmen ihre Defaults an, siehe `json_config.py`):
   "calculated_start": { "solltemperatur_c": 42, "target_uhr": 17, "netz_solltemperatur_c": 38, "netz_einschalten_ab_k": 1.0, "notfall_mindestdefizit_k": 1.0 },
   "mindest_temp": { "eintraege": [ /* Fuehler+Fenster+min_temp_c+fenster_aus_lernen+nachtsperre_ueberschreiben */ ] },
   "sommer_modus": { "temperatur_offset_c": -3.0, "pv_ausschalt_offset_c": -2.0 },
-  "legionellen":  { "aktiv": true, "target_temp_c": 60, "legionellen_max_temp_c": 65, "max_duration_hours": 24, "bevorzugter_tag": 4, "letzter_tag": 6, "start_uhr": 8, "spaeteste_start_uhr": 16, "probezeit_minuten": 30 }
+  "legionellen":  { "aktiv": true, "target_temp_c": 60, "legionellen_max_temp_c": 65, "max_duration_hours": 24, "bevorzugter_tag": 4, "letzter_tag": 6, "start_uhr": 8, "spaeteste_start_uhr": 16, "probezeit_minuten": 10, "probezeit_min_temp_c": 55 }
 }
 ```
 

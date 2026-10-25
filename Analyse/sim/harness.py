@@ -555,6 +555,14 @@ class Simulation:
         if not state.legionellen_aktiv:
             return
         t_unten = state.sensors.t_unten
+        # NUTZERANFORDERUNG (25.10.2026): Heizen stoppt beim einmaligen
+        # Erreichen der Zieltemperatur; danach laeuft nur die Halteprobe
+        # (10 min, mindestens 55 C) bei ausgeschaltetem Kompressor.
+        probe_min_c = float(getattr(cfg, "probezeit_min_temp_c", 55.0))
+        if (state.legionellen_target_reached_at is not None
+                and isinstance(t_unten, (int, float))
+                and t_unten < probe_min_c):
+            state.legionellen_target_reached_at = None
         if (isinstance(t_unten, (int, float)) and t_unten >= cfg.target_temp_c
                 and state.legionellen_target_reached_at is None):
             state.legionellen_target_reached_at = jetzt

@@ -2627,41 +2627,76 @@ def evaluate_legionellen(
         )
         return result
     if legionellen_aktiv:
-        if t_unten >= legionellen_cfg.target_temp_c:
-            if legionellen_started_at is None:
-                result.einschalten = None
-                result.grund = "Legionellen wartet: Startzeit fehlt fuer die Probezeit"
+        # NUTZERANFORDERUNG (25.10.2026): Ein einmaliges Erreichen von 60 C
+        # unten genuegt. Danach wird NICHT weitergeheizt (frueher lief die
+        # Heizung 30 min weiter und trieb den Speicher bis 65 C). Stattdessen
+        # laeuft eine Halteprobe: 10 min lang mindestens 55 C unten.
+        try:
+            ziel_c = float(legionellen_cfg.target_temp_c)
+            probe_min_c = float(
+                getattr(legionellen_cfg, "probezeit_min_temp_c", 55.0)
+            )
+            probe_min = max(0, int(legionellen_cfg.probezeit_minuten))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            ziel_c = 60.0
+            probe_min_c = 55.0
+            probe_min = 10
+        if legionellen_target_reached_at is not None:
+            # Halteprobe laeuft: heizen nur, wenn die Mindesttemperatur faellt.
+            if t_unten < probe_min_c:
+                result.einschalten = True
+                result.grund = (
+                    f"Legionellen: Halteprobe unterbrochen - unten {t_unten:.1f}C "
+                    f"< {probe_min_c:.0f}C, heize erneut auf {ziel_c:.0f}C"
+                )
                 return result
             try:
-                gehalten_seit = now - (legionellen_target_reached_at or legionellen_started_at)
+                gehalten_seit = now - legionellen_target_reached_at
             except (TypeError, ValueError):
                 gehalten_seit = timedelta(0)
-            if legionellen_target_reached_at is None:
-                result.einschalten = True
-                result.grund = "Legionellen: Zieltemperatur erreicht; Probezeit startet"
-                return result
-            # Ziel erreicht, aber die konfigurierte Probezeit muss noch ablaufen.
-            if gehalten_seit < timedelta(minutes=int(legionellen_cfg.probezeit_minuten)):
-                result.einschalten = True
-                verbleib = max(0, int((timedelta(minutes=int(legionellen_cfg.probezeit_minuten)) - gehalten_seit).total_seconds() // 60) + 1)
+            if gehalten_seit < timedelta(minutes=probe_min):
+                result.einschalten = False
+                verbleib = max(
+                    0,
+                    int(
+                        (
+                            timedelta(minutes=probe_min) - gehalten_seit
+                        ).total_seconds() // 60
+                    )
+                    + 1,
+                )
                 result.grund = (
-                    f"Legionellen: Zieltemperatur erreicht; Probezeit laeuft noch "
-                    f"(ca. {verbleib} min)"
+                    f"Legionellen: Ziel {ziel_c:.0f}C erreicht - Heizen aus; "
+                    f"Halteprobe laeuft noch (ca. {verbleib} min, min "
+                    f"{probe_min_c:.0f}C)"
                 )
             else:
                 result.einschalten = False
                 result.grund = (
-                    f"Legionellen: unten {t_unten:.1f}C >= {legionellen_cfg.target_temp_c:.0f}C "
-                    f"und Probezeit {legionellen_cfg.probezeit_minuten} min abgeschlossen -> AUS"
+                    f"Legionellen: Ziel {ziel_c:.0f}C einmalig erreicht und "
+                    f"{probe_min} min Halteprobe >= {probe_min_c:.0f}C "
+                    f"abgeschlossen -> AUS"
                 )
             return result
-        else:
-            result.einschalten = True
+        if t_unten >= ziel_c:
+            if legionellen_started_at is None:
+                result.einschalten = None
+                result.grund = "Legionellen wartet: Startzeit fehlt fuer die Halteprobe"
+                return result
+            # Zieltemperatur einmalig erreicht -> Heizen stoppt sofort; die
+            # Halteprobe uebernimmt der Lifecycle (Zeitstempel setzen).
+            result.einschalten = False
             result.grund = (
-                f"Legionellen aktiv: {t_unten:.1f}C < {legionellen_cfg.target_temp_c:.0f}C, "
-                f"heize weiter"
+                f"Legionellen: Ziel {ziel_c:.0f}C unten erreicht - Heizen "
+                f"stoppt, Halteprobe {probe_min} min (min {probe_min_c:.0f}C) "
+                f"startet"
             )
             return result
+        result.einschalten = True
+        result.grund = (
+            f"Legionellen aktiv: {t_unten:.1f}C < {ziel_c:.0f}C, heize weiter"
+        )
+        return result
     # Nachversuch einer abgebrochenen Fahrt: Das Wochentags-Gate und das
     # Startfenster werden dann uebersprungen, damit die Prophylaxe nicht
     # still ausfaellt. Begrenzt wird der Nachversuch weiterhin durch

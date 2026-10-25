@@ -447,9 +447,14 @@ Konfigurationsschlüsseln.
 
 ### 5.3 Legionellen (Prio 90) – Legionellenprophylaxe
 
-- **Zweck:** Einmal pro Kalenderwoche das Warmwasser auf ``target_temp_c`` (60 °C)
-  erhitzen und dort **``probezeit_minuten`` (30 min)** halten, um
-  Legionellenbildung im Boiler zu verhindern.
+- **Zweck:** Einmal pro Kalenderwoche das Warmwasser auf ``target_temp_c``
+  (60 °C) erhitzen, um Legionellenbildung im Boiler zu verhindern.
+  **NUTZERANFORDERUNG 25.10.2026:** Das **einmalige** Erreichen von 60 °C
+  unten genügt. Danach wird **nicht weitergeheizt**; es läuft nur noch eine
+  **Halteprobe** von ``probezeit_minuten`` (Standard **10 min**), in der
+  ``probezeit_min_temp_c`` (Standard **55 °C**) unten nicht unterschritten
+  werden darf. Die frühere 30-min-Haltephase bei laufender Heizung (bis
+  65 °C) ist entfallen.
 - **Eingänge:** `temp_dict["unten"]`, `now`, `legionellen_aktiv`,
   `legionellen_last_done`, `legionellen_started_at`, `kompressor_ein`.
 - **Planung (in `main.py`, nach dem Forecast-Update):**
@@ -472,10 +477,19 @@ Konfigurationsschlüsseln.
      „Nachtsperre aktiv … pausiert"), **auch für eine laufende Fahrt**.
      Siehe „Nachtsperre / Fortsetzung am nächsten Tag" unten.
   4. **Prophylaxe läuft bereits** (`legionellen_aktiv=true`):
-     - `t_unten < target_temp_c` → `EIN` („heize weiter").
-     - `t_unten >= target_temp_c`: Probezeit seit `legionellen_target_reached_at`
-       abgelaufen → `AUS` (Ziel erreicht + Probezeit gehalten); sonst `EIN`
-       (Ziel erreicht, warte Probezeit).
+     - `legionellen_target_reached_at` ist **nicht** gesetzt und
+       `t_unten < target_temp_c` → `EIN` („heize weiter").
+     - `t_unten >= target_temp_c` und Ziel noch nicht erreicht → `AUS`:
+       Das Heizen stoppt **sofort** beim einmaligen Erreichen des Ziels.
+     - `legionellen_target_reached_at` gesetzt (Halteprobe läuft):
+       - `t_unten < probezeit_min_temp_c` (55 °C) → `EIN` (Halteprobe
+         unterbrochen, erneut auf Ziel heizen).
+       - sonst bis Ablauf der `probezeit_minuten` → `AUS`
+         („Halteprobe laeuft noch"), danach `AUS`
+         („Halteprobe abgeschlossen").
+     - Während der Halteprobe ist der Kompressor aus; es wird **nicht**
+       weitergeheizt. Für den Ziel-Stopp gilt die normale Mindestlaufzeit
+       nicht (`_effektive_mindestlaufzeit` liefert für „Legionellen" 0).
   5. **Neue Prophylaxe:**
      - Bereits in dieser Kalenderwoche erledigt → inaktiv.
      - Nur **exakt zur Startzeit** (`now.hour == start_h` und
@@ -486,11 +500,17 @@ Konfigurationsschlüsseln.
 - **Lifecycle (in `run_logic_step`):** Bei `EIN` wird `legionellen_aktiv=true`,
   `legionellen_started_at=jetzt` und der Temperatur-Override
   `legionellen_max_temp_c` (65 °C) gesetzt. Erreicht `t_unten` das Ziel, wird
-  `legionellen_target_reached_at` gesetzt (Probezeit-Start). Liefert die Regel
-  `AUS` und die Probezeit ist abgelaufen → `legionellen_last_done=heute`,
-  `legionellen_aktiv=false`, Override gelöscht, Telegram-Erfolgsmeldung.
-  Ohne Zielerreichung (z. B. an der Nachtsperre) → Abbruch als
-  `legionellen_unvollstaendig`; Plan und Nachversuch bleiben erhalten.
+  `legionellen_target_reached_at` gesetzt (Start der Halteprobe) und das
+  Heizen beendet. Der zugehörige Hardware-Stopp wird von
+  `_beende_legionellenlauf_if_needed` **nicht** als Abbruch gewertet: Der
+  Lifecycle bleibt aktiv, der Plan bleibt stehen. Erst wenn die Halteprobe
+  (`probezeit_minuten` mit `t_unten >= probezeit_min_temp_c`) abgelaufen ist,
+  wird `legionellen_last_done=heute`, `legionellen_aktiv=false`, Override
+  gelöscht und die Telegram-Erfolgsmeldung gesendet. Fällt die Temperatur
+  während der Probe unter 55 °C, wird der Zielzeitstempel verworfen und
+  erneut auf 60 °C geheizt. Ohne Zielerreichung (z. B. an der Nachtsperre) →
+  Abbruch als `legionellen_unvollstaendig`; Plan und Nachversuch bleiben
+  erhalten.
 - **Zeitlimit (`legionellen.max_duration_hours`):** Notausstieg gegen einen
   endlos laufenden Lauf, **nicht** die Regelgrenze – die Fahrt endet am
   Boiler-Maximum (65 °C) bzw. am Ziel + Probezeit. Standard **24 h**, `0` hebt
@@ -532,7 +552,7 @@ Konfigurationsschlüsseln.
 - **Konfig:** `legionellen.{aktiv (true), prioritaet (90), target_temp_c (60),
   legionellen_max_temp_c (65), bevorzugter_tag (4), letzter_tag (6),
   start_uhr (8), spaeteste_start_uhr (16), max_duration_hours (24; 0 = kein
-  Zeitlimit), probezeit_minuten (30),
+  Zeitlimit), probezeit_minuten (10), probezeit_min_temp_c (55),
   erforderliche_wh_qm (800), pv_prognose_schwelle_gut (2000)}`.
 - **Kompressor-Verifizierung im Legionellenmodus (seit 3.4):** Der untere
   Fuehler saettigt am oberen Boilerende (Nettorate ~0,5 °C/h < der 0,2-K-
@@ -970,7 +990,7 @@ die Prioritäten-Engine.
 |---|---|---|
 | 110 | Notfallschutz | Reiner Schutzleiter: ≤36 °C heizt vor allen Sperren |
 | 100 | Wochenende | blockiert vor 9 Uhr am Sa/So |
-| 90 | Legionellen | 60 °C 1×/Woche, 30 min Probezeit; Wochenend-Nachholung |
+| 90 | Legionellen | 60 °C 1×/Woche (einmalig) + 10 min Halteprobe ≥ 55 °C, ohne Weiterheizen; Wochenend-Nachholung |
 | 85 | Einspeisung | Heizen ab 7500 W Einspeisung |
 | 82 | CalcStart | Startrechnung zur Zielzeit (PV-Faktor, Mittagstief) |
 | 78 | AdaptivePV | Exklusive PV-Schwelle (300 W Basis), sobald Forecast da |

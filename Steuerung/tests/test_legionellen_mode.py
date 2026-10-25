@@ -26,7 +26,7 @@ def legionellen_config():
         prioritaet=90,
         target_temp_c=60.0,
         legionellen_max_temp_c=65.0,
-        probezeit_minuten=15,
+        probezeit_minuten=10,
         bevorzugter_tag=4,  # Freitag
         letzter_tag=6,      # Sonntag
         start_uhr=10.0,
@@ -163,8 +163,13 @@ class TestEvaluateLegionellen:
         assert result.einschalten is True
         assert "heize weiter" in result.grund
 
-    def test_aktiv_ziel_erreicht_wartet_probezeit(self, legionellen_config, temp_dict):
-        """Ziel erreicht (z.B. >= 60 Grad unten) -> sofort AUS."""
+    def test_aktiv_ziel_erreicht_stoppt_heizen(self, legionellen_config, temp_dict):
+        """NUTZERANFORDERUNG 25.10.2026: Einmal 60 C unten -> Heizen AUS.
+
+        Vorher meldete die Regel hier einschalten=True ("Probezeit laeuft")
+        und heizte 30 min weiter. Jetzt stoppt das Heizen sofort; die
+        Halteprobe (10 min, min. 55 C) laeuft bei ausgeschaltetem Kompressor.
+        """
         from priority_control import evaluate_legionellen
         now = datetime(2025, 3, 21, 11, 0, 0)
         td = {"oben": 62.0, "unten": 60.5, "mittig": 61.0}  # >= target=60
@@ -173,8 +178,52 @@ class TestEvaluateLegionellen:
             legionellen_aktiv=True,
             legionellen_started_at=datetime(2025, 3, 21, 10, 0, 0),
         )
-        assert result.einschalten is True
-        assert "Probezeit" in result.grund
+        assert result.einschalten is False
+        assert "Halteprobe" in result.grund
+        assert "Heizen" in result.grund
+
+    def test_aktiv_halteprobe_laeuft_ohne_weiterheizen(self, legionellen_config):
+        """Waehrend der Halteprobe bleibt der Kompressor aus (auch unter 60 C,
+        solange 55 C gehalten werden)."""
+        from priority_control import evaluate_legionellen
+        now = datetime(2025, 3, 21, 11, 5, 0)
+        td = {"oben": 61.0, "unten": 59.0, "mittig": 60.0}
+        result = evaluate_legionellen(
+            legionellen_config, td, now,
+            legionellen_aktiv=True,
+            legionellen_started_at=datetime(2025, 3, 21, 10, 0, 0),
+            legionellen_target_reached_at=datetime(2025, 3, 21, 11, 2, 0),
+        )
+        assert result.einschalten is False, result.grund
+        assert "Halteprobe" in result.grund
+
+    def test_aktiv_halteprobe_nach_10min_abgeschlossen(self, legionellen_config):
+        """Nach 10 min mit mindestens 55 C meldet die Regel AUS."""
+        from priority_control import evaluate_legionellen
+        now = datetime(2025, 3, 21, 11, 13, 0)
+        td = {"oben": 60.0, "unten": 57.0, "mittig": 59.0}
+        result = evaluate_legionellen(
+            legionellen_config, td, now,
+            legionellen_aktiv=True,
+            legionellen_started_at=datetime(2025, 3, 21, 10, 0, 0),
+            legionellen_target_reached_at=datetime(2025, 3, 21, 11, 2, 0),
+        )
+        assert result.einschalten is False
+        assert "abgeschlossen" in result.grund
+
+    def test_aktiv_halteprobe_unter_55C_heizt_erneut(self, legionellen_config):
+        """Faellt die Temperatur unter 55 C, wird erneut auf 60 C geheizt."""
+        from priority_control import evaluate_legionellen
+        now = datetime(2025, 3, 21, 11, 6, 0)
+        td = {"oben": 58.0, "unten": 54.0, "mittig": 56.0}
+        result = evaluate_legionellen(
+            legionellen_config, td, now,
+            legionellen_aktiv=True,
+            legionellen_started_at=datetime(2025, 3, 21, 10, 0, 0),
+            legionellen_target_reached_at=datetime(2025, 3, 21, 11, 2, 0),
+        )
+        assert result.einschalten is True, result.grund
+        assert "Halteprobe unterbrochen" in result.grund
 
 
 def test_legionellen_startet_im_fenster_spaeter_wenn_pv_kommt():

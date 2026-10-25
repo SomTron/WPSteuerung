@@ -176,7 +176,9 @@ class TestLegionellenFrist:
 # 3. Legionellen-Probezeit wird nicht abgebrochen
 # ==============================================================
 class TestLegionellenProbe:
-    """Der generische Ausschaltzweig darf die Probezeit nicht kappen."""
+    """NUTZERANFORDERUNG 25.10.2026: Beim einmaligen Erreichen der
+    Zieltemperatur stoppt das Heizen sofort - unabhaengig von der
+    Mindestlaufzeit. Die Halteprobe laeuft bei ausgeschaltetem Kompressor."""
 
     @staticmethod
     def _state(t_unten=60.2, aktiv=True, erreicht=None):
@@ -204,30 +206,32 @@ class TestLegionellenProbe:
         )
 
     @pytest.mark.asyncio
-    async def test_probe_wird_nicht_abgebrochen(self):
-        """Ziel erreicht, Probe laeuft -> Kompressor bleibt an."""
-        state = self._state(aktiv=True, erreicht=HEUTE - timedelta(minutes=5))
+    async def test_ziel_erreicht_schaltet_trotz_mindestlaufzeit_ab(self):
+        """Ziel erreicht -> Kompressor AUS, auch wenn die Mindestlaufzeit
+        (hier 60 min) noch nicht abgelaufen waere."""
+        state = self._state(aktiv=True, erreicht=None)
+        state.control._soll_einschalten = False  # Regel sagt AUS
+        state.stats.last_compressor_on_time = HEUTE - timedelta(minutes=20)
+        status = AsyncMock(return_value=True)
         with patch.object(pcl, "_now_for_state", return_value=HEUTE):
             erg = await pcl.handle_compressor_off(
-                state, None, regelfuehler=60.2, ausschaltpunkt=60.0,
+                state, None, regelfuehler=60.0, ausschaltpunkt=60.0,
                 min_laufzeit=timedelta(minutes=60), t_oben=61.2,
-                set_kompressor_status_func=AsyncMock(return_value=True),
-                regel_name="Legionellen",
-            )
-        assert erg is False
-
-    @pytest.mark.asyncio
-    async def test_nach_probe_wird_abgeschaltet(self):
-        """Nach abgelaufener Probe darf abgeschaltet werden."""
-        state = self._state(aktiv=True, erreicht=HEUTE - timedelta(minutes=60))
-        with patch.object(pcl, "_now_for_state", return_value=HEUTE):
-            erg = await pcl.handle_compressor_off(
-                state, None, regelfuehler=60.2, ausschaltpunkt=60.0,
-                min_laufzeit=timedelta(minutes=60), t_oben=61.2,
-                set_kompressor_status_func=AsyncMock(return_value=True),
+                set_kompressor_status_func=status,
                 regel_name="Legionellen",
             )
         assert erg is True
+        status.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mindestlaufzeit_gilt_fuer_legionellen_nicht(self):
+        """Die normale Mindestlaufzeit darf den Ziel-Stopp nicht verzoegern."""
+        state = self._state(aktiv=True, erreicht=None)
+        with patch.object(pcl, "_now_for_state", return_value=HEUTE):
+            eff = pcl._effektive_mindestlaufzeit(
+                state, timedelta(minutes=60), regel_name="Legionellen"
+            )
+        assert eff == timedelta(0)
 
     @pytest.mark.asyncio
     async def test_ohne_probezeit_normales_abschalten(self):

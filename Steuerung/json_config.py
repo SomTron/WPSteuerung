@@ -1051,7 +1051,27 @@ class LegionellenConfig(BaseModel):
     mindest_prognose_wh_qm: float = Field(default=800.0, description="Mindestprognose für einen planbaren Legionellen-Tag (Wh/qm)")
     tagwechsel_ab_diff_wh_qm: float = Field(default=300.0, description="Mindestvorsprung eines alternativen PV-Tages (Wh/qm)")
     pv_prognose_schwelle_gut: float = Field(default=2000.0, description="PV-Prognose >= diesem Wert gilt als 'guter PV-Tag' (Wh/qm)")
-    probezeit_minuten: int = Field(default=30, description="Haltezeit nach Erreichen der Legionellen-Zieltemperatur")
+    # NUTZERANFORDERUNG (25.10.2026): Ein einmaliges Erreichen von 60 C unten
+    # plus eine Halteprobe von mindestens 55 C ueber 10 min reicht. Vorher
+    # wurde die Zieltemperatur 30 min lang GEHALTEN und dabei weitergeheizt
+    # (bis 65 C). Jetzt stoppt das Heizen beim Erreichen der Zieltemperatur;
+    # die Probe prueft nur noch, dass der Speicher die Mindesttemperatur
+    # 10 min lang haelt.
+    probezeit_minuten: int = Field(
+        default=10,
+        description=(
+            "Haltezeit der Legionellen-Halteprobe nach einmaligem Erreichen "
+            "der Zieltemperatur. Waehrend der Probe wird NICHT weitergeheizt."
+        ),
+    )
+    probezeit_min_temp_c: float = Field(
+        default=55.0,
+        description=(
+            "Mindesttemperatur unten, die waehrend der Halteprobe gehalten "
+            "werden muss (C). Faellt sie darunter, wird erneut auf die "
+            "Zieltemperatur geheizt."
+        ),
+    )
     pv_start_min_watt: float = Field(default=500.0, description="Mindest-PV-Leistung für Start der Legionellenfahrt (W)")
     batterie_start_min_watt: float = Field(default=50.0, description="Mindest-Batterieleistung für Start der Legionellenfahrt (W)")
     batterie_start_min_soc_prozent: float = Field(default=90.0, description="Mindest-SOC für Batterie-Start der Legionellenfahrt (%)")
@@ -1101,6 +1121,12 @@ class LegionellenConfig(BaseModel):
             )
         if not (0 <= self.probezeit_minuten <= 240):
             raise ValueError("probezeit_minuten muss zwischen 0 und 240 liegen")
+        if not (40.0 <= self.probezeit_min_temp_c < self.target_temp_c):
+            raise ValueError(
+                "probezeit_min_temp_c muss zwischen 40 C und der "
+                f"Zieltemperatur ({self.target_temp_c} C) liegen, nicht "
+                f"{self.probezeit_min_temp_c}"
+            )
         if not (0 <= self.erforderliche_wh_qm <= 20000):
             raise ValueError("erforderliche_wh_qm ausserhalb 0-20000 Wh/qm")
         if not (0 <= self.mindest_prognose_wh_qm <= 20000):

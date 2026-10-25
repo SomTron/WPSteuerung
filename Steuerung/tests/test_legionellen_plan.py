@@ -360,3 +360,116 @@ class TestLegionellenZeitlimit:
             "Der Plan darf am Zeitlimit nicht geraumt werden"
         )
         assert st.legionellen_planned_tag == 4
+
+
+# ===========================================================
+# Halteprobe (Nutzeranforderung 25.10.2026)
+# ===========================================================
+
+def _state_mit_uhr(jetzt):
+    st = _state()
+    st.clock = SimpleNamespace(now=lambda: jetzt)
+    st.priority_config.legionellen.probezeit_minuten = 10
+    st.priority_config.legionellen.probezeit_min_temp_c = 55.0
+    return st
+
+
+class TestLegionellenHalteprobe:
+    """Einmal 60 C unten genuegt; danach 10 min Halteprobe >= 55 C.
+
+    Der Hardware-Stopp am Ziel ist kein Abbruch. Erst nach der Halteprobe
+    gilt die Prophylaxe als abgeschlossen.
+    """
+
+    def test_hardware_stopp_am_ziel_ist_kein_abbruch(self):
+        t0 = datetime(2026, 10, 23, 13, 0, tzinfo=TZ)
+        st = _state_mit_uhr(t0)
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = t0 - timedelta(hours=2)
+        st.legionellen_target_reached_at = None
+        st.legionellen_temp_override = 65.0
+        st.sensors.t_unten = 60.1
+
+        _beende_legionellenlauf_if_needed(st, t0, "regel_aus")
+
+        assert st.legionellen_aktiv is True, (
+            "Der Stopp am Ziel ist der Start der Halteprobe, kein Abbruch"
+        )
+        assert st.legionellen_target_reached_at == t0
+        assert st.legionellen_unvollstaendig is False
+        assert st.legionellen_temp_override == 65.0
+
+    def test_stopp_am_ziel_behaelt_den_plan(self):
+        from datetime import date as _date
+
+        t0 = datetime(2026, 10, 23, 13, 0, tzinfo=TZ)
+        st = _state_mit_uhr(t0)
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = t0 - timedelta(hours=2)
+        st.legionellen_planned_date = _date(2026, 10, 23)
+        st.legionellen_planned_tag = 4
+        st.sensors.t_unten = 60.2
+
+        _beende_legionellenlauf_if_needed(st, t0, "regel_aus")
+
+        assert st.legionellen_planned_date == _date(2026, 10, 23), (
+            "Waehrend der Halteprobe darf der Plan nicht geraeumt werden"
+        )
+
+    def test_abschluss_erst_nach_10min_halteprobe(self):
+        import asyncio
+
+        t0 = datetime(2026, 10, 23, 13, 0, tzinfo=TZ)
+        st = _state_mit_uhr(t0 + timedelta(minutes=11))
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = t0 - timedelta(hours=2)
+        st.legionellen_target_reached_at = t0
+        st.sensors.t_unten = 56.0  # >= 55, aber unter der Zieltemperatur
+
+        result = {"gewinner_ergebnis": RegelErgebnis(
+            name="Legionellen", prioritaet=90, aktiv=True, einschalten=False
+        )}
+        asyncio.run(_aktualisiere_legionellen_lifecycle(None, st, result))
+
+        assert st.legionellen_aktiv is False
+        assert st.legionellen_last_done == st.clock.now().date()
+        assert st.legionellen_target_reached_at is None
+
+    def test_probe_laeuft_vor_10min_noch(self):
+        import asyncio
+
+        t0 = datetime(2026, 10, 23, 13, 0, tzinfo=TZ)
+        st = _state_mit_uhr(t0 + timedelta(minutes=4))
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = t0 - timedelta(hours=2)
+        st.legionellen_target_reached_at = t0
+        st.sensors.t_unten = 57.0
+
+        result = {"gewinner_ergebnis": RegelErgebnis(
+            name="Legionellen", prioritaet=90, aktiv=True, einschalten=False
+        )}
+        asyncio.run(_aktualisiere_legionellen_lifecycle(None, st, result))
+
+        assert st.legionellen_aktiv is True
+        assert st.legionellen_target_reached_at == t0
+        assert st.legionellen_last_done is None
+
+    def test_unterschreiten_von_55C_verwirft_die_halteprobe(self):
+        import asyncio
+
+        t0 = datetime(2026, 10, 23, 13, 0, tzinfo=TZ)
+        st = _state_mit_uhr(t0 + timedelta(minutes=3))
+        st.legionellen_aktiv = True
+        st.legionellen_started_at = t0 - timedelta(hours=2)
+        st.legionellen_target_reached_at = t0
+        st.sensors.t_unten = 54.9
+
+        result = {"gewinner_ergebnis": RegelErgebnis(
+            name="Legionellen", prioritaet=90, aktiv=True, einschalten=False
+        )}
+        asyncio.run(_aktualisiere_legionellen_lifecycle(None, st, result))
+
+        assert st.legionellen_aktiv is True, "Lauf bleibt aktiv (erneut heizen)"
+        assert st.legionellen_target_reached_at is None, (
+            "Unter 55 C ist die Halteprobe ungueltig und muss neu beginnen"
+        )

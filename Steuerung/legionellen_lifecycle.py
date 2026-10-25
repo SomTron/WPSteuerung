@@ -40,6 +40,49 @@ def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
             )
         except (TypeError, ValueError, OverflowError):
             probe_done = False
+
+    # NUTZERANFORDERUNG (25.10.2026): Das Heizen stoppt beim EINMALIGEN
+    # Erreichen der Zieltemperatur. Der zugehoerige Hardware-Stopp ist damit
+    # kein Abbruch, sondern der Beginn der Halteprobe (10 min, min. 55 C).
+    # Er darf den Lifecycle deshalb NICHT aufraeumen - sonst waere die
+    # Zielerkennung sofort wieder weg und der Lauf gaelte als abgebrochen.
+    # Der Zeitstempel wird hier gesetzt, weil die Zielerkennung im Lifecycle
+    # (Schritt 7) erst NACH dem Abschalten (Schritt 5) laeuft.
+    t_unten = getattr(getattr(state, "sensors", None), "t_unten", None)
+    t_unten_ok = isinstance(t_unten, (int, float)) and not isinstance(t_unten, bool)
+    if cfg is not None and not probe_done:
+        try:
+            ziel_c = float(cfg.target_temp_c)
+            probe_min_c = float(getattr(cfg, "probezeit_min_temp_c", 55.0))
+        except (TypeError, ValueError, AttributeError):
+            ziel_c, probe_min_c = 60.0, 55.0
+        ziel_erreicht = (
+            isinstance(target_at, datetime)
+            and t_unten_ok
+            and float(t_unten) >= probe_min_c
+        )
+        if (
+            not ziel_erreicht
+            and end_grund == "regel_aus"
+            and t_unten_ok
+            and float(t_unten) >= ziel_c - 1.0
+        ):
+            # Die Regel hat am Ziel abgeschaltet (kleine Messtoleranz fuer
+            # den Fuehler direkt am Ausschaltpunkt).
+            ziel_erreicht = True
+        if ziel_erreicht:
+            if not isinstance(target_at, datetime):
+                state.legionellen_target_reached_at = now
+            state.legionellen_end_time = now
+            state._last_was_legionellen = True
+            logging.info(
+                "Legionellen: Ziel %.0fC unten erreicht - Heizen gestoppt, "
+                "Halteprobe %.0f min (min %.0fC) laeuft bei ausgeschaltetem "
+                "Kompressor weiter.",
+                ziel_c, float(getattr(cfg, "probezeit_minuten", 10) or 0), probe_min_c,
+            )
+            return
+
     # Der korrekte Lifecycle-Status wird an der einen Stelle bereinigt.
     state.legionellen_aktiv = False
     state.legionellen_temp_override = None
@@ -170,9 +213,9 @@ def _legionellen_bedarf_wh(legionellen_cfg, state, flaeche_qm: float):
     # Speichermasse (Wasser + Boiler) mit dem Faktor 1,2 gerechnet.
     delta_k = max(0.0, ziel_c - aktuell_c)
     aufheiz_wh = delta_k * volumen_l * 1.163 * 1.2
-    # Die Probezeit (Halten der Zieltemperatur) kostet zusaetzlich Energie -
-    # bei 60 C und 30 min sind das rund 30 l * 60 K * 1,163 Wh/(l*K) / 60
-    # min/h = 35 Wh. Der genaue Wert haengt am Lastgang; konservativ
+    # Die Halteprobe kostet als Energieansatz nur noch den Bereitschafts-
+    # anteil: waehrend der Probe wird nicht geheizt, der Speicher kuehlt
+    # lediglich langsam ab. Der genaue Wert haengt am Lastgang; konservativ
     # gerechnet wird mit dem Anteil am Tagesbedarf.
     probe_wh = 0.0
     if probezeit_min > 0:
@@ -190,8 +233,10 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
     if getattr(state, "_legionellen_completion_pending", False):
         _complete_legionellen_lifecycle(state, now)
         logging.info(
-            "Legionellenprophylaxe ABGESCHLOSSEN: KW %d, Ziel %.0fC inklusive %d min Probezeit",
+            "Legionellenprophylaxe ABGESCHLOSSEN: KW %d, Ziel %.0fC einmalig "
+            "erreicht inklusive %d min Halteprobe (min %.0fC)",
             now.isocalendar()[1], cfg.target_temp_c, cfg.probezeit_minuten,
+            float(getattr(cfg, "probezeit_min_temp_c", 55.0)),
         )
         return
     winner = result.get("gewinner_ergebnis")
@@ -286,15 +331,36 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
             return
 
     t_unten = state.sensors.t_unten
+    try:
+        probe_min_c = float(getattr(cfg, "probezeit_min_temp_c", 55.0))
+    except (TypeError, ValueError, AttributeError):
+        probe_min_c = 55.0
+    # Halteprobe verwerfen, wenn die Mindesttemperatur unterschritten wird:
+    # Dann muss erneut auf die Zieltemperatur geheizt werden (die Regel
+    # liefert dafuer einschalten=True).
+    if (
+        state.legionellen_target_reached_at is not None
+        and isinstance(t_unten, (int, float))
+        and not isinstance(t_unten, bool)
+        and t_unten < probe_min_c
+    ):
+        state.legionellen_target_reached_at = None
+        logging.warning(
+            "Legionellen: Halteprobe verworfen - unten %.1fC < %.0fC, "
+            "heize erneut auf %.0fC",
+            float(t_unten), probe_min_c, float(cfg.target_temp_c),
+        )
     if (
         isinstance(t_unten, (int, float))
+        and not isinstance(t_unten, bool)
         and t_unten >= cfg.target_temp_c
         and state.legionellen_target_reached_at is None
     ):
         state.legionellen_target_reached_at = now
         logging.info(
-            "Legionellen: Zieltemperatur erreicht, Probezeit startet (%d min)",
-            cfg.probezeit_minuten,
+            "Legionellen: Zieltemperatur %.0fC einmalig erreicht - Heizen "
+            "stoppt; Halteprobe startet (%d min, min %.0fC)",
+            float(cfg.target_temp_c), cfg.probezeit_minuten, probe_min_c,
         )
 
     if winner.einschalten is not False or state.legionellen_target_reached_at is None:
@@ -311,6 +377,9 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
     state.legionellen_last_done = now.date()
     state.legionellen_wochennummer = now.isocalendar()[1]
     state.legionellen_aktiv = False
+    # Ziel + Halteprobe erfuellt: eine gemerkte Unvollstaendigkeit aus einem
+    # frueheren Abbruch ist damit erledigt (sonst bliebe der Nachversuch aktiv).
+    state.legionellen_unvollstaendig = False
     state.legionellen_temp_override = None
     state.legionellen_started_at = None
     state.legionellen_target_reached_at = None
@@ -320,13 +389,17 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
     # Nach dem Abschluss dürfen effektive Hardwarefelder nicht wieder
     # resurrectiert werden; requested_rule_name bleibt als Diagnose erhalten.
     logging.info(
-        "Legionellenprophylaxe ABGESCHLOSSEN: KW %d, Ziel %.0fC inklusive %d min Probezeit",
+        "Legionellenprophylaxe ABGESCHLOSSEN: KW %d, Ziel %.0fC einmalig "
+        "erreicht inklusive %d min Halteprobe (min %.0fC)",
         now.isocalendar()[1], cfg.target_temp_c, cfg.probezeit_minuten,
+        probe_min_c,
     )
     if not state.legionellen_telegram_done_sent:
         try:
             msg = (f"✅ *Legionellenprophylaxe abgeschlossen!*\n"
-                   f"KW {now.isocalendar()[1]}: {cfg.target_temp_c:.0f}°C und Probezeit erreicht")
+                   f"KW {now.isocalendar()[1]}: {cfg.target_temp_c:.0f}°C einmalig "
+                   f"erreicht, {cfg.probezeit_minuten} min Halteprobe "
+                   f">= {probe_min_c:.0f}°C")
             from telegram_api import send_telegram_message as _send_tg
             sent = await _send_tg(session, state.config.Telegram.CHAT_ID, msg,
                                   state.config.Telegram.BOT_TOKEN, parse_mode="Markdown")
