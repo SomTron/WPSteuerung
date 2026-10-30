@@ -1925,6 +1925,40 @@ def _erhoehtes_legionellen_limit(state, sicher_cfg):
     return None
 
 
+def _schichtungsdeckel_aktiv(state):
+    """Aktuell wirksamer Schichtungsdeckel - oder None.
+
+    Der Deckel entsteht im Schichtungs-Warmstart der Abweichungs-Regel
+    ("oben warm, unten kalt") und begrenzt den Oberfuehler auf
+    `oben beim Start + schichtung_max_steig_k`.
+
+    Waehrend einer Legionellenfahrt (und im Nachlauf) ist genau dieses
+    Weiterheizen der oberen Schicht gewollt: Ziel 60 C. Boiler-Maximum und
+    Ueberhitzungsschutz stehen dort ueber `_erhoehtes_legionellen_limit` auf
+    `legionellen_max_temp_c` (65 C) - der Deckel war die einzige Grenze ohne
+    diese Ausnahme. Betriebslog 30.10.2026, 10:38: "SCHICHTUNG AUS
+    (cycle=23) reason=schichtung: oben 49.0C >= 49.0C (Start 48.0C)" bei
+    unten 48,4 C und Ziel 60 C; die Fahrt galt danach als abgebrochen.
+
+    Der Deckel wird in diesem Fall verworfen, die BASIS
+    (`schichtung_oben_start`) bleibt stehen: Sie markiert, bei welchem
+    Oberwert der Warmstart einsetzte. Wuerde sie mitgeloescht, baste der
+    naechste Warmstart auf dem hoeheren Oberwert neu (siehe
+    `_spiegele_schichtungsdeckel`).
+    """
+    control = getattr(state, "control", None)
+    deckel = getattr(control, "schichtung_oben_max", None)
+    if deckel is None:
+        return None
+    sicher_cfg = getattr(getattr(state, "priority_config", None), "sicherheit", None)
+    if _erhoehtes_legionellen_limit(state, sicher_cfg) is None:
+        return deckel
+    # Legionellenfahrt oder Nachlauf: Deckel ausser Kraft setzen (nicht die
+    # Basis - siehe Docstring).
+    control.schichtung_oben_max = None
+    return None
+
+
 def _boiler_max_info(state):
     """Infos zum harten Boiler-Maximum: (temp, limit, wiederein, fuehler).
 
@@ -2558,7 +2592,13 @@ async def handle_compressor_off(
     # unten/mitte kalt -> einschalten erlaubt, aber oben darf nicht weiter
     # stark steigen). Der Wert kommt aus dem Abweichungs-gewinn (regel_dict)
     # und wurde in determine_mode_and_setpoints nach state.control gespiegelt.
-    schichtung_max = getattr(state.control, "schichtung_oben_max", None)
+    #
+    # Waehrend einer Legionellenfahrt/Nachlauf holt `_schichtungsdeckel_aktiv`
+    # den Deckel ausser Kraft: Dort ist das Weiterheizen der oberen Schicht
+    # gewollt, die harten Grenzen stehen auf legionellen_max_temp_c (65 C).
+    # Befund 30.10.2026: Ein Deckel aus einem alten Warmstart beendete die
+    # Prophylaxe bei unten 48,4 C mit reason=schichtung.
+    schichtung_max = _schichtungsdeckel_aktiv(state)
     if (
         schichtung_max is not None
         and t_oben is not None
@@ -2846,7 +2886,12 @@ async def handle_compressor_on(
     # Zwangsabschaltung durchgesetzt. Fehlte hier die Start-Sperre, wurde ein
     # Lauf gestartet und 48 s spaeter (Log 15.10., 18:38) wieder abgewuergt.
     # Ein Start auf/ueber dem Deckel ist von vornherein sinnlos.
-    schichtung_max = getattr(state.control, "schichtung_oben_max", None)
+    #
+    # Ausnahme Legionellenfahrt/Nachlauf (`_schichtungsdeckel_aktiv`): Dort
+    # darf der Deckel den Start nicht verhindern - sonst bliebe ein
+    # unvollstaendiger Lauf bis zum Ablauf der Mindestpause stehen und das
+    # 60-C-Ziel waere nicht erreichbar.
+    schichtung_max = _schichtungsdeckel_aktiv(state)
     if (
         isinstance(schichtung_max, (int, float))
         and not isinstance(schichtung_max, bool)

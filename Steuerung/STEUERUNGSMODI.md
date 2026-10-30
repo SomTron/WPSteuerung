@@ -913,6 +913,14 @@ Konfigurationsschlüsseln.
          auf/ueber der Obergrenze steht (Befund 15.10.2026: sonst nur ein
          48-Sekunden-Lauf); `handle_compressor_off` stoppt den Lauf bei
          Erreichen der Obergrenze (`Schichtungs-Obergrenze`).
+         **Ausnahme Legionellenfahrt/Nachlauf** (`_schichtungsdeckel_aktiv`,
+         Befund 30.10.2026): Dort ist der Deckel außer Kraft, weil genau das
+         Weiterheizen der oberen Schicht gewollt ist (Ziel 60 °C) und
+         Boiler-Maximum/Überhitzungsschutz über dieselbe Anhebung auf
+         `legionellen_max_temp_c` (65 °C) stehen. Zuvor beendete der Deckel
+         eines alten Warmstarts die Prophylaxe bei `unten` 48,4 °C
+         (`reason=schichtung`); die Basis `schichtung_oben_start` bleibt dabei
+         erhalten.
        - `schichtung_erlaube_start=false` → alte Logik: `einschalten=None`
          (kein Netz-Start, wenn oben noch warm – vermeidet unnötiges Heizen
          nach Zapfen).

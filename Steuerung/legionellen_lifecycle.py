@@ -49,7 +49,14 @@ def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
     # Der Zeitstempel wird hier gesetzt, weil die Zielerkennung im Lifecycle
     # (Schritt 7) erst NACH dem Abschalten (Schritt 5) laeuft.
     t_unten = getattr(getattr(state, "sensors", None), "t_unten", None)
-    t_unten_ok = isinstance(t_unten, (int, float)) and not isinstance(t_unten, bool)
+    # Direkt mit isinstance umwandeln (kein separates Flag): nur so kann auch
+    # mypy den Wert als Zahl eingrenzen. Verhalten unveraendert - `bool` ist
+    # kein gueltiger Messwert.
+    t_unten_c = (
+        float(t_unten)
+        if isinstance(t_unten, (int, float)) and not isinstance(t_unten, bool)
+        else None
+    )
     if cfg is not None and not probe_done:
         try:
             ziel_c = float(cfg.target_temp_c)
@@ -58,14 +65,14 @@ def _beende_legionellenlauf_if_needed(state, now, end_grund=None) -> None:
             ziel_c, probe_min_c = 60.0, 55.0
         ziel_erreicht = (
             isinstance(target_at, datetime)
-            and t_unten_ok
-            and float(t_unten) >= probe_min_c
+            and t_unten_c is not None
+            and t_unten_c >= probe_min_c
         )
         if (
             not ziel_erreicht
             and end_grund == "regel_aus"
-            and t_unten_ok
-            and float(t_unten) >= ziel_c - 1.0
+            and t_unten_c is not None
+            and t_unten_c >= ziel_c - 1.0
         ):
             # Die Regel hat am Ziel abgeschaltet (kleine Messtoleranz fuer
             # den Fuehler direkt am Ausschaltpunkt).
