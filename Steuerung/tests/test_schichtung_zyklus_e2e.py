@@ -198,6 +198,59 @@ async def test_basis_ueberlebt_den_stopp_am_deckel():
 
 
 @pytest.mark.asyncio
+async def test_alt_deckel_verfaellt_wenn_oben_unter_die_basis_faellt():
+    """Befund 30.10.2026: Die Aufraeumung in `handle_compressor_on` war durch
+    die Zusatzbedingung `and not hat_grenze` wirkungslos - ein Alt-Deckel blieb
+    stehen und blockierte spaetere Laeufe. Kuehlt `oben` unter die Basis ab,
+    ist die Warmstart-Phase vorbei und BEIDE Werte verfallen."""
+    state = _state(t_oben=45.0)
+    state.control.schichtung_oben_max = 49.0
+    state.control.schichtung_oben_start = 48.0
+    state.control.kompressor_ein = False
+
+    async def set_status(st, ein, **kw):
+        st.control.kompressor_ein = ein
+        return True
+
+    await pcl.handle_compressor_on(
+        state, None,
+        regelfuehler=state.sensors.t_unten, einschaltpunkt=45.0,
+        ausschaltpunkt=48.0, min_laufzeit=timedelta(minutes=30),
+        min_pause=timedelta(minutes=0), t_oben=45.0, t_mittig=41.0,
+        set_kompressor_status_func=set_status,
+    )
+
+    assert state.control.schichtung_oben_max is None, (
+        "Alt-Deckel blieb stehen - er wuerde einen spaeteren Start abwuergen"
+    )
+    assert state.control.schichtung_oben_start is None
+
+
+@pytest.mark.asyncio
+async def test_deckel_bleibt_solange_oben_die_basis_haelt():
+    """Kontrolle: Innerhalb der Phase bleibt der Deckel wirksam (1 K insgesamt)."""
+    state = _state(t_oben=48.5)
+    state.control.schichtung_oben_max = 49.0
+    state.control.schichtung_oben_start = 48.0
+    state.control.kompressor_ein = False
+
+    async def set_status(st, ein, **kw):
+        st.control.kompressor_ein = ein
+        return True
+
+    await pcl.handle_compressor_on(
+        state, None,
+        regelfuehler=state.sensors.t_unten, einschaltpunkt=45.0,
+        ausschaltpunkt=48.0, min_laufzeit=timedelta(minutes=30),
+        min_pause=timedelta(minutes=0), t_oben=48.5, t_mittig=41.0,
+        set_kompressor_status_func=set_status,
+    )
+
+    assert state.control.schichtung_oben_max == 49.0
+    assert state.control.schichtung_oben_start == 48.0
+
+
+@pytest.mark.asyncio
 async def test_start_am_schichtungsdeckel_wird_abgelehnt():
     """Befund 15.10.2026, 18:38: Ein Start bei `oben` >= Deckel lief 48 s und
     wurde von `handle_compressor_off` wieder abgewuergt (end_grund schichtung).

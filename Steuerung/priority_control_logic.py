@@ -2798,28 +2798,34 @@ async def handle_compressor_on(
     # gehoert der AUS-Grund des Gewinners in die Statuszeile.
     _start_gewuenscht = bool(getattr(state.control, "_soll_einschalten", False))
 
-    # Schichtungs-Warmstart: Wenn ein neuer Lauf beginnt und KEINE gültige
-    # Obergrenze vorliegt (z.B. normaler Abweichungslauf ohne warmes Ober),
-    # eine evtl. alte Grenze aus einem vorherigen Lauf entfernen - sie darf
-    # einen neuen Lauf nicht unnötig begrenzen.
+    # Schichtungs-Warmstart: Deckel und Basis gehoeren zu EINER Phase
+    # (Oberwert beim Einsetzen des Warmstarts + schichtung_max_steig_k).
     #
-    # Die BASIS (schichtung_oben_start) wird davon getrennt verworfen: Sie
-    # ueberlebt Laeufe und Laeufegrenzen, damit der erlaubte Spielraum des
-    # Warmstarts nicht pro Lauf um schichtung_max_steig_k waechst. Nur wenn
-    # der Oberfuehler inzwischen UNTER die alte Basis gefallen ist (also
-    # wirklich abgekuehlt), beginnt eine neue Phase mit frischer Basis.
-    hat_grenze = getattr(state.control, "schichtung_oben_max", None) is not None
-    if not state.control.kompressor_ein and not hat_grenze:
+    # Solange `oben` die Basis haelt, bleibt der Deckel bewusst stehen: Er
+    # begrenzt die obere Schicht dieser Phase auf 1 K insgesamt (Regression
+    # 28.09.2026: sonst schraubte sie sich pro Lauf um 1 K hoch) und
+    # verhindert einen Start, der sofort wieder abgewuergt wuerde (Befund
+    # 15.10.2026: 48-Sekunden-Lauf).
+    #
+    # Faellt der Oberfuehler UNTER die Basis, ist die Phase vorbei - dann
+    # muessen Deckel UND Basis weg, sonst blockiert ein Alt-Deckel spaetere
+    # Laeufe bis er zufaellig erreicht wird (Befund 30.10.2026, 10:38: ein
+    # Deckel 49,0 C aus einem alten Warmstart beendete die Legionellenfahrt).
+    #
+    # Die frueher hier stehende Zusatzbedingung `and not hat_grenze` machte
+    # diese Aufraeumung wirkungslos: Ein Deckel existiert genau dann, wenn
+    # `hat_grenze` True ist - die Bedingung war also nie erfuellt.
+    _basis = getattr(state.control, "schichtung_oben_start", None)
+    if (
+        not state.control.kompressor_ein
+        and isinstance(_basis, (int, float))
+        and not isinstance(_basis, bool)
+        and isinstance(t_oben, (int, float))
+        and not isinstance(t_oben, bool)
+        and float(t_oben) < float(_basis)
+    ):
+        state.control.schichtung_oben_start = None
         state.control.schichtung_oben_max = None
-        _basis = getattr(state.control, "schichtung_oben_start", None)
-        if (
-            isinstance(_basis, (int, float))
-            and not isinstance(_basis, bool)
-            and isinstance(t_oben, (int, float))
-            and not isinstance(t_oben, bool)
-            and float(t_oben) < float(_basis)
-        ):
-            state.control.schichtung_oben_start = None
 
     # Boiler-Maximum-Kuehlphase: Nur nach einem tatsaechlichen Limit-Abschalten
     # aktiv (Flag boiler_max_blockiert). Der normale EIN-Bereich unterhalb des

@@ -921,6 +921,10 @@ Konfigurationsschlüsseln.
          eines alten Warmstarts die Prophylaxe bei `unten` 48,4 °C
          (`reason=schichtung`); die Basis `schichtung_oben_start` bleibt dabei
          erhalten.
+         **Phasenende:** Fällt `oben` unter die Basis, ist die Warmstart-Phase
+         vorbei – dann verfallen Deckel **und** Basis (`handle_compressor_on`).
+         Solange `oben` die Basis hält, bleibt der Deckel stehen (die Phase
+         erlaubt insgesamt `schichtung_max_steig_k`).
        - `schichtung_erlaube_start=false` → alte Logik: `einschalten=None`
          (kein Netz-Start, wenn oben noch warm – vermeidet unnötiges Heizen
          nach Zapfen).
