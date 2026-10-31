@@ -209,13 +209,44 @@ def test_quality_degraded_ohne_details_erklaert_den_hinweis():
     assert "quality_report.json" in text
 
 
-def test_quality_endgrund_unbekannt_wird_gemeldet():
+def test_quality_endgrund_unbekannt_wird_nur_mit_zaehler_gemeldet():
+    """Rohzaehlung allein reicht nicht - Altbestand darf kein Problem erzeugen.
+
+    `end_reasons`/`sources` zaehlen Zyklen UND Entscheidungen inklusive
+    Altbestand. Gemeldet wird nur, wenn der praezise Zaehler es bestaetigt
+    (Befund 31.10.2026: 34x 'unbekannt' und 257x 'decision:unbekannt' stammten
+    aus Zeilen ohne reason_code bzw. ohne Endgrund).
+    """
     report = _echter_report(status="degraded")
-    report["end_reasons"]["unbekannt"] = 4
+    report["end_reasons"]["unbekannt"] = 34
+    report["end_reasons"]["decision:unbekannt"] = 257
     report["sources"]["unbekannt"] = 2
     text, _gruen = mh.render_quality(report)
-    assert "Endgrund 'unbekannt': 4" in text, text
+    assert "Endgrund 'unbekannt'" not in text, text
+    assert "Endgrund 'decision:unbekannt'" not in text, text
+
+    report["cycle_quality"]["unknown_end_grund"] = 34
+    report["summary"]["missing_source_at_start"] = 2
+    report["summary"]["missing_decision_reason_codes"] = 257
+    text, _gruen = mh.render_quality(report)
+    assert "Endgrund 'unbekannt': 34" in text, text
+    assert "Endgrund 'decision:unbekannt': 257" in text, text
     assert "Quelle 'unbekannt': 2" in text, text
+
+
+def test_quality_hinweise_zu_altbestand_und_abgeleiteten_quellen():
+    """Altbestand und geschaetzte Quellen sind Hinweise, keine Probleme."""
+    report = _echter_report(status="degraded")
+    report["decision_quality"]["source_quality"] = {
+        "direct": 1132,
+        "inferred_feedin": 370,
+    }
+    report["decision_quality"]["legacy_missing_reason_codes"] = 257
+    text, _gruen = mh.render_quality(report)
+    assert "Quellen (Entscheidungen): direct=1132, inferred_feedin=370" in text, text
+    assert "Altbestand: 257 Zeilen ohne reason_code (Schema < 2)" in text, text
+    assert "Quellen 'inferred_feedin'" not in text, text
+    assert "Probleme" not in text, text
 
 
 def test_quality_viele_probleme_werden_gekuerzt():

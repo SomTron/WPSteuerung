@@ -74,6 +74,27 @@ KNOWN_END_CODES = {
     "unknown", "unbekannt",
 }
 
+#: reason_codes, die der ENTSCHEIDUNGSLOG fuer die HANDLUNG schreibt.
+#:
+#: BEFUND 31.10.2026: `build_quality_report` prueft die Codes der
+#: Entscheidungen gegen `KNOWN_END_CODES` (Zyklus-Endgruende). "start" und
+#: "stop" stehen dort nicht - im Bericht galten deshalb 1170 von 1502 Zeilen
+#: als "nicht zugeordnete reason_codes" und die Analyse war dauerhaft
+#: "degraded". Die Handlungscodes werden hier getrennt gefuehrt.
+KNOWN_DECISION_CODES = {
+    # Handlung des Zyklus
+    "start", "stop",
+    # Warten auf Quelle / Datenlage (set_reason_code in priority_control.py)
+    "waiting_source", "warte_quelle", "pv_unterbrechung", "data_stale",
+    "planned_future", "planned_day_missed", "nachtsperre",
+    # Blocking-Codes, die als reason_code im Log landen koennen
+    "mindestlaufzeit", "mindestpause", "boiler_bereits_warm",
+}
+
+#: Erste Log-Version, die `reason_code` schreibt. Zeilen davor sind
+#: Altbestand; ein fehlender Code ist dort kein Datenfehler der Steuerung.
+SCHEMA_MIT_REASON_CODE = 2
+
 
 def get_git_revision() -> str:
     """Ermittelt die Code-Revision robust für den Qualitätsbericht.
@@ -198,11 +219,18 @@ def classify_source(row: dict[str, Any]) -> tuple[str, str]:
 
 
 def classify_end_reason(row: dict[str, Any]) -> tuple[str, str]:
-    """(end_grund, quality); legacy-text wird nur als Fallback klassifiziert."""
+    """(end_grund, quality); legacy-text wird nur als Fallback klassifiziert.
+
+    BEFUND 31.10.2026: Stand im `reason_code` nur "unbekannt", wurde ein
+    vorhandener `end_grund`-Text ignoriert - im Bericht erschienen 34 Zyklen
+    als Endgrund "unbekannt", obwohl die CSV den echten Grund enthielt.
+    Jetzt gilt: ein aussagekraeftiger Text gewinnt gegen ein leeres
+    "unbekannt"; erst wenn beides fehlt, ist der Endgrund wirklich unbekannt.
+    """
     raw = str(row.get("reason_code") or row.get("end_grund_code") or "").strip().lower()
-    if raw:
-        return raw, ("direct" if raw in KNOWN_END_CODES else "direct_unmapped")
     text = str(row.get("end_grund") or "").strip().lower()
+    if raw and raw not in {"unbekannt", "unknown"}:
+        return raw, ("direct" if raw in KNOWN_END_CODES else "direct_unmapped")
     if not text or text in {"unbekannt", "unknown", "?"}:
         return "unbekannt", "missing"
     if text in KNOWN_END_CODES:
@@ -210,6 +238,22 @@ def classify_end_reason(row: dict[str, Any]) -> tuple[str, str]:
     if text.startswith("regel:"):
         return "regel_aus", "legacy_text"
     return text, "legacy_text"
+
+def _ohne_reason_code_schema(row: dict[str, Any]) -> bool:
+    """True, wenn die Zeile aus einer Log-Version VOR `reason_code` stammt.
+
+    Nur dann ist ein fehlender Code Altbestand und kein Datenfehler. Fehlt die
+    Schema-Angabe ganz (sehr alte Dateien), bleibt es konservativ bei
+    "missing" - lieber ein Hinweis zu viel als eine stille Luecke.
+    """
+    schema = row.get("schema")
+    if isinstance(schema, bool) or not isinstance(schema, (int, float)):
+        try:
+            schema = int(str(schema))
+        except (TypeError, ValueError):
+            return False
+    return float(schema) < SCHEMA_MIT_REASON_CODE
+
 
 def read_cycles(path: str | Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Liest eine oder mehrere Zyklus-CSVs und kennzeichnet ihr Schema."""
@@ -448,6 +492,7 @@ def build_quality_report(
     decision_reason_quality = Counter()
     decision_unknown_codes = 0
     decision_missing_codes = 0
+    decision_legacy_missing = 0
     for decision in decision_list:
         diagnostics = decision.get("diagnostics") if isinstance(decision.get("diagnostics"), dict) else {}
         reason = str(
@@ -458,13 +503,17 @@ def build_quality_report(
             or "unbekannt"
         ).strip().lower()
         if reason in {"unbekannt", "unknown"}:
-            decision_missing_codes += 1
-        if reason in KNOWN_END_CODES or reason in {
-            "warte_quelle", "waiting_source", "pv_unterbrechung", "data_stale",
-        }:
+            # BEFUND 31.10.2026: Zeilen aus der Zeit VOR `reason_code`
+            # (Schema < 2) sind Altbestand, kein Datenfehler der Steuerung.
+            # Getrennt zaehlen, damit "degraded" aussagekraeftig bleibt.
+            if _ohne_reason_code_schema(decision):
+                decision_legacy_missing += 1
+                decision_reason_quality["legacy"] += 1
+            else:
+                decision_missing_codes += 1
+                decision_reason_quality["missing"] += 1
+        elif reason in KNOWN_DECISION_CODES or reason in KNOWN_END_CODES:
             decision_reason_quality["direct"] += 1
-        elif reason == "unbekannt":
-            decision_reason_quality["missing"] += 1
         else:
             decision_reason_quality["direct_unmapped"] += 1
             decision_unknown_codes += 1
@@ -474,6 +523,7 @@ def build_quality_report(
         decision_source_quality[source_quality] += 1
     decision_quality = dict(decision_quality)
     decision_quality["missing_reason_codes"] = decision_missing_codes
+    decision_quality["legacy_missing_reason_codes"] = decision_legacy_missing
     decision_quality["unknown_reason_codes"] = decision_unknown_codes
     decision_quality["reason_quality"] = dict(decision_reason_quality)
     decision_quality["source_quality"] = dict(decision_source_quality)
@@ -516,5 +566,6 @@ def build_quality_report(
             "unknown_decision_reason_codes": decision_unknown_codes,
             "missing_source_at_start": cycle_quality.get("missing_source_at_start", 0),
             "missing_decision_reason_codes": decision_missing_codes,
+            "legacy_missing_decision_reason_codes": decision_legacy_missing,
         },
     }

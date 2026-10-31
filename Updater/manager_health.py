@@ -203,6 +203,11 @@ def render_quality(report: dict) -> tuple[str, bool]:
             text = _kennzahlen_zeile(wert) if isinstance(wert, dict) else _fmt(wert)
             zeilen.append(f"  - {name}: {text}")
 
+    hinweise = _hinweise_aus_report(report)
+    if hinweise:
+        zeilen.append("")
+        zeilen.extend(hinweise)
+
     probleme = _probleme_aus_report(report)
     if probleme:
         zeilen.append("")
@@ -274,7 +279,11 @@ def _probleme_aus_report(report: dict) -> list:
         quellen_qualitaet = block.get("source_quality")
         if isinstance(quellen_qualitaet, dict):
             for name, anzahl in sorted(quellen_qualitaet.items()):
-                if str(name).strip().lower() in {"direct", "ok"}:
+                # Abgeleitete/aufgezeichnete Quellen sind kein Datenfehler -
+                # sie stehen als Hinweis unter den Kennzahlen.
+                if str(name).strip().lower() in {
+                    "direct", "ok", "recorded", "inferred_rule", "inferred_feedin",
+                }:
                     continue
                 wert = _als_zahl(anzahl)
                 if wert > 0:
@@ -307,10 +316,59 @@ def _probleme_aus_report(report: dict) -> list:
             basis = str(name).rsplit(":", 1)[-1].strip().lower()
             if basis not in {"unbekannt", "unknown"}:
                 continue
+            # BEFUND 31.10.2026: Diese Eintraege sind eine Rohzaehlung ueber
+            # Zyklen UND Entscheidungen - inklusive Altbestand (Zeilen vor
+            # `reason_code`). Gemeldet wird nur, wenn der praezise Zaehler es
+            # bestaetigt; sonst entstuenden Probleme, die keine sind.
+            if blockname == "end_reasons":
+                if str(name).startswith("decision:"):
+                    if _als_zahl(summary.get("missing_decision_reason_codes")) <= 0:
+                        continue
+                else:
+                    zyklen_quality = report.get("cycle_quality")
+                    if _als_zahl(
+                        zyklen_quality.get("unknown_end_grund")
+                        if isinstance(zyklen_quality, dict) else 0
+                    ) <= 0:
+                        continue
+            else:
+                if _als_zahl(summary.get("missing_source_at_start")) <= 0:
+                    continue
             wert = _als_zahl(anzahl)
             if wert > 0:
                 probleme.append(f"{titel} '{name}': {wert}")
     return probleme
+
+
+def _hinweise_aus_report(report: dict) -> list:
+    """Zusatzinformationen, die kein Problem, aber erklaerungsbeduerftig sind.
+
+    Beispiel (31.10.2026): 370 Entscheidungszeilen ohne protokollierte Quelle
+    (nur aus der Einspeisung geschaetzt) und 257 Altzeilen aus der Zeit vor
+    `reason_code`. Beides gehoert sichtbar in die Anzeige, darf die Stufe aber
+    nicht auf "degraded" ziehen.
+    """
+    hinweise: list = []
+    entscheidungen = report.get("decision_quality")
+    if isinstance(entscheidungen, dict):
+        quellen = entscheidungen.get("source_quality")
+        if isinstance(quellen, dict):
+            teile = [
+                f"{name}={wert}"
+                for name, wert in sorted(quellen.items())
+                if _als_zahl(wert) > 0
+            ]
+            if teile:
+                hinweise.append("Quellen (Entscheidungen): " + ", ".join(teile))
+        gruende = entscheidungen.get("reason_quality")
+        legacy = _als_zahl(entscheidungen.get("legacy_missing_reason_codes"))
+        if legacy <= 0 and isinstance(gruende, dict):
+            legacy = _als_zahl(gruende.get("legacy"))
+        if legacy > 0:
+            hinweise.append(
+                f"Altbestand: {legacy} Zeilen ohne reason_code (Schema < 2)"
+            )
+    return hinweise
 
 
 def _kennzahlen_zeile(block) -> str:

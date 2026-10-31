@@ -320,6 +320,66 @@ def test_fehlender_decision_code_wird_als_missing_gewertet():
     assert report["summary"]["missing_decision_reason_codes"] == 1
 
 
+def test_handlungscodes_start_stop_gelten_nicht_als_unbekannt():
+    """BEFUND 31.10.2026: 1170 von 1502 Zeilen galten als 'nicht zugeordnet'.
+
+    Ursache: Die Handlungscodes des Entscheidungslogs (start/stop) wurden
+    gegen die ZYKLUS-Endgruende (`KNOWN_END_CODES`) geprueft - dort stehen sie
+    nicht, also war die Analyse dauerhaft "degraded".
+    """
+    report = build_quality_report(
+        [], {"unknown_reason_codes": 0},
+        [
+            {"ts": "2026-09-24 10:00:00", "schema": 2, "reason_code": "start"},
+            {"ts": "2026-09-24 10:01:00", "schema": 2, "reason_code": "stop"},
+            {"ts": "2026-09-24 10:02:00", "schema": 2, "reason_code": "waiting_source"},
+            {"ts": "2026-09-24 10:03:00", "schema": 2, "reason_code": "planned_day_missed"},
+        ],
+        {"invalid_rows": 0, "invalid_timestamps": 0},
+    )
+    assert report["status"] == "ok"
+    assert report["decision_quality"]["unknown_reason_codes"] == 0
+    assert report["decision_quality"]["reason_quality"]["direct"] == 4
+
+
+def test_altzeilen_ohne_reason_code_sind_altbestand_keine_luecke():
+    """Schema < 2 kannte `reason_code` noch nicht - kein Datenfehler."""
+    report = build_quality_report(
+        [], {"unknown_reason_codes": 0},
+        [{"ts": "2026-09-24 10:00:00", "schema": 1}],
+        {"invalid_rows": 0, "invalid_timestamps": 0},
+    )
+    assert report["status"] == "ok"
+    assert report["summary"]["missing_decision_reason_codes"] == 0
+    assert report["summary"]["legacy_missing_decision_reason_codes"] == 1
+    assert report["decision_quality"]["reason_quality"]["legacy"] == 1
+
+
+def test_schema_2_ohne_reason_code_bleibt_eine_luecke():
+    """Ab Schema 2 MUSS ein Code da sein - sonst ist es ein echtes Problem."""
+    report = build_quality_report(
+        [], {"unknown_reason_codes": 0},
+        [{"ts": "2026-09-24 10:00:00", "schema": 2}],
+        {"invalid_rows": 0, "invalid_timestamps": 0},
+    )
+    assert report["status"] == "degraded"
+    assert report["summary"]["missing_decision_reason_codes"] == 1
+    assert report["summary"]["legacy_missing_decision_reason_codes"] == 0
+
+
+def test_endgrund_text_gewinnt_gegen_unbekannten_reason_code():
+    """Stand im Code nur 'unbekannt', zaehlt der echte Text der CSV."""
+    assert classify_end_reason(
+        {"reason_code": "unbekannt", "end_grund": "regel_aus"}
+    ) == ("regel_aus", "direct")
+    assert classify_end_reason(
+        {"reason_code": "unbekannt", "end_grund": "Legionellenlauf vor dem Ziel abgebrochen"}
+    ) == ("legionellenlauf vor dem ziel abgebrochen", "legacy_text")
+    assert classify_end_reason(
+        {"reason_code": "unbekannt", "end_grund": ""}
+    ) == ("unbekannt", "missing")
+
+
 def test_legacy_wp_analysis_meldet_leere_analyse(monkeypatch, tmp_path):
     """Die alte Dashboard-Analyse darf ohne Eingabedatei sauber None liefern."""
     monkeypatch.setattr(wp_analysis, "ANALYSE_DIR", str(tmp_path))
