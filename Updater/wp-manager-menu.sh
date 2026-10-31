@@ -750,7 +750,11 @@ except Exception as exc:
 try:
     # 8 Tage (192 h): die Detailansicht soll etwa die letzte Woche zeigen,
     # nicht nur die letzten drei Tage.
-    eintraege = el.historie(192, limit=zeilen)
+    # `historie_voll`: die Anzeige braucht PV/Ueberschuss/Haus/SOC/t_unten -
+    # `historie` reduziert auf die Felder des Dienstes (OOM-Schutz) und lieferte
+    # deshalb "PV=- | SOC=None | unten=NoneC" (Befund 31.10.2026).
+    leser = getattr(el, "historie_voll", None) or el.historie
+    eintraege = leser(192, limit=zeilen)
 except Exception as exc:
     print("Historie nicht lesbar: %s" % exc)
     raise SystemExit(1)

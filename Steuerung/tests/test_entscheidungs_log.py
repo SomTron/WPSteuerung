@@ -1206,13 +1206,55 @@ def test_historie_grenzen_decken_das_acht_tage_fenster():
 
 
 def test_manager_option15_fragt_acht_tage_ab():
-    """Der Anzeigepfad muss 192 h (8 Tage) anfordern, nicht mehr 72 h."""
+    """Der Anzeigepfad muss 192 h (8 Tage) anfordern, nicht mehr 72 h.
+
+    Seit 31.10.2026 laeuft die Abfrage ueber `historie_voll` (die Anzeige
+    braucht PV/Ueberschuss/Haus/SOC/t_unten, die `historie` aus RAM-Gruenden
+    weglaesst). Das Zeitfenster bleibt 192 h.
+    """
     pfad = os.path.join(os.path.dirname(__file__), "..", "..",
                         "Updater", "wp-manager-menu.sh")
     with open(pfad, encoding="utf-8") as f:
         skript = f.read()
-    assert "historie(192" in skript
-    assert "historie(72" not in skript
+    assert "(192, limit=" in skript
+    assert "(72, limit=" not in skript
+    assert "historie_voll" in skript
+
+
+def test_historie_voll_liefert_die_felder_der_anzeige(tmp_path):
+    """REGRESSION 31.10.2026: Option 15 zeigte "PV=- | SOC=None | unten=NoneC".
+
+    `historie()` reduziert die Eintraege auf `_LESE_FELDER` (RAM-/OOM-Schutz
+    des Dienstes). PV-Erzeugung, Ueberschuss, Hausverbrauch, SOC und t_unten
+    fehlen darin - die Terminalanzeige braucht sie aber.
+    """
+    patcher, log_datei, _ = _patch_log_pfad(tmp_path)
+    with patcher:
+        now = _basiszeit()
+        eintrag = {
+            "ts": now.isoformat(timespec="seconds"),
+            "gewinner": "Legionellen", "grund": "g",
+            "soll_einschalten": True, "kompressor_laeuft": True,
+            "feedin_w": 5448.0, "batpower_w": 933.0,
+            "pv_acpower_w": 1689.0, "pv_ueberschuss_w": 933.0,
+            "hausverbrauch_w": 1689.0, "soc": 19.0, "t_unten": 33.0,
+        }
+        with open(log_datei, "w", encoding="utf-8") as f:
+            f.write(json.dumps(eintrag) + "\n")
+
+        reduziert = el.historie(24, limit=10)
+        voll = el.historie_voll(24, limit=10)
+
+    assert len(reduziert) == 1 and len(voll) == 1
+    # Die Dienst-/API-Sicht bleibt schlank (kein RAM-Wachstum) ...
+    assert "pv_acpower_w" not in reduziert[0]
+    assert "t_unten" not in reduziert[0]
+    # ... die Anzeige bekommt alle Felder.
+    assert voll[0]["pv_acpower_w"] == 1689.0
+    assert voll[0]["pv_ueberschuss_w"] == 933.0
+    assert voll[0]["hausverbrauch_w"] == 1689.0
+    assert voll[0]["soc"] == 19.0
+    assert voll[0]["t_unten"] == 33.0
 
 
 def test_lese_cache_haelt_und_wird_bei_append_verworfen(tmp_path):

@@ -51,6 +51,7 @@ speist erst Haus und WP, der Rest laedt die Batterie:
 import json
 import logging
 import os
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -739,6 +740,45 @@ def historie(stunden: float = 24, limit: int = 100) -> List[Dict]:
         if ts >= grenze:
             auswahl.append(e)
     return list(reversed(auswahl[-limit:]))
+
+
+def historie_voll(stunden: float = 24, limit: int = 100) -> List[Dict]:
+    """Letzte Entscheidungen MIT allen Feldern - fuer die Manager-Anzeige.
+
+    BEFUND 31.10.2026 (Option 15 zeigte "PV=- | Ueber=- | Haus=- | SOC=None |
+    unten=NoneC"): `historie()` reduzierte die Eintraege auf `_LESE_FELDER`
+    (RAM-/OOM-Schutz des Dienstes, siehe Docstring dort). PV-Erzeugung,
+    Ueberschuss, Hausverbrauch, SOC und t_unten sind darin nicht enthalten.
+
+    Diese Funktion liest die Dateien deshalb DIREKT und haelt nur die letzten
+    `limit` Eintraege (`deque`). Der Dienst-Cache bleibt unberuehrt: der
+    Manager laeuft als eigener Prozess, sein Speicher ist fuer den Dienst
+    unerheblich.
+    """
+    grenze = _log_now() - timedelta(hours=stunden)
+    auswahl: deque = deque(maxlen=max(int(limit), 1))
+    for pfad in _alle_logpfade():
+        if not os.path.exists(pfad):
+            continue
+        try:
+            with open(pfad, "r", encoding="utf-8", errors="replace") as fh:
+                for zeile in fh:
+                    zeile = zeile.strip()
+                    if not zeile:
+                        continue
+                    try:
+                        eintrag = json.loads(zeile)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(eintrag, dict):
+                        continue
+                    ts = _parse_log_datetime(eintrag.get("ts"))
+                    if ts is None or ts < grenze:
+                        continue
+                    auswahl.append(eintrag)
+        except OSError:
+            continue
+    return list(reversed(auswahl))
 
 
 def _aggregiere(eintraege: List[Dict], wp_leistung_watt: float,
