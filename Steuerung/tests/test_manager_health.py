@@ -195,10 +195,16 @@ def test_quality_degraded_zeigt_die_ursachen(tmp_path):
     text, gruen = mh.render_quality(mh.load_quality_report(pfad))
     assert gruen is False
     assert "Probleme (" in text, text
-    assert "7 unbekannte reason_codes" in text, text
+    assert "7 nicht zugeordnete reason_codes" in text, text
+    # Keine Doppelmeldung: die summary-Zeile nennt nur ZUSAETZLICHE Codes.
+    assert "7 unbekannte reason_codes" not in text, text
     assert "12 Zyklen ohne source_at_start" in text, text
     assert "3 Entscheidungen ohne reason_code" in text, text
     assert "keine Einzelprobleme" not in text
+
+    report["summary"]["unknown_reason_codes"] = 12
+    text, _gruen = mh.render_quality(report)
+    assert "12 unbekannte reason_codes (davon 7 in Entscheidungen)" in text, text
 
 
 def test_quality_degraded_ohne_details_erklaert_den_hinweis():

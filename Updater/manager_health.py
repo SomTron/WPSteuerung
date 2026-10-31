@@ -253,6 +253,7 @@ def _probleme_aus_report(report: dict) -> list:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
 
     ungueltig_in_block = False
+    unbekannt_in_block = 0
     for blockname, titel in (
         ("cycle_quality", "Zyklen"),
         ("decision_quality", "Entscheidungen"),
@@ -273,6 +274,7 @@ def _probleme_aus_report(report: dict) -> list:
                 probleme.append(
                     f"{titel}: {nicht_zugeordnet} nicht zugeordnete reason_codes"
                 )
+                unbekannt_in_block += nicht_zugeordnet
             ohne_code = _als_zahl(grund_qualitaet.get("missing"))
             if ohne_code > 0:
                 probleme.append(f"{titel}: {ohne_code} ohne reason_code")
@@ -290,7 +292,11 @@ def _probleme_aus_report(report: dict) -> list:
                     probleme.append(f"{titel}: {wert} Quellen '{name}'")
 
     unbekannt = _als_zahl(summary.get("unknown_reason_codes"))
-    if unbekannt > 0:
+    # Doppelmeldung vermeiden: `summary.unknown_reason_codes` enthaelt die
+    # bereits oben gemeldeten Entscheidungs-Codes. Die Zeile erscheint nur,
+    # wenn zusaetzlich Zyklus-Codes unbekannt sind (Befund 31.10.2026: 1170
+    # stand zweimal in der Liste).
+    if unbekannt > unbekannt_in_block:
         in_entscheidungen = _als_zahl(summary.get("unknown_decision_reason_codes"))
         zusatz = (
             f" (davon {in_entscheidungen} in Entscheidungen)"
