@@ -113,43 +113,120 @@ def test_health_api_key_wird_als_header_gesendet(monkeypatch):
 # ----------------------------------------------------------------- Quality
 
 
+def _echter_report(**overrides) -> dict:
+    """Bericht genau so, wie ihn `analysis_core.build_quality_report` liefert.
+
+    Anlass: Der Renderer suchte deutsche Feldnamen (`quality_level`, `schema`,
+    `zyklen`, `probleme`), die dieser Bericht nie hatte - Option 23 zeigte
+    deshalb "Schema: n/a" und nie ein Problem (Befund 31.10.2026).
+    """
+    report = {
+        "schema_version": 1,
+        "generated_at": "2026-10-31T04:32:16+01:00",
+        "git_revision": "67adf23",
+        "status": "ok",
+        "sources": {"pv": 120, "netz": 3},
+        "end_reasons": {"regel_aus": 100, "legionellen_ziel": 2},
+        "scenarios": {"pv": 120, "legionellen": 2},
+        "cycle_quality": {
+            "present": True,
+            "rows": 201,
+            "invalid_rows": 0,
+            "invalid_timestamps": 0,
+        },
+        "decision_quality": {
+            "present": True,
+            "rows": 500,
+            "invalid_rows": 0,
+            "missing_reason_codes": 0,
+            "unknown_reason_codes": 0,
+            "reason_quality": {"direct": 500},
+            "source_quality": {"direct": 500},
+        },
+        "summary": {
+            "cycles": 201,
+            "decisions": 500,
+            "invalid_rows": 0,
+            "unknown_reason_codes": 0,
+            "unknown_decision_reason_codes": 0,
+            "missing_source_at_start": 0,
+            "missing_decision_reason_codes": 0,
+        },
+    }
+    report.update(overrides)
+    return report
+
+
 def test_quality_gut_wird_als_gruen_gewertet(tmp_path):
     pfad = tmp_path / "quality_report.json"
-    pfad.write_text(
-        json.dumps(
-            {
-                "quality_level": "ok",
-                "git_revision": "abc1234",
-                "schema": 2,
-                "zyklen": {"rows": 201, "schema": "v2"},
-                "szenarien": {"pv": {"rows": 50}},
-                "probleme": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    pfad.write_text(json.dumps(_echter_report()), encoding="utf-8")
+
     text, gruen = mh.render_quality(mh.load_quality_report(pfad))
     assert gruen is True
-    assert "abc1234" in text
-    assert "rows=201" in text
-    assert "pv" in text
+    assert "67adf23" in text
+    assert "Schema:       1" in text, text          # vorher "n/a"
+    assert "201 Zeilen / 500 Zeilen" in text, text  # vorher gar keine Kennzahlen
+    assert "pv" in text                             # Szenarien
+    assert "Probleme" not in text
 
 
-def test_quality_mit_problemen_wird_abgewiesen(tmp_path):
-    pfad = tmp_path / "quality_report.json"
-    pfad.write_text(
-        json.dumps(
-            {
-                "quality_level": "warnung",
-                "probleme": ["24 unbekannte Codes"] + [f"P{i}" for i in range(20)],
-            }
-        ),
-        encoding="utf-8",
+def test_quality_degraded_zeigt_die_ursachen(tmp_path):
+    """Der Logfall: 'degraded' muss die Zaehler als Probleme ausweisen."""
+    report = _echter_report(status="degraded")
+    report["summary"].update(
+        {
+            "unknown_reason_codes": 7,
+            "unknown_decision_reason_codes": 7,
+            "missing_source_at_start": 12,
+            "missing_decision_reason_codes": 3,
+        }
     )
+    report["cycle_quality"]["missing_source_at_start"] = 12
+    report["decision_quality"].update(
+        {
+            "missing_reason_codes": 3,
+            "unknown_reason_codes": 7,
+            "reason_quality": {"direct": 480, "direct_unmapped": 7, "missing": 3},
+        }
+    )
+    pfad = tmp_path / "quality_report.json"
+    pfad.write_text(json.dumps(report), encoding="utf-8")
+
     text, gruen = mh.render_quality(mh.load_quality_report(pfad))
     assert gruen is False
-    assert "Probleme (21)" in text
-    assert "11 weitere" in text
+    assert "Probleme (" in text, text
+    assert "7 unbekannte reason_codes" in text, text
+    assert "12 Zyklen ohne source_at_start" in text, text
+    assert "3 Entscheidungen ohne reason_code" in text, text
+    assert "keine Einzelprobleme" not in text
+
+
+def test_quality_degraded_ohne_details_erklaert_den_hinweis():
+    """Ohne Zaehler darf der Hinweis 'siehe Probleme oben' nicht ins Leere gehen."""
+    text, gruen = mh.render_quality({"status": "degraded", "schema_version": 1})
+    assert gruen is False
+    assert "keine Einzelprobleme" in text
+    assert "quality_report.json" in text
+
+
+def test_quality_endgrund_unbekannt_wird_gemeldet():
+    report = _echter_report(status="degraded")
+    report["end_reasons"]["unbekannt"] = 4
+    report["sources"]["unbekannt"] = 2
+    text, _gruen = mh.render_quality(report)
+    assert "Endgrund 'unbekannt': 4" in text, text
+    assert "Quelle 'unbekannt': 2" in text, text
+
+
+def test_quality_viele_probleme_werden_gekuerzt():
+    report = _echter_report(status="degraded")
+    report["decision_quality"]["source_quality"] = {
+        f"unklar_{i}": 1 for i in range(15)
+    }
+    text, gruen = mh.render_quality(report)
+    assert gruen is False
+    assert "Probleme (15)" in text, text
+    assert "5 weitere" in text, text
 
 
 def test_quality_fehlende_datei_wirft_runtime_error(tmp_path):

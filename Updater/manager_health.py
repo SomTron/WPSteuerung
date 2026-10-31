@@ -151,40 +151,166 @@ def render_health(health: dict) -> tuple[str, bool]:
 
 
 def render_quality(report: dict) -> tuple[str, bool]:
-    """Formatiert den Analyse-Qualitaetsbericht. Rueckgabe: (Text, gruen)."""
-    level = str(report.get("quality_level", report.get("status", "unknown")))
-    gruen = level in {"ok", "gruen", "good", "green"}
+    """Formatiert den Analyse-Qualitaetsbericht. Rueckgabe: (Text, gruen).
+
+    Feldnamen kommen vom ERZEUGER (`Analyse/analysis_core.build_quality_report`,
+    Schema 1): `status`, `schema_version`, `summary`, `scenarios`, `sources`,
+    `end_reasons`, `cycle_quality`, `decision_quality`.
+
+    BEFUND 31.10.2026 (Option 23 zeigte "Schema: n/a" und sonst nichts): Der
+    Renderer las deutsche Namen, die der Bericht nie enthielt
+    (`quality_level`, `schema`, `zyklen`, `entscheidungen`, `szenarien`,
+    `probleme`). Deshalb fehlten Schema und Kennzahlen - und der Hinweis
+    "siehe Probleme oben" verwies auf eine Liste, die es nicht gab. Die
+    Probleme werden jetzt aus den Zaehlern des Berichts abgeleitet
+    (`_probleme_aus_report`).
+    """
+    level = str(report.get("status", report.get("quality_level", "unknown")))
+    gruen = level.strip().lower() in {"ok", "gruen", "good", "green"}
     zeilen = ["=== Analyse-Qualitaet ===", f"Stufe:        {level}"]
     zeilen.append(f"Git-Revision: {_fmt(report.get('git_revision'))}")
-    erzeugt = report.get("erzeugt_am") or report.get("generated_at")
+    erzeugt = report.get("generated_at") or report.get("erzeugt_am")
     if erzeugt:
         zeilen.append(f"Erzeugt:      {erzeugt}")
-    zeilen.append(f"Schema:       {_fmt(report.get('schema'))}")
+    zeilen.append(
+        f"Schema:       {_fmt(report.get('schema_version', report.get('schema')))}"
+    )
 
-    zyklen = report.get("zyklen")
-    if isinstance(zyklen, dict):
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    if summary:
         zeilen.append("")
-        zeilen.append("Zyklen:       " + _kennzahlen_zeile(zyklen))
-    entscheidungen = report.get("entscheidungen")
-    if isinstance(entscheidungen, dict):
-        zeilen.append("Entscheidungen: " + _kennzahlen_zeile(entscheidungen))
+        zeilen.append(
+            "Zyklen / Entscheidungen: "
+            f"{_fmt(summary.get('cycles'), '0')} Zeilen / "
+            f"{_fmt(summary.get('decisions'), '0')} Zeilen"
+        )
+    else:
+        # Fallback fuer aeltere/abweichende Berichte.
+        zyklen = report.get("zyklen")
+        if isinstance(zyklen, dict):
+            zeilen.append("")
+            zeilen.append("Zyklen:       " + _kennzahlen_zeile(zyklen))
+        entscheidungen = report.get("entscheidungen")
+        if isinstance(entscheidungen, dict):
+            zeilen.append("Entscheidungen: " + _kennzahlen_zeile(entscheidungen))
 
-    szenarien = report.get("szenarien")
+    szenarien = report.get("scenarios") or report.get("szenarien")
     if isinstance(szenarien, dict) and szenarien:
         zeilen.append("")
         zeilen.append("Szenarien:")
         for name in sorted(szenarien):
-            zeilen.append(f"  - {name}: {_kennzahlen_zeile(szenarien[name])}")
+            wert = szenarien[name]
+            text = _kennzahlen_zeile(wert) if isinstance(wert, dict) else _fmt(wert)
+            zeilen.append(f"  - {name}: {text}")
 
-    probleme = report.get("probleme")
-    if isinstance(probleme, list) and probleme:
+    probleme = _probleme_aus_report(report)
+    if probleme:
         zeilen.append("")
         zeilen.append(f"Probleme ({len(probleme)}):")
         for eintrag in probleme[:10]:
-            zeilen.append(f"  - {_fmt(eintrag)}")
+            zeilen.append(f"  - {eintrag}")
         if len(probleme) > 10:
             zeilen.append(f"  ... {len(probleme) - 10} weitere")
+    elif not gruen:
+        zeilen.append("")
+        zeilen.append("Hinweis: Der Bericht meldet keine Einzelprobleme. Die")
+        zeilen.append("Zaehler stehen in quality_report.json unter summary,")
+        zeilen.append("cycle_quality und decision_quality.")
     return "\n".join(zeilen), gruen
+
+
+#: Zaehler in den quality-Bloecken, die ein Problem beschreiben.
+_QUALITY_PROBLEME = (
+    ("invalid_rows", "ungueltige Zeilen"),
+    ("invalid_timestamps", "ungueltige Zeitstempel"),
+    ("duplicate_timestamps", "doppelte Zeitstempel"),
+    ("backwards_timestamps", "rueckwaerts laufende Zeitstempel"),
+    ("missing_source_at_start", "Zeilen ohne source_at_start"),
+)
+
+
+def _als_zahl(wert) -> int:
+    try:
+        return int(wert)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _probleme_aus_report(report: dict) -> list:
+    """Leitet aus den Zaehlern des Berichts konkrete Problemzeilen ab.
+
+    Der Bericht (Schema 1) enthaelt keine fertige Problemliste - er zaehlt
+    die Auffaelligkeiten in `summary`, `cycle_quality`, `decision_quality`,
+    `end_reasons` und `sources`. Genau diese Zaehler macht der Manager
+    sichtbar; nur so stimmt der Satz "siehe Probleme oben".
+    """
+    probleme: list = []
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+
+    ungueltig_in_block = False
+    for blockname, titel in (
+        ("cycle_quality", "Zyklen"),
+        ("decision_quality", "Entscheidungen"),
+    ):
+        block = report.get(blockname)
+        if not isinstance(block, dict):
+            continue
+        for schluessel, text in _QUALITY_PROBLEME:
+            anzahl = _als_zahl(block.get(schluessel))
+            if anzahl > 0:
+                probleme.append(f"{titel}: {anzahl} {text}")
+                if schluessel == "invalid_rows":
+                    ungueltig_in_block = True
+        grund_qualitaet = block.get("reason_quality")
+        if isinstance(grund_qualitaet, dict):
+            nicht_zugeordnet = _als_zahl(grund_qualitaet.get("direct_unmapped"))
+            if nicht_zugeordnet > 0:
+                probleme.append(
+                    f"{titel}: {nicht_zugeordnet} nicht zugeordnete reason_codes"
+                )
+            ohne_code = _als_zahl(grund_qualitaet.get("missing"))
+            if ohne_code > 0:
+                probleme.append(f"{titel}: {ohne_code} ohne reason_code")
+        quellen_qualitaet = block.get("source_quality")
+        if isinstance(quellen_qualitaet, dict):
+            for name, anzahl in sorted(quellen_qualitaet.items()):
+                if str(name).strip().lower() in {"direct", "ok"}:
+                    continue
+                wert = _als_zahl(anzahl)
+                if wert > 0:
+                    probleme.append(f"{titel}: {wert} Quellen '{name}'")
+
+    unbekannt = _als_zahl(summary.get("unknown_reason_codes"))
+    if unbekannt > 0:
+        in_entscheidungen = _als_zahl(summary.get("unknown_decision_reason_codes"))
+        zusatz = (
+            f" (davon {in_entscheidungen} in Entscheidungen)"
+            if in_entscheidungen > 0
+            else ""
+        )
+        probleme.append(f"{unbekannt} unbekannte reason_codes{zusatz}")
+    fehlend = _als_zahl(summary.get("missing_decision_reason_codes"))
+    if fehlend > 0:
+        probleme.append(f"{fehlend} Entscheidungen ohne reason_code")
+    ungueltig = _als_zahl(summary.get("invalid_rows"))
+    if ungueltig > 0 and not ungueltig_in_block:
+        probleme.append(f"{ungueltig} ungueltige Zeilen insgesamt")
+    ohne_quelle = _als_zahl(summary.get("missing_source_at_start"))
+    if ohne_quelle > 0:
+        probleme.append(f"{ohne_quelle} Zyklen ohne source_at_start")
+
+    for blockname, titel in (("end_reasons", "Endgrund"), ("sources", "Quelle")):
+        block = report.get(blockname)
+        if not isinstance(block, dict):
+            continue
+        for name, anzahl in sorted(block.items()):
+            basis = str(name).rsplit(":", 1)[-1].strip().lower()
+            if basis not in {"unbekannt", "unknown"}:
+                continue
+            wert = _als_zahl(anzahl)
+            if wert > 0:
+                probleme.append(f"{titel} '{name}': {wert}")
+    return probleme
 
 
 def _kennzahlen_zeile(block) -> str:
