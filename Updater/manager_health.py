@@ -374,6 +374,14 @@ def _hinweise_aus_report(report: dict) -> list:
             hinweise.append(
                 f"Altbestand: {legacy} Zeilen ohne reason_code (Schema < 2)"
             )
+        idle = _als_zahl(entscheidungen.get("idle_without_reason_code"))
+        if idle <= 0 and isinstance(gruende, dict):
+            idle = _als_zahl(gruende.get("idle"))
+        if idle > 0:
+            hinweise.append(
+                f"Leerlauf: {idle} Entscheidungen ohne Heizbedarf "
+                "(dort gibt es keinen reason_code)"
+            )
     return hinweise
 
 

@@ -240,6 +240,15 @@ def test_quality_endgrund_unbekannt_wird_nur_mit_zaehler_gemeldet():
     assert "Quelle 'unbekannt': 2" in text, text
 
 
+def test_quality_hinweis_zu_leerlauf_zeilen():
+    """Leerlauf-Zeilen ohne reason_code sind ein Hinweis, kein Problem."""
+    report = _echter_report(status="degraded")
+    report["decision_quality"]["idle_without_reason_code"] = 257
+    text, _gruen = mh.render_quality(report)
+    assert "Leerlauf: 257 Entscheidungen ohne Heizbedarf" in text, text
+    assert "Probleme" not in text, text
+
+
 def test_quality_hinweise_zu_altbestand_und_abgeleiteten_quellen():
     """Altbestand und geschaetzte Quellen sind Hinweise, keine Probleme."""
     report = _echter_report(status="degraded")

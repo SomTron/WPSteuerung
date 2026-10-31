@@ -367,6 +367,29 @@ def test_schema_2_ohne_reason_code_bleibt_eine_luecke():
     assert report["summary"]["legacy_missing_decision_reason_codes"] == 0
 
 
+def test_idle_zeilen_ohne_reason_code_sind_kein_problem():
+    """BEFUND 31.10.2026: 257 Zeilen galten als 'ohne reason_code'.
+
+    Es waren ausschliesslich Leerlauf-Zeilen (`gewinner: Idle` - "keine Regel
+    fordert Heizbetrieb"). Dort gibt es keine Gewinner-Regel und damit auch
+    keinen Handlungscode: Normalzustand, kein Datenfehler.
+    """
+    report = build_quality_report(
+        [], {"unknown_reason_codes": 0},
+        [
+            {"ts": "2026-10-09 09:38:24", "schema": 2, "gewinner": "Idle"},
+            {"ts": "2026-10-09 10:08:36", "schema": 2, "gewinner": "Idle"},
+            {"ts": "2026-10-09 10:09:36", "schema": 2, "gewinner": "Abweichung", "reason_code": "stop"},
+        ],
+        {"invalid_rows": 0, "invalid_timestamps": 0},
+    )
+    assert report["status"] == "ok"
+    assert report["summary"]["missing_decision_reason_codes"] == 0
+    assert report["summary"]["idle_decisions_without_reason_code"] == 2
+    assert report["decision_quality"]["reason_quality"]["idle"] == 2
+    assert report["decision_quality"]["reason_quality"]["direct"] == 1
+
+
 def test_endgrund_text_gewinnt_gegen_unbekannten_reason_code():
     """Stand im Code nur 'unbekannt', zaehlt der echte Text der CSV."""
     assert classify_end_reason(

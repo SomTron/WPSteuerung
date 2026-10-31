@@ -95,6 +95,14 @@ KNOWN_DECISION_CODES = {
 #: Altbestand; ein fehlender Code ist dort kein Datenfehler der Steuerung.
 SCHEMA_MIT_REASON_CODE = 2
 
+#: Gewinner-Name des Leerlaufs (`entscheidungs_log.IDLE_GEWINNER`).
+#:
+#: BEFUND 31.10.2026: 257 von 1631 Entscheidungen galten als "ohne
+#: reason_code". Es sind ausschliesslich Idle-Zeilen ("keine Regel fordert
+#: Heizbetrieb") - dort gibt es keine Gewinner-Regel und folglich auch keinen
+#: Handlungscode. Das ist Normalzustand, kein Datenfehler.
+IDLE_GEWINNER = "idle"
+
 
 def get_git_revision() -> str:
     """Ermittelt die Code-Revision robust für den Qualitätsbericht.
@@ -238,6 +246,15 @@ def classify_end_reason(row: dict[str, Any]) -> tuple[str, str]:
     if text.startswith("regel:"):
         return "regel_aus", "legacy_text"
     return text, "legacy_text"
+
+def _ist_idle_zeile(row: dict[str, Any]) -> bool:
+    """True fuer Leerlauf-Zeilen ('keine Regel fordert Heizbetrieb').
+
+    Sie haben bewusst keinen `reason_code` - es gibt keine Gewinner-Regel.
+    """
+    gewinner = str(row.get("gewinner") or "").strip().lower()
+    return gewinner == IDLE_GEWINNER
+
 
 def _ohne_reason_code_schema(row: dict[str, Any]) -> bool:
     """True, wenn die Zeile aus einer Log-Version VOR `reason_code` stammt.
@@ -493,6 +510,7 @@ def build_quality_report(
     decision_unknown_codes = 0
     decision_missing_codes = 0
     decision_legacy_missing = 0
+    decision_idle = 0
     for decision in decision_list:
         diagnostics = decision.get("diagnostics") if isinstance(decision.get("diagnostics"), dict) else {}
         reason = str(
@@ -503,10 +521,14 @@ def build_quality_report(
             or "unbekannt"
         ).strip().lower()
         if reason in {"unbekannt", "unknown"}:
-            # BEFUND 31.10.2026: Zeilen aus der Zeit VOR `reason_code`
-            # (Schema < 2) sind Altbestand, kein Datenfehler der Steuerung.
-            # Getrennt zaehlen, damit "degraded" aussagekraeftig bleibt.
-            if _ohne_reason_code_schema(decision):
+            # BEFUND 31.10.2026: Leerlauf-Zeilen ("keine Regel fordert
+            # Heizbetrieb") haben bewusst keinen Code; Zeilen aus der Zeit
+            # VOR `reason_code` (Schema < 2) sind Altbestand. Nur der Rest
+            # ist eine echte Luecke - sonst waere "degraded" dauerhaft.
+            if _ist_idle_zeile(decision):
+                decision_idle += 1
+                decision_reason_quality["idle"] += 1
+            elif _ohne_reason_code_schema(decision):
                 decision_legacy_missing += 1
                 decision_reason_quality["legacy"] += 1
             else:
@@ -524,6 +546,7 @@ def build_quality_report(
     decision_quality = dict(decision_quality)
     decision_quality["missing_reason_codes"] = decision_missing_codes
     decision_quality["legacy_missing_reason_codes"] = decision_legacy_missing
+    decision_quality["idle_without_reason_code"] = decision_idle
     decision_quality["unknown_reason_codes"] = decision_unknown_codes
     decision_quality["reason_quality"] = dict(decision_reason_quality)
     decision_quality["source_quality"] = dict(decision_source_quality)
@@ -567,5 +590,6 @@ def build_quality_report(
             "missing_source_at_start": cycle_quality.get("missing_source_at_start", 0),
             "missing_decision_reason_codes": decision_missing_codes,
             "legacy_missing_decision_reason_codes": decision_legacy_missing,
+            "idle_decisions_without_reason_code": decision_idle,
         },
     }
