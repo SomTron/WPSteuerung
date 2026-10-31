@@ -849,6 +849,21 @@ show_analysis_quality() {
     elif [ "$rc" -ne 0 ]; then
         printf "${RED}Qualitaetsbericht nicht lesbar.${NC}\n"
     fi
+    # BEFUND 31.10.2026: Nach einem Update der Auswertungslogik zeigte
+    # Option 23 weiter den ALTEN Bericht (rev 67adf23) - die Probleme kamen
+    # aus dem alten Erzeuger. Ist die Revision im Bericht eine andere als die
+    # des Repos, wird das gesagt und der Neulauf direkt angeboten.
+    bericht_rev=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1],encoding='utf-8-sig'));print(d.get('git_revision') or '')" "$REPORT" 2>/dev/null || true)
+    repo_rev=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)
+    if [ -n "$bericht_rev" ] && [ -n "$repo_rev" ] && [ "$bericht_rev" != "$repo_rev" ]; then
+        printf "\n${YELLOW}Der Bericht stammt von Revision %s, das Repo steht auf %s.${NC}\n" \
+            "$bericht_rev" "$repo_rev"
+        printf "Die Auswertung ist damit aelter als der Code. Analyse jetzt neu erzeugen? (j/N): "
+        read neu_lauf
+        case "$neu_lauf" in
+            [Jj]*) run_auto_analysis ;;
+        esac
+    fi
     wait_for_key
 }
 

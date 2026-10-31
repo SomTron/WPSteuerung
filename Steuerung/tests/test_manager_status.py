@@ -233,6 +233,22 @@ def test_upload_ist_bestaetigungspflichtig_begrenzt_und_bereinigt():
     assert 'rm -rf "$temp_dir"' in manager
 
 
+def test_option23_erkennt_veralteten_bericht_und_bietet_neulauf():
+    """REGRESSION 31.10.2026: Nach einem Update zeigte Option 23 den alten Bericht.
+
+    Der Bericht traegt `git_revision`; steht dort eine andere Revision als im
+    Repo, ist die Auswertung aelter als der Code. Dann muss das Menue das
+    sagen und den Neulauf anbieten - sonst sucht man Probleme, die der alte
+    Erzeuger gemeldet hat.
+    """
+    manager, _ = _updater_scripts()
+    block = manager.split("show_analysis_quality() {", 1)[1].split("\n}", 1)[0]
+    assert "git_revision" in block
+    assert "rev-parse --short HEAD" in block
+    assert "run_auto_analysis" in block
+    assert "neu erzeugen" in block
+
+
 def test_upload_bestaetigung_liest_nicht_die_archivliste():
     """REGRESSION 30.10.2026: Die Bestaetigung wartete nie auf eine Eingabe.
 
