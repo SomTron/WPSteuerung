@@ -233,6 +233,18 @@ def test_upload_ist_bestaetigungspflichtig_begrenzt_und_bereinigt():
     assert 'rm -rf "$temp_dir"' in manager
 
 
+def test_option15_zeigt_die_start_sperre():
+    """REGRESSION 31.10.2026: "soll=EIN | WP=AUS" ohne erkennbaren Grund.
+
+    Die Sperre (Mindestpause, Sensor, Verdampfer, Boiler-Max ...) steht in
+    `diagnostics.blocking_code`/`blocking_reason` - Option 15 muss sie
+    anzeigen, sonst sucht man den Grund im Log.
+    """
+    manager, _ = _updater_scripts()
+    assert 'diag.get("blocking_code")' in manager
+    assert "Block: %s" in manager
+
+
 def test_option23_erkennt_veralteten_bericht_und_bietet_neulauf():
     """REGRESSION 31.10.2026: Nach einem Update zeigte Option 23 den alten Bericht.
 

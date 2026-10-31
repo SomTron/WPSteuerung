@@ -784,9 +784,20 @@ for e in eintraege:
     grund_txt = str(e.get("grund", ""))
     if ov:
         grund_txt = "[Override] %s | %s" % (ov, grund_txt)
-    print("%s | %s | soll=%s | WP=%s | PV=%s | Ueber=%s | Haus=%s | einsp=%s | SOC=%s | unten=%sC | %s" % (
+    # Start-Sperre sichtbar machen (Befund 31.10.2026): "soll=EIN | WP=AUS"
+    # hatte keinen erkennbaren Grund - die Sperre steht in
+    # diagnostics.blocking_code/blocking_reason (Mindestpause, Sensor,
+    # Verdampfer, Boiler-Max ...). Ohne diese Angabe muss man im Log suchen.
+    diag = e.get("diagnostics") if isinstance(e.get("diagnostics"), dict) else {}
+    block = e.get("blocking_code") or diag.get("blocking_code")
+    block_txt = ""
+    if block:
+        block_grund = str(diag.get("blocking_reason") or "")[:70]
+        block_txt = " | Block: %s%s" % (
+            block, (" (%s)" % block_grund) if block_grund else "")
+    print("%s | %s | soll=%s | WP=%s | PV=%s | Ueber=%s | Haus=%s | einsp=%s | SOC=%s | unten=%sC | %s%s" % (
         e.get("ts", "?"), e.get("gewinner", "-"), soll, laeuft, p_txt, ub_txt, hb_txt, f_txt,
-        e.get("soc"), e.get("t_unten"), grund_txt[:140]))
+        e.get("soc"), e.get("t_unten"), grund_txt[:140], block_txt))
 print("-" * 78)
 
 # Die KPI-Funktion benoetigt WP-Leistung und Strompreis als Pflichtargumente.
