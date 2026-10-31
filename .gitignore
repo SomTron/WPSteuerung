@@ -31,6 +31,9 @@ legionellen_zustand.json
 letzter_lauf.json
 absturz_historie.json
 
+# Importierte Pi-Daten (Analyse-Export, enthaelt Logs/CSVs - nie committen)
+logs/import/
+
 # Diagnose-/Analyse-Artefakte (lokal ausgewertet, nie committen - teils >10 MB)
 logs/wp_diag_*/
 # Exportierte Betriebsdaten (CSV/Log aus dem realen Betrieb).
