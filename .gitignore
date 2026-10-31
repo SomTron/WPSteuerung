@@ -23,6 +23,9 @@ absturz_historie.json
 Steuerung/modi_zustand.json
 Steuerung/legionellen_plan.json
 legionellen_plan.json
+# Abschluss der Legionellenprophylaxe (Laufzeit-Zustand, nie committen)
+Steuerung/legionellen_zustand.json
+legionellen_zustand.json
 
 # Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
 letzter_lauf.json

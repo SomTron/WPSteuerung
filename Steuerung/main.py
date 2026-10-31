@@ -63,6 +63,7 @@ from learning_engine import LearningEngine
 from weather_forecast import get_solar_forecast
 from cycle_logging import CYCLE_CSV, begin_cycle, ensure_cycle_csv, finish_cycle, update_cycle_maxima
 from legionellen_plan import clear_plan, load_plan, save_plan
+from legionellen_zustand import load_abschluss
 from energy_source import (
     batterie_entladung_watt,
     batterie_ladung_watt,
@@ -443,6 +444,11 @@ async def setup_application():
         logging.critical("Runtime-Vertrag ungültig - Starte nicht mit Hardware", exc_info=True)
         raise
     load_plan(state)
+    # BEFUND 31.10.2026: Der letzte erfolgreiche Abschluss der Prophylaxe
+    # (`legionellen_last_done`) war reiner RAM-Zustand. Nach einem Neustart
+    # startete die Fahrt in derselben Kalenderwoche erneut ("Legionellen-
+    # prophylaxe faellig"). Der Abschluss wird deshalb beim Start geladen.
+    load_abschluss(state)
     # Nach einem sauberen Service-Restart die letzte AUS-Zeit aus dem
     # Snapshot uebernehmen. Sonst waere die JSON-Mindestpause nach einem
     # Neustart nicht mehr geschuetzt und ein Kompressor koennte erneut

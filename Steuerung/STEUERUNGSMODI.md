@@ -519,6 +519,18 @@ Konfigurationsschlüsseln.
   die kurz vor dem Ziel stand. Ein Abbruch am Limit gilt wie jeder Abbruch vor
   dem Ziel als `legionellen_unvollstaendig`: Plan bleibt stehen, Nachversuch
   ist zulässig (vorher fiel die Prophylaxe für die ganze KW still aus).
+- **Abschluss ist persistent (Befund 31.10.2026):** `legionellen_last_done`,
+  `legionellen_wochennummer` und `legionellen_end_time` wurden bisher nur im
+  RAM gehalten. Nach einem Service-Neustart (Deploy/OOM) war das Wochen-Gate
+  in `evaluate_legionellen` (`Bereits in KW 44 durchgefuehrt`) damit
+  wirkungslos — im Log 30./31.10.2026 heizte die Prophylaxe am Samstag
+  erneut auf 60 °C, obwohl sie am Freitag abgeschlossen war (Neustart mit
+  `rev` e9e60d1 → 67adf23). Der Abschluss wird deshalb atomar in
+  `legionellen_zustand.json` gespeichert (`legionellen_zustand.save_abschluss`)
+  und beim Start über `load_abschluss` wieder geladen; ein *Abbruch*
+  (`legionellen_unvollstaendig`) lässt den gespeicherten Abschluss unberührt.
+  Zukunftsdatums-Werte (verdrehte Uhr) und unlesbare Dateien werden
+  verworfen.
 - **Nachtsperre / Fortsetzung am nächsten Tag (Nutzeranforderung 23.10.2026):**
   Die Prophylaxe hält sich an die Nachtsperre wie jede andere Regel — auch
   eine **laufende** Fahrt. Mit Sperrenbeginn (19 Uhr) liefert die Regel

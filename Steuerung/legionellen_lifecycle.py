@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 import priority_control_logic as pcl
 from clock import now_for
 from legionellen_plan import clear_plan, save_plan
+from legionellen_zustand import save_abschluss
 from utils import safe_timedelta
 
 
@@ -147,6 +148,11 @@ def _complete_legionellen_lifecycle(state, now) -> None:
     state.legionellen_end_time = now
     state._last_was_legionellen = True
     state._legionellen_completion_pending = False
+    # BEFUND 31.10.2026: Der Abschluss war reiner RAM-Zustand. Nach einem
+    # Neustart (Deploy/OOM) war `legionellen_last_done` weg, das Wochen-Gate
+    # in `evaluate_legionellen` griff nicht mehr und die Prophylaxe heizte am
+    # Folgetag erneut auf 60 C. Der Abschluss wird deshalb persistiert.
+    save_abschluss(state)
     state.control.requested_rule_name = "Legionellen"
     # Nach dem Hardware-Stopp dürfen keine effektiven Felder reaktiviert werden.
     state.control.effective_rule_name = None
@@ -393,6 +399,9 @@ async def _aktualisiere_legionellen_lifecycle(session, state, result):
     state.legionellen_end_time = now
     clear_plan(state, "Legionellenlauf abgeschlossen", persist=True)
     state._last_was_legionellen = True
+    # Abschluss persistieren (Befund 31.10.2026): ohne das startete die
+    # Prophylaxe nach jedem Neustart in derselben Kalenderwoche erneut.
+    save_abschluss(state)
     # Nach dem Abschluss dürfen effektive Hardwarefelder nicht wieder
     # resurrectiert werden; requested_rule_name bleibt als Diagnose erhalten.
     logging.info(

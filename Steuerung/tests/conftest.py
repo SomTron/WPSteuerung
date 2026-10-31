@@ -89,6 +89,25 @@ def isolate_legionellenplan(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_legionellen_zustand(tmp_path, monkeypatch):
+    """Unit-Tests duerfen den echten Abschluss nicht lesen oder schreiben.
+
+    Seit 31.10.2026 persistiert der erfolgreiche Abschluss der Prophylaxe
+    (`legionellen_last_done`, KW, Endzeit) in `legionellen_zustand.json`.
+    Ohne Isolation wuerde ein Test den echten Abschluss ueberschreiben - und
+    ein Test, der `evaluate_legionellen` mit leerem State aufruft, wuerde den
+    produktiven Abschluss laden und das Wochen-Gate zufaellig greifen.
+    """
+    import legionellen_zustand
+
+    monkeypatch.setattr(
+        legionellen_zustand,
+        "ZUSTAND_FILE",
+        str(tmp_path / "legionellen_zustand.json"),
+    )
+
+
+@pytest.fixture(autouse=True)
 def isolate_status_caches():
     """Der /status-Cache (Entscheidungen/KPIs) startet in jedem Test kalt.
 
