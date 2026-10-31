@@ -319,7 +319,20 @@ export WPS_QUALITY_REPORT=/pfad/quality_report.json
 Optionen 9, 14, 16, 18 und 21 nutzen dieselbe Upload-Routine. Vor jeder Übertragung
 muss die öffentliche, nicht authentifizierte Catbox-URL ausdrücklich bestätigt
 werden. Standardlimit sind 200 MiB (`WPS_UPLOAD_MAX_BYTES`), Verbindung 15 s und
-Gesamtlaufzeit 300 s. Temporäre Dateien werden nach dem Versuch gelöscht.
+Gesamtlaufzeit 1800 s (`WPS_UPLOAD_MAX_TIME`, bis v1.17 hart 300 s). Temporäre
+Dateien werden nach dem Versuch gelöscht.
+
+Seit v1.18 zeigt der Upload einen Fortschrittsbalken (nur am Terminal), die
+Dauer und - bei Fehlern - den curl-RC mit Bedeutung sowie die HTTP-Antwort von
+catbox (Status + Text). Die Bau-Phase des Archivs wird vorher angekündigt: das
+Komprimieren des ganzen Bestands dauert auf dem Pi einige Minuten und sah
+vorher wie ein Hänger aus.
+
+> **Befund v1.18:** Bis v1.17 luden die Optionen 9/14/16/18/21 **nichts** hoch.
+> Die Rückfrage lief innerhalb der Schleife, die die Archivliste über stdin
+> einlas (`done < archivee.txt`) und bekam dadurch sofort die nächste
+> Listenzeile bzw. EOF - die Meldung war „Upload abgebrochen“, ohne auf eine
+> Eingabe zu warten. Die Liste wird jetzt über FD 3 gelesen.
 
 ## 🛠️ Einrichtung auf dem RPi
 

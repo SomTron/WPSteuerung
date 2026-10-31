@@ -2,6 +2,18 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.18: Die Upload-Optionen (9/14/16/18/21) luden NICHTS hoch. Die Rueckfrage
+#       `read upload_reply` erbte das stdin der Schleife (`done < archivee.txt`)
+#       und las deshalb die naechste Zeile der Archivliste statt der Eingabe:
+#       sofort "Upload abgebrochen", ohne auf eine Antwort zu warten; bei
+#       mehreren Archiven fehlte danach sogar ein Eintrag. Die Liste kommt
+#       jetzt ueber FD 3 (`read -r archiv <&3` / `done 3< datei`).
+#       Ausserdem: Fortschrittsbalken am Terminal, Dauer in der Erfolgsmeldung,
+#       konfigurierbares Zeitlimit (WPS_UPLOAD_MAX_TIME, Standard 1800 s statt
+#       hart 300 s) und die HTTP-Antwort von catbox im Fehlerfall (curl -f ist
+#       entfallen, sonst waere die Antwort leer). Die Bau-Phase des Archivs
+#       wird angekuendigt - sie dauert auf dem Pi Minuten und war bisher
+#       vollkommen stumm ("haengt das?").
 #       den Fuehler als DEFEKT verworfen, Regeln behandeln ihn als nicht
 #       verfuegbar). Header zeigt Modi-Zustand (modi_zustand.json), Option 17
 #       zaehlt die Endgruende der angezeigten Zyklen inkl. reason_code=unbekannt.
@@ -368,11 +380,20 @@ verify_service_action() {
 # upload_fertig() bekommt eine fertige Datei (z. B. ein ZIP). Der restliche
 # Teil (Groessengrenze, Rueckfrage, curl) ist fuer Einzeldatei und Datenbestand
 # identisch - deshalb steckt er in dieser einen Funktion.
+#
+# Rueckfrage: `read` liest die Bestaetigung vom stdin des Aufrufers. Wer diese
+# Funktion aus einer Schleife mit umgeleitetem stdin aufruft, muss die Liste
+# ueber einen eigenen Filedeskriptor lesen (siehe upload_bestand, FD 3) -
+# sonst kommt hier die naechste Listenzeile oder EOF an (Befund v1.18).
 upload_fertig() {
     source_file="$1"
     label="$2"
     upload_name="$3"
     max_bytes="${WPS_UPLOAD_MAX_BYTES:-209715200}"
+    # Zeitlimit fuer die gesamte Uebertragung. 300 s waren zu knapp: curl brach
+    # dann OHNE Antwort von catbox ab (RC 28) - von aussen nicht von einem
+    # Haenger zu unterscheiden. 0/leer wird abgewiesen.
+    max_time="${WPS_UPLOAD_MAX_TIME:-1800}"
     case "$max_bytes" in
         ''|*[!0-9]*)
             printf "${RED}✗ WPS_UPLOAD_MAX_BYTES muss eine positive Ganzzahl sein.${NC}\n"
@@ -381,6 +402,16 @@ upload_fertig() {
     esac
     if [ "$max_bytes" -le 0 ]; then
         printf "${RED}✗ WPS_UPLOAD_MAX_BYTES muss groesser als 0 sein.${NC}\n"
+        return 1
+    fi
+    case "$max_time" in
+        ''|*[!0-9]*)
+            printf "${RED}✗ WPS_UPLOAD_MAX_TIME muss eine positive Ganzzahl (Sekunden) sein.${NC}\n"
+            return 1
+            ;;
+    esac
+    if [ "$max_time" -le 0 ]; then
+        printf "${RED}✗ WPS_UPLOAD_MAX_TIME muss groesser als 0 sein.${NC}\n"
         return 1
     fi
     if [ ! -f "$source_file" ] || [ ! -r "$source_file" ]; then
@@ -414,33 +445,68 @@ upload_fertig() {
         [Jj]*) ;;
         *) printf "Upload abgebrochen.\n"; return 0 ;;
     esac
-    printf "Lade %s (%s) ...\n" "$label" "$(du -h "$source_file" | cut -f1)"
-    upload_url=$(curl --connect-timeout 15 --max-time 300 -fsS \
+    printf "Lade %s (%s) hoch - Zeitlimit %ss, Strg+C bricht ab.\n" \
+        "$label" "$(du -h "$source_file" | cut -f1)" "$max_time"
+    # Fortschritt nur am Terminal: sonst wuerde der Balken Logs mit
+    # Wagenruecklauf-Updates fluten.
+    if [ -t 2 ]; then
+        curl_fortschritt="--progress-bar"
+    else
+        curl_fortschritt="-sS"
+    fi
+    start_ts=$(date +%s)
+    # Kein -f: catbox schickt bei Fehlern einen Text (z. B. "File too large"),
+    # den man sehen will. Der HTTP-Status kommt als letzte Zeile mit -w.
+    curl_antwort=$(curl --connect-timeout 15 --max-time "$max_time" \
+        $curl_fortschritt -w '\n%{http_code}' \
         -F 'reqtype=fileupload' -F "fileToUpload=@$source_file" \
         https://catbox.moe/user/api.php)
     curl_rc=$?
+    dauer=$(( $(date +%s) - start_ts ))
     if [ "$curl_rc" -ne 0 ]; then
-        printf "${RED}✗ Upload fehlgeschlagen (curl RC=%s).${NC}\n" "$curl_rc"
+        printf "${RED}✗ Upload abgebrochen nach %ss (curl RC=%s).${NC}\n" "$dauer" "$curl_rc"
+        printf "${DIM}  RC 28 = Zeitlimit (%ss) erreicht -> WPS_UPLOAD_MAX_TIME erhoehen\n" "$max_time"
+        printf "  RC 6/7 = DNS/Verbindung, RC 35/55/56 = TLS/Uebertragung,\n${NC}"
+        printf "${DIM}  RC 18/56 = Uebertragung unvollstaendig (erneut versuchen)${NC}\n"
         return 1
     fi
+    http_code=$(printf '%s\n' "$curl_antwort" | tail -n 1 | tr -d '\r\n')
+    antwort=$(printf '%s\n' "$curl_antwort" | sed '$d' | tr -d '\r')
+    antwort_kurz=$(printf '%s' "$antwort" | tr -d '\n' | head -c 200)
+    if [ "$http_code" != "200" ]; then
+        printf "${RED}✗ Catbox antwortete mit HTTP %s nach %ss.${NC}\n" "$http_code" "$dauer"
+        [ -n "$antwort_kurz" ] && printf "${RED}  Antwort: %s${NC}\n" "$antwort_kurz"
+        case "$http_code" in
+            413) printf "${DIM}  Datei zu gross fuer catbox (max. 200 MB).${NC}\n" ;;
+            412|429|500|503) printf "${DIM}  catbox ist ausgelastet - spaeter erneut versuchen.${NC}\n" ;;
+        esac
+        return 1
+    fi
+    upload_url=$(printf '%s' "$antwort" | tr -d '\r\n')
     if ! printf '%s' "$upload_url" | grep -Eq '^https://files\.catbox\.moe/[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)?$'; then
-        printf "${RED}✗ Unerwartete Catbox-Antwort.${NC}\n"
+        printf "${RED}✗ Unerwartete Catbox-Antwort (HTTP %s) nach %ss: %s${NC}\n" \
+            "$http_code" "$dauer" "$antwort_kurz"
         return 1
     fi
-    printf "${GREEN}✓ Upload erfolgreich.${NC}\nURL: ${BLUE}%s${NC}\n" "$upload_url"
+    printf "${GREEN}✓ Upload erfolgreich (%ss).${NC}\nURL: ${BLUE}%s${NC}\n" "$dauer" "$upload_url"
 }
 
 # Ladt eine einzelne Datei hoch (gzip-komprimiert).
-upload_file() {
+#
+# Subshell `( ... )`: Der Temp-Verzeichnis-Trap (0 1 2 3 15) bleibt so auf
+# diese Funktion beschraenkt. Vorher ueberschrieb er die globalen Traps
+# (`menu_abbruch`/`menu_beenden`) dauerhaft - nach dem ersten Upload beendete
+# ein Strg+C den ganzen Manager statt nur der Ansicht.
+upload_file() (
     source_file="$1"
     label="$2"
     if ! command -v gzip >/dev/null 2>&1; then
         printf "${RED}✗ Upload benoetigt gzip.${NC}\n"
-        return 1
+        exit 1
     fi
     temp_dir=$(mktemp -d 2>/dev/null) || {
         printf "${RED}✗ Temporaeres Verzeichnis konnte nicht erstellt werden.${NC}\n"
-        return 1
+        exit 1
     }
     trap 'rm -rf "$temp_dir"' 0 1 2 3 15
     base_name=$(basename "$source_file")
@@ -448,13 +514,13 @@ upload_file() {
     if ! gzip -c "$source_file" > "$temp_dir/$upload_name"; then
         rm -rf "$temp_dir"
         printf "${RED}✗ Komprimierung fehlgeschlagen.${NC}\n"
-        return 1
+        exit 1
     fi
     upload_fertig "$temp_dir/$upload_name" "$label" "$upload_name"
     upload_rc=$?
     rm -rf "$temp_dir"
-    return $upload_rc
-}
+    exit $upload_rc
+)
 
 # Laedt den VOLLSTAENDIGEN Datenbestand hoch - nicht nur die aktive Datei.
 #
@@ -467,14 +533,16 @@ upload_file() {
 # $2 = Pfad der aktiven Datei
 # $3 = Label (Basisname des Archivs)
 # $4... = optionale Suchverzeichnisse (z. B. logs/)
-upload_bestand() {
+#
+# Subshell `( ... )` wie bei upload_file: Der Temp-Trap bleibt lokal.
+upload_bestand() (
     art="$1"
     pfad="$2"
     label="$3"
     shift 3
     if ! command -v python3 >/dev/null 2>&1; then
         printf "${RED}✗ Upload des Datenbestands benoetigt python3.${NC}\n"
-        return 1
+        exit 1
     fi
     max_bytes="${WPS_UPLOAD_MAX_BYTES:-209715200}"
     # Rohdaten-Budget: so viele Rohdaten duerfen in den Bestand, damit
@@ -485,7 +553,7 @@ upload_bestand() {
     budget="${WPS_UPLOAD_BUDGET_BYTES:-$((max_bytes * 4))}"
     temp_dir=$(mktemp -d 2>/dev/null) || {
         printf "${RED}✗ Temporaeres Verzeichnis konnte nicht erstellt werden.${NC}\n"
-        return 1
+        exit 1
     }
     trap 'rm -rf "$temp_dir"' 0 1 2 3 15
     # Suchverzeichnisse ueber die Umgebung uebergeben: Newline als Trenner
@@ -497,28 +565,42 @@ upload_bestand() {
     done
     # stdout (die Archive) in eine Datei, stderr (die Zusammenfassung) in
     # eine Variable: so kann der Manager beides getrennt verwenden.
+    #
+    # Bau-Phase ankuendigen: Das Komprimieren (deflate Level 9) ueber den
+    # ganzen Bestand dauert auf dem Pi Minuten und war bisher vollkommen
+    # stumm - von aussen nicht von einem Haenger zu unterscheiden.
+    printf "${CYAN}Baue Datenbestand '%s' ... das dauert bei vielen Generationen einige Minuten.${NC}\n" "$art"
+    bau_start=$(date +%s)
     info=$(WPS_SUCHVERZ="$suchverz" python3 "$TARGET_DIR/datenbestand.py" \
         --art "$art" --pfad "$pfad" --out-dir "$temp_dir" --label "$label" \
         --max-bytes "$max_bytes" --budget "$budget" \
         2>&1 1>"$temp_dir/archivee.txt")
+    bau_dauer=$(( $(date +%s) - bau_start ))
     if [ -z "$info" ] || [ ! -s "$temp_dir/archivee.txt" ]; then
         rm -rf "$temp_dir"
-        printf "${RED}✗ Datenbestand konnte nicht zusammengestellt werden.${NC}\n"
+        printf "${RED}✗ Datenbestand konnte nicht zusammengestellt werden (nach %ss).${NC}\n" "$bau_dauer"
         [ -n "$info" ] && printf "${RED}  %s${NC}\n" "$info"
-        return 1
+        exit 1
     fi
-    printf "${CYAN}Datenbestand: %s${NC}\n" "$info"
+    printf "${CYAN}Datenbestand: %s (Archiv gebaut in %ss)${NC}\n" "$info" "$bau_dauer"
     # Mehrere Archive (geteilte Uploads): jedes einzeln bestaetigen und
     # hochladen. Jedes Archiv ist fuer sich ein gueltiges ZIP.
+    #
+    # WICHTIG (Befund v1.18): Die Liste wird ueber FD 3 gelesen, NICHT ueber
+    # stdin. Mit `done < datei` erbte `upload_fertig` dieses stdin - die
+    # Rueckfrage `read upload_reply` las dann die naechste Zeile der Liste
+    # (oder EOF) statt der Nutzereingabe und meldete sofort "Upload
+    # abgebrochen", ohne ueberhaupt zu warten. Bei mehreren Archiven fehlte
+    # danach zusaetzlich ein Eintrag.
     upload_rc=0
-    while IFS= read -r archiv; do
+    while IFS= read -r archiv <&3; do
         [ -n "$archiv" ] || continue
         upload_fertig "$archiv" "$label (Datenbestand)" "$(basename "$archiv")"
         [ "$?" -eq 0 ] || { upload_rc=1; break; }
-    done < "$temp_dir/archivee.txt"
+    done 3< "$temp_dir/archivee.txt"
     rm -rf "$temp_dir"
-    return $upload_rc
-}
+    exit $upload_rc
+)
 
 preflight
 trap menu_abbruch INT

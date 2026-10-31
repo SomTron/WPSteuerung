@@ -222,9 +222,31 @@ def test_upload_ist_bestaetigungspflichtig_begrenzt_und_bereinigt():
     assert "Upload jetzt ausfuehren? (j/N)" in manager
     assert "WPS_UPLOAD_MAX_BYTES" in manager
     assert "--connect-timeout 15" in manager
-    assert "--max-time 300" in manager
+    # v1.18: Das Zeitlimit ist konfigurierbar (vorher hart 300 s - curl brach
+    # damit ohne Antwort von catbox ab, RC 28).
+    assert 'max_time="${WPS_UPLOAD_MAX_TIME:-1800}"' in manager
+    assert '--max-time "$max_time"' in manager
+    assert "--max-time 300" not in manager
+    # Fortschritt am Terminal, stille Variante fuer Logs.
+    assert "--progress-bar" in manager
     assert "trap 'rm -rf \"$temp_dir\"' 0 1 2 3 15" in manager
     assert 'rm -rf "$temp_dir"' in manager
+
+
+def test_upload_bestaetigung_liest_nicht_die_archivliste():
+    """REGRESSION 30.10.2026: Die Bestaetigung wartete nie auf eine Eingabe.
+
+    `upload_bestand` las die Archivliste mit `done < archivee.txt`. Die darin
+    aufgerufene Rueckfrage (`read upload_reply` in upload_fertig) erbte dieses
+    stdin und bekam deshalb die naechste Listenzeile - oder EOF, sobald nur
+    ein Archiv vorlag. Folge: sofort "Upload abgebrochen", ohne auf die
+    Antwort zu warten; bei mehreren Archiven fehlte danach ein Eintrag.
+    Die Liste kommt jetzt ueber FD 3, stdin bleibt das Terminal.
+    """
+    manager, _ = _updater_scripts()
+    assert "read -r archiv <&3" in manager
+    assert 'done 3< "$temp_dir/archivee.txt"' in manager
+    assert 'done < "$temp_dir/archivee.txt"' not in manager
 
 
 def test_upload_optionen_nehmen_den_vollstaendigen_datenbestand():
