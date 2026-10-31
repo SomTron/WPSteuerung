@@ -55,18 +55,29 @@ def _quelle(start_regel):
     return "unbekannt"
 
 
-def _end_code(end_grund, blocking_code=None):
-    """Stabilen Abschlusscode bevorzugen, Freitext nur als Fallback nutzen."""
-    if blocking_code:
-        return str(blocking_code).strip().lower() or "unbekannt"
-    text = str(end_grund or "").strip().lower()
-    if text in {"boiler_max", "regel_aus", "keine_regel", "mindestlaufzeit", "mindestpause",
-                "uebertemperatur", "sensorfehler", "druckfehler", "hardwarefehler",
-                "kompressor_verifizierung", "verifizierung_fehler", "legionellen_timeout",
-                "dienst_neustart", "api_manuell", "unknown", "unbekannt",
-                "schichtung", "schichtungsdeckel", "overshoot_vorhersage",
-                "komfortverletzung", "start_vorhersage"}:
+#: Endgruende, die als `reason_code` in der Zyklus-CSV landen duerfen.
+#: Muessen zu `Analyse/analysis_core.KNOWN_END_CODES` passen, sonst meldet die
+#: Qualitaetsauswertung "unbekannte reason_codes".
+END_CODES = {
+    "boiler_max", "regel_aus", "keine_regel", "mindestlaufzeit", "mindestpause",
+    "uebertemperatur", "sensorfehler", "druckfehler", "hardwarefehler",
+    "kompressor_verifizierung", "verifizierung_fehler", "legionellen_timeout",
+    "dienst_neustart", "api_manuell", "unknown", "unbekannt",
+    "schichtung", "schichtungsdeckel", "overshoot_vorhersage",
+    "komfortverletzung", "start_vorhersage", "verdampfer",
+}
+
+
+def _end_code_aus_text(text):
+    """Freitext auf einen stabilen Endgruende-Code abbilden (None = unbekannt)."""
+    if not text or text in {"unbekannt", "unknown", "?"}:
+        return None
+    if text in END_CODES:
         return text
+    # Ueberhitzung: kommt als "ueberhitzungsschutz" (handle_compressor_off) oder
+    # als "UEBERHITZUNG (58.0C >= 58.0C)" (check_safety_limits) an.
+    if "ueberhitz" in text or "uebertemperatur" in text:
+        return "uebertemperatur"
     if "boiler" in text or "max" in text:
         return "boiler_max"
     if "verifiz" in text:
@@ -75,6 +86,8 @@ def _end_code(end_grund, blocking_code=None):
         return "schichtung"
     if "overshoot" in text:
         return "overshoot_vorhersage"
+    if "verdampfer" in text:
+        return "verdampfer"
     if "sensor" in text:
         return "sensorfehler"
     if "druck" in text:
@@ -83,6 +96,26 @@ def _end_code(end_grund, blocking_code=None):
         return "mindestpause"
     if "laufzeit" in text:
         return "mindestlaufzeit"
+    return None
+
+
+def _end_code(end_grund, blocking_code=None):
+    """Stabilen Abschlusscode aus dem Endgrund ableiten.
+
+    BEFUND 31.10.2026 (Zyklus-CSV 01.-31.10.): 49 Laeufe trugen den Code
+    `mindestlaufzeit`, obwohl sie mit `regel_aus` (32), `boiler_max` (7),
+    `schichtung` (5), `overshoot_vorhersage` (4) bzw. `dienst_neustart` (1)
+    endeten. Ursache: `blocking_code` wurde VOR dem Endgrund ausgewertet - der
+    Blocking-Code beschreibt aber, warum ein START verweigert wurde, nicht
+    warum der Lauf endete. Deshalb gilt jetzt der Endgrund; der Blocking-Code
+    dient nur noch als Fallback, wenn kein Endgrund vorliegt.
+    """
+    code = _end_code_aus_text(str(end_grund or "").strip().lower())
+    if code is not None:
+        return code
+    fallback = str(blocking_code or "").strip().lower()
+    if fallback and fallback not in {"unbekannt", "unknown"}:
+        return fallback
     return "unbekannt"
 
 

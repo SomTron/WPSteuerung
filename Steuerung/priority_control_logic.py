@@ -3293,7 +3293,12 @@ async def check_safety_limits(
             logging.critical(
                 f"UEBERHITZUNG: {max(v for v in (t_oben, t_unten) if v is not None):.1f}C - Sofort-Abschaltung!"
             )
-            await set_kompressor_status_func(state, False, force=True)
+            # BEFUND 31.10.2026: Ohne end_grund landete der Freitext
+            # "UEBERHITZUNG (58.0C >= 58.0C)" als Zyklus-Endgrund in der CSV
+            # und der reason_code wurde "unbekannt". Jetzt ein stabiler Code.
+            await set_kompressor_status_func(
+                state, False, force=True, end_grund="uebertemperatur"
+            )
         return False
 
     # Schritt 3: Verdampfer-Schutz (Eisfrei + Gueltigkeit). Ein vereister

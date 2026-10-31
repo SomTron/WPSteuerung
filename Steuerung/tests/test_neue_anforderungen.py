@@ -448,7 +448,12 @@ class TestLegionellenUeberhitzungCheckSafety:
             set_kompressor_status_func=setter,
         )
         assert "UEBERHITZUNG" in state.control.blocking_reason
-        setter.assert_awaited_once_with(state, False, force=True)
+        # BEFUND 31.10.2026: Der Abschaltung wird ein stabiler Endgruende-Code
+        # mitgegeben - vorher entstand in der Zyklus-CSV der Freitext und
+        # `cycle_logging._end_code` machte daraus `unbekannt`.
+        setter.assert_awaited_once_with(
+            state, False, force=True, end_grund="uebertemperatur"
+        )
 
 
 # ============================================================

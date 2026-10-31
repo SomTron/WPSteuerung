@@ -333,3 +333,32 @@ def test_end_code_unbekannt_nur_fuer_unklassifizierbares():
     from cycle_logging import _end_code
     assert _end_code("irgendwas_neues") == "unbekannt"
     assert _end_code("") == "unbekannt"
+
+
+def test_end_code_endgrund_hat_vorrang_vor_blocking_code():
+    """REGRESSION 31.10.2026: 49 Zyklen trugen `mindestlaufzeit` als code.
+
+    `_end_code` wertete den Blocking-Code VOR dem Endgrund aus. Der
+    Blocking-Code sagt aber, warum ein START verweigert wurde - nicht, warum
+    der Lauf endete (Zyklus-CSV 01.-31.10.: 32x regel_aus, 7x boiler_max,
+    5x schichtung, 4x overshoot, 1x dienst_neustart).
+    """
+    from cycle_logging import _end_code
+    assert _end_code("regel_aus", "mindestlaufzeit") == "regel_aus"
+    assert _end_code("boiler_max", "mindestlaufzeit") == "boiler_max"
+    assert _end_code("schichtung", "mindestlaufzeit") == "schichtung"
+    assert _end_code("overshoot_vorhersage", "mindestlaufzeit") == "overshoot_vorhersage"
+    assert _end_code("dienst_neustart", "mindestlaufzeit") == "dienst_neustart"
+    # Ohne Endgrund bleibt der Blocking-Code der einzige Hinweis.
+    assert _end_code(None, "mindestpause") == "mindestpause"
+    assert _end_code("unbekannt", "boiler_bereits_warm") == "boiler_bereits_warm"
+
+
+def test_end_code_ueberhitzung_und_verdampfer():
+    """Ueberhitzung kam als Freitext bzw. als `ueberhitzungsschutz` an."""
+    from cycle_logging import _end_code
+    assert _end_code("ueberhitzungsschutz") == "uebertemperatur"
+    assert _end_code("UEBERHITZUNG (58.0C >= 58.0C)") == "uebertemperatur"
+    assert _end_code("uebertemperatur") == "uebertemperatur"
+    assert _end_code("verdampfer_zu_kalt") == "verdampfer"
+    assert _end_code("verdampfer_ungueltig") == "verdampfer"

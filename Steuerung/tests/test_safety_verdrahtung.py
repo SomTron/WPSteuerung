@@ -128,6 +128,22 @@ async def test_verdampfer_wird_als_ereignis_erfasst():
     assert len(state.verdampfer_shutdowns) == 1
 
 
+@pytest.mark.asyncio
+async def test_ueberhitzung_schaltet_mit_end_code_ab():
+    """BEFUND 31.10.2026: Die Ueberhitzungs-Abschaltung lief ohne `end_grund`.
+
+    In der Zyklus-CSV stand dann der Freitext "UEBERHITZUNG (58.0C >= 58.0C)"
+    und `cycle_logging._end_code` machte daraus `unbekannt`. Jetzt wird der
+    stabile Code `uebertemperatur` durchgereicht.
+    """
+    state = _state(t_oben=60.0, kompressor_ein=True)
+    erg, setter = await _pruefe(state, 60.0, 40.0, 50.0, 20.0)
+
+    assert erg is False
+    assert setter.await_args.args[1] is False
+    assert setter.await_args.kwargs.get("end_grund") == "uebertemperatur"
+
+
 # ── 2) Sensorfehler-Sperre ─────────────────────────────────────────────
 
 @pytest.mark.asyncio
