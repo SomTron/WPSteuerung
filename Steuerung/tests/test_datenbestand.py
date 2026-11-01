@@ -55,6 +55,31 @@ def test_bestand_log_umfasst_alle_generationen(tmp_path):
     assert namen[-1] == "heizungssteuerung.log"
 
 
+def test_bestand_zyklen_umfasst_monatsarchive(tmp_path):
+    """REGRESSION 01.11.2026: Der Export enthielt nur den neuen Monat.
+
+    Die monatliche Rotation legt die Historie als `zyklen_2026-10.csv` neben
+    die aktive `zyklen.csv`; gesammelt wurde aber nur der exakte Name
+    `zyklen.csv`. Am 01.11. waren das drei statt 155 Zyklen.
+    """
+    aktiv = tmp_path / "zyklen.csv"
+    aktiv.write_text("start;ende\n", encoding="utf-8")
+    (tmp_path / "zyklen_2026-10.csv").write_text("start;ende\n", encoding="utf-8")
+    (tmp_path / "zyklen_2026-09.csv").write_text("start;ende\n", encoding="utf-8")
+    # Fremde Dateien duerfen nicht mitkommen.
+    (tmp_path / "heizungsdaten.csv").write_text("x\n", encoding="utf-8")
+    (tmp_path / "zyklen_notizen.txt").write_text("x\n", encoding="utf-8")
+
+    namen = [os.path.basename(p) for p in bestand_zyklen(str(aktiv))]
+
+    assert "zyklen.csv" in namen
+    assert "zyklen_2026-10.csv" in namen
+    assert "zyklen_2026-09.csv" in namen
+    assert "heizungsdaten.csv" not in namen
+    assert "zyklen_notizen.txt" not in namen
+    assert len(namen) == 3
+
+
 def test_bestand_log_ignoriert_fremde_dateien(tmp_path):
     log = tmp_path / "heizungssteuerung.log"
     log.write_text("x\n", encoding="utf-8")

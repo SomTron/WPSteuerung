@@ -39,6 +39,8 @@ _RE_MONATSARCHIV = re.compile(
 _RE_ENTSCHEIDUNGSGEN = re.compile(r"^(?P<basis>.+?)\.old\.(?P<nr>\d+)$")
 # Lern-Backups: learning_data.json.korrupt-20261020_101500
 _RE_LERNBACKUP = re.compile(r"^(?P<basis>.+)\.(?:korrupt|bak|backup)")
+# Zyklus-CSV und ihre Monatsarchive: zyklen.csv, zyklen_2026-10.csv
+_RE_ZYKLENARCHIV = re.compile(r"^zyklen(?:[_-]\d{4}-\d{2})?\.csv$")
 
 
 def bestand_log(pfad: str) -> List[str]:
@@ -137,15 +139,31 @@ def bestand_lerndaten(pfad: str) -> List[str]:
 
 
 def bestand_zyklen(pfad: str, suchverzeichnisse: List[str] = None) -> List[str]:
-    """zyklen.csv der laufenden Analyse + die aus den Analyse-Laeufen.
+    """zyklen.csv der laufenden Analyse + Monatsarchive + Analyse-Laeufe.
 
     `pfad` ist der bevorzugte Pfad (leer, wenn keiner existiert).
     `suchverzeichnisse` sind Verzeichnisse, in denen nach weiteren
     zyklen.csv gesucht wird (z. B. logs/analyse_*/).
+
+    BEFUND 01.11.2026: Die monatliche Rotation legt die Historie als
+    ``zyklen_2026-10.csv`` NEBEN die aktive Datei. Dieses Modul sammelte nur
+    exakt ``zyklen.csv`` - der Export enthielt am Monatsanfang deshalb nur
+    den neuen Monat (drei Zeilen statt der 155 des Vormonats). Die
+    Monatsarchive kommen jetzt mit.
     """
     dateien: List[str] = []
     if pfad and os.path.isfile(pfad):
         dateien.append(os.path.abspath(pfad))
+        verzeichnis = os.path.dirname(os.path.abspath(pfad))
+        try:
+            for datei in sorted(os.listdir(verzeichnis)):
+                if not _RE_ZYKLENARCHIV.match(datei):
+                    continue
+                voll = os.path.join(verzeichnis, datei)
+                if os.path.isfile(voll) and voll not in dateien:
+                    dateien.append(voll)
+        except OSError:
+            pass
     for basis_verz in suchverzeichnisse or []:
         if not basis_verz or not os.path.isdir(basis_verz):
             continue
