@@ -1,6 +1,4 @@
 """Regressionen fuer die zentrale Energiequellen-Klassifikation."""
-import re
-
 import pytest
 
 from energy_source import (
@@ -38,33 +36,38 @@ def test_pv_ist_nur_mit_echter_pv_leistung_und_ohne_netzkauf_erlaubt():
     assert pv_mit_netzkauf.verfuegbar is False
 
 
-def test_schwellenwert_steht_beim_entscheidenden_wert():
-    """Befund 18.10.2026: Die Meldung behauptete "Ueberschuss 0W >= 50W".
+def test_erzeugung_ohne_ueberschuss_ist_keine_quelle():
+    """BEFUND 01.11.2026, 09:00: PV 880 W, Einspeisung 0 W, Batterie 0 W.
 
-    Der Ueberschuss stand neben der Schwelle, obwohl die ERZEUGUNG den
-    Nachweis erbrachte - im Betriebslog 14.09.-18.10.2026 waren 5 von 21
-    solchen Zeilen sachlich falsch formuliert. Jetzt steht der Schwelle
-    der Wert gegenueber, der sie erfuellt hat; der zweite Wert bleibt
-    als Kontext in Klammern.
+    Das Haus verbrauchte die Erzeugung vollstaendig. Frueher galt die
+    ERZEUGUNG allein als Quelle ("PV-Erzeugung 880W >= 50W (Ueberschuss 0W),
+    kein Netzkauf"); die Abweichungs-Regel startete, die WP zog den Rest aus
+    Netz/Batterie und lief 60 min Mindestlaufzeit - zwei Stunden spaeter
+    kamen 9 kW PV.
     """
-    # 1) Erzeugung entscheidet, Ueberschuss ist 0 W
-    pv = classify_energy_source(
-        pv_acpower=363.0, feedin_watt=0.0, batpower_raw=0.0, soc=50.0,
+    ohne = classify_energy_source(
+        pv_acpower=880.0, feedin_watt=0.0, batpower_raw=0.0, soc=18.0,
         pv_min_watt=50.0, max_netzkauf_watt=-50.0,
     )
-    assert pv.quelle is Energiequelle.PV
-    assert "PV-Erzeugung 363W >= 50W" in pv.begruendung
-    assert "Ueberschuss 0W >= 50W" not in pv.begruendung
-    assert "Ueberschuss 0W" in pv.begruendung  # als Kontext erhalten
+    assert ohne.quelle is Energiequelle.NETZ
+    assert ohne.verfuegbar is False
 
-    # 2) Ueberschuss entscheidet (kaputte Erzeugungsanzeige)
-    ueb = classify_energy_source(
-        pv_acpower=0.0, feedin_watt=1500.0, batpower_raw=0.0, soc=50.0,
+    # Laedt die Batterie, ist der Ueberschuss dort gebunden und fuer die WP
+    # verfuegbar - das bleibt eine gueltige PV-Quelle.
+    laedt = classify_energy_source(
+        pv_acpower=880.0, feedin_watt=0.0, batpower_raw=400.0, soc=60.0,
         pv_min_watt=50.0, max_netzkauf_watt=-50.0,
     )
-    assert ueb.quelle is Energiequelle.PV
-    assert re.search(r"Ueberschuss [\d.]+W >= 50W", ueb.begruendung), ueb.begruendung
-    assert not re.search(r"PV-Erzeugung [\d.]+W >= 50W", ueb.begruendung)
+    assert laedt.quelle is Energiequelle.PV
+    assert "Batterie laedt 400W" in laedt.begruendung, laedt.begruendung
+
+    # Einspeisung oeffnet die Freigabe ebenfalls (bestehendes Verhalten).
+    export = classify_energy_source(
+        pv_acpower=880.0, feedin_watt=300.0, batpower_raw=0.0, soc=60.0,
+        pv_min_watt=50.0, max_netzkauf_watt=-50.0,
+    )
+    assert export.quelle is Energiequelle.PV
+    assert "Einspeisung 300W" in export.begruendung, export.begruendung
 
 
 def test_feedin_beweist_solar_auch_ohne_erzeugungsanzeige():
@@ -444,8 +447,10 @@ def test_nachts_liefert_die_batterie_nicht_pv():
         pv_min_watt=50.0, battery_min_watt=50.0,
         soc_min_prozent=90.0, max_netzkauf_watt=-50.0,
     )
-    assert ohne_dc.quelle is Energiequelle.PV, (
-        "Fallback auf den AC-Wert = alter Zustand; hier bewusst dokumentiert"
+    assert ohne_dc.quelle is Energiequelle.NETZ, (
+        "BEFUND 01.11.2026: Der AC-Wert allein ist keine Quelle mehr - ohne "
+        "Ueberschuss (Einspeisung 0 W, Batterie entlaedt) zieht ein Start "
+        "Netz/Batterie."
     )
 
     mit_dc = classify_energy_source(

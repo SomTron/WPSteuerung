@@ -91,6 +91,12 @@ def _adaptive_grund(forecast, adaptive_cfg=None):
         temp_dict={"unten": 40.0, "mitte": 42.0, "oben": 44.0},
         pv_leistung=0.0,  # unter jeder Schwelle -> Grund enthaelt die Schwelle
         pv_acpower=200.0,
+        # Die Batterie laedt 300 W: das ist der Ueberschuss-Nachweis, den das
+        # Quellen-Gate seit dem Befund 01.11.2026 verlangt. Ohne ihn blockt
+        # die Regel VOR der Schwellenpruefung ("wartet auf PV/Batterie") und
+        # der Test saehe die Schwelle nie.
+        battery_power=300.0,
+        soc=60.0,
         forecast_wh_qm=forecast,
         kompressor_ein=False,
         now_hour=12,

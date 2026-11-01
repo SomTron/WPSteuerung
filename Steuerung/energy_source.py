@@ -254,6 +254,7 @@ def classify_energy_source(
 
     kein_netzkauf = feedin is not None and feedin >= grid_limit
     ueberschuss = pv_ueberschuss_watt(pv, feedin, batpower_raw)
+    ladung = batterie_ladung_watt(batpower_raw)
 
     # Zwei Nachweise fuer Solarstrom:
     #  1. die ERZEUGUNG liegt ueber der Schwelle, ODER
@@ -275,11 +276,28 @@ def classify_energy_source(
     pv_signal = generation if generation is not None else (
         pv if pv is not None else feedin
     )
+    # (1) Solarstrom braucht einen UEBERSCHUSS-Nachweis: eingespeister Strom
+    #     ODER eine ladende Batterie. Die ERZEUGUNG allein ist keine freie
+    #     Energie.
+    #
+    #     BEFUND 01.11.2026, 09:00: PV-Erzeugung 880 W, Einspeisung 0 W,
+    #     BatPower 0 W, SOC 18 % - das Haus verbrauchte die Erzeugung
+    #     vollstaendig. Die Freigabe erteilte trotzdem "PV: PV-Erzeugung
+    #     880W >= 50W (Ueberschuss 0W), kein Netzkauf"; die Abweichungs-Regel
+    #     startete und die WP zog den Rest aus Netz/Batterie. Weil der Lauf
+    #     als Netz-Lauf die volle Mindestlaufzeit bekam, heizte sie 60 min,
+    #     obwohl AdaptivePV nach 5 min "Speicher oben voll" meldete und zwei
+    #     Stunden spaeter 9 kW PV kamen.
+    ueberschuss_nachweis = (
+        (feedin is not None and feedin >= pv_threshold)
+        or (ladung is not None and ladung >= battery_threshold)
+    )
     pv_ok = (
         pv_erlaubt
         and pv_signal is not None
         and pv_signal >= pv_threshold
         and kein_netzkauf
+        and ueberschuss_nachweis
     )
     ueberschuss_ok = (
         pv_erlaubt
@@ -302,9 +320,14 @@ def classify_energy_source(
         erzeugung_txt = "n/a" if pv_signal is None else f"{pv_signal:.0f}W"
         ueberschuss_txt = "n/a" if ueberschuss is None else f"{ueberschuss:.0f}W"
         if pv_ok:
+            nachweis = (
+                f"Einspeisung {feedin:.0f}W"
+                if feedin is not None and feedin >= pv_threshold
+                else f"Batterie laedt {ladung:.0f}W"
+            )
             begruendung = (
                 f"PV-Erzeugung {erzeugung_txt} >= {pv_threshold:.0f}W "
-                f"(Ueberschuss {ueberschuss_txt}), kein Netzkauf"
+                f"({nachweis}, Ueberschuss {ueberschuss_txt}), kein Netzkauf"
             )
         else:
             begruendung = (

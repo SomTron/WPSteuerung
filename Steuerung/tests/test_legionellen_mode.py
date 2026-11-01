@@ -317,7 +317,14 @@ def test_legionellen_wartet_auf_pv_erzeugung_nicht_nur_netzteil():
     assert "PV-Erzeugung" in result.grund
 
 
-def test_legionellen_akzeptiert_pv_erzeugung():
+def test_legionellen_akzeptiert_pv_ueberschuss():
+    """PV traegt die Prophylaxe - aber nur mit nachgewiesenem Ueberschuss.
+
+    BEFUND 01.11.2026: Frueher genuegte die ERZEUGUNG (`pv_acpower` 600 W),
+    obwohl nichts eingespeist wurde und die Batterie nicht lud - das Haus
+    verbrauchte alles, der Lauf zog den Rest aus Netz/Batterie. Jetzt zaehlt
+    nur Einspeisung oder eine ladende Batterie.
+    """
     from priority_control import evaluate_legionellen
 
     cfg = LegionellenConfig(
@@ -325,15 +332,22 @@ def test_legionellen_akzeptiert_pv_erzeugung():
         bevorzugter_tag=4, letzter_tag=6, start_uhr=8,
         pv_start_min_watt=500.0,
     )
-    result = evaluate_legionellen(
-        cfg,
-        {"oben": 45.0, "unten": 35.0, "mittig": 40.0},
-        datetime(2025, 6, 13, 8, 0),
-        pv_leistung=0.0,
-        pv_acpower=600.0,
+    temps = {"oben": 45.0, "unten": 35.0, "mittig": 40.0}
+    now = datetime(2025, 6, 13, 8, 0)
+
+    # Erzeugung ohne Ueberschuss -> keine Quelle.
+    ohne = evaluate_legionellen(
+        cfg, temps, now, pv_leistung=0.0, pv_acpower=600.0,
     )
-    assert result.einschalten is True
-    assert "mit PV" in result.grund
+    assert ohne.einschalten is None, ohne.grund
+    assert "wartet auf PV" in ohne.grund or "keine erneuerbare" in ohne.grund
+
+    # 600 W Einspeisung -> PV-Quelle, Start erlaubt.
+    mit = evaluate_legionellen(
+        cfg, temps, now, pv_leistung=600.0, pv_acpower=600.0,
+    )
+    assert mit.einschalten is True, mit.grund
+    assert "mit PV" in mit.grund
 
 
 def test_legionellen_start_mit_veralteten_solardaten_gesperrt():

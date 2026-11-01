@@ -87,8 +87,13 @@ def test_ohne_prognose_kein_fenster():
 
 def test_ausserhalb_des_fensters_zaehlt_pv_nicht_als_quelle():
     """Daemmerlicht liefert oft noch 300 W DC - ein 600-W-Lauf zieht dann
-    trotzdem Netz. Ausserhalb bleibt nur die Batterie."""
-    werte = dict(pv_acpower=320.0, feedin_watt=0.0, batpower_raw=0.0,
+    trotzdem Netz. Ausserhalb bleibt nur die Batterie.
+
+    Seit dem Befund 01.11.2026 braucht PV ohnehin einen UEBERSCHUSS
+    (Einspeisung oder ladende Batterie); hier wird deshalb mit 300 W
+    Einspeisung gearbeitet, damit der Test die FENSTERLAGE prueft.
+    """
+    werte = dict(pv_acpower=320.0, feedin_watt=300.0, batpower_raw=0.0,
                  soc=60.0, pv_min_watt=50.0, max_netzkauf_watt=-50.0)
 
     drin = classify_energy_source(**werte)
@@ -265,7 +270,10 @@ def _pcl_state(stundenprognose, pv_erzeugung=800.0, jetzt_stunde=16.0):
         legionellen_unvollstaendig=False,
         sensors=SimpleNamespace(t_oben=48.0, t_unten=33.0, t_mittig=45.0, t_verd=30.0),
         solar=SimpleNamespace(
-            feedinpower=0.0, batpower=0.0, soc=60.0, acpower=pv_erzeugung,
+            # 400 W Einspeisung = nachgewiesener Ueberschuss. Seit dem
+            # Befund 01.11.2026 zaehlt PV nur noch mit Ueberschuss als
+            # Quelle - ohne diesen Wert prueft der Test die falsche Sache.
+            feedinpower=400.0, batpower=0.0, soc=60.0, acpower=pv_erzeugung,
             pv_erzeugung=pv_erzeugung,
             forecast_today=None, forecast_tomorrow=None, forecast_day2=None,
             forecast_hourly_wm2=stundenprognose,
@@ -380,10 +388,12 @@ def test_energiequelle_ok_reicht_pv_erlaubt_durch():
     from priority_control import _energiequelle_ok
 
     werte = dict(pv_acpower=800.0, battery_power=0.0, solar_stale=False)
+    # 100 W Einspeisung: echte PV-Quelle braucht seit 01.11.2026 einen
+    # Ueberschuss - die Erzeugung allein genuegt nicht mehr.
     drin = _energiequelle_ok(
-        0.0, 95.0, 50.0, 90.0, -50.0, pv_erlaubt=True, **werte)
+        100.0, 95.0, 50.0, 90.0, -50.0, pv_erlaubt=True, **werte)
     draussen = _energiequelle_ok(
-        0.0, 95.0, 50.0, 90.0, -50.0, pv_erlaubt=False, **werte)
+        100.0, 95.0, 50.0, 90.0, -50.0, pv_erlaubt=False, **werte)
     assert drin is True
     assert draussen is False, "pv_erlaubt=False muss die PV als Quelle sperren"
 

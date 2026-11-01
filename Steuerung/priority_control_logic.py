@@ -2234,35 +2234,46 @@ def _boiler_max_kontext(state, lauf_regel=None, gewinner_regel=None) -> str:
     )
 
 
+#: Regeln, bei denen die Startquelle ueber die Mindestlaufzeit entscheidet:
+#: mit PV/Batterie gilt die kurze PV-Schutzzeit, mit Netz die volle.
+_QUELLENABHAENGIGE_MINDESTLAUFZEIT_REGELN = {"CalcStart", "Abweichung"}
+
+
 def _ist_pv_gesteuerter_lauf(name, quelle=None) -> bool:
     """True, wenn der laufende Kompressor-Lauf von einer PV-/Einspeisung-
     Regel gestartet wurde (fuer die PV-Mindestlaufzeit-Entkopplung).
 
-    CalcStart zaehlt nur dann dazu, wenn er mit PV oder Batterie gestartet ist
-    (Befund 18.10.2026): Er startet quellengesteuert oder als Netz-Notfall.
-    Im Betriebslog 14.09.-18.10.2026 startete er 8 Laeufe; fuer den Lauf
-    17:40-17:53 galt deshalb die volle 60-min-Mindestlaufzeit, obwohl das Ziel
-    nach 13,5 min erreicht war - der Lauf endete erst durch die
-    Overshoot-Vorhersage (Alarm). Die Quelle steht beim Start fest
-    (`state.control.source_at_start`); fehlt sie, bleibt es bei der vollen
-    Mindestlaufzeit (konservativ).
+    CalcStart und Abweichung zaehlen nur dann dazu, wenn sie mit PV oder
+    Batterie gestartet sind (Befund 18.10.2026): CalcStart startet
+    quellengesteuert oder als Netz-Notfall. Im Betriebslog 14.09.-18.10.2026
+    startete er 8 Laeufe; fuer den Lauf 17:40-17:53 galt deshalb die volle
+    60-min-Mindestlaufzeit, obwohl das Ziel nach 13,5 min erreicht war - der
+    Lauf endete erst durch die Overshoot-Vorhersage (Alarm). Die Quelle steht
+    beim Start fest (`state.control.source_at_start`); fehlt sie, bleibt es
+    bei der vollen Mindestlaufzeit (konservativ).
+
+    BEFUND 01.11.2026: Die Abweichungs-Regel fehlte in dieser Liste. Ein
+    Schichtungs-Warmstart um 09:00 (oben 57 C, unten 21 C) wurde ueber
+    880 W PV-Erzeugung freigegeben, lief aber 60 min weiter, obwohl
+    AdaptivePV nach 5 min "Speicher oben voll" meldete - 55 min Netz/Batterie
+    ohne Nutzen. Auch hier entscheidet jetzt die Startquelle.
     """
     if not isinstance(name, str) or not name:
         return False
-    if name == "CalcStart":
+    if name in _QUELLENABHAENGIGE_MINDESTLAUFZEIT_REGELN:
         return str(quelle or "").strip().lower() in ("pv", "batterie")
     return name in ("Einspeisung", "AdaptivePV") or name.startswith("PV_")
 
 
 def _quelle_fuer_mindestlaufzeit(state, regel_name):
-    """Startquelle des laufenden Zyklus (fuer CalcStart, Befund 18.10.2026).
+    """Startquelle des laufenden Zyklus (fuer CalcStart und Abweichung).
 
     ``source_at_start`` setzt der Hardware-Start (main.set_kompressor_status);
     ``source_current`` traegt die Quelle des laufenden Betriebs. Nur wenn dabei
-    PV oder Batterie steht, darf ein CalcStart-Lauf die kurze
-    PV-Mindestlaufzeit nutzen - ein Netz-Notfalllauf behaelt die volle.
+    PV oder Batterie steht, darf ein quellenabhaengiger Lauf die kurze
+    PV-Mindestlaufzeit nutzen - ein Netz-Start behaelt die volle.
     """
-    if not isinstance(regel_name, str) or regel_name != "CalcStart":
+    if not isinstance(regel_name, str) or regel_name not in _QUELLENABHAENGIGE_MINDESTLAUFZEIT_REGELN:
         return None
     control = getattr(state, "control", None)
     for feld in ("source_at_start", "source_current", "_lauf_start_source"):
