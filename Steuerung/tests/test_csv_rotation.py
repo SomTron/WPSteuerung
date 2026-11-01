@@ -218,6 +218,29 @@ class TestAufraeumen:
         assert geloescht == []
         assert os.path.exists(alt)
 
+    def test_tz_bewusste_referenzzeit_wird_vertragen(self, tmp_path):
+        """BEFUND 01.11.2026: Das Zyklus-Logging uebergibt `now` mit Zeitzone.
+
+        `datetime.strptime(monat, "%Y-%m")` liefert ein naives Datum; der
+        Vergleich warf "can't compare offset-naive and offset-aware
+        datetimes". Beim Monatswechsel (01.11.2026, 10:00:18) fiel das
+        Aufraeumen deshalb mit ERROR aus und alte Archive blieben liegen.
+        """
+        import pytz
+
+        alt = self._archiv(tmp_path, "2023-05")
+        neu = self._archiv(tmp_path, "2026-05")
+
+        geloescht = raeume_csv_archiv_auf(
+            os.path.dirname(alt), "heizungsdaten", max_monate=24,
+            heute=pytz.timezone("Europe/Berlin").localize(
+                datetime(2026, 6, 1, 10, 0)),
+        )
+
+        assert alt in geloescht, "tz-bewusste Zeit muss trotzdem aufraeumen"
+        assert not os.path.exists(alt)
+        assert os.path.exists(neu)
+
     def test_rotation_raeumt_alte_archived_auf(self, tmp_path, csv_pfad):
         """Der Aufruf muss aus der Rotation heraus automatisch erfolgen."""
         verzeichnis = os.path.dirname(csv_pfad)

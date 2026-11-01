@@ -345,6 +345,14 @@ def raeume_csv_archiv_auf(
         return []
     if heute is None:
         heute = datetime.now()
+    # BEFUND 01.11.2026: Das Zyklus-Logging reicht `now` aus dem Hauptloop
+    # herein - und das ist ZEITZONEN-BEWUSST. `datetime.strptime(monat,
+    # "%Y-%m")` liefert dagegen ein naives Datum; der Vergleich warf
+    # "can't compare offset-naive and offset-aware datetimes". Folge: Beim
+    # Monatswechsel (01.11.2026, 10:00:18) fiel das Aufraeumen mit einem
+    # ERROR aus, alte Monatsarchive blieben liegen.
+    if heute.tzinfo is not None:
+        heute = heute.replace(tzinfo=None)
     if not verzeichnis or not os.path.isdir(verzeichnis):
         return []
 
