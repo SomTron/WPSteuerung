@@ -2381,6 +2381,7 @@
                     container.innerHTML = regelnSortiert.map(function(r, idx) {
                         const isWinner = ruleName === r.name;
                         let detail = '';
+                        let etappenHtml = '';
                         if (r.typ === 'pv') detail = 'Sensor: ' + r.sensor + ' | PV >= ' + r.schwellwert + 'W | ' + r.ein + '-' + r.aus + ' C';
                         else if (r.typ === 'komfort') detail = 'Notfall ' + r.notfall + 'C | Komfort ' + r.ein + 'C | MinPV ' + r.min_pvid + 'W';
                         else if (r.typ === 'zeitfenster') detail = r.start + '-' + r.ende + ' Uhr | max ' + r.ein + 'C | PV >= ' + r.min_pv + 'W';
@@ -2404,7 +2405,36 @@
                             const planned = calc ? ' | geplant: ' + formatCalcHour(calc.planned_start_hour) : '';
                             const latest = calc ? ' | spätestens: ' + formatCalcHour(calc.spaetester_start_hour) : '';
                             const needed = calc && Number.isFinite(Number(calc.hours_needed)) ? ' | Heizzeit: ' + Number(calc.hours_needed).toFixed(1) + ' h' : '';
-                            detail = 'Soll ' + r.soll_c + 'C um ' + r.ziel_uhr + ':00 | max ' + r.max_c + 'C' + planned + latest + needed;
+                            const etappen = calc && Array.isArray(calc.etappen) ? calc.etappen : [];
+                            if (etappen.length) {
+                                // Mehrere Bedarfszeitpunkte (Nutzerentscheidung
+                                // 05.11.2026): der Plan steht in
+                                // regel_dict.etappen - je Etappe Zielzeit,
+                                // berechnete Startzeit (Ziel minus Heizzeit)
+                                // und Restpuffer. Die dringendste Etappe
+                                // bestimmt die aktuelle Entscheidung.
+                                detail = 'Etappen: ' + etappen.map(e => e.name + ' ' + formatCalcHour(e.ziel_uhr) +
+                                    '/' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + e.temperaturfuehler).join(' &middot; ') + latest;
+                                etappenHtml = '<div class="rule-etappen" style="margin-top:4px">' +
+                                    etappen.map(function(e) {
+                                        const puffer = Number(e.puffer_h);
+                                        const pufferTxt = Number.isFinite(puffer)
+                                            ? (puffer >= 0 ? 'Puffer ' + puffer.toFixed(1) + ' h' : 'ZU SP&Auml;T ' + Math.abs(puffer).toFixed(1) + ' h')
+                                            : '';
+                                        const farbe = !Number.isFinite(puffer) ? 'var(--text-secondary)'
+                                            : (puffer < 0 ? '#e57373' : (puffer < 0.5 ? '#ffa726' : '#4caf50'));
+                                        return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary);' +
+                                            (e.dringendste ? 'font-weight:600;color:var(--text-primary);' : '') + '">' +
+                                            '<span style="min-width:64px">' + (e.dringendste ? '&rarr; ' : '') + e.name + '</span>' +
+                                            '<span>Start ' + formatCalcHour(e.start_uhr) + ' &rarr; ' + formatCalcHour(e.ziel_uhr) + '</span>' +
+                                            '<span>' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + e.temperaturfuehler + '</span>' +
+                                            '<span style="color:' + farbe + '">' + pufferTxt + '</span>' +
+                                            (e.erreichbar === false ? '<span style="color:#e57373">Ziel kaum erreichbar</span>' : '') +
+                                            '</div>';
+                                    }).join('') + '</div>';
+                            } else {
+                                detail = 'Soll ' + r.soll_c + 'C um ' + r.ziel_uhr + ':00 | max ' + r.max_c + 'C' + planned + latest + needed;
+                            }
                         }
                         else if (r.typ === 'mindesttemp') detail = 'Sensor: ' + r.sensor + ' | >= ' + r.min_c + ' C | ' + r.start + '-' + r.ende + ' Uhr' + (r.nachtsperre_ueberschreiben === false ? ' | respektiert Nachtsperre (kein Nacht-Heizen)' : '');
                         else if (r.typ === 'batterie') detail = 'SOC >= ' + r.min_soc + '% | Netzbezug-Grenze ' + r.max_netzbezug_w + ' W';
@@ -2434,6 +2464,7 @@
                         return '<div class="rule-card ' + stateClass + '" onclick="toggleRuleDetail(' + idx + ')">' +
                             '<div class="rule-header"><span class="rule-name">' + (isWinner ? '> ' : '') + r.name + '</span><span class="rule-prio">P' + r.prio + '</span></div>' +
                             '<div class="rule-detail">' + detail + '</div>' +
+                            etappenHtml +
                             decisionHtml + '</div>';
                     }).join('');
                 }

@@ -102,6 +102,28 @@ class TestEtappenplan:
                    16, 0)
         assert "etappen" not in (erg.regel_dict or {})
 
+    def test_plan_liefert_startzeit_und_markiert_die_dringendste(self):
+        """WebApp-Anforderung: 'wann ist ein Start geplant' (05.11.2026)."""
+        erg = _ruf(_config([MITTAG, ABEND]), {"unten": 30.0, "mittig": 38.0,
+                                             "oben": 45.0}, 12, 40)
+        plan = erg.regel_dict["etappen"]
+        for e in plan:
+            assert "start_uhr" in e, "Startzeit je Etappe fehlt (WebApp)"
+            assert abs(e["start_uhr"] - (e["ziel_uhr"] - e["hours_needed"])) <= 0.02
+        assert sum(1 for e in plan if e.get("dringendste")) == 1
+
+    def test_webapp_zeigt_den_etappenplan(self):
+        """Quelltext-Guard: die WebApp rendert Startzeit, Soll und Puffer."""
+        pfad = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "webapp", "index.html")
+        with open(pfad, encoding="utf-8") as fh:
+            quelle = fh.read()
+        assert "calc.etappen" in quelle
+        assert "formatCalcHour(e.start_uhr)" in quelle
+        assert "etappenHtml" in quelle
+        assert "dringendste" in quelle
+
     def test_etappe_mit_falschem_ziel_wird_abgelehnt(self):
         with pytest.raises(ValueError):
             CalcEtappeConfig(name="X", ziel_uhr=25.0)

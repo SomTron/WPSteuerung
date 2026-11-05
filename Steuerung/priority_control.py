@@ -2072,6 +2072,10 @@ def _etappen_plan(
         plan.append({
             "name": getattr(etappe, "name", "Etappe"),
             "ziel_uhr": round(ziel, 2),
+            # Berechnete Startzeit: Zielzeit minus benoetigte Heizzeit. Das
+            # ist die Zahl, die der Betreiber in der WebApp sehen will
+            # ("wann muss ich einschalten, um um 13:00 40 C zu haben?").
+            "start_uhr": round(ziel - stunden, 2),
             "solltemperatur_c": float(getattr(etappe, "solltemperatur_c", 42.0)),
             "temperaturfuehler": getattr(etappe, "temperaturfuehler", "unten"),
             "hours_needed": round(stunden, 2),
@@ -2088,6 +2092,7 @@ def _etappen_plan(
         return (letzte["ziel_uhr"], letzte["solltemperatur_c"], 0.0, plan)
     # Dringendste = kleinster Restpuffer; bei Gleichstand die fruehere Zielzeit.
     dringend = min(offen, key=lambda e: (e["puffer_h"], e["ziel_uhr"]))
+    dringend["dringendste"] = True
     return (dringend["ziel_uhr"], dringend["solltemperatur_c"],
             dringend["hours_needed"], plan)
 
