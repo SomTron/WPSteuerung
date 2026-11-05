@@ -310,7 +310,12 @@ def test_nachtuebergang_rotiert_und_je_tag_hat_eine_datei(tmp_path, monkeypatch)
     monkeypatch.setattr(logging_config, "date", fake)
 
     log = tmp_path / "heizungssteuerung.log"
-    h = _handler(log)
+    # keep_tage bewusst hoch: `log_files.verwalte_archiv` rechnet mit dem
+    # ECHTEN date.today() (gepatcht ist nur logging_config.date). Mit dem
+    # Fake-Datum 19./20.10. laege das frisch rotierte Archiv sonst sofort
+    # ausserhalb der 14-Tage-Grenze und wuerde im selben Aufruf geloescht -
+    # der Test waere damit rein zeitabhaengig (rot ab November 2026).
+    h = _handler(log, keep_tage=400)
     try:
         _emit(h, "Tag 19")
         fake.aktuell = dt.date(2026, 10, 20)   # Mitternacht
