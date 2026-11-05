@@ -370,17 +370,32 @@ def _deployment_cfg():
         return json.load(f)
 
 
-def test_mittag_fenster_deckt_den_vormittag():
-    """Von 08:00 bis 11:00 gab es zeitlich keine Komfortregel.
+def test_mittag_fenster_beginnt_um_11_uhr():
+    """Fenster 11-16 Uhr (Nutzerentscheidung 05.11.2026).
 
-    Log 18.09.-01.10.2026: Komfort lieferte dort 2 EIN-Zeilen bei 81 W PV
-    (87 % Netzanteil bei 600 W Bedarf). CalcStart zielt auf die Zapfzeit
-    (16-17 Uhr), MinTemp-Mittag-Mitte startete erst um 11:00. Das Fenster
-    beginnt jetzt um 09:00 - zeitgesteuert statt temperatur+PV-gesteuert.
+    Historie: Am 28.09.2026 wurde das Fenster von 11 auf 9 Uhr vorgezogen,
+    weil die Komfort-Regel abgeschaltet wurde und zwischen 08:00 und 11:00
+    zeitlich keine Regel lag (Log 18.09.-01.10.: 2 EIN-Zeilen bei 81 W PV,
+    87 % Netzanteil).
+
+    Replay 01.10.-05.11.2026 (36 Tage, 3388 Intervalle) mit der heutigen
+    Konfiguration (calculated_start.netz_solltemperatur_c=0) zeigt, dass der
+    Vormittag heute keinen Zapfbedarf hat - Zapfungen zwischen 23 und 08 Uhr:
+    0. Die Vorheizung um 9 Uhr war damit reine Batterie-/Netzlast:
+
+        Fenster 9-16  -> 133,2 h Laufzeit (46,5 h davon MinTemp),
+                         19,5 kWh Batterie, 3,8 kWh Netz,
+                         0,0 h mit echtem PV-Ueberschuss
+        Fenster 11-16 -> 116,8 h Laufzeit (9,5 h davon MinTemp),
+                         15,0 kWh Batterie, 0,8 kWh Netz
+                         - PV-Anteil (57,2 kWh) und Komfort-Proxy unveraendert
+
+    Die Garantie "mitte >= 42 C zwischen 11 und 16 Uhr" ist unveraendert;
+    die Hysterese ist in dieser Regel wirkungslos (rein additiv).
     """
     eintraege = _deployment_cfg()["mindest_temp"]["eintraege"]
     mittag = next(e for e in eintraege if e["name"] == "Mittag-Mitte")
-    assert mittag["start_uhr"] == 9
+    assert mittag["start_uhr"] == 11
     assert mittag["ende_uhr"] == 16
 
 

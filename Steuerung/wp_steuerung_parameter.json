@@ -159,7 +159,7 @@
         "name": "Mittag-Mitte",
         "temperaturfuehler": "mitte",
         "min_temp_c": 42.0,
-        "start_uhr": 9,
+        "start_uhr": 11,
         "ende_uhr": 16,
         "hysterese_k": 0.0
       },
