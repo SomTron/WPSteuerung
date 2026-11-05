@@ -1988,6 +1988,110 @@ def _uhr_text(stunde: float) -> str:
     return f"{gesamt // 60}:{gesamt % 60:02d}"
 
 
+def _etappen_heizzeit_h(
+    temp_dict: Dict[str, Optional[float]],
+    etappe,
+    parameter=None,
+    max_h: float = 8.0,
+    schritt_min: int = 15,
+    boiler_max_c: float = 48.0,
+) -> Optional[Tuple[float, bool]]:
+    """Heizzeit (h) bis eine Etappe ihre Zieltemperatur erreicht.
+
+    Vorwaertssimulation des kalibrierten Speichermodells
+    (``Steuerung/thermal_modell.py``) mit laufendem Kompressor.
+    Rueckgabe ``(stunden, erreicht)`` oder ``None``, wenn Modell oder
+    Sensoren fehlen - dann rechnet der Aufrufer mit der Raten-Schaetzung.
+
+    WARUM SIMULATION STATT RATE (Messung 01.10.-05.11.2026): Die Rate des
+    mittleren Fuehlers haengt vom Schichtungsabstand ab - bei delta <= 4 K
+    steigt er mit 3,75 K/h, bei delta > 8 K FAELLT er (-1,25 K/h), waehrend
+    ``unten`` mit 17-21 K/h hochgeht. Eine Konstante liegt damit je nach
+    Situation um Faktor 2-3 daneben und verschiebt den Start um Stunden.
+    """
+    try:
+        from thermal_modell import Speicher, SpeicherParameter
+    except ImportError:      # pragma: no cover - Modell nicht vorhanden
+        return None
+
+    unten = _parse_sensor(temp_dict, "unten")
+    mitte = _parse_sensor(temp_dict, "mitte")
+    oben = _parse_sensor(temp_dict, "oben")
+    if unten is None or mitte is None or oben is None:
+        return None
+
+    if parameter is None:
+        parameter = SpeicherParameter.gemessen_oktober_2026()
+    feld = getattr(etappe, "temperaturfuehler", "unten")
+    ziel = float(getattr(etappe, "solltemperatur_c", 42.0))
+
+    speicher = Speicher(parameter, start_unten=unten, start_mitte=mitte, start_oben=oben)
+    if feld not in speicher.temperaturen:
+        return None
+    if speicher.temperaturen[feld] >= ziel:
+        return (0.0, True)
+
+    minuten = 0.0
+    while minuten < max_h * 60.0:
+        speicher.schritt(schritt_min * 60.0, kompressor_ein=True)
+        minuten += schritt_min
+        if speicher.temperaturen[feld] >= ziel:
+            return (minuten / 60.0, True)
+        if speicher.temperaturen["oben"] >= boiler_max_c:
+            # Boiler-Max erreicht: die reale WP schaltet ab, mehr geht nicht.
+            return (minuten / 60.0, False)
+    return (max_h, False)
+
+
+def _etappen_plan(
+    calc_cfg,
+    temp_dict: Dict[str, Optional[float]],
+    current_time: float,
+    ziel_uhr_default: float,
+    boiler_max_c: float = 48.0,
+    parameter=None,
+) -> Tuple[Optional[float], Optional[float], Optional[float], List[Dict]]:
+    """Dringendste Etappe bestimmen.
+
+    Rueckgabe ``(ziel_uhr, solltemperatur_c, hours_needed, plan)``.
+    ``plan`` ist die vollstaendige Liste fuer die Diagnose/WebApp:
+    je Etappe Zielzeit, Soll, Heizzeit und Restpuffer. Ist keine Etappe
+    offen (alle Ziele erreicht), kommen ``hours_needed = 0.0`` und die
+    zuletzt faellige Etappe zurueck - der Aufrufer meldet dann "Ziel
+    bereits erreicht".
+    """
+    plan: List[Dict] = []
+    for etappe in getattr(calc_cfg, "etappen", None) or []:
+        ziel = (float(etappe.ziel_uhr) if getattr(etappe, "ziel_uhr", None) is not None
+                else float(ziel_uhr_default))
+        erg = _etappen_heizzeit_h(temp_dict, etappe, parameter=parameter,
+                                  boiler_max_c=boiler_max_c)
+        if erg is None:
+            continue
+        stunden, erreichbar = erg
+        plan.append({
+            "name": getattr(etappe, "name", "Etappe"),
+            "ziel_uhr": round(ziel, 2),
+            "solltemperatur_c": float(getattr(etappe, "solltemperatur_c", 42.0)),
+            "temperaturfuehler": getattr(etappe, "temperaturfuehler", "unten"),
+            "hours_needed": round(stunden, 2),
+            "puffer_h": round((ziel - current_time) - stunden
+                              - float(getattr(etappe, "puffer_h", 0.5)), 2),
+            "erreichbar": erreichbar,
+        })
+    if not plan:
+        return (None, None, None, [])
+
+    offen = [e for e in plan if e["hours_needed"] > 0.0]
+    if not offen:
+        letzte = max(plan, key=lambda e: e["ziel_uhr"])
+        return (letzte["ziel_uhr"], letzte["solltemperatur_c"], 0.0, plan)
+    # Dringendste = kleinster Restpuffer; bei Gleichstand die fruehere Zielzeit.
+    dringend = min(offen, key=lambda e: (e["puffer_h"], e["ziel_uhr"]))
+    return (dringend["ziel_uhr"], dringend["solltemperatur_c"],
+            dringend["hours_needed"], plan)
+
+
 def evaluate_calculated_start(
     calc_cfg: CalculatedStartConfig,
     temp_dict: Dict[str, Optional[float]],
@@ -2111,6 +2215,26 @@ def evaluate_calculated_start(
         else float(calc_cfg.target_uhr)
     )
 
+    # Etappenplan (Nutzerentscheidung 05.11.2026): mehrere Bedarfszeitpunkte,
+    # Heizzeit je Etappe per Vorwaertssimulation des kalibrierten Speichers.
+    # Die DRINGENDSTE Etappe liefert Zielzeit, Sollwert und Heizzeit; der
+    # restliche Entscheidungsweg (PV-Fruehstart, Spaetest-Start, Netz-
+    # Fallback, Notfall) bleibt unveraendert.
+    etappen_plan: List[Dict] = []
+    etappen_hours: Optional[float] = None
+    if getattr(calc_cfg, "etappen", None):
+        etappen_ziel, etappen_soll, etappen_std, etappen_plan = _etappen_plan(
+            calc_cfg, temp_dict, current_time, ziel_uhr,
+            boiler_max_c=float(calc_cfg.tmax_c),
+        )
+        if etappen_ziel is not None:
+            ziel_uhr = etappen_ziel
+            etappen_hours = etappen_std
+            if etappen_soll is not None:
+                calc_cfg = calc_cfg.model_copy(
+                    update={"solltemperatur_c": float(etappen_soll)}
+                )
+
     # BUGFIX (22.10.2026): Zapfungs-Vorhaltung in die Zielzeit einrechnen.
     #
     # Nach einer Zapfung ist der Speicher unten kalt: Q Liter warmes Wasser
@@ -2181,7 +2305,14 @@ def evaluate_calculated_start(
     )
     diff_gesamt = diff_unten + diff_mitte + diff_oben
 
-    if diff_gesamt <= 0:
+    if etappen_hours is not None:
+        if etappen_hours <= 0.0:
+            result.grund = (
+                "CalcStart: alle Etappenziele erreicht (%d Etappen geprueft)"
+                % len(etappen_plan)
+            )
+            return result
+    elif diff_gesamt <= 0:
         result.grund = f"CalcStart: Soll {calc_cfg.solltemperatur_c}C bereits erreicht"
         return result
 
@@ -2200,17 +2331,21 @@ def evaluate_calculated_start(
     # bewusst NICHT erneut zugewiesen - zwei getrennte Bestimmungen waren
     # die Ursache des Befunds vom 04.10.2026.
 
-    # Benoetigte Heizzeit
-    hours_needed = diff_unten / max(heizrate_unten, 0.1)
-    hours_needed_mitte = diff_mitte / max(heizrate_gesamt, 0.1)
-    hours_needed = max(hours_needed, hours_needed_mitte)
+    # Benoetigte Heizzeit: mit Etappen aus der Vorwaertssimulation, sonst aus
+    # den gelernten Raten (altes Verhalten mit einem Ziel).
+    if etappen_hours is not None:
+        hours_needed = float(etappen_hours)
+    else:
+        hours_needed = diff_unten / max(heizrate_unten, 0.1)
+        hours_needed_mitte = diff_mitte / max(heizrate_gesamt, 0.1)
+        hours_needed = max(hours_needed, hours_needed_mitte)
 
     # === Multisensor-Zapfungsdaten einbeziehen (Punkt 4) ===
     # Temperaturverlust aus erkannter Zapfung abziehen, damit der
     # CalcStart die tatsaechliche Startzeit korrigeriert und die
     # Zapf-Garantie waerert.
     usage_drop_gesamt_k = 0.0
-    if recent_usage_events:
+    if recent_usage_events and etappen_hours is None:
         # Letzte Zapfung nehmen und Temperaturverlust als "bereits verlorene
         # Energie" interpretieren -> reduziert effektive Heizzeit
         # (die WP muss den Verlust nicht mehr kompensieren, er ist
@@ -2334,6 +2469,10 @@ def evaluate_calculated_start(
         "zapfmenge_l": round(max(0.0, float(zapfmenge_l)), 1),
         "soll_effektiv_c": round(soll_effektiv_c, 1),
     }
+    if etappen_plan:
+        # Der ganze Plan (alle Etappen mit Restpuffer) gehoert in die
+        # Diagnose: nur so ist nachvollziehbar, WARUM jetzt geheizt wird.
+        result.regel_dict["etappen"] = etappen_plan
 
     # Netz-Start mit REDUZIERTEM Soll (Nutzerwunsch 28.09.2026).
     # Steht bewusst VOR dem Zeitablauf-/Spätest-Start-Zweig: Ohne PV wird

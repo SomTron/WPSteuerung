@@ -370,33 +370,28 @@ def _deployment_cfg():
         return json.load(f)
 
 
-def test_mittag_fenster_beginnt_um_11_uhr():
-    """Fenster 11-16 Uhr (Nutzerentscheidung 05.11.2026).
+def test_mittag_ist_eine_berechnete_etappe():
+    """Mittag ist seit 05.11.2026 ein Etappenziel, keine Zeitgarantie.
 
-    Historie: Am 28.09.2026 wurde das Fenster von 11 auf 9 Uhr vorgezogen,
-    weil die Komfort-Regel abgeschaltet wurde und zwischen 08:00 und 11:00
-    zeitlich keine Regel lag (Log 18.09.-01.10.: 2 EIN-Zeilen bei 81 W PV,
-    87 % Netzanteil).
-
-    Replay 01.10.-05.11.2026 (36 Tage, 3388 Intervalle) mit der heutigen
-    Konfiguration (calculated_start.netz_solltemperatur_c=0) zeigt, dass der
-    Vormittag heute keinen Zapfbedarf hat - Zapfungen zwischen 23 und 08 Uhr:
-    0. Die Vorheizung um 9 Uhr war damit reine Batterie-/Netzlast:
-
-        Fenster 9-16  -> 133,2 h Laufzeit (46,5 h davon MinTemp),
-                         19,5 kWh Batterie, 3,8 kWh Netz,
-                         0,0 h mit echtem PV-Ueberschuss
-        Fenster 11-16 -> 116,8 h Laufzeit (9,5 h davon MinTemp),
-                         15,0 kWh Batterie, 0,8 kWh Netz
-                         - PV-Anteil (57,2 kWh) und Komfort-Proxy unveraendert
-
-    Die Garantie "mitte >= 42 C zwischen 11 und 16 Uhr" ist unveraendert;
-    die Hysterese ist in dieser Regel wirkungslos (rein additiv).
+    Vorher: MinTemp 'Mittag-Mitte' heizte ab 9 (zuletzt 11) Uhr stumpf auf
+    42 C - obwohl `mitte` um 13 Uhr ohnehin bei 46,9 C liegt (nur 5,7 % der
+    Zeit unter 40 C) und der Vormittag 0 Zapfungen hat. Jetzt rechnet
+    CalcStart die Heizzeit per Vorwaertssimulation des kalibrierten
+    Speichermodells und startet nur, wenn es knapp wird.
     """
-    eintraege = _deployment_cfg()["mindest_temp"]["eintraege"]
-    mittag = next(e for e in eintraege if e["name"] == "Mittag-Mitte")
-    assert mittag["start_uhr"] == 11
-    assert mittag["ende_uhr"] == 16
+    cfg = _deployment_cfg()
+    etappen = cfg["calculated_start"]["etappen"]
+    mittag = next(e for e in etappen if e["name"] == "Mittag")
+    assert mittag["ziel_uhr"] == 13.0
+    assert mittag["solltemperatur_c"] == 40.0
+    assert mittag["temperaturfuehler"] == "mitte"
+    # Die zeitgesteuerte Garantie fuer den Mittag ist entfallen.
+    namen = [e["name"] for e in cfg["mindest_temp"]["eintraege"]]
+    assert "Mittag-Mitte" not in namen
+    # Der Abend bleibt als Etappe (Zielzeit None = gelernte Zapfzeit).
+    abend = next(e for e in etappen if e["name"] == "Abend")
+    assert abend["temperaturfuehler"] == "unten"
+    assert abend["solltemperatur_c"] == 42.0
 
 
 def test_deployment_komfort_abgeschaltet():

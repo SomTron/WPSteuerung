@@ -138,7 +138,22 @@
     "tmax_c": 48,
     "netz_solltemperatur_c": 0,
     "netz_einschalten_ab_k": 1.0,
-    "notfall_mindestdefizit_k": 1.0
+    "notfall_mindestdefizit_k": 1.0,
+    "etappen": [
+      {
+        "name": "Mittag",
+        "ziel_uhr": 13.0,
+        "solltemperatur_c": 40.0,
+        "temperaturfuehler": "mitte",
+        "puffer_h": 0.5
+      },
+      {
+        "name": "Abend",
+        "solltemperatur_c": 42.0,
+        "temperaturfuehler": "unten",
+        "puffer_h": 0.5
+      }
+    ]
   },
   "sommer_modus": {
     "aktiv": true,
@@ -155,14 +170,6 @@
     "aktiv": true,
     "prioritaet": 65,
     "eintraege": [
-      {
-        "name": "Mittag-Mitte",
-        "temperaturfuehler": "mitte",
-        "min_temp_c": 42.0,
-        "start_uhr": 11,
-        "ende_uhr": 16,
-        "hysterese_k": 0.0
-      },
       {
         "name": "Abend-Mitte",
         "temperaturfuehler": "mitte",

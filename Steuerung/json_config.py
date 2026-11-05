@@ -808,6 +808,54 @@ class AdaptivePVConfig(BaseModel):
         return self
 
 
+class CalcEtappeConfig(BaseModel):
+    """Ein Etappenziel fuer die berechnete Startzeit (Nutzerentscheidung 05.11.2026).
+
+    Warum Etappen statt eines einzigen Ziels: Der Speicher hat MEHRERE
+    Bedarfszeitpunkte. Gemessen an 170 Zapfungen (01.10.-05.11.2026):
+    Schwerpunkt 18-21 Uhr (116 Ereignisse), zweiter Schwerpunkt 13 Uhr
+    (17 Ereignisse). Ein einzelnes Ziel (Abend) laesst den Mittag offen -
+    bisher deckte das die zeitgesteuerte Mindesttemperatur ab, die aber
+    ab 11 Uhr stumpf auf 42 C heizte, obwohl `mitte` um 13 Uhr ohnehin
+    bei 46,9 C liegt (nur 5,7 % der Zeit unter 40 C).
+
+    Die Heizzeit je Etappe wird per Vorwaertssimulation des kalibrierten
+    Speichermodells bestimmt - nicht aus einer Rate, weil die Rate vom
+    Schichtungsabstand abhaengt (siehe SpeicherParameter.gemessen_oktober_2026).
+    """
+
+    name: str = Field(default="Etappe", description="Anzeigename (z.B. 'Mittag')")
+    ziel_uhr: Optional[float] = Field(
+        default=None,
+        description=(
+            "Zielzeit als Stunde (0-23.99, z.B. 13.0). None = gelernte "
+            "Zapfzeit (learned_target_hour) bzw. calculated_start.target_uhr."
+        ),
+    )
+    solltemperatur_c: float = Field(
+        default=42.0, description="Zieltemperatur am gewaehlten Fuehler (Grad C)"
+    )
+    temperaturfuehler: str = Field(
+        default="unten", description="'unten', 'mitte' oder 'oben'"
+    )
+    puffer_h: float = Field(
+        default=0.5,
+        description="Sicherheitszuschlag auf die berechnete Heizzeit (h)",
+    )
+
+    @model_validator(mode="after")
+    def _plausibel(self):
+        if self.ziel_uhr is not None and not (0.0 <= self.ziel_uhr <= 23.99):
+            raise ValueError("etappe: ziel_uhr ausserhalb 0-23.99")
+        if not (20.0 <= self.solltemperatur_c <= 65.0):
+            raise ValueError("etappe: solltemperatur_c ausserhalb 20-65 C")
+        if self.temperaturfuehler not in ("unten", "mitte", "oben"):
+            raise ValueError("etappe: temperaturfuehler muss unten/mitte/oben sein")
+        if not (0.0 <= self.puffer_h <= 6.0):
+            raise ValueError("etappe: puffer_h ausserhalb 0-6 h")
+        return self
+
+
 class CalculatedStartConfig(BaseModel):
     """Startzeit-Regel: Berechnet optimalen Einschaltzeitpunkt fuer Zieltemperatur."""
     prioritaet: int = Field(default=82, description="Prioritaet")
@@ -919,6 +967,16 @@ class CalculatedStartConfig(BaseModel):
         default=500.0,
         description=("Unter dieser Tagesprognose halbiert sich der Puffer "
                       "(0.5) - lieber frueher mit dem vorhandenen Solar."),
+    )
+    etappen: List[CalcEtappeConfig] = Field(
+        default_factory=list,
+        description=(
+            "Etappenziele (Nutzerentscheidung 05.11.2026). LEER = altes "
+            "Verhalten mit EINEM Ziel (solltemperatur_c/target_uhr). Ist die "
+            "Liste gefuellt, rechnet die Regel fuer jede Etappe per "
+            "Vorwaertssimulation die Heizzeit und entscheidet nach der "
+            "DRINGENDSTEN (kleinster Restpuffer)."
+        ),
     )
 
 
