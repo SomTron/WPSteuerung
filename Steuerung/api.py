@@ -1693,7 +1693,13 @@ def _status_daten(rechne_auswertung: bool = False):
             "nachtsperre_ende": pc.sicherheit.nachtsperre_ende,
             "sicherheit_max": pc.sicherheit.max_temp_c,
             "sicherheit_ueberhitzung": pc.sicherheit.ueberhitzung_c,
-            "sicherheit_notfall": pc.sicherheit.notfall_c,
+            # BEFUND 05.11.2026: `sicherheit.notfall_c` wird von KEINER Regel
+            # gelesen - der Notfallschutz (Prio 110) entscheidet ueber
+            # `notfallschutz.einschalten_bei_c`. Hier stand der tote Wert,
+            # sodass die Statusanzeige eine Schwelle zeigte, die nichts
+            # steuert (beide waren zufaellig 36). Ausgeliefert wird jetzt die
+            # wirksame Schwelle.
+            "sicherheit_notfall": pc.notfallschutz.einschalten_bei_c,
             "regeln": [],
         }
         # PV-Regeln

@@ -45,7 +45,15 @@ class SicherheitConfig(BaseModel):
     nachtsperre_ende: int = Field(default=8, description="Nachtsperre Ende-Stunde (0-23)")
     max_temp_c: float = Field(default=48.0, description="Maximale Boiler-Temperatur (°C)")
     ueberhitzung_c: float = Field(default=58.0, description="Überhitzungsschutz (°C)")
-    notfall_c: float = Field(default=36.0, description="Notfall-Einschalttemperatur (°C)")
+    notfall_c: float = Field(
+        default=36.0,
+        description=(
+            "DEPRECATED / wirkungslos (Befund 05.11.2026): dieser Wert wird "
+            "von keiner Regel gelesen. Der Notfallschutz entscheidet ueber "
+            "'notfallschutz.einschalten_bei_c' (Strategie 'auto': oben -> "
+            "mittig -> unten). Nur noch fuer Altkonfigurationen vorhanden."
+        ),
+    )
 
     boiler_max_fuehler: str = Field(
         default="unten",
