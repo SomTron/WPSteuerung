@@ -142,7 +142,7 @@
     "etappen": [
       {
         "name": "Mittag",
-        "ziel_uhr": 13.0,
+        "ziel_uhr": 12.0,
         "solltemperatur_c": 40.0,
         "temperaturfuehler": "mitte",
         "puffer_h": 0.5

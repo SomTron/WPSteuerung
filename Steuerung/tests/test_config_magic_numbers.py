@@ -382,7 +382,7 @@ def test_mittag_ist_eine_berechnete_etappe():
     cfg = _deployment_cfg()
     etappen = cfg["calculated_start"]["etappen"]
     mittag = next(e for e in etappen if e["name"] == "Mittag")
-    assert mittag["ziel_uhr"] == 13.0
+    assert mittag["ziel_uhr"] == 12.0
     assert mittag["solltemperatur_c"] == 40.0
     assert mittag["temperaturfuehler"] == "mitte"
     # Die zeitgesteuerte Garantie fuer den Mittag ist entfallen.
