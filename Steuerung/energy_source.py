@@ -361,12 +361,28 @@ def classify_energy_source(
         "" if pv_erlaubt
         else " (ausserhalb des PV-Fensters zaehlt PV nicht als Quelle)"
     )
+    # Die Begruendung muss den Wert nennen, der die Freigabe WIRKLICH
+    # verhindert hat. Vorher stand dort IMMER "PV-Erzeugung X<50W" - auch
+    # bei 1192 W Erzeugung (Log 05.11.2026, 11:26: PV-Erzeugung 1192 W,
+    # Einspeisung -891 W, Batterie 0 W, SOC 15 %). Der wahre Grund war der
+    # Netzkauf; die Zeile behauptete einen Vergleich, der nie stattfand -
+    # genau die Sorte Fehldiagnose, die den Betreiber in die Irre fuehrt.
+    gruende = []
+    if pv_signal is not None and pv_signal >= pv_threshold:
+        gruende.append(f"PV-Erzeugung {pv_text} ohne Ueberschuss")
+    else:
+        gruende.append(f"PV-Erzeugung {pv_text}<{pv_threshold:.0f}W")
+    if not kein_netzkauf:
+        einspeisung_txt = "n/a" if feedin is None else f"{feedin:.0f}W"
+        gruende.append(
+            f"Netzkauf (Einspeisung {einspeisung_txt} < {grid_limit:.0f}W)"
+        )
+    if discharge is None or discharge < battery_threshold:
+        gruende.append(f"Batterie {batt_text}<{battery_threshold:.0f}W")
+    if soc_value is None or soc_value < soc_threshold:
+        gruende.append(f"SOC {soc_text}<{soc_threshold:.0f}%")
     return result(
         Energiequelle.NETZ,
         False,
-        (
-            f"keine erneuerbare Quelle{fenster_txt}: PV-Erzeugung {pv_text}<{pv_threshold:.0f}W, "
-            f"Batterie {batt_text}/{soc_text}<{battery_threshold:.0f}W/"
-            f"{soc_threshold:.0f}% oder Netzkauf"
-        ),
+        f"keine erneuerbare Quelle{fenster_txt}: " + ", ".join(gruende),
     )

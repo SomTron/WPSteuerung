@@ -471,3 +471,32 @@ def test_nachts_liefert_die_batterie_nicht_pv():
     )
     assert batterie.quelle is Energiequelle.BATTERIE
 
+
+
+def test_netz_begruendung_nennt_den_wahren_grund():
+    """Log 05.11.2026, 11:26: PV 1192 W, Einspeisung -891 W, Batterie 0 W, SOC 15 %.
+
+    Die Meldung behauptete "PV-Erzeugung 1192W<50W" - ein Vergleich, der nie
+    stattfand (1192 > 50). Der Grund war der Netzkauf. Seit dem Fix nennt
+    die Begruendung nur die Bedingungen, die wirklich verletzt sind.
+    """
+    status = classify_energy_source(
+        pv_acpower=2100.0, feedin_watt=-891.0, batpower_raw=0.0, soc=15.0,
+        pv_erzeugung_watt=1192.0,
+        pv_min_watt=50.0, soc_min_prozent=90.0, max_netzkauf_watt=-50.0,
+    )
+    assert status.quelle is Energiequelle.NETZ
+    assert "1192W<50W" not in status.begruendung
+    assert "ohne Ueberschuss" in status.begruendung
+    assert "Netzkauf" in status.begruendung
+    assert "SOC 15%<90%" in status.begruendung
+
+
+def test_netz_begruendung_bei_echt_kleiner_erzeugung():
+    """Ist die Erzeugung wirklich zu klein, bleibt der Vergleich stehen."""
+    status = classify_energy_source(
+        pv_acpower=250.0, feedin_watt=0.0, batpower_raw=0.0, soc=40.0,
+        pv_erzeugung_watt=30.0, pv_min_watt=50.0,
+    )
+    assert "PV-Erzeugung 30W<50W" in status.begruendung
+
