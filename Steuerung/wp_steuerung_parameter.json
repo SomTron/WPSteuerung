@@ -136,7 +136,7 @@
     "heizrate_unten_c_h": 3.0,
     "heizrate_gesamt_c_h": 2.0,
     "tmax_c": 48,
-    "netz_solltemperatur_c": 38,
+    "netz_solltemperatur_c": 0,
     "netz_einschalten_ab_k": 1.0,
     "notfall_mindestdefizit_k": 1.0
   },

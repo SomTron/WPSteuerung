@@ -10,6 +10,8 @@ notfalls mit Netzstrom. Neu:
 - Abweichung wartet im Normalfall auf PV/Batterie; faellt der Fuehler unter
   (Soll - netz_notfall_offset_k), erlaubt der Tiefenschutz Netzstrom.
 """
+import json
+import os
 import sys
 from datetime import datetime
 from types import SimpleNamespace
@@ -336,3 +338,49 @@ class TestAbweichungQuellenGate:
         """Ausschalten benoetigt keine Energie - Gate darf nicht eingreifen."""
         erg = _abw_rufe(39.8, feedin=0.0, soc=None)
         assert erg.einschalten is False
+
+
+# ─────────── Nutzerentscheidung 05.11.2026: keine Netz-Vorheizung ───────────
+#
+# Replay 01.10.-05.11.2026 (36 Tage, echte Messwerte): `netz_solltemperatur_c=38`
+# liess CalcStart OHNE Quelle sofort auf 38 C vorheizen, sobald die Restzeit
+# reichte - morgens um 08:00: 16 K Defizit / 3 K/h = 5,3 h <= 10,6 h Restzeit
+# -> EIN. Das kostete 20,3 h Laufzeit, 6,7 kWh echten Netzbezug und 6,6 kWh
+# Batterie, ohne auch nur 1 Wh zusaetzliche PV-Nutzung (PV blieb in jeder
+# getesteten Variante exakt 65,1 kWh). Der PV-Fruehstart bleibt unberuehrt:
+# mit Quelle startet die Regel weiterhin, sobald der Puffer knapp wird.
+
+class TestOhneNetzvorheizung:
+    def test_live_config_hat_netzvorheizung_aus(self):
+        """Guard: die Live-Config darf die Netz-Vorheizung nicht zurueckholen."""
+        pfad = os.path.join(os.path.dirname(__file__), "..", "wp_steuerung_parameter.json")
+        with open(pfad, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        assert cfg["calculated_start"]["netz_solltemperatur_c"] == 0
+
+    def test_ohne_quelle_wartet_statt_netz_vorzuheizen(self):
+        """08:00, unten 22 C: trotz reichlicher Restzeit kein Netz-EIN."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(), _temps(unten=22.0, mitte=40.0), 8, 0,
+            feedin_watt=0.0, soc=42.0,
+        )
+        assert erg.einschalten is not True
+        assert (erg.regel_dict or {}).get("spaetester_start_hour") is not None
+
+    def test_mit_netzvorheizung_waere_es_ein(self):
+        """Gegenprobe: mit 38 C Soll haette dieselbe Lage EIN ergeben."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(netz_solltemperatur_c=38.0), _temps(unten=22.0, mitte=40.0),
+            8, 0, feedin_watt=0.0, soc=42.0,
+        )
+        assert erg.einschalten is True
+        assert "Netz-Start ohne PV" in erg.grund
+
+    def test_pv_ueberschuss_startet_weiter_frueh(self):
+        """PV-Ueberschuss wird weiterhin sofort genutzt (Anforderung)."""
+        erg = evaluate_calculated_start(
+            _calc_cfg(), _temps(unten=38.0, mitte=40.0), 15, 20,
+            feedin_watt=900.0, soc=95.0,
+        )
+        assert erg.einschalten is True
+        assert "Puffer" in erg.grund
