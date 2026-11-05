@@ -91,9 +91,83 @@ class SpeicherParameter:
     #: Multiplikator des Waermeverlustkoeffizienten der oberen Schicht.
     #: Der Deckel ist gut gedammt (Wert < 1 verringert den Verlust).
     verlust_oben_anteil: float = 1.0
+    #: Zustandsabhaengigkeit der Heizleistung (W pro Kelvin).
+    #:
+    #: BEFUND 05.11.2026 (Parameter-Fit gegen 545 Heizintervalle): Mit
+    #: KONSTANTER Leistung kann das Modell die Messung nicht treffen. Die
+    #: zugefuehrte Waerme betraegt bei durchmischtem Speicher (delta <= 4 K,
+    #: unten ~44 C) rund 980 Wh/h, bei stark geschichtetem Speicher
+    #: (delta > 16 K, unten ~25 C) dagegen rund 1950 Wh/h - die WP gibt bei
+    #: kaltem Ruecklauf fast die doppelte Leistung ab. Deshalb:
+    #:
+    #:     P = heizleistung_w + leistung_pro_k * (leistung_referenz_c - T_unten)
+    #:
+    #: 0.0 = altes Verhalten (konstante Leistung, rueckwaertskompatibel).
+    leistung_pro_k: float = 0.0
+    #: Bezugstemperatur der unteren Schicht fuer ``leistung_pro_k`` (Grad C).
+    leistung_referenz_c: float = 40.0
+    #: Zustandsabhaengige Waermeverteilung (Anteil nach unten pro Kelvin).
+    #:
+    #: BEFUND 05.11.2026 (zweiter Fit-Durchgang): Mit einem KONSTANTEN
+    #: ``einspeisung_anteil_unten`` ist beides nicht zu treffen - bei
+    #: durchmischtem Speicher (delta <= 4 K) steigt `mitte` real fast so
+    #: schnell wie `unten` (3.75 zu 4.75 K/h), bei delta > 8 K bleibt die
+    #: Waerme unten (mitte faellt sogar). Physikalisch: liegt der
+    #: Waermetauscher in Wasser mit Speichertemperatur, verteilt sich die
+    #: Waerme; liegt er in kaltem Wasser, bleibt sie unten (Dichtestroemung).
+    #:
+    #:     anteil_unten = einspeisung_anteil_unten + verteilung_pro_k * delta
+    #:
+    #: 0.0 = altes Verhalten (konstanter Anteil, rueckwaertskompatibel).
+    verteilung_pro_k: float = 0.0
 
     def kopie(self) -> "SpeicherParameter":
         return replace(self)
+
+    @classmethod
+    def gemessen_oktober_2026(cls) -> "SpeicherParameter":
+        """Parameter aus dem Fit gegen die Betriebsdaten (01.10.-05.11.2026).
+
+        Datenbasis: 3.388 Viertelstunden-Intervalle, davon 545 mit
+        durchlaufendem Kompressor (Heizphase) und ~2.200 Ruheintervalle
+        (Kompressor aus, ohne Zapfung). Gefittet in zwei Stufen:
+
+          * Heizphase (8 Parameter): Leistung, Waermeverteilung,
+            Konvektion, zustandsabhaengige Leistung.
+            Guete R2 = 0.93 ueber 6 Schichtungs-Bins x 3 Knoten.
+          * Ruhephase (5 Parameter): Verluste und Umgebung.
+            Fehler 3.8 (K/h)^2, getroffen in allen Temperaturlagen.
+
+        Zwei BEFUNDE, die das Modell dafuer brauchte:
+
+        1. Die Heizleistung ist NICHT konstant: bei kaltem Ruecklauf
+           (unten 25 C) gibt die WP ~1950 Wh/h ab, bei durchmischtem
+           Speicher (unten 44 C) nur ~980 Wh/h. Daher ``leistung_pro_k``.
+        2. Die Waermeverteilung haengt vom Schichtungsabstand ab: bei
+           delta <= 4 K steigt `mitte` fast so schnell wie `unten`, bei
+           delta > 8 K bleibt die Waerme unten (`mitte` faellt). Daher
+           ``verteilung_pro_k``.
+
+        Diese Werte sind GEMESSEN, nicht abgeleitet - sie ersetzen die
+        Default-Annahmen fuer diesen Speicher. Die Defaults bleiben
+        unveraendert, damit andere Szenarien vergleichbar bleiben.
+        """
+        return cls(
+            volumen_l=300.0,
+            heizleistung_w=1227.9,
+            leistung_pro_k=41.5,
+            leistung_referenz_c=40.0,
+            einspeisung_anteil_unten=0.42,
+            verteilung_pro_k=0.09,
+            konvektion_an_w_k=9.2,
+            konvektion_oben_an_w_k=1.0,
+            konvektion_aus_w_k=0.0,
+            konvektion_oben_aus_w_k=1.68,
+            verlust_w_k=2.93,
+            verlust_oben_anteil=0.23,
+            umgebung_c=20.1,
+            waerme_verteilt=False,
+        )
 
 
 class Speicher:
@@ -146,7 +220,16 @@ class Speicher:
         h = dt_s / 3600.0  # Zeitschritt in Stunden
 
         # --- Waermeeintrag des Heizkreises (Wh) ---
-        q_in = p.heizleistung_w * h if kompressor_ein else 0.0
+        # Die Leistung haengt vom Ruecklauf ab: je kaeltter die untere
+        # Schicht, desto groesser die Spreizung am Kondensator und desto
+        # mehr Waerme gibt die WP ab (leistung_pro_k, Default 0 = konstant).
+        if kompressor_ein:
+            leistung = p.heizleistung_w + p.leistung_pro_k * (
+                p.leistung_referenz_c - self.unten.temperatur
+            )
+            q_in = max(0.0, leistung) * h
+        else:
+            q_in = 0.0
         if p.waerme_verteilt:
             # Der Waermetauscher der WP sitzt im unteren Bereich: die
             # Waerme geht nach unten und mitte (anteilig nach Volumen),
@@ -161,6 +244,9 @@ class Speicher:
             dq_mitte = rest * (self.mitte.volumen_l / vol_um)
         else:
             anteil = min(max(p.einspeisung_anteil_unten, 0.0), 1.0)
+            if p.verteilung_pro_k:
+                delta_um = self.mitte.temperatur - self.unten.temperatur
+                anteil = min(1.0, max(0.0, anteil + p.verteilung_pro_k * delta_um))
             dq_unten = q_in * anteil
             dq_mitte = q_in * (1.0 - anteil)
             dq_oben = 0.0
