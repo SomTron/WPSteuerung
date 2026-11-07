@@ -80,6 +80,26 @@ def test_clientfehler_wird_gedrosselt(caplog):
     assert len(caplog.records) == 1
 
 
+def test_clientfehler_geht_nicht_an_telegram(caplog):
+    """Ein Browser-Timeout ist Diagnose, kein Betriebsalarm.
+
+    Der TelegramHandler haengt ab WARNING am Root-Logger. Ohne die
+    `kein_telegram`-Markierung schickt ein Handy im Funkloch im
+    5-Minuten-Takt Nachrichten - der Fehler ist aber auf dem Geraet des
+    Nutzers entstanden und interessiert nur im Log.
+    """
+    with caplog.at_level(logging.WARNING):
+        antwort = api.client_fehler(
+            api.ClientFehler(meldung="Zeitueberschreitung", typ="status")
+        )
+    assert antwort["geloggt"] is True
+    assert caplog.records, "die Meldung muss im Log stehen"
+    for record in caplog.records:
+        assert getattr(record, "kein_telegram", False) is True, (
+            "WebApp-Fehler wuerden sonst zusaetzlich per Telegram verschickt"
+        )
+
+
 def test_clientfehler_begrenzt_laenge():
     """Ein fehlerhafter Client darf das Log nicht mit Romanen fuellen."""
     with pytest.raises(Exception):
@@ -139,7 +159,6 @@ def test_gecachtes_profil_liefert_none_wenn_kalt(tmp_path):
 
 def test_gecachtes_wh_qm_liefert_none_wenn_kalt(tmp_path, monkeypatch):
     import pytz
-    from datetime import datetime as dt
     from types import SimpleNamespace
 
     monkeypatch.setattr(
@@ -150,7 +169,27 @@ def test_gecachtes_wh_qm_liefert_none_wenn_kalt(tmp_path, monkeypatch):
     api._HIST_WH_QM_CACHE["wert"] = None
     assert api._historisches_wh_qm_gecacht(str(tmp_path / "x.csv")) is None
 
-    api._HIST_WH_QM_CACHE["zeit"] = api.to_naive(dt.now())
+    # ⚠️ DIESELBE ZEITQUELLE WIE DIE FUNKTION (CI-Fehler 05.11.2026).
+    #
+    # GEMESSEN: hier stand `api.to_naive(dt.now())` — die WANDUHR DES
+    # RECHNERS. `_historisches_wh_qm_gecacht()` vergleicht aber mit
+    # `to_naive(now_for(shared_state))`, also der Wanduhr der
+    # KONFIGURIERTEN Zone (Europe/Berlin, api.py:1482).
+    #
+    # Der GitHub-Runner steht in UTC, die Zone bleibt Berlin: der
+    # Cache war damit 1 Stunde "alt", die TTL ist 1800 s — die Funktion
+    # gab None zurück statt 1234.0.
+    #
+    #     Wanduhr der Zone   : 11:27:25
+    #     Wanduhr des Rechners: 10:27:25
+    #     Differenz          : 3600 s        TTL: 1800 s
+    #     1) Cache aus dt.now()   -> None      (der Fehler)
+    #     3) Cache aus now_for()  -> 1234.0    (so ist es richtig)
+    #
+    # Lokal (Europe/Berlin) fiel es nie auf, weil beide Wanduhren
+    # gleich sind. `tests/test_status_historie.py:297` macht es mit
+    # `state.localize(...)` schon richtig.
+    api._HIST_WH_QM_CACHE["zeit"] = api.to_naive(api.now_for(api.shared_state))
     api._HIST_WH_QM_CACHE["wert"] = 1234.0
     assert api._historisches_wh_qm_gecacht(str(tmp_path / "x.csv")) == 1234.0
 

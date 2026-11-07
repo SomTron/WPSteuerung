@@ -1214,14 +1214,32 @@
     </div>
 
         <script>
-        // --- Sichtbare Fehleranzeige (BUGFIX 23.10.2026) ---------------------
+        // --- Fehleranzeige UND Log-Meldung (BUGFIX 23.10.2026/07.11.2026) -----
         // Ein Fehler im Renderpfad liess die Oberflaeche stumm leer: alle
         // Werte blieben auf "-", waehrend der Verbindungstext unveraendert
         // stehen blieb. In der Konsole stand die Ursache, auf dem Handy war
-        // sie nicht erreichbar. Deshalb wird JEDER unbehandelte Fehler oben
-        // in der Leiste angezeigt (und bleibt dort stehen, bis man sie
-        // schliesst). Das ist Diagnose, kein Ersatz fuer try/catch.
-        function zeigeJsFehler(text) {
+        // sie nicht erreichbar. Deshalb wird JEDER Fehler oben in der Leiste
+        // angezeigt (und bleibt dort stehen, bis man sie schliesst) UND ins
+        // Steuerungs-Log gemeldet. Das ist Diagnose, kein Ersatz fuer
+        // try/catch.
+        //: Wie oft DERSELBE Fehlertext hoechstens an den Server geht. Der
+        //: Server drosselt zusaetzlich auf 5 Minuten (api.py,
+        //: `_MELDUNG_DROSSEL_SEC`); hier wird nur der Netzanteil begrenzt -
+        //: der Statusabruf laeuft alle 5 s, ein Dauer-Timeout wuerde sonst
+        //: 12 POSTs je Minute erzeugen.
+        const SERVER_MELDUNG_DROSSEL_MS = 60000;
+        //: Text -> Zeitstempel der letzten Servermeldung.
+        const _zuletztAnServer = new Map();
+
+        function zeigeJsFehler(text, typ) {
+            // 1) IMMER ins STEUERUNGS-LOG melden - unabhaengig davon, ob die
+            //    Leiste existiert und ob derselbe Text dort schon steht.
+            //    Frueher hing die Meldung am Anzeigepfad: fehlte das Element
+            //    (alte gecachte Huelle) oder stand der Text bereits in der
+            //    Leiste, war der Fehler im Log unsichtbar.
+            meldeAnServer(text, typ);
+            // 2) Zusaetzlich sichtbar anzeigen (Diagnose, kein Ersatz fuer
+            //    try/catch).
             try {
                 const leiste = document.getElementById('js-fehler');
                 if (!leiste) return;
@@ -1234,25 +1252,39 @@
                 // Nur die letzten 15 Meldungen behalten.
                 leiste.textContent = zeilen.slice(-16).join('\n');
                 leiste.style.display = 'block';
-                // Zusaetzlich ins STEUERUNGS-LOG melden (BUGFIX 23.10.2026):
-                // Ein Fehler im Browser war bisher nur auf dem Geraet
-                // sichtbar - auf dem Handy gibt es keine Konsole. Der Server
-                // schreibt ihn als WARNUNG ins Log (gedrosselt, s. api.py).
-                meldeAnServer(text);
             } catch (_ignoriert) { /* Anzeige darf nie selbst scheitern */ }
         }
 
-        function meldeAnServer(text) {
+        // Schreibt eine Meldung ins Steuerungs-Log (WARNUNG, s. api.py
+        // `/debug/clientfehler`). Auf dem Handy gibt es keine Konsole - ohne
+        // diesen Weg bleibt ein Fehler auf dem Geraet des Nutzers.
+        // `typ` ist optional und ordnet die Zeile ein ('status', 'historie',
+        // 'health', 'analyse', 'errors', 'befehl', 'js').
+        function meldeAnServer(text, typ) {
             try {
-                if (typeof API_BASE === 'undefined') return;
-                fetch(API_BASE + '/debug/clientfehler', {
+                const meldung = String(text == null ? '' : text).slice(0, 500);
+                const jetzt = Date.now();
+                const vorher = _zuletztAnServer.get(meldung);
+                if (vorher !== undefined && jetzt - vorher < SERVER_MELDUNG_DROSSEL_MS) {
+                    return;  // gerade erst gemeldet - der Server hat sie schon
+                }
+                _zuletztAnServer.set(meldung, jetzt);
+                if (_zuletztAnServer.size > 50) _zuletztAnServer.clear();
+                // `API_BASE` wird erst weiter unten per `const` gesetzt. Ein
+                // Fehler VOR dieser Zeile wuerde beim Zugriff einen
+                // ReferenceError (Temporal Dead Zone) ausloesen - dann gilt
+                // der eigene Origin als Rueckfall, statt die Meldung zu
+                // verlieren.
+                let basis = '';
+                try { basis = API_BASE; } catch (_tdz) { basis = ''; }
+                fetch((basis || window.location.origin) + '/debug/clientfehler', {
                     method: 'POST',
                     cache: 'no-store',
                     keepalive: true,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        meldung: String(text).slice(0, 500),
-                        typ: 'webapp',
+                        meldung: meldung,
+                        typ: String(typ || 'webapp').slice(0, 80),
                         seite: String(location.pathname).slice(0, 120),
                         version: (typeof APP_VERSION === 'undefined' ? '?' : APP_VERSION)
                     })
@@ -1261,18 +1293,20 @@
         }
         window.addEventListener('error', function (ev) {
             const ort = ev.filename ? ' (' + ev.filename.split('/').pop() + ':' + ev.lineno + ')' : '';
-            zeigeJsFehler('JS-Fehler: ' + (ev.message || 'unbekannt') + ort);
+            zeigeJsFehler('JS-Fehler: ' + (ev.message || 'unbekannt') + ort, 'js');
         });
         window.addEventListener('unhandledrejection', function (ev) {
             const g = ev.reason;
-            zeigeJsFehler('Promise-Fehler: ' + (g && g.message ? g.message : String(g)));
+            zeigeJsFehler('Promise-Fehler: ' + (g && g.message ? g.message : String(g)), 'promise');
         });
 
         const API_BASE = window.location.origin;
         // EINZIGE Versionsangabe der WebApp (Badge + Dokumenttitel).
         // Vorher stand dieselbe Version doppelt im HTML und war veraltet.
         // Bei jedem Release mit dem Log-Verzeichnisnamen abgleichen.
-        const APP_VERSION = '1.10.28';
+        // 1.10.29: WebApp-Fehler gehen jetzt aus JEDEM Abrufpfad ins
+        // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
+        const APP_VERSION = '1.10.29';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -1311,6 +1345,10 @@
                 if (!setText.gemeldet) {
                     setText.gemeldet = true;
                     console.warn('setText: Element fehlt:', id);
+                    // Ins Steuerungs-Log (1.10.29): Ein fehlendes Element ist
+                    // die Ursache fuer "Verbindung steht, Werte bleiben leer" -
+                    // genau der Befund vom 23.10.2026 (alte gecachte Huelle).
+                    meldeAnServer('setText: Element fehlt: ' + id, 'ui');
                 }
                 return false;
             }
@@ -1343,6 +1381,9 @@
             const el = document.getElementById('app');
             if (!el) {
                 console.error('renderApp: Container #app nicht gefunden');
+                // Auch ins Steuerungs-Log (1.10.29): ohne #app bleibt die
+                // ganze Seite leer - das darf nicht nur in der Konsole stehen.
+                meldeAnServer('renderApp: Container #app nicht gefunden', 'ui');
                 return false;
             }
             el.innerHTML = html;
@@ -1601,9 +1642,14 @@
                 updateLastErrorCard();
                 if (offen) renderErrorHistory();
             } catch (error) {
-                errorData = { error: error.name === 'AbortError'
-                    ? 'Zeitüberschreitung' : (error.message || 'unbekannt') };
+                const fehlerText = error.name === 'AbortError'
+                    ? 'Zeitüberschreitung' : (error.message || 'unbekannt');
+                errorData = { error: fehlerText };
                 updateLastErrorCard();
+                // Auch ins Steuerungs-Log (1.10.29): Die Karte zeigt den
+                // Fehler nur dem, der gerade hinschaut - die Fehler-API ist
+                // aber genau das Werkzeug, mit dem man Problemen nachgeht.
+                meldeAnServer('Fehler-API: ' + fehlerText, 'errors');
             } finally {
                 clearTimeout(timeoutId);
                 errorRequestActive = false;
@@ -1639,8 +1685,14 @@
                 updateHealthBadge();
                 updateConnectionStatus(true);
             } catch (error) {
-                healthData = { status: 'degraded', error: error.message || 'Health unbekannt' };
+                const fehlerText = error.name === 'AbortError'
+                    ? 'Health-API Zeitüberschreitung' : (error.message || 'Health unbekannt');
+                healthData = { status: 'degraded', error: fehlerText };
                 updateHealthBadge();
+                // Ins Steuerungs-Log (1.10.29): Ein nicht erreichbarer
+                // Health-Endpunkt ist ein Betriebsproblem, kein reines
+                // Anzeigedetail.
+                meldeAnServer('Health-API: ' + fehlerText, 'health');
             } finally {
                 clearTimeout(timeoutId);
                 healthRequestActive = false;
@@ -1663,7 +1715,15 @@
                 updateAnalysisCard();
             } catch (error) {
                 analysisData = null;
-                updateAnalysisCard(error.name === 'AbortError' ? 'Analyse-Zeitüberschreitung' : (error.message || 'Analyse nicht verfügbar'));
+                const fehlerText = error.name === 'AbortError'
+                    ? 'Analyse-Zeitüberschreitung' : (error.message || 'Analyse nicht verfügbar');
+                updateAnalysisCard(fehlerText);
+                // Ins Steuerungs-Log (1.10.29) - AUSSER 404: ein fehlender
+                // Bericht ist kein Fehler der Steuerung, sondern heisst nur,
+                // dass `wp-analyse.timer` noch nicht gelaufen ist.
+                if (!/404/.test(fehlerText)) {
+                    meldeAnServer('Analyse: ' + fehlerText, 'analyse');
+                }
             } finally {
                 clearTimeout(timeoutId);
                 analysisRequestActive = false;
@@ -1765,8 +1825,10 @@
                     errorMsg.textContent = '';
                 }
             } catch (error) {
+                // Kein zweites "Statusabruf" im Text: Leiste und Logzeile
+                // setzen das Praefix selbst ("Statusabruf: ...").
                 const fehlerText = error.name === 'AbortError'
-                    ? 'Statusabruf Zeitüberschreitung'
+                    ? 'Zeitüberschreitung'
                     : (error.message || 'Unbekannter Fehler');
                 if (error.name !== 'AbortError') {
                     console.error('Fehler beim Abrufen der Daten:', error);
@@ -1774,7 +1836,7 @@
                 // Auch sichtbar machen: Hier landet AUCH ein Fehler aus
                 // renderApp()/updateValues() - dann sind die Daten da, die
                 // Anzeige bleibt aber leer.
-                zeigeJsFehler('Statusabruf: ' + fehlerText);
+                zeigeJsFehler('Statusabruf: ' + fehlerText, 'status');
                 updateConnectionStatus(false);
                 if (errorPanel && errorMsg) {
                     errorMsg.textContent = fehlerText;
@@ -1939,6 +2001,10 @@
                 // ueberschreiben.
                 if (error.name !== 'AbortError') {
                     console.error('Fehler beim Laden der Historie:', error);
+                    // Sichtbar UND ins Steuerungs-Log (1.10.29): Ohne die
+                    // Historie bleibt der Verlauf leer - das sieht wie "keine
+                    // Daten" aus, obwohl /status Werte liefert.
+                    zeigeJsFehler('Historie: ' + (error.message || 'unbekannter Fehler'), 'historie');
                     // Fallback: leeren Chart erstellen falls API fehlschlaegt
                     if (!chart) createChart();
                 }
@@ -2255,6 +2321,10 @@
                 await fetchStatus();
             } catch (error) {
                 console.error('Fehler beim Senden des Befehls:', error);
+                // Ins Steuerungs-Log (1.10.29): Ein gescheiterter Befehl ist
+                // die wichtigste Fehlerklasse ueberhaupt - der Nutzer denkt,
+                // er haette geschaltet, und es ist nichts passiert.
+                meldeAnServer('Steuerbefehl: ' + (error.message || 'Unbekannter API-Fehler'), 'befehl');
                 showControlFeedback(error.message || 'Unbekannter API-Fehler', true);
                 const errorPanel = document.getElementById('error-panel');
                 const errorMsg = document.getElementById('error-message');
@@ -3650,11 +3720,15 @@
             // Initial load mit Fehlerbehandlung
             fetchStatus().catch(error => {
                 console.error('Initial fetch failed:', error);
+                const fehlerText = 'Initial load failed: ' + (error.message || 'Unbekannter Fehler');
+                // Ins Steuerungs-Log (1.10.29): Der Startabruf ist der
+                // einzige, den der Nutzer als "App laedt nicht" erlebt.
+                meldeAnServer(fehlerText, 'status');
                 // Zeige Fehler auf der Seite an
                 const errorPanel = document.getElementById('error-panel');
                 const errorMsg = document.getElementById('error-message');
                 if (errorPanel && errorMsg) {
-                    errorMsg.textContent = 'Initial load failed: ' + (error.message || 'Unbekannter Fehler');
+                    errorMsg.textContent = fehlerText;
                     errorPanel.style.display = 'block';
                 }
             }).then(() => {
@@ -3711,7 +3785,14 @@
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('service-worker.js')
-                .catch(err => console.error('Service Worker registration failed:', err));
+                .catch(err => {
+                    console.error('Service Worker registration failed:', err);
+                    // Ins Steuerungs-Log (1.10.29): Ohne Service Worker fehlt
+                    // die Offline-Huelle - die App bleibt offline leer, ohne
+                    // dass im Betriebslog ein Grund steht.
+                    meldeAnServer('Service-Worker-Registrierung: '
+                        + (err && err.message ? err.message : String(err)), 'sw');
+                });
         }
     </script>
 </body>

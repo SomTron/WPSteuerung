@@ -52,6 +52,14 @@ class TelegramHandler(logging.Handler):
 
     def emit(self, record):
         try:
+            # Reine Diagnose-Meldungen (z. B. WebApp-Fehler aus dem Browser)
+            # gehoeren in die Logdateien, nicht aufs Handy: ein Handy im
+            # Funkloch erzeugt sonst alle 5 Minuten ein Timeout - und damit
+            # eine Telegram-Nachricht nach der anderen. Der Aufrufer setzt
+            # dafuer `extra={"kein_telegram": True}` (s. api.py
+            # `/debug/clientfehler`).
+            if getattr(record, "kein_telegram", False):
+                return
             msg = self.format(record)
             if self.loop is None:
                 try:

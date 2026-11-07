@@ -81,6 +81,21 @@ standen längst bereit. Es war reine I/O-Last.
   gedrosselt auf 5 min). Er ist das Frühwarnsystem, falls wieder etwas
   Teures in den Request-Pfad gerät.
 
+**Nachgezogen (07.11.2026): jede WebApp-Fehlermeldung steht im Log.**
+Bisher meldeten nur der Statusabruf und unbehandelte JS-/Promise-Fehler an
+`/debug/clientfehler`; Fehler aus `/errors`, `/health`, `/analysis/quality`,
+`/history`, `/control`, fehlende DOM-Elemente (`setText`/`#app`) und die
+Service-Worker-Registrierung blieben in der Browser-Konsole bzw. auf der
+Karte stehen. Jetzt geht jeder dieser Pfade ins Steuerungs-Log; das
+`typ`-Feld (`status`, `historie`, `health`, `analyse`, `errors`, `befehl`,
+`ui`, `sw`) ordnet die Zeile ein. Gedrosselt wird zweistufig: im Client
+60 s je Text (sonst 12 POSTs/Minute beim 5-s-Poll), im Server 5 min je
+Meldung. Die Meldungen tragen `kein_telegram` – ohne diese Markierung
+würde ein Handy im Funkloch im Poll-Takt Telegram-Nachrichten erzeugen.
+WebApp-Version 1.10.29, Shell-Cache v9. Vertragstests:
+`tests/test_webapp_fehlerleiste.py`, `test_clientfehler_geht_nicht_an_telegram`,
+`test_telegram_ueberspringt_reine_diagnose_meldungen`.
+
 **Umgesetzt (W1, 24.10.2026):** Das Status-Polling plant bei verstecktem Tab
 oder offline sofort auf `HIDDEN_POLL_INTERVAL_MS = 30 s` um. Vorher lief der
 5-s-Timer weiter, obwohl gar kein Request gemacht wurde (Timer-Wakeups,

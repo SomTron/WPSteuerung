@@ -2150,8 +2150,14 @@ def client_fehler(fehler: ClientFehler):
         version = fehler.version or "?"
         if not _darf_melden("client:" + text[:120]):
             return {"ok": True, "geloggt": False, "grund": "gedrosselt"}
+        # `kein_telegram`: Die Meldung gehoert ins Log, ist aber kein
+        # Betriebsalarm. Ohne diese Markierung wuerde der TelegramHandler
+        # (haengt ab WARNING am Root) bei einem Handy im Funkloch im
+        # 5-Minuten-Takt Nachrichten schicken.
         logging.warning(
-            "WebApp-Fehler (Seite %s, Version %s): %s", seite, version, text
+            "WebApp-Fehler (Seite %s, Version %s): %s",
+            seite, version, text,
+            extra={"kein_telegram": True},
         )
         return {"ok": True, "geloggt": True}
     except Exception:

@@ -3,9 +3,13 @@
  * - cachel nur die statische App-Hülle
  * - /status, /history und Steuernachrichten bleiben immer live im Netz
  */
+// v9 (07.11.2026): WebApp-Fehler gehen aus jedem Abrufpfad ins
+// Steuerungs-Log (1.10.29) - die Huelle muss beim naechsten Besuch neu
+// geladen werden, sonst meldet die alte Version weiterhin nur den
+// Statusabruf.
 // v8 (24.10.2026): Hintergrund-Polling auf 30 s gedrosselt - die Huelle
 // muss beim naechsten Besuch neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v8';
+const CACHE_NAME = 'wp-webapp-shell-v9';
 const APP_SHELL = [
     './',
     './index.html',
