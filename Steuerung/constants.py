@@ -122,7 +122,7 @@ SOLAR_REFRESH_INTERVAL_SEC: int = 60
 # open-meteo = 2: zwei aufeinanderfolgende Fehlversuche im Abstand
 # von 15 Minuten. Ein einzelner Fehlversuch ist normal (Netzblaupause,
 # Rate-Limit); zwei hintereinander sind ein Muster.
-API_FEHLER_SCHWELLE: dict = {
+API_FEHLER_SCHWELLE: dict[str, int] = {
     "solax": 25,
     "open-meteo": 2,
 }

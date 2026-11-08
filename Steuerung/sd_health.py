@@ -110,7 +110,7 @@ def dateisystem_fehler() -> Optional[int]:
     return None
 
 
-def schreibtest(verzeichnis: str) -> Dict:
+def schreibtest(verzeichnis: str) -> Dict[str, object]:
     """Schreibt, liest und loescht eine kleine Testdatei.
 
     Erkennt eine Karte, auf der nicht mehr geschrieben werden kann.
@@ -142,7 +142,7 @@ def schreibtest(verzeichnis: str) -> Dict:
     return ergebnis
 
 
-def csv_konsistenz(csv_pfad: str, mindest_zeilen: int = 1) -> Dict:
+def csv_konsistenz(csv_pfad: str, mindest_zeilen: int = 1) -> Dict[str, object]:
     """Prueft, ob die Heizungsdaten-CSV lesbar und plausibel ist.
 
     Ein leeres oder abgeschnittenes Log waere ein stummer Datenverlust -
@@ -180,7 +180,7 @@ def pruefe(
     daten_verzeichnis: str,
     csv_pfad: str = "",
     dmesg_zeilen: Optional[List[str]] = None,
-) -> Dict:
+) -> Dict[str, object]:
     """Fuehrt die gesamte Pruefung durch. Liefert einen Status-Dict.
 
     `sd_ok` ist True, wenn kein Warnzeichen gefunden wurde. Die einzelnen

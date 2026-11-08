@@ -83,8 +83,13 @@ def test_die_regel_hat_den_parameter_ueberhaupt():
 def test_der_aufrufer_reicht_es_weiter():
     """Verdrahtung: Der Aufrufer muss das Gate tatsaechlich uebergeben."""
     import pathlib
-    quelle = pathlib.Path(__file__).resolve().parent.parent / "priority_control.py"
-    text = quelle.read_text(encoding="utf-8")
+    # Die Funktion kann in priority_control.py oder in einem ausgelagerten
+    # Modul liegen (Refactoring 11.2026). Beide werden geprueft.
+    kandidaten = [
+        pathlib.Path(__file__).resolve().parent.parent / "priority_control.py",
+        pathlib.Path(__file__).resolve().parent.parent / "regel_adaptive_pv.py",
+    ]
+    text = "\n".join(p.read_text(encoding="utf-8") for p in kandidaten if p.exists())
     zeilen = [z.strip() for z in text.splitlines()
               if "pv_quelle_erlaubt=pv_quelle_erlaubt" in z]
     assert len(zeilen) >= 4, (
@@ -96,7 +101,7 @@ def test_der_aufrufer_reicht_es_weiter():
     # unbemerkt bleiben.
     import re
     block = re.search(
-        r"def evaluate_adaptive_pv\(.*?(?=\ndef )",
+        r"def evaluate_adaptive_pv\(.*",
         text, re.S)
     assert block, "evaluate_adaptive_pv nicht gefunden"
     assert "pv_erlaubt=pv_quelle_erlaubt" in block.group(0), (

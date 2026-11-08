@@ -1,3 +1,8 @@
+"""Hauptmodul der WPSteuerung.
+
+Enthaelt den Main-Loop, die Regelungs-Orchestrierung und die
+Initialisierung aller Subsysteme.
+"""
 import asyncio
 from collections import deque
 

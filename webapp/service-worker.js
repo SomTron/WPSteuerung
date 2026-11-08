@@ -9,7 +9,10 @@
 // Statusabruf.
 // v8 (24.10.2026): Hintergrund-Polling auf 30 s gedrosselt - die Huelle
 // muss beim naechsten Besuch neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v9';
+// v10 (08.11.2026): WebApp meldet Fehler mit API-Key (1.10.30) und
+// escaped HTML in innerHTML-Einbettungen - die Huelle muss neu geladen
+// werden, sonst laeuft die alte Fassung weiter.
+const CACHE_NAME = 'wp-webapp-shell-v10';
 const APP_SHELL = [
     './',
     './index.html',

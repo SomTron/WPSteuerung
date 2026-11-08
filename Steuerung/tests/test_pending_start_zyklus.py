@@ -57,7 +57,7 @@ def _state():
     st.control = SimpleNamespace(
         kompressor_ein=False,
         _soll_einschalten=True,
-        requested_rule_name='CalcStart',
+        requested_rule_name='CalcStart-Abend',
         previous_modus='Abweichung',
         source_current='PV',
         _pending_start_rule=None,
@@ -165,7 +165,7 @@ async def test_pending_wird_aktuell_gefuellt():
         timedelta(minutes=60), timedelta(minutes=20), 45.0, 42.0, setz,
     )
     # Der aktuelle Gewinner, nicht die Altlast
-    assert gesetzt.get('gelesen') == 'CalcStart', gesetzt
+    assert gesetzt.get('gelesen') == 'CalcStart-Abend', gesetzt
 
 
 if __name__ == "__main__":

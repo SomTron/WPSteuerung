@@ -47,7 +47,7 @@ def test_andere_regeln_bleiben_unberuehrt():
     assert pcl._ist_pv_gesteuerter_lauf("Legionellen", "PV") is False
     assert pcl._ist_pv_gesteuerter_lauf("Einspeisung", None) is True
     assert pcl._ist_pv_gesteuerter_lauf("AdaptivePV", None) is True
-    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "PV") is True
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart-Abend", "PV") is True
     assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "Netz") is False
     assert pcl._ist_pv_gesteuerter_lauf("Abweichung", "PV") is True
     assert pcl._ist_pv_gesteuerter_lauf("Abweichung", "Netz") is False

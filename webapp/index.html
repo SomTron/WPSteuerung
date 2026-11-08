@@ -1281,7 +1281,11 @@
                     method: 'POST',
                     cache: 'no-store',
                     keepalive: true,
-                    headers: { 'Content-Type': 'application/json' },
+                    // apiHeaders(): Der Endpunkt ist seit dem Security-Audit
+                    // (11/2026) API-Key-pflichtig. Ohne den Header antwortet der
+                    // Server mit 401 (Key gesetzt) bzw. 503 (Key leer) - und die
+                    // Meldung waere genau dann unsichtbar, wenn sie gebraucht wird.
+                    headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({
                         meldung: meldung,
                         typ: String(typ || 'webapp').slice(0, 80),
@@ -1306,7 +1310,9 @@
         // Bei jedem Release mit dem Log-Verzeichnisnamen abgleichen.
         // 1.10.29: WebApp-Fehler gehen jetzt aus JEDEM Abrufpfad ins
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
-        const APP_VERSION = '1.10.29';
+        // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
+        // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
+        const APP_VERSION = '1.10.30';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -1357,6 +1363,19 @@
         }
         setText.gemeldet = false;
 
+        // Escaped einen beliebigen Text fuer die sichere Einbettung in innerHTML.
+        // Verhindert, dass aus der API/Config stammende Strings (Regelnamen,
+        // Saison, Wochentagskuerzel) HTML/JS einschleusen koennen.
+        function escapeHtml(wert) {
+            if (wert == null) return '';
+            var s = String(wert);
+            s = s.split(String.fromCharCode(38)).join(String.fromCharCode(38) + 'amp;');
+            s = s.split(String.fromCharCode(60)).join(String.fromCharCode(38) + 'lt;');
+            s = s.split(String.fromCharCode(62)).join(String.fromCharCode(38) + 'gt;');
+            s = s.split(String.fromCharCode(34)).join(String.fromCharCode(38) + 'quot;');
+            return s;
+        }
+
         // Geschwister zu setText, gleiche Begruendung: ein null-Element
         // waere sonst ein TypeError mitten in einer Aktualisierung.
         function setClass(id, wert) {
@@ -1392,9 +1411,11 @@
 
         function apiHeaders(extra = {}) {
             // Der Key wird grundsaetzlich an JEDEN API-Aufruf mitgeschickt.
-            // Serverseitig ist er nur fuer Schreib-/Exportrouten Pflicht
-            // (api.py: _check_api_key bei /config, /command, Export, Debug-CSV);
-            // die Leserouten /status, /health, /history sind absichtlich offen.
+            // Serverseitig ist er fuer die schreibenden Routen (/config,
+            // /command, /control) und - seit dem Security-Audit 11/2026 - auch
+            // fuer /errors und die /debug/*-Endpunkte Pflicht (api.py:
+            // _check_api_key). Offen bleiben nur die Leserouten /status,
+            // /health, /history und /analysis.
             // Durch das mitschleusen bleibt die WebApp aber konsistent und
             // funktionsfaehig, falls eine Leseroute spaeter geschuetzt wird.
             const headers = Object.assign({}, extra);
@@ -2495,9 +2516,9 @@
                                             : (puffer < 0 ? '#e57373' : (puffer < 0.5 ? '#ffa726' : '#4caf50'));
                                         return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary);' +
                                             (e.dringendste ? 'font-weight:600;color:var(--text-primary);' : '') + '">' +
-                                            '<span style="min-width:64px">' + (e.dringendste ? '&rarr; ' : '') + e.name + '</span>' +
+                                            '<span style="min-width:64px">' + (e.dringendste ? '&rarr; ' : '') + escapeHtml(e.name) + '</span>' +
                                             '<span>Start ' + formatCalcHour(e.start_uhr) + ' &rarr; ' + formatCalcHour(e.ziel_uhr) + '</span>' +
-                                            '<span>' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + e.temperaturfuehler + '</span>' +
+                                            '<span>' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(e.temperaturfuehler) + '</span>' +
                                             '<span style="color:' + farbe + '">' + pufferTxt + '</span>' +
                                             (e.erreichbar === false ? '<span style="color:#e57373">Ziel kaum erreichbar</span>' : '') +
                                             '</div>';
@@ -2872,14 +2893,14 @@
                         ? 'Haushalt je Wochentag (' + saison + ', Tagesbilanz, Median):'
                         : 'Haushalt je Wochentag (Tagesbilanz, Median) - noch keine Werte fuer ' + saison + ':';
                     const maxW = Math.max(1, ...gezeigt.map(x => x.w));
-                    hw.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:3px">' + hinweis + '</div>'
+                    hw.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:3px">' + escapeHtml(hinweis) + '</div>'
                         + '<div style="display:flex;gap:4px;align-items:flex-end;height:34px">'
                         + gezeigt.map(x => {
                             const h = Math.max(4, Math.round(x.w / maxW * 30));
                             return '<div style="flex:1;text-align:center">'
-                                + '<div title="' + x.nm + ' (' + (x.sais || 'alle') + '): ' + Math.round(x.w) + ' Wh" style="height:' + h
+                                + '<div title="' + escapeHtml(x.nm) + ' (' + escapeHtml(x.sais || 'alle') + '): ' + Math.round(x.w) + ' Wh" style="height:' + h
                                 + 'px;background:var(--accent,#3b82f6);border-radius:2px"></div>'
-                                + '<div style="font-size:0.65rem;color:var(--text-secondary)">' + x.nm + '</div>'
+                                + '<div style="font-size:0.65rem;color:var(--text-secondary)">' + escapeHtml(x.nm) + '</div>'
                                 + '</div>';
                         }).join('')
                         + '</div>'

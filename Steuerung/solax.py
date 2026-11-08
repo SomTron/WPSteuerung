@@ -4,7 +4,7 @@ import asyncio
 import aiohttp
 from datetime import timedelta
 from clock import now_for
-from typing import Optional
+from typing import Any, Dict, Optional, cast
 import pytz
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from constants import (
@@ -32,18 +32,20 @@ class SolaxRealtime(BaseModel):
 
     @field_validator("*", mode="before")
     @classmethod
-    def _finite_number(cls, value):
+    def _finite_number(cls, value: object) -> Optional[float]:
         if value is None or value == "":
             return None
         if isinstance(value, bool):
             raise ValueError("bool ist kein Solar-Messwert")
-        number = float(value)
+        # Die API liefert Zahlen als str oder float; cast statt ignore, weil
+        # der Typ hier bewusst erst zur Laufzeit feststeht.
+        number = float(cast(Any, value))
         if not math.isfinite(number):
             raise ValueError("Solar-Messwert ist nicht endlich")
         return number
 
 
-async def get_solax_data(session, state):
+async def get_solax_data(session: object, state: object) -> Optional[Dict[str, Any]]:
     """
     Holt aktuelle Solax-Daten mit Freshness-Check.
     Gibt None zurück wenn Daten zu alt sind (>15 min) oder API nicht erreichbar.
@@ -69,7 +71,10 @@ async def get_solax_data(session, state):
 
     # Gib gecachte Daten zurück wenn noch frisch genug
     if state.solar.last_api_call and (now - state.solar.last_api_call) < CACHE_TTL:
-        return state.solar.last_api_data
+        # isinstance statt direktem Durchreichen: last_api_data ist Any und
+        # der Rückgabetyp verspricht ein dict (mypy: no-any-return).
+        gecacht = state.solar.last_api_data
+        return gecacht if isinstance(gecacht, dict) else None
 
     max_retries = SOLAX_MAX_RETRIES
     # Die Wartezeit kommt aus constants.py, damit die Retry-Logik in Tests
@@ -103,9 +108,10 @@ async def get_solax_data(session, state):
                     except (ValidationError, TypeError, ValueError) as exc:
                         logging.error("Solax-API lieferte ein ungültiges Realtime-Schema: %s", exc)
                         return None
-                    state.solar.last_api_data = validated.model_dump(exclude_none=True)
+                    daten = validated.model_dump(exclude_none=True)
+                    state.solar.last_api_data = daten
                     state.solar.last_api_call = now
-                    return state.solar.last_api_data
+                    return daten
                 else:
                     logging.error(f"API-Fehler: {data.get('exception', 'Unbekannter Fehler')}")
                     return None
@@ -127,7 +133,7 @@ async def get_solax_data(session, state):
                 return None
     return None
 
-async def fetch_solax_data(session, state):
+async def fetch_solax_data(session: object, state: object) -> Dict[str, Any]:
     """
     Holt die aktuellen Solax-Daten und gibt sie mit Fallback-Werten zurück.
     """

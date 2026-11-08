@@ -24,17 +24,19 @@ def lern_engine():
 
 
 def test_endpunkt_ohne_engine_meldet_verfuegbar_false(monkeypatch):
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
     monkeypatch.setattr(api, "shared_state", SimpleNamespace(
         learning_engine=None))
-    antwort = api.debug_lernstand()
+    antwort = api.debug_lernstand(x_api_key="test-secret")
     assert antwort["verfuegbar"] is False
     assert "grund" in antwort
 
 
 def test_endpunkt_zeigt_die_gelernten_aggregate(monkeypatch, lern_engine):
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
     monkeypatch.setattr(api, "shared_state", SimpleNamespace(
         learning_engine=lern_engine))
-    antwort = api.debug_lernstand()
+    antwort = api.debug_lernstand(x_api_key="test-secret")
     assert antwort["verfuegbar"] is True
     # Die Zaehler der Rohdaten muessen vorhanden sein
     assert "eintraege" in antwort
@@ -149,8 +151,9 @@ def test_endpunkt_zaehlt_die_echten_eintraege(monkeypatch, lern_engine):
                     hausverbrauch_watt=400.0,
                     hausverbrauch_stunden_profil=True,
                 )
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
     monkeypatch.setattr(api, "shared_state", SimpleNamespace(
         learning_engine=lern_engine))
-    antwort = api.debug_lernstand()
+    antwort = api.debug_lernstand(x_api_key="test-secret")
     assert antwort["eintraege"]["surplus_by_hour"] == 24 * 3
     assert antwort["eintraege"]["tages_haushalt"] >= 1

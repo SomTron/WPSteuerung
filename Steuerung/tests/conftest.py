@@ -125,7 +125,13 @@ def isolate_status_caches():
     api._ENTSCHEIDUNGEN_KPI_CACHE["entscheidungen"] = []
     api._ENTSCHEIDUNGEN_KPI_CACHE["kpi"] = {}
     api._entscheidungen_refresh_laeuft = False
+    # API-Key zwischen Tests zuruecksetzen (Security-Audit: Debug-Endpoints
+    # sind jetzt geschuetzt; ein Test, der den Key setzt, darf nicht in
+    # spaetere Tests hineinwirken).
+    _alter_api_key = getattr(api, "API_KEY", "")
+    api.API_KEY = ""
     yield
+    api.API_KEY = _alter_api_key
 
 
 @pytest.fixture(autouse=True)

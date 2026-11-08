@@ -13,6 +13,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wpsteuerung.app.R
+import com.wpsteuerung.app.data.local.Einstellungen
 import com.wpsteuerung.app.viewmodel.DashboardUiState
 import com.wpsteuerung.app.viewmodel.DashboardViewModel
 
@@ -119,6 +120,17 @@ fun DashboardScreen(
                     )
                 }
 
+                if (!Einstellungen.baseUrlGesetzt) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Server-URL nicht konfiguriert - es wird der " +
+                            "Emulator-Default (localhost) verwendet. Fuer echte " +
+                            "Geraete (IP oder Tailscale-URL) in den Einstellungen eintragen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
                 OutlinedTextField(
@@ -138,6 +150,18 @@ fun DashboardScreen(
                 ) {
                     Text(stringResource(R.string.verbindung_speichern))
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Server-URL (IP oder Tailscale). Leer = Emulator-Default.
+                OutlinedTextField(
+                    value = Einstellungen.baseUrl,
+                    onValueChange = { Einstellungen.baseUrl = it },
+                    label = { Text("Server-URL") },
+                    singleLine = true,
+                    placeholder = { Text("http://10.0.2.2:5000/ oder https://hostname.ts.net") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 

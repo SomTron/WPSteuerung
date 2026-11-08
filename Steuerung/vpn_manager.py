@@ -2,13 +2,14 @@ import asyncio
 import ipaddress
 import logging
 import sys
+from typing import Optional
 
 
 VPN_INTERFACE = "wg0"
 VPN_CHECK_TIMEOUT_SEC = 5.0
 
 
-def _set_vpn_ip(state, ip):
+def _set_vpn_ip(state: object, ip: Optional[str]) -> None:
     """Statusaktualisierung mit Logging nur bei tatsaechlicher Aenderung."""
     if ip and state.vpn_ip != ip:
         logging.info("VPN Status: Verbunden (%s)", ip)
@@ -17,7 +18,7 @@ def _set_vpn_ip(state, ip):
     state.vpn_ip = ip
 
 
-def _ipv4_from_ip_output(output):
+def _ipv4_from_ip_output(output: str) -> Optional[str]:
     """Erste gueltige IPv4-Adresse aus der kompakten Ausgabe von ``ip -o`` lesen."""
     for line in output.splitlines():
         parts = line.split()
@@ -29,7 +30,7 @@ def _ipv4_from_ip_output(output):
     return None
 
 
-async def check_vpn_status(state):
+async def check_vpn_status(state: object) -> None:
     """
     Prueft, ob das WireGuard-Interface (wg0) aktiv ist und extrahiert die IP-Adresse.
     Aktualisiert state.vpn_ip. Der Prozess wird ohne Shell und mit Timeout ausgefuehrt,

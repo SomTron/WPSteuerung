@@ -34,7 +34,7 @@ _TIMEOUT_S = 5
 _cache = {}
 
 
-def _git(*args) -> str:
+def _git(*args: str) -> str:
     """git-Aufruf im Repo; leerer String bei jedem Fehler (Robust-Fallback)."""
     try:
         aus = subprocess.run(
@@ -51,7 +51,7 @@ def kurz_hash() -> str:
     if "hash" not in _cache:
         env = str(os.environ.get("WPS_GIT_REVISION", "")).strip()
         _cache["hash"] = env[:40] if env else _git("rev-parse", "--short", "HEAD")
-    return _cache["hash"]
+    return str(_cache["hash"])
 
 
 def kennung() -> str:
@@ -70,7 +70,7 @@ def kennung() -> str:
                 "status", "--porcelain", "--untracked-files=no", "--", "*.py"
             )
             _cache["kennung"] = f"{hash_wert}+" if geaendert else hash_wert
-    return _cache["kennung"]
+    return str(_cache["kennung"])
 
 
 def startup_text() -> str:

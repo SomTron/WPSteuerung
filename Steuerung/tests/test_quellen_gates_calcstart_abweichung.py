@@ -230,7 +230,7 @@ class TestCalcStartVerdrahtung:
             forecast_today_wh_qm=None,
             soc=soc,
         )
-        return [e for e in alle if e.name == "CalcStart"][0]
+        return [e for e in alle if e.name == "CalcStart-Abend"][0]
 
     def test_netzfallback_wird_am_spaetesten_start_ausgefuehrt(self):
         cs = self._ergebnisse(feedin=0.0, soc=None)

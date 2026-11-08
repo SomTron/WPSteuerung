@@ -121,15 +121,15 @@ def test_calcstart_nutzt_pv_mindestlaufzeit_nur_mit_solarquelle():
                 )
             ),
             control=SimpleNamespace(
-                active_rule_name=None, _lauf_start_regel="CalcStart",
+                active_rule_name=None, _lauf_start_regel="CalcStart-Abend",
                 source_at_start=quelle,
             ),
         )
 
-    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "PV") is True
-    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "batterie") is True
-    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", "Netz") is False
-    assert pcl._ist_pv_gesteuerter_lauf("CalcStart", None) is False
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart-Abend", "PV") is True
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart-Abend", "batterie") is True
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart-Abend", "Netz") is False
+    assert pcl._ist_pv_gesteuerter_lauf("CalcStart-Abend", None) is False
     # Andere Regeln bleiben unveraendert (auch ohne Quellenangabe)
     assert pcl._ist_pv_gesteuerter_lauf("AdaptivePV") is True
     assert pcl._ist_pv_gesteuerter_lauf("Einspeisung") is True
@@ -137,11 +137,11 @@ def test_calcstart_nutzt_pv_mindestlaufzeit_nur_mit_solarquelle():
 
     # PV-Lauf: kurze Mindestlaufzeit; Netz-Notfall und unbekannte Quelle: voll
     assert pcl._effektive_mindestlaufzeit(
-        _state_mit_quelle("PV"), basis, "CalcStart") == timedelta(minutes=10)
+        _state_mit_quelle("PV"), basis, "CalcStart-Abend") == timedelta(minutes=10)
     assert pcl._effektive_mindestlaufzeit(
-        _state_mit_quelle("Netz"), basis, "CalcStart") == basis
+        _state_mit_quelle("Netz"), basis, "CalcStart-Abend") == basis
     assert pcl._effektive_mindestlaufzeit(
-        _state_mit_quelle(None), basis, "CalcStart") == basis
+        _state_mit_quelle(None), basis, "CalcStart-Abend") == basis
 
 
 if __name__ == "__main__":

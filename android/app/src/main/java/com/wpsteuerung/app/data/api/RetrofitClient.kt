@@ -10,9 +10,12 @@ import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
     
-    // Local test server (api_server.py)
-    private const val BASE_URL = "http://10.0.2.2:5000/"  // Android Emulator -> localhost
-    // For physical device on same network, use: "http://YOUR_PC_IP:5000/"
+    // Basis-URL aus den Einstellungen. Ist keine gesetzt (erster Start),
+    // faellt auf den Emulator-Default zurueck, damit Entwicklung weiter
+    // funktioniert. Fuer echte Geraete die URL in den Einstellungen eintragen
+    // (IP oder Tailscale-URL, z. B. https://hostname.ts.net).
+    private val baseUrl: String
+        get() = Einstellungen.baseUrl.ifBlank { "http://10.0.2.2:5000/" }
     
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         // HEADERS statt BODY, um die Antwortkoerper nicht vollstaendig zu
@@ -47,11 +50,12 @@ object RetrofitClient {
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
     
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
-        .client(okHttpClient)
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
-    
-    val apiService: WPApiService = retrofit.create(WPApiService::class.java)
+    val apiService: WPApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(WPApiService::class.java)
+    }
 }

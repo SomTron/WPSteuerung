@@ -195,12 +195,12 @@ def test_calcstart_startet_am_fensterende_und_nicht_spaeter():
     )
 
     # 16:35, Puffer ~1,6 h: ohne Fenster -> "Puffer reicht, warte auf PV"
-    ohne = _allel(config, pv_fenster_stunde=None, **gemeinsam)["CalcStart"]
+    ohne = _allel(config, pv_fenster_stunde=None, **gemeinsam)["CalcStart-Abend"]
     assert ohne.einschalten is None, ohne.grund
     assert "warte" in ohne.grund, ohne.grund
 
     # Mit Fenster (letzte Stunde 16 Uhr, Reserve 30 min) -> Spaetest-Start
-    mit = _allel(config, pv_fenster_stunde=16.0, **gemeinsam)["CalcStart"]
+    mit = _allel(config, pv_fenster_stunde=16.0, **gemeinsam)["CalcStart-Abend"]
     assert mit.einschalten is True, mit.grund
     assert "SPAETEST-START" in mit.grund, mit.grund
 
@@ -208,7 +208,7 @@ def test_calcstart_startet_am_fensterende_und_nicht_spaeter():
     frueh = _allel(
         config, pv_fenster_stunde=16.0,
         **{**gemeinsam, "now": datetime(2026, 12, 8, 12, 0)}
-    )["CalcStart"]
+    )["CalcStart-Abend"]
     assert frueh.einschalten is None, frueh.grund
 
 

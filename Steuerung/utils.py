@@ -1,3 +1,8 @@
+"""Hilfsfunktionen: Zeitkonvertierung, CSV-Header-Pruefung, Backup.
+
+Stellt to_naive(), check_and_fix_csv_header() und weitere
+Utility-Funktionen bereit.
+"""
 from datetime import datetime, timedelta
 import math
 import pytz
@@ -5,7 +10,7 @@ import logging
 
 import shutil
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 
 def to_naive(dt: datetime) -> datetime:
@@ -146,7 +151,7 @@ def safe_timedelta(now: datetime, timestamp: datetime, local_tz: pytz.BaseTzInfo
         return default
 
 
-def safe_float(value, default=0.0, field_name="unknown"):
+def safe_float(value: object, default: float = 0.0, field_name: str = "unknown") -> float:
     """
     Safely convert value to float with comprehensive validation.
     
@@ -193,7 +198,7 @@ def safe_float(value, default=0.0, field_name="unknown"):
 
 # ── CSV-Monatsrotation ────────────────────────────────────────────────
 
-def _parse_zeitstempel_aus_csv_zeile(zeile: str, delimiter: str = ","):
+def _parse_zeitstempel_aus_csv_zeile(zeile: str, delimiter: str = ",") -> Optional[datetime]:
     """Erste Spalte einer Datenzeile als datetime parsen (oder None)."""
     try:
         erste = zeile.split(delimiter, 1)[0].strip().lstrip("\ufeff")
@@ -202,7 +207,7 @@ def _parse_zeitstempel_aus_csv_zeile(zeile: str, delimiter: str = ","):
         return None
 
 
-def _letzter_csv_zeitstempel(csv_path: str, delimiter: str = ","):
+def _letzter_csv_zeitstempel(csv_path: str, delimiter: str = ",") -> Optional[datetime]:
     """Letzten parsebaren Zeitstempel lesen (nur ~4KB vom Dateiende)."""
     groesse = os.path.getsize(csv_path)
     with open(csv_path, "rb") as f:
@@ -218,7 +223,7 @@ def _letzter_csv_zeitstempel(csv_path: str, delimiter: str = ","):
     return None
 
 
-def rotiere_csv_monatlich(csv_path: str = None, heute: datetime = None, delimiter: str = ","):
+def rotiere_csv_monatlich(csv_path: Optional[str] = None, heute: Optional[datetime] = None, delimiter: str = ",") -> Optional[str]:
     """Archiviert heizungsdaten.csv nach Monatswechsel (Schutz gegen Endwachstum).
 
     Stammt der letzte Eintrag aus einem frueheren Monat als 'heute', wird die

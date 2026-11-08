@@ -52,7 +52,7 @@ def _state():
         _lauf_start_regel='Einspeisung',
         source_at_start='PV',
         source_current='PV',
-        requested_rule_name='CalcStart',
+        requested_rule_name='CalcStart-Abend',
         previous_modus='Abweichung',
         zyklus_id=3,
         _legionellen_verify_checks=set(),
@@ -88,12 +88,12 @@ async def test_aktuelle_regel_ohne_pending_wird_gesetzt(monkeypatch):
     ok = await main.set_kompressor_status(st, True)
     assert ok is True
 
-    assert st.control.active_rule_name == 'CalcStart', (
+    assert st.control.active_rule_name == 'CalcStart-Abend', (
         "active_rule_name traegt noch den Regelnamen des vorherigen Laufs: "
         f"{st.control.active_rule_name!r}"
     )
-    assert st.control.effective_rule_name == 'CalcStart'
-    assert st.control._lauf_start_regel == 'CalcStart'
+    assert st.control.effective_rule_name == 'CalcStart-Abend'
+    assert st.control._lauf_start_regel == 'CalcStart-Abend'
 
 
 @pytest.mark.asyncio

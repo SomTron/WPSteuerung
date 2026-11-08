@@ -1333,7 +1333,7 @@ def _extract_einschaltpunkt(
         if isinstance(t_max, (int, float)) and not isinstance(t_max, bool):
             return float(t_max) - 3.0
         return config.sicherheit.max_temp_c
-    elif name == "CalcStart":
+    elif name.startswith("CalcStart"):
         return config.calculated_start.solltemperatur_c
     elif name.startswith("MinTemp-"):
         for eintrag in config.mindest_temp.eintraege:
@@ -1431,7 +1431,7 @@ def _extract_ausschaltpunkt(
         return config.forecast.tmax_c
     elif name == "AdaptivePV":
         return config.adaptive_pv.tmax_c
-    elif name == "CalcStart":
+    elif name.startswith("CalcStart"):
         return config.calculated_start.tmax_c
     elif name.startswith("MinTemp-"):
         for eintrag in config.mindest_temp.eintraege:
@@ -1671,7 +1671,7 @@ def _logge_heizplan(
         return
 
     # Kompressor aus: den berechneten naechsten Start melden.
-    calc = next((e for e in (alle_ergebnisse or []) if e.name == "CalcStart"), None)
+    calc = next((e for e in (alle_ergebnisse or []) if e.name.startswith("CalcStart")), None)
     plan = (calc.regel_dict or {}) if calc is not None else {}
     geplant = plan.get("planned_start_hour")
     if geplant is None:
@@ -2236,7 +2236,7 @@ def _boiler_max_kontext(state, lauf_regel=None, gewinner_regel=None) -> str:
 
 #: Regeln, bei denen die Startquelle ueber die Mindestlaufzeit entscheidet:
 #: mit PV/Batterie gilt die kurze PV-Schutzzeit, mit Netz die volle.
-_QUELLENABHAENGIGE_MINDESTLAUFZEIT_REGELN = {"CalcStart", "Abweichung"}
+_QUELLENABHAENGIGE_MINDESTLAUFZEIT_REGELN = {"CalcStart-Mittag", "CalcStart-Abend", "Abweichung"}
 
 
 def _ist_pv_gesteuerter_lauf(name, quelle=None) -> bool:

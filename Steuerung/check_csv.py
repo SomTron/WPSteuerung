@@ -1,3 +1,8 @@
+"""Test-Skript fuer die CSV-Header-Reparatur.
+
+Prueft, ob check_and_fix_csv_header() einen falschen Header
+erkennt und repariert. Kein Produktionscode.
+"""
 import pandas as pd
 import logging
 import os

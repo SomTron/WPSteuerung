@@ -26,11 +26,11 @@ MODI_DATEI = os.path.join(
 BADEMODUS_WIEDERHERSTELLUNG_MAX = timedelta(hours=24)
 
 
-def _now_naiv():
+def _now_naiv() -> datetime:
     return datetime.now()
 
 
-def _bis_utc_naiv(wert) -> Optional[datetime]:
+def _bis_utc_naiv(wert: object) -> Optional[datetime]:
     """Normalisiert aware/naive Datetimes auf naive UTC-Vergleichszeit."""
     dt = _parse_iso(wert)
     if dt is None:
@@ -40,11 +40,11 @@ def _bis_utc_naiv(wert) -> Optional[datetime]:
     return dt
 
 
-def _jetzt_utc_naiv():
+def _jetzt_utc_naiv() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
 
 
-def speichere_modi(state, pfad: str = MODI_DATEI) -> bool:
+def speichere_modi(state: object, pfad: str = MODI_DATEI) -> bool:
     """Sichert die aktuellen Modi-Zustaende atomar. Scheitert nie hart."""
     try:
         start = state.urlaubsmodus_start
@@ -64,7 +64,7 @@ def speichere_modi(state, pfad: str = MODI_DATEI) -> bool:
         return False
 
 
-def lade_modi(state, pfad: str = MODI_DATEI, jetzt_utc_naiv: Optional[datetime] = None) -> bool:
+def lade_modi(state: object, pfad: str = MODI_DATEI, jetzt_utc_naiv: Optional[datetime] = None) -> bool:
     """Stellt Bademodus/Urlaubsmodus nach einem Neustart wieder her.
 
     Fail-safe: Jede Unstimmigkeit (fehlende/korrupte Datei, veralteter
@@ -127,7 +127,7 @@ def lade_modi(state, pfad: str = MODI_DATEI, jetzt_utc_naiv: Optional[datetime] 
         return False
 
 
-def _parse_iso(wert) -> Optional[datetime]:
+def _parse_iso(wert: object) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(str(wert))
     except (TypeError, ValueError):

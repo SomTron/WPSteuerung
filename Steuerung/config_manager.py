@@ -1,5 +1,12 @@
+"""Konfigurations-Manager: Laedt und validiert die INI-Config.
+
+Unterstuetzt partielle Konfiguration (fehlende Schluessel nehmen
+Defaults an) und Feld-fuer-Feld-Validierung bei Fehlern.
+"""
 import configparser
 import logging
+from typing import Any, Mapping
+
 from pydantic import BaseModel, Field, ValidationError
 
 from constants import API_SERVER_HOST, API_SERVER_PORT
@@ -115,7 +122,7 @@ class ConfigManager:
         self.config: AppConfig = AppConfig()
         self.load_config()
 
-    def load_config(self):
+    def load_config(self) -> None:
         """Liest die Config-Datei, validiert sie und lädt sie in das Pydantic Model."""
         parser = configparser.ConfigParser()
         parser.optionxform = str  # Behalte Groß-/Kleinschreibung bei (wichtig für Pydantic Models)
@@ -137,7 +144,7 @@ class ConfigManager:
         except Exception as e:
             logging.error(f"Fehler beim Laden der Konfiguration: {e}")
 
-    def _lade_app_config(self, config_dict: dict) -> AppConfig:
+    def _lade_app_config(self, config_dict: Mapping[str, object]) -> AppConfig:
         """Laedt alle Sektionen einzeln statt Alles-oder-nichts.
 
         Bisher verfaelschte EIN Tippfehler (z.B. API_PORT = keine_zahl) die
@@ -145,14 +152,19 @@ class ConfigManager:
         stillschweigend durch Defaults ersetzt. Jetzt bleibt jede Sektion
         bzw. jeder einzelne Wert so weit wie moeglich erhalten.
         """
-        sektionen = {}
+        sektionen: dict[str, Any] = {}
         for feld_name, modell_feld in AppConfig.model_fields.items():
             modell_klasse = modell_feld.default_factory
-            werte = config_dict.get(feld_name, {})
+            # Der Parser liefert pro Sektion ein dict; alles andere (fehlende
+            # Sektion, unerwarteter Typ) wird wie eine leere Sektion behandelt.
+            roh = config_dict.get(feld_name)
+            werte = roh if isinstance(roh, dict) else {}
             sektionen[feld_name] = self._lade_sektion(feld_name, modell_klasse, werte)
         return AppConfig(**sektionen)
 
-    def _lade_sektion(self, name: str, modell_klasse, werte: dict):
+    def _lade_sektion(
+        self, name: str, modell_klasse: Any, werte: Mapping[str, object]
+    ) -> Any:
         """Laedt eine Sektion; bei Validierungsfehlern nur die betroffenen Felder kappen.
 
         Behandlungspfad fuer jeden INI-Schluessel:
@@ -215,23 +227,42 @@ class ConfigManager:
 
         try:
             return modell_klasse(**gueltig)
-        except ValidationError:
-            gefiltert = {}
-            for schluessel, wert in gueltig.items():
-                try:
-                    modell_klasse(**{schluessel: wert})
-                    gefiltert[schluessel] = wert
-                except ValidationError:
+        except ValidationError as exc:
+            # Fehlerhafte Felder aus der Pydantic-Fehlermeldung ableiten, statt
+            # jedes Feld isoliert zu pruefen. Die isolierte Pruefung umging
+            # bisher die model_validatoren (Cross-Field-Regeln) der Sektion.
+            gefiltert = dict(gueltig)
+            fehlerfelder = {e["loc"][0] for e in exc.errors() if e.get("loc")}
+            if not fehlerfelder:
+                # model_validator ohne Feld-Bezug (z.B. Cross-Field): Felder
+                # einzeln entfernen, bis die Sektion validiert.
+                for schluessel in list(gueltig.keys()):
+                    versuch = {k: v for k, v in gefiltert.items() if k != schluessel}
+                    try:
+                        modell_klasse(**versuch)
+                    except ValidationError:
+                        continue
                     logging.error(
-                        f"Ungueltiger Wert in [{name}]: {schluessel} = '{wert}' "
+                        f"Ungueltiger Wert in [{name}]: {schluessel} = '{gueltig[schluessel]}' "
                         f"- verwende Defaultwert"
                     )
+                    del gefiltert[schluessel]
+                    break
+            else:
+                for feld in fehlerfelder:
+                    if feld in gefiltert:
+                        logging.error(
+                            f"Ungueltiger Wert in [{name}]: {feld} = '{gefiltert[feld]}' "
+                            f"- verwende Defaultwert"
+                        )
+                        del gefiltert[feld]
             gekappt = len(gueltig) - len(gefiltert)
             if gekappt > 0:
                 logging.warning(
                     f"Sektion [{name}]: {gekappt} ungueltige(r) Wert(e) auf Default gesetzt"
                 )
+            # Finale Validierung der ganzen Sektion: model_validatoren greifen.
             return modell_klasse(**gefiltert)
 
-    def get(self):
+    def get(self) -> object:
         return self.config

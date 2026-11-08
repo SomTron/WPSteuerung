@@ -50,7 +50,7 @@ def _quelle(start_regel):
         return "pv"
     if start_regel == "Batterie":
         return "batterie"
-    if start_regel in ("API force_on", "Legionellen", "Notfallschutz", "MindestTemp", "Abweichung", "CalcStart", "Komfort", "Zeitfenster", "Wochenende"):
+    if start_regel in ("API force_on", "Legionellen", "Notfallschutz", "MindestTemp", "Abweichung", "CalcStart", "CalcStart-Mittag", "CalcStart-Abend", "Komfort", "Zeitfenster", "Wochenende"):
         return "netz"
     return "unbekannt"
 

@@ -1,3 +1,9 @@
+"""FastAPI-Endpunkte der WPSteuerung.
+
+Stellt Status, Historie, Konfiguration und Steuerbefehle bereit.
+Alle schreibenden Endpunkte sind durch einen API-Key geschuetzt
+und rate-limitiert.
+"""
 try:
     from constants import SOLAR_DATA_STALE_THRESHOLD_MIN
 except ImportError:
@@ -309,7 +315,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 1. API-Key (bester Identifier)
         api_key = request.headers.get("X-API-Key")
         if api_key:
-            return f"apikey:{api_key[:16]}"
+            # Hash statt Klartext-Teilstring: leakt keinen Key-Anteil und ist
+            # auch bei kurzen Keys kollisionsarm (slowapi nutzt den String nur
+            # als Bucket-Identifier).
+            import hashlib
+            key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+            return f"apikey:{key_hash}"
         # 2. X-Forwarded-For (Tailscale Funnel)
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
@@ -549,7 +560,9 @@ def _sd_karten_status() -> dict:
 
 
 @app.get("/debug/lernstand")
-def debug_lernstand():
+def debug_lernstand(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
     """Lernstand der Engine - fuer die Beobachtung des Auto-Lernens.
 
     BUGFIX (21.10.2026): Die gelernten Daten waren nur ueber die
@@ -560,6 +573,7 @@ def debug_lernstand():
 
     Kein Schreibzugriff, keine sensiblen Daten (nur Aggregate).
     """
+    _check_api_key(x_api_key)
     le = getattr(shared_state, "learning_engine", None)
     if le is None:
         return {"verfuegbar": False, "grund": "keine Lernengine im State"}
@@ -815,6 +829,7 @@ def errors_endpoint(
     Nur Fehler ab Stufe WARNING - die WebApp blendet reine
     Steuerungs-Informationen ohnehin aus.
     """
+    _check_api_key(x_api_key)
     limit = max(1, min(int(limit or 100), 500))
     return fehler_historie(limit=limit, nur_ab_warnung=True)
 
@@ -1789,14 +1804,18 @@ def _status_daten(rechne_auswertung: bool = False):
             "sensor": pc.adaptive_pv.temperaturfuehler,
             "max_c": pc.adaptive_pv.tmax_c,
         })
-        # CalcStart-Regel
-        priority_info["regeln"].append({
-            "name": "CalcStart", "typ": "calcstart", "prio": pc.calculated_start.prioritaet,
-            "aktiv": pc.calculated_start.aktiv,
-            "soll_c": pc.calculated_start.solltemperatur_c,
-            "ziel_uhr": pc.calculated_start.target_uhr,
-            "max_c": pc.calculated_start.tmax_c,
-        })
+        # CalcStart-Regel (Mittag und Abend)
+        for _cs_name, _cs_uhr in (
+            ("CalcStart-Mittag", pc.calculated_start.target_mittag_uhr),
+            ("CalcStart-Abend", pc.calculated_start.target_uhr),
+        ):
+            priority_info["regeln"].append({
+                "name": _cs_name, "typ": "calcstart", "prio": pc.calculated_start.prioritaet,
+                "aktiv": pc.calculated_start.aktiv,
+                "soll_c": pc.calculated_start.solltemperatur_c,
+                "ziel_uhr": _cs_uhr,
+                "max_c": pc.calculated_start.tmax_c,
+            })
 
     # Regel-Ergebnisse (Entscheidungen) aus State
     regel_ergebnisse = []
@@ -2132,7 +2151,10 @@ class ClientFehler(BaseModel):
 
 
 @app.post("/debug/clientfehler")
-def client_fehler(fehler: ClientFehler):
+def client_fehler(
+    fehler: ClientFehler,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
     """Nimmt einen Fehler aus der WebApp an und schreibt ihn ins Log.
 
     BUGFIX (23.10.2026): Ein JS-/Render-Fehler blieb bisher auf dem Geraet
@@ -2140,10 +2162,14 @@ def client_fehler(fehler: ClientFehler):
     keine Konsole. Genau deshalb war am 23.10.2026 stundenlang unklar, warum
     die Oberflaeche leer blieb, obwohl /status korrekte Werte lieferte.
 
-    Der Endpunkt ist bewusst wehrlos einfach: kein API-Key (wie
-    /debug/lernstand), nie 500, gedrosselt je Meldung (5 Minuten) und ohne
-    Auswirkung auf die Regelung.
+    Der Endpunkt ist bewusst wehrlos einfach: nie 500, gedrosselt je Meldung
+    (5 Minuten) und ohne Auswirkung auf die Regelung. Er erfordert einen
+    API-Key, um Spam und DoS zu verhindern.
     """
+    _check_api_key(x_api_key)
+    # Payload-Groessenbegrenzung: max. 1 KB fuer Typ + Meldung + Seite
+    if len(fehler.meldung or "") > 1000 or len(fehler.typ or "") > 100 or len(fehler.seite or "") > 100:
+        raise HTTPException(status_code=413, detail="Payload zu gross")
     try:
         text = f"{fehler.typ or 'Fehler'}: {fehler.meldung or 'ohne Meldung'}"[:400]
         seite = fehler.seite or "unbekannt"
@@ -2380,7 +2406,9 @@ def _csv_spaltentypen(kopf, daten):
 
 
 @app.get("/debug/zapfvorhaltung")
-def debug_zapfvorhaltung():
+def debug_zapfvorhaltung(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
     """Beobachtung der Zapfungs-Vorhaltung (BUGFIX 22.10.2026).
 
     Die Vorhaltung ist die Massnahme, damit "unten" nach der Zapfung
@@ -2395,6 +2423,7 @@ def debug_zapfvorhaltung():
 
     Kein Schreibzugriff, keine sensiblen Daten (nur Aggregate).
     """
+    _check_api_key(x_api_key)
     le = getattr(shared_state, "learning_engine", None)
     if le is None:
         return {"verfuegbar": False, "grund": "keine Lernengine im State"}

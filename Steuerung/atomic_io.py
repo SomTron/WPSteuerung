@@ -22,7 +22,7 @@ def atomic_write_text(path: str, text: str, encoding: str = "utf-8") -> None:
             os.remove(temporary)
 
 
-def atomic_write_json(path: str, data, encoding: str = "utf-8") -> None:
+def atomic_write_json(path: str, data: object, encoding: str = "utf-8") -> None:
     """Schreibt JSON atomar und mit stabilem Format."""
     atomic_write_text(
         path,

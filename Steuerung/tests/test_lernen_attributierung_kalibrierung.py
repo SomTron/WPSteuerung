@@ -618,6 +618,6 @@ class TestVerdrahtungBewerteAlleRegeln:
             # ein Tief ist eine Stunde mit HOHEM Verbrauch (> 250 W).
             surplus_profile={"15": 900.0},
         )
-        cs = [e for e in alle if e.name == "CalcStart"][0]
+        cs = [e for e in alle if e.name == "CalcStart-Abend"][0]
         assert "x0.40" in cs.grund
         assert "Mittagstief" in cs.grund

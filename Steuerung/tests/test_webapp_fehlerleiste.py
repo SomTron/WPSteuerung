@@ -95,6 +95,21 @@ def test_servermeldung_ueberlebt_fehlendes_api_base():
     )
 
 
+def test_servermeldung_schickt_den_api_key_mit():
+    """`/debug/clientfehler` ist seit dem Security-Audit API-Key-pflichtig.
+
+    Ohne `X-API-Key` antwortet der Server mit 401 (Key gesetzt) bzw. 503
+    (Key leer). Der WebApp-Fehler waere dann genau im Fehlerfall unsichtbar -
+    live nachgewiesen am 08.11.2026: Meldung ohne Header -> 401, keine
+    Logzeile.
+    """
+    koerper = _funktion(_html(), "meldeAnServer")
+    assert "apiHeaders(" in koerper, (
+        "meldeAnServer schickt keinen X-API-Key - der Server weist die "
+        "Meldung mit 401/503 ab"
+    )
+
+
 def test_alle_abrufpfade_melden_an_den_server():
     """Karten/Badge/Feedback zeigen den Fehler nur dem, der hinschaut.
 

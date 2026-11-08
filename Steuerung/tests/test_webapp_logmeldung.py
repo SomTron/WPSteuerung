@@ -16,6 +16,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import api  # noqa: E402
 
+@pytest.fixture(autouse=True)
+def _api_key_setzen(monkeypatch):
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
+
 
 @pytest.fixture(autouse=True)
 def _drossel_zuruecksetzen():
@@ -62,7 +66,7 @@ def test_clientfehler_wird_geloggt(caplog):
         antwort = api.client_fehler(
             api.ClientFehler(meldung="Cannot read properties of null",
                              typ="JS-Fehler", seite="/", version="1.10.26")
-        )
+        , x_api_key="test-secret")
     assert antwort["ok"] is True and antwort["geloggt"] is True
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "WebApp-Fehler" in text
@@ -73,8 +77,8 @@ def test_clientfehler_wird_geloggt(caplog):
 def test_clientfehler_wird_gedrosselt(caplog):
     fehler = api.ClientFehler(meldung="gleicher Fehler", typ="JS-Fehler")
     with caplog.at_level(logging.WARNING):
-        erste = api.client_fehler(fehler)
-        zweite = api.client_fehler(fehler)
+        erste = api.client_fehler(fehler, x_api_key="test-secret")
+        zweite = api.client_fehler(fehler, x_api_key="test-secret")
     assert erste["geloggt"] is True
     assert zweite["geloggt"] is False and zweite["grund"] == "gedrosselt"
     assert len(caplog.records) == 1
@@ -91,13 +95,27 @@ def test_clientfehler_geht_nicht_an_telegram(caplog):
     with caplog.at_level(logging.WARNING):
         antwort = api.client_fehler(
             api.ClientFehler(meldung="Zeitueberschreitung", typ="status")
-        )
+        , x_api_key="test-secret")
     assert antwort["geloggt"] is True
     assert caplog.records, "die Meldung muss im Log stehen"
     for record in caplog.records:
         assert getattr(record, "kein_telegram", False) is True, (
             "WebApp-Fehler wuerden sonst zusaetzlich per Telegram verschickt"
         )
+
+
+def test_clientfehler_ohne_key_wird_abgewiesen(caplog):
+    """Gegenprobe zum WebApp-Header: ohne Key gibt es keinen Log-Eintrag.
+
+    Seit dem Security-Audit (11/2026) ist der Endpunkt geschuetzt; die
+    WebApp muss den Key deshalb mitschicken (index.html: apiHeaders()).
+    """
+    from fastapi import HTTPException
+
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as fehler:
+        api.client_fehler(api.ClientFehler(meldung="ohne Key"), x_api_key=None)
+    assert fehler.value.status_code == 401
+    assert not caplog.records, "ohne Key darf nichts ins Log geschrieben werden"
 
 
 def test_clientfehler_begrenzt_laenge():
@@ -109,7 +127,7 @@ def test_clientfehler_begrenzt_laenge():
 
 def test_clientfehler_ohne_inhalt_crasht_nicht(caplog):
     with caplog.at_level(logging.WARNING):
-        antwort = api.client_fehler(api.ClientFehler())
+        antwort = api.client_fehler(api.ClientFehler(), x_api_key="test-secret")
     assert antwort["ok"] is True
     assert "ohne Meldung" in " ".join(r.getMessage() for r in caplog.records)
 

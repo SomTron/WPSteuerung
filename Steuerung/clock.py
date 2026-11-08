@@ -1,10 +1,11 @@
 """Zentrale Zeitquelle mit lokaler Zeitzone und monotoner Laufzeit."""
 import time
-from datetime import datetime
+from datetime import datetime, tzinfo
+from typing import Optional
 
 
 class Clock:
-    def __init__(self, local_tz):
+    def __init__(self, local_tz: Optional[tzinfo]) -> None:
         self.local_tz = local_tz
 
     def now(self) -> datetime:
@@ -14,7 +15,7 @@ class Clock:
         return time.monotonic()
 
 
-def now_for(state, fallback_tz=None):
+def now_for(state: object, fallback_tz: Optional[tzinfo] = None) -> datetime:
     """Einheitliche Zeitquelle für Live-State und API-Snapshots."""
     clock = getattr(state, "clock", None)
     if clock is not None and hasattr(clock, "now"):

@@ -1,3 +1,8 @@
+"""Sensor-Manager fuer DS18B20-Temperatursensoren (1-Wire).
+
+Liest bis zu 4 Sensoren (oben, mittig, unten, verdampfer) mit
+Caching, Retry und Plausibilitaetspruefung.
+"""
 import asyncio
 import logging
 import math
@@ -24,7 +29,7 @@ class SensorManager:
             "verd": "28-213bd4460d65"
         }
 
-    def reset_cache(self):
+    def reset_cache(self) -> None:
         """Leert den Temperatur-Cache."""
         self.last_sensor_readings.clear()
         logging.debug("Sensor-Cache geleert")
@@ -58,7 +63,7 @@ class SensorManager:
                     logging.error(f"Sensor {sensor_id}: Zu wenige Zeilen in w1_slave ({len(lines)})")
                     self._track_sensor_error(sensor_id)
                     return None
-                if lines[0].strip()[-3:] == "YES":
+                if lines[0].strip().endswith("YES"):
                     temp_data = lines[1].split("=")[-1]
                     try:
                         temp = float(temp_data) / 1000.0

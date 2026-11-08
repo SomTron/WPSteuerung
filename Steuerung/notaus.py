@@ -35,7 +35,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 
 #: Prozess-Exitcode fuer einen regulaeren Not-Aus. In
 #: ``wpsteuerung.service`` als ``RestartPreventExitStatus=42`` gefuehrt.
@@ -48,7 +48,10 @@ NOTAUS_DATEI = os.path.join(
 
 
 def _jetzt() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    # Lokale Zeitzone mitführen, damit der Zeitpunkt im Not-Aus-Log
+    # eindeutig ist (Sommer-/Winterzeit). datetime.now() allein liefert
+    # einen naiven String ohne Offset.
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def notaus_gesetzt(datei: Optional[str] = None) -> bool:
@@ -60,12 +63,15 @@ def notaus_gesetzt(datei: Optional[str] = None) -> bool:
         return False
 
 
-def notaus_daten(datei: Optional[str] = None) -> Optional[dict]:
+def notaus_daten(datei: Optional[str] = None) -> Optional[Dict[str, object]]:
     """Liest Grund und Zeitpunkt der Sperre (None = keine Sperre)."""
     pfad = datei or NOTAUS_DATEI
     try:
         with open(pfad, "r", encoding="utf-8") as f:
-            return json.load(f)
+            result = json.load(f)
+            if isinstance(result, dict):
+                return result
+            return None
     except (OSError, ValueError):
         # Vorhandene, aber unlesbare Datei ist trotzdem eine Sperre: Not-Aus
         # darf nie durch ein beschaedigtes File aufgehoben werden.

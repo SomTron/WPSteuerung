@@ -15,6 +15,7 @@ object Einstellungen {
 
     private const val DATEI = "wpsteuerung"
     private const val SCHLUESSEL_API_KEY = "api_key"
+    private const val SCHLUESSEL_BASE_URL = "base_url"
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -35,6 +36,16 @@ object Einstellungen {
         set(wert) {
             prefs?.edit()?.putString(SCHLUESSEL_API_KEY, wert.trim())?.apply()
         }
+
+    /** Basis-URL der WPSteuerung-API. Leer = noch nicht konfiguriert. */
+    var baseUrl: String
+        get() = prefs?.getString(SCHLUESSEL_BASE_URL, "").orEmpty()
+        set(wert) {
+            prefs?.edit()?.putString(SCHLUESSEL_BASE_URL, wert.trim())?.apply()
+        }
+
+    /** true, solange keine Server-URL hinterlegt ist. */
+    val baseUrlGesetzt: Boolean get() = baseUrl.isNotBlank()
 
     /** Ohne diesen Schalter sind alle Schreibbefehle der App wirkungslos. */
     val apiKeyGesetzt: Boolean get() = apiKey.isNotBlank()

@@ -30,6 +30,7 @@ def _zapfe(eng, start, unten_vor, unten_nach):
 @pytest.fixture
 def mit_engine(monkeypatch, tmp_path):
     """Setzt eine Lernengine in den API-State."""
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
     eng = _engine(tmp_path)
 
     class _State:
@@ -43,13 +44,14 @@ def mit_engine(monkeypatch, tmp_path):
 
 class TestEndpunkt:
     def test_ohne_lernengine_meldet_es(self, monkeypatch):
+        monkeypatch.setattr(api, "API_KEY", "test-secret")
         monkeypatch.setattr(api, "shared_state", None)
-        r = api.debug_zapfvorhaltung()
+        r = api.debug_zapfvorhaltung(x_api_key="test-secret")
         assert r["verfuegbar"] is False
         assert "grund" in r
 
     def test_ohne_zapfungen_ist_die_vorhaltung_null(self, mit_engine):
-        r = api.debug_zapfvorhaltung()
+        r = api.debug_zapfvorhaltung(x_api_key="test-secret")
         assert r["verfuegbar"] is True
         assert r["vorhaltung_peak_k"] == 0.0
         assert r["zapfmenge_samples"] == 0
@@ -64,7 +66,7 @@ class TestEndpunkt:
         for i in range(3):
             _zapfe(eng, datetime(2026, 10, 12, 18, 30) + timedelta(days=7 * i),
                    43.0, 35.0)   # Montag
-        r = api.debug_zapfvorhaltung()
+        r = api.debug_zapfvorhaltung(x_api_key="test-secret")
         assert r["verfuegbar"] is True
         assert r["je_wochentag"]["Sa"]["menge_l"] > \
             r["je_wochentag"]["Mo"]["menge_l"], (
@@ -79,7 +81,7 @@ class TestEndpunkt:
         for i in range(3):
             _zapfe(eng, datetime(2026, 10, 17, 18, 30) + timedelta(days=7 * i),
                    43.0, 27.0)
-        r = api.debug_zapfvorhaltung()
+        r = api.debug_zapfvorhaltung(x_api_key="test-secret")
         assert r["vorhaltung_peak_k"] > 0.0
         assert r["soll_mit_vorhaltung_c"] > r["sollwert_c"]
         assert "Vorhaltung aktiv" in r["hinweis"]
@@ -91,7 +93,7 @@ class TestEndpunkt:
         for i in range(3):
             _zapfe(eng, datetime(2026, 10, 17, 18, 30) + timedelta(days=7 * i),
                    43.0, 10.0)   # extremer Abfall -> riesige Menge
-        r = api.debug_zapfvorhaltung()
+        r = api.debug_zapfvorhaltung(x_api_key="test-secret")
         # Die Warnung erscheint, wenn der Sollwert die Grenze reisst.
         if r["soll_mit_vorhaltung_c"] > r["boiler_max_c"]:
             assert "ACHTUNG" in r["hinweis"], (
@@ -100,14 +102,13 @@ class TestEndpunkt:
     def test_ist_json_serialisierbar(self, mit_engine):
         """Die API-Antwort muss JSON-faehig sein (FastAPI macht daraus
         eine HTTP-Antwort)."""
-        r = api.debug_zapfvorhaltung()
+        r = api.debug_zapfvorhaltung(x_api_key="test-secret")
         text = json.dumps(r, ensure_ascii=False)
         assert json.loads(text)["verfuegbar"] is True
 
-    def test_ist_lesend_ohne_api_key(self):
-        """Der Endpunkt darf keinen Schreibzugriff sein - er haengt
-        an keinem _check_api_key."""
+    def test_erfordert_api_key(self):
+        """Der Endpunkt ist durch einen API-Key geschuetzt (Security-Audit)."""
         import inspect
         src = inspect.getsource(api.debug_zapfvorhaltung)
-        assert "_check_api_key" not in src, (
-            "Der Beobachtungs-Endpunkt darf keinen Schreibzugriff haben")
+        assert "_check_api_key" in src, (
+            "Der Beobachtungs-Endpunkt muss durch einen API-Key geschuetzt sein")
