@@ -377,10 +377,20 @@ def bewerte_alle_regeln(
     ergebnisse.append(ergebnis)
 
     # 7. Calculated-Start-Regel (optimierter Startzeitpunkt) - Mittag und Abend
+    #
+    # BEFUND 09.11.2026: Beide Regeln trugen denselben Text und starteten mit
+    # demselben Ziel, weil (a) der Etappenplan fuer beide ueber ALLE Etappen
+    # lief und die dringendste (Mittag, 12:00) waehlte und (b) die Zielzeit
+    # `target_mittag_uhr` nie ankam. Jetzt bekommt jede Regel ihre eigene
+    # Zielzeit und nur ihre eigene Etappe (`etappen_filter`).
     for _cs_name, _cs_target in (
         ("CalcStart-Mittag", config.calculated_start.target_mittag_uhr),
         ("CalcStart-Abend", config.calculated_start.target_uhr),
     ):
+        # "CalcStart-Mittag" -> Etappe "Mittag", "CalcStart-Abend" -> "Abend"
+        _cs_etappen = (
+            [_cs_name.split("-", 1)[1].strip().lower()] if "-" in _cs_name else None
+        )
         ergebnis = evaluate_calculated_start(
             config.calculated_start,
             temp_dict,
@@ -410,6 +420,7 @@ def bewerte_alle_regeln(
             speicher_volumen_l=_speichervolumen_l(config),
             name_override=_cs_name,
             target_uhr_override=_cs_target,
+            etappen_filter=_cs_etappen,
         )
         ergebnisse.append(ergebnis)
 

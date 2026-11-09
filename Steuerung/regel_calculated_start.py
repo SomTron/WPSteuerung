@@ -47,6 +47,7 @@ def evaluate_calculated_start(
     # Aufteilung in Mittag und Abend (Nutzerwunsch).
     name_override: Optional[str] = None,
     target_uhr_override: Optional[int] = None,
+    etappen_filter: Optional[List[str]] = None,
 ) -> RegelErgebnis:
     """
     Berechnete-Startzeit-Regel: Schaltet rechtzeitig vor der Zielzeit ein.
@@ -131,23 +132,44 @@ def evaluate_calculated_start(
     #
     # Die Zielzeit wird deshalb genau einmal bestimmt und fuer alles
     # verwendet - Abbruch, Restzeit und Meldungen.
-    ziel_uhr = (
-        learned_target_hour
-        if learned_target_hour is not None
-        else float(calc_cfg.target_uhr)
-    )
+    #
+    # BEFUND 09.11.2026: Mit den getrennten Regeln CalcStart-Mittag und
+    # CalcStart-Abend gewann hier IMMER `learned_target_hour` - die gelernte
+    # ABEND-Zapfzeit (Default 17:00) - auch fuer den Mittag. Im else-Zweig
+    # wurde zusaetzlich `calc_cfg.target_uhr` statt `_target_uhr` verwendet,
+    # sodass `target_mittag_uhr` NIE ankam. Folge im Betriebslog: beide
+    # Regeln meldeten wortgleich "bis 12:00" (aus der Etappenwahl) und
+    # starteten mit demselben Ziel.
+    #
+    # Jetzt gilt: Hat der Aufrufer die Regel einer Etappe zugeordnet
+    # (`target_uhr_override`), ist seine Zielzeit die Grundlage. Die
+    # gelernte Zapfzeit korrigiert nur die Abend-Regel - dort liegt die
+    # gelernte Zapfung (Befund 04.10.2026).
+    if target_uhr_override is not None:
+        ziel_uhr = float(_target_uhr)
+        if learned_target_hour is not None and _name.endswith("-Abend"):
+            ziel_uhr = float(learned_target_hour)
+    else:
+        ziel_uhr = (
+            learned_target_hour
+            if learned_target_hour is not None
+            else float(calc_cfg.target_uhr)
+        )
 
     # Etappenplan (Nutzerentscheidung 05.11.2026): mehrere Bedarfszeitpunkte,
     # Heizzeit je Etappe per Vorwaertssimulation des kalibrierten Speichers.
     # Die DRINGENDSTE Etappe liefert Zielzeit, Sollwert und Heizzeit; der
     # restliche Entscheidungsweg (PV-Fruehstart, Spaetest-Start, Netz-
     # Fallback, Notfall) bleibt unveraendert.
+    # `etappen_filter` sorgt dafuer, dass jede Regel nur ihre eigene Etappe
+    # bewertet (Mittag <-> "Mittag", Abend <-> "Abend").
     etappen_plan: List[Dict] = []
     etappen_hours: Optional[float] = None
     if getattr(calc_cfg, "etappen", None):
         etappen_ziel, etappen_soll, etappen_std, etappen_plan = _etappen_plan(
             calc_cfg, temp_dict, current_time, ziel_uhr,
             boiler_max_c=float(calc_cfg.tmax_c),
+            etappen_filter=etappen_filter,
         )
         if etappen_ziel is not None:
             ziel_uhr = etappen_ziel

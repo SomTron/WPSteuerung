@@ -411,6 +411,7 @@ def _etappen_plan(
     ziel_uhr_default: float,
     boiler_max_c: float = 48.0,
     parameter: object = None,
+    etappen_filter: Optional[List[str]] = None,
 ) -> Tuple[Optional[float], Optional[float], Optional[float], List[Dict[str, object]]]:
     """Dringendste Etappe bestimmen.
 
@@ -420,9 +421,19 @@ def _etappen_plan(
     offen (alle Ziele erreicht), kommen ``hours_needed = 0.0`` und die
     zuletzt faellige Etappe zurueck - der Aufrufer meldet dann "Ziel
     bereits erreicht".
+
+    ``etappen_filter`` (BEFUND 09.11.2026): Liste von Etappennamen
+    (kleingeschrieben). CalcStart-Mittag und CalcStart-Abend sind eigene
+    Regeln und duerfen NICHT dieselbe Etappe bewerten - sonst trugen beide
+    den gleichen Text und starteten mit demselben Ziel (Betriebslog
+    09.11.2026: beide "bis 12:00"). ``None`` = alle Etappen (altes
+    Verhalten fuer Aufrufer ohne Etappen-Zuordnung).
     """
     plan: List[Dict] = []
     for etappe in getattr(calc_cfg, "etappen", None) or []:
+        name = str(getattr(etappe, "name", "Etappe") or "Etappe").strip().lower()
+        if etappen_filter is not None and name not in etappen_filter:
+            continue
         ziel = (float(etappe.ziel_uhr) if getattr(etappe, "ziel_uhr", None) is not None
                 else float(ziel_uhr_default))
         erg = _etappen_heizzeit_h(temp_dict, etappe, parameter=parameter,
