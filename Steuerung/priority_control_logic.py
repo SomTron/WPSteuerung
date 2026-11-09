@@ -2308,6 +2308,25 @@ def _effektive_mindestlaufzeit(state, min_laufzeit, regel_name=None) -> timedelt
         # Erreichen weiter aufgeheizt - genau das soll nicht passieren.
         # Der Kompressor ist durch die Mindestpause weiter geschuetzt.
         return timedelta()
+    if regel_name == "Notfallschutz":
+        # BEFUND 09.11.2026 (Log 06:56-11:17): Ein Notfallschutz-Lauf endet
+        # PLANMAESSIG am Ausschaltpunkt des oberen Fuehlers (38 C). Bei
+        # oben 34,3 C sind das 3,7 K Hub - bei 6 C/h rund 37 min. Gegen die
+        # normale Mindestlaufzeit (60 min) gerechnet war JEDE solche Fahrt
+        # ein Laufzeit-Bruch, und die Start-Antizipation verweigerte den
+        # Start dauerhaft (sie loest sich erst bei oben ~31,8 C - der
+        # Speicher kuehlte 4 h aus, statt zu heizen).
+        # Eigene, kurze Schutzzeit: verhindert nur das sofortige Abwuergen.
+        # Boiler-Maximum, Ueberhitzungsschutz und Mindestpause bleiben.
+        cfg_notfall = getattr(
+            getattr(state, "priority_config", None), "notfallschutz", None)
+        notfall_min = getattr(cfg_notfall, "mindestlaufzeit_min", None)
+        if (
+            isinstance(notfall_min, (int, float))
+            and not isinstance(notfall_min, bool)
+            and float(notfall_min) > 0
+        ):
+            return timedelta(minutes=float(notfall_min))
     if _ist_pv_gesteuerter_lauf(regel_name, _quelle_fuer_mindestlaufzeit(state, regel_name)):
         cfg = getattr(getattr(state, "priority_config", None), "zyklus", None)
         wert = getattr(cfg, "pv_min_laufzeit_minuten", None)

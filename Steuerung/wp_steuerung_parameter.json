@@ -21,7 +21,8 @@
     "start_vorhersage_puffer_min": 1.0,
     "start_vorhersage_ausnahme_regeln": [
         "MinTemp-Mittag-Mitte",
-        "MinTemp-Abend-Mitte"
+        "MinTemp-Abend-Mitte",
+        "Notfallschutz"
     ],
     "start_vorhersage_niedrig_confidence": 0.4,
     "start_vorhersage_hoch_confidence": 0.7,
@@ -37,7 +38,8 @@
     "einschalten_bei_c": 36.0,
     "ausschalten_bei_c": 38.0,
     "temperaturfuehler": "oben",
-    "bis_uhr": 22
+    "bis_uhr": 22,
+    "mindestlaufzeit_min": 10
   },
   "wochenende": {
     "aktiv": true,

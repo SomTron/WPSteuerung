@@ -191,3 +191,48 @@ def test_projektkonfiguration_entscheidet_abendkomfort_vor():
     assert "MinTemp-Abend-Mitte" in ausnahme, (
         "Die Abendgarantie braucht die Ausnahme von der Start-Antizipation "
         "(Nutzerentscheidung 20.10.2026)")
+
+
+# --- Notfallschutz ist ausgenommen (BEFUND 09.11.2026) ---------------------
+#
+# Log 06:56-11:17: Der Notfallschutz gewann mit Prio 110 (oben 35,7 -> 34,3 C,
+# unten 25,4 -> 22,6 C), aber die Start-Antizipation verweigerte den Start:
+# "hub zur Obergrenze nur 3.7K (Rate 6C/h ... -> 37min < 60min Mindestlaufzeit
+# + 1min Reserve)". Die Sperre loest sich erst bei einem Hub von ~6,2 K, also
+# bei oben ~31,8 C - der Speicher kuehlte 4 h aus, statt zu heizen.
+# Nutzerentscheidung 09.11.2026: Untertemperatur hat Vorrang - der
+# Notfallschutz darf nicht von einem Taktschutz ueberstimmt werden.
+
+
+@pytest.mark.asyncio
+async def test_notfallschutz_ist_von_der_antizipation_ausgenommen():
+    """Der Notfallschutz startet auch bei kurzem Hub (Prio 110 vor Taktschutz)."""
+    state = _state(rate_c_h=6.0, t_unten=47.0)   # Hub 1,0 K -> 10 min
+    state.priority_config.sicherheit.start_vorhersage_ausnahme_regeln = [
+        "MinTemp-Abend-Mitte", "Notfallschutz",
+    ]
+    ergebnis = await _starte(state, "Notfallschutz")
+    assert ergebnis is True
+    assert state.control.kompressor_ein is True
+    assert "Start-Antizipation" not in (state.control.blocking_reason or "")
+
+
+def test_projektkonfiguration_nimmt_den_notfallschutz_aus():
+    """Die Projektkonfiguration muss den Notfallschutz befreien."""
+    import json
+
+    pfad = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "wp_steuerung_parameter.json")
+    with open(pfad, "r", encoding="utf-8") as f:
+        daten = json.load(f)
+    ausnahme = daten["sicherheit"].get("start_vorhersage_ausnahme_regeln", [])
+    assert "Notfallschutz" in ausnahme, (
+        "Sonst blockiert die Start-Antizipation den Notfallschutz dauerhaft "
+        "(Befund 09.11.2026: 4 h kein Start bei oben 34 C / unten 23 C)")
+    # Eigene, kurze Mindestlaufzeit: Der Lauf endet planmaessig am
+    # Ausschaltpunkt (38 C) und ist sonst ein Laufzeit-Bruch.
+    notfall = daten.get("notfallschutz", {})
+    assert float(notfall.get("mindestlaufzeit_min", 0)) > 0, (
+        "ohne eigene Mindestlaufzeit endet jeder Notfallschutz-Lauf als "
+        "Laufzeit-Bruch gegen die 60-min-Netzlaufzeit")
+

@@ -217,11 +217,26 @@ class NotfallschutzConfig(BaseModel):
             "Ziel erreichen und kann mehrere Stunden dauern."
         ),
     )
+    mindestlaufzeit_min: float = Field(
+        default=10.0,
+        description=(
+            "Mindestlaufzeit eines Notfallschutz-Laufs (min). BEFUND "
+            "09.11.2026: Der Notfallschutz endet PLANMAESSIG am "
+            "Ausschaltpunkt des oberen Fuehlers (38 C). Bei 3,7 K Hub und "
+            "6 C/h sind das ~37 min - die normale Mindestlaufzeit (60 min) "
+            "ist dort nicht erreichbar, jeder Lauf endete als "
+            "Laufzeit-Bruch. Die kurze eigene Schutzzeit verhindert nur das "
+            "sofortige Abwuergen; Boiler-Max und Mindestpause bleiben. "
+            "0 = normale Mindestlaufzeit verwenden."
+        ),
+    )
 
     @model_validator(mode="after")
     def _pruefe_notfallschutz(self):
         if self.einschalten_bei_c >= self.ausschalten_bei_c:
             raise ValueError("einschalten_bei_c muss kleiner als ausschalten_bei_c sein")
+        if not 0.0 <= float(self.mindestlaufzeit_min) <= 120.0:
+            raise ValueError("mindestlaufzeit_min muss zwischen 0 und 120 liegen")
         if not (-20.0 <= self.einschalten_bei_c < self.ausschalten_bei_c <= 80.0):
             raise ValueError("Notfallschutz-Temperaturen ausserhalb plausiblen Bereichs")
         if self.einschalten_bei_c >= self.ausschalten_bei_c:
