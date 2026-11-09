@@ -110,6 +110,30 @@ def test_servermeldung_schickt_den_api_key_mit():
     )
 
 
+def test_webapp_zeigt_berechnete_startzeit_und_gemeinsame_etappen():
+    """Nutzerwunsch 09.11.2026: CalcStart zeigt "Start 09:15 -> 12:00" im
+    Detailtext und eine gemeinsame Etappen-Uebersicht beider Regeln.
+
+    Hintergrund: Seit der Trennung (09.11.2026) bewertet CalcStart-Mittag nur
+    "Mittag", CalcStart-Abend nur "Abend". Beide Regeln sind eigene Zeilen -
+    die gemeinsame Uebersicht fuehrt sie wieder zusammen, damit man Mittag UND
+    Abend mit berechneter Startzeit und Entscheidung auf einen Blick sieht.
+    """
+    html = _html()
+    # Berechnete Startzeit im Detailtext.
+    assert "' Start ' + formatCalcHour(e.start_uhr)" in html, (
+        "die berechnete Startzeit fehlt im Detailtext der CalcStart-Regel"
+    )
+    # Gemeinsame Uebersicht ueber beide Regeln (einmal gerendert).
+    assert "rule-etappen-sammel" in html, "keine gemeinsame Etappen-Uebersicht"
+    assert "Beide CalcStart-Etappen (Mittag + Abend)" in html, (
+        "die Uebersicht ist nicht benannt"
+    )
+    assert "if (r.name === 'CalcStart-Mittag'" in html, (
+        "die Uebersicht muss genau einmal gerendert werden (Mittag-Zeile)"
+    )
+
+
 def test_alle_abrufpfade_melden_an_den_server():
     """Karten/Badge/Feedback zeigen den Fehler nur dem, der hinschaut.
 

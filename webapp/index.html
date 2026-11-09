@@ -1312,7 +1312,9 @@
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
         // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
-        const APP_VERSION = '1.10.30';
+        // 1.10.31: CalcStart zeigt die berechnete Startzeit im Detailtext und
+        // eine gemeinsame Etappen-Uebersicht (Mittag + Abend).
+        const APP_VERSION = '1.10.31';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -2504,8 +2506,11 @@
                                 // berechnete Startzeit (Ziel minus Heizzeit)
                                 // und Restpuffer. Die dringendste Etappe
                                 // bestimmt die aktuelle Entscheidung.
-                                detail = 'Etappen: ' + etappen.map(e => e.name + ' ' + formatCalcHour(e.ziel_uhr) +
-                                    '/' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + e.temperaturfuehler).join(' &middot; ') + latest;
+                                // Nutzerwunsch 09.11.2026: Die BERECHNETE
+                                // Startzeit steht jetzt auch im Detailtext
+                                // ("Mittag Start 09:15 -> 12:00").
+                                detail = 'Etappen: ' + etappen.map(e => escapeHtml(e.name) + ' Start ' + formatCalcHour(e.start_uhr) +
+                                    ' &rarr; ' + formatCalcHour(e.ziel_uhr) + ' (' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(e.temperaturfuehler) + ')').join(' &middot; ') + planned + latest;
                                 etappenHtml = '<div class="rule-etappen" style="margin-top:4px">' +
                                     etappen.map(function(e) {
                                         const puffer = Number(e.puffer_h);
@@ -2525,6 +2530,41 @@
                                     }).join('') + '</div>';
                             } else {
                                 detail = 'Soll ' + r.soll_c + 'C um ' + r.ziel_uhr + ':00 | max ' + r.max_c + 'C' + planned + latest + needed;
+                            }
+                            // Gemeinsame Etappen-Uebersicht ueber BEIDE
+                            // CalcStart-Regeln (Nutzerwunsch 09.11.2026).
+                            // Seit der Trennung bewertet jede Regel nur ihre
+                            // eigene Etappe - hier stehen Mittag UND Abend
+                            // nebeneinander, mit berechneter Startzeit und
+                            // momentaner Entscheidung. Einmal je Zyklus,
+                            // gerendert in der Mittag-Zeile.
+                            if (r.name === 'CalcStart-Mittag' && statusData && statusData.regel_ergebnisse) {
+                                const sammel = [];
+                                ['CalcStart-Mittag', 'CalcStart-Abend'].forEach(function(nm) {
+                                    const erg2 = statusData.regel_ergebnisse.find(e2 => e2 && e2.name === nm);
+                                    const plan2 = erg2 && erg2.regel_dict && Array.isArray(erg2.regel_dict.etappen) ? erg2.regel_dict.etappen : [];
+                                    plan2.forEach(function(e2) { sammel.push({ regel: nm, e: e2, ein: erg2.einschalten }); });
+                                });
+                                if (sammel.length) {
+                                    etappenHtml += '<div class="rule-etappen-sammel" style="margin-top:6px;padding-top:4px;border-top:1px dashed var(--border,#333)">' +
+                                        '<div style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:2px">Beide CalcStart-Etappen (Mittag + Abend)</div>' +
+                                        sammel.map(function(x) {
+                                            const p = Number(x.e.puffer_h);
+                                            const pTxt = Number.isFinite(p)
+                                                ? (p >= 0 ? 'Puffer ' + p.toFixed(1) + ' h' : 'ZU SP&Auml;T ' + Math.abs(p).toFixed(1) + ' h')
+                                                : '';
+                                            const f = !Number.isFinite(p) ? 'var(--text-secondary)'
+                                                : (p < 0 ? '#e57373' : (p < 0.5 ? '#ffa726' : '#4caf50'));
+                                            const status = x.ein === true ? ' <span style="color:#4caf50;font-weight:600">EIN</span>'
+                                                : (x.ein === false ? ' <span style="color:#e57373">AUS</span>' : '');
+                                            return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary)">' +
+                                                '<span style="min-width:92px">' + escapeHtml(x.e.name) + status + '</span>' +
+                                                '<span>Start ' + formatCalcHour(x.e.start_uhr) + ' &rarr; ' + formatCalcHour(x.e.ziel_uhr) + '</span>' +
+                                                '<span>' + Number(x.e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(x.e.temperaturfuehler) + '</span>' +
+                                                '<span style="color:' + f + '">' + pTxt + '</span>' +
+                                                '</div>';
+                                        }).join('') + '</div>';
+                                }
                             }
                         }
                         else if (r.typ === 'mindesttemp') detail = 'Sensor: ' + r.sensor + ' | >= ' + r.min_c + ' C | ' + r.start + '-' + r.ende + ' Uhr' + (r.nachtsperre_ueberschreiben === false ? ' | respektiert Nachtsperre (kein Nacht-Heizen)' : '');

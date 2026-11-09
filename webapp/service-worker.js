@@ -12,7 +12,10 @@
 // v10 (08.11.2026): WebApp meldet Fehler mit API-Key (1.10.30) und
 // escaped HTML in innerHTML-Einbettungen - die Huelle muss neu geladen
 // werden, sonst laeuft die alte Fassung weiter.
-const CACHE_NAME = 'wp-webapp-shell-v10';
+// v11 (09.11.2026): CalcStart zeigt die berechnete Startzeit und eine
+// gemeinsame Etappen-Uebersicht (1.10.31) - die Huelle muss neu geladen
+// werden, sonst laeuft die alte Fassung weiter.
+const CACHE_NAME = 'wp-webapp-shell-v11';
 const APP_SHELL = [
     './',
     './index.html',
