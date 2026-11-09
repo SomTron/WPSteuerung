@@ -114,23 +114,27 @@ def test_webapp_zeigt_berechnete_startzeit_und_gemeinsame_etappen():
     """Nutzerwunsch 09.11.2026: CalcStart zeigt "Start 09:15 -> 12:00" im
     Detailtext und eine gemeinsame Etappen-Uebersicht beider Regeln.
 
-    Hintergrund: Seit der Trennung (09.11.2026) bewertet CalcStart-Mittag nur
-    "Mittag", CalcStart-Abend nur "Abend". Beide Regeln sind eigene Zeilen -
-    die gemeinsame Uebersicht fuehrt sie wieder zusammen, damit man Mittag UND
-    Abend mit berechneter Startzeit und Entscheidung auf einen Blick sieht.
+    Die Uebersicht ist NUR eine Anzeige und steht bewusst NICHT in einer
+    Regelzeile (sonst liest es sich, als gehoerte die Abend-Etappe zur
+    Mittag-Regel). Berechnet wird getrennt: CalcStart-Mittag gegen
+    target_mittag_uhr, CalcStart-Abend gegen die Abendzeit.
     """
     html = _html()
-    # Berechnete Startzeit im Detailtext.
+    # Berechnete Startzeit im Detailtext der jeweiligen Regel.
     assert "' Start ' + formatCalcHour(e.start_uhr)" in html, (
         "die berechnete Startzeit fehlt im Detailtext der CalcStart-Regel"
     )
-    # Gemeinsame Uebersicht ueber beide Regeln (einmal gerendert).
-    assert "rule-etappen-sammel" in html, "keine gemeinsame Etappen-Uebersicht"
-    assert "Beide CalcStart-Etappen (Mittag + Abend)" in html, (
-        "die Uebersicht ist nicht benannt"
+    # Eigene Funktion fuer die gemeinsame Uebersicht.
+    assert "function calcStartUebersichtHtml(" in html, (
+        "keine gemeinsame Etappen-Uebersicht"
     )
-    assert "if (r.name === 'CalcStart-Mittag'" in html, (
-        "die Uebersicht muss genau einmal gerendert werden (Mittag-Zeile)"
+    assert "CalcStart-Uebersicht" in html, "die Uebersicht ist nicht benannt"
+    # Sie wird an die Regelliste ANGEHAENGT, nicht in eine Regelzeile gehaengt.
+    assert ".join('') + calcStartUebersichtHtml(" in html, (
+        "die Uebersicht muss am Ende der Regelliste stehen"
+    )
+    assert "etappenHtml += '<div class=\"rule-etappen-sammel\"" not in html, (
+        "die Abend-Etappe darf nicht in der Mittag-Zeile erscheinen"
     )
 
 

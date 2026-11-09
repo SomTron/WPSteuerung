@@ -15,7 +15,10 @@
 // v11 (09.11.2026): CalcStart zeigt die berechnete Startzeit und eine
 // gemeinsame Etappen-Uebersicht (1.10.31) - die Huelle muss neu geladen
 // werden, sonst laeuft die alte Fassung weiter.
-const CACHE_NAME = 'wp-webapp-shell-v11';
+// v12 (09.11.2026): CalcStart-Uebersicht steht als eigener Block am Ende der
+// Regelliste (1.10.32) - die Huelle muss neu geladen werden, sonst laeuft die
+// alte Fassung weiter.
+const CACHE_NAME = 'wp-webapp-shell-v12';
 const APP_SHELL = [
     './',
     './index.html',

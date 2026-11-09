@@ -1312,9 +1312,10 @@
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
         // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
-        // 1.10.31: CalcStart zeigt die berechnete Startzeit im Detailtext und
-        // eine gemeinsame Etappen-Uebersicht (Mittag + Abend).
-        const APP_VERSION = '1.10.31';
+        // 1.10.32: CalcStart zeigt die berechnete Startzeit im Detailtext und
+        // eine gemeinsame Etappen-Uebersicht als eigenen Block am Ende der
+        // Regelliste (nicht mehr in der Mittag-Zeile).
+        const APP_VERSION = '1.10.32';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -1376,6 +1377,58 @@
             s = s.split(String.fromCharCode(62)).join(String.fromCharCode(38) + 'gt;');
             s = s.split(String.fromCharCode(34)).join(String.fromCharCode(38) + 'quot;');
             return s;
+        }
+
+        // Formatiert eine Dezimalstunde als "HH:MM" (z. B. 12.25 -> "12:15").
+        // Top-Level, weil sowohl die Regelzeilen als auch die gemeinsame
+        // CalcStart-Uebersicht sie brauchen.
+        function formatCalcHour(value) {
+            if (value == null || !Number.isFinite(Number(value))) return NO_DATA;
+            const h = Number(value);
+            const hour = Math.floor(h);
+            const minute = Math.round((h - hour) * 60);
+            const carry = minute === 60;
+            return String((hour + (carry ? 1 : 0)) % 24).padStart(2, '0') + ':' + String(carry ? 0 : minute).padStart(2, '0');
+        }
+
+        // Gemeinsame Etappen-Uebersicht ueber BEIDE CalcStart-Regeln.
+        //
+        // Nutzerwunsch 09.11.2026. Wichtig: Das ist NUR eine Anzeige. Die
+        // Regeln rechnen getrennt (CalcStart-Mittag gegen target_mittag_uhr,
+        // CalcStart-Abend gegen die Abendzeit) - die Uebersicht fuehrt die
+        // beiden Ergebnisse nebeneinander, damit man beide Etappen mit
+        // berechneter Startzeit und Entscheidung auf einen Blick sieht.
+        // Sie steht bewusst NICHT in einer Regelzeile, sondern als eigener
+        // Block am Ende der Regelliste - sonst liest es sich, als gehoerte
+        // die Abend-Etappe zur Mittag-Regel.
+        function calcStartUebersichtHtml(regelErgebnisse) {
+            const sammel = [];
+            ['CalcStart-Mittag', 'CalcStart-Abend'].forEach(function(nm) {
+                const erg = (regelErgebnisse || []).find(e => e && e.name === nm);
+                const plan = erg && erg.regel_dict && Array.isArray(erg.regel_dict.etappen)
+                    ? erg.regel_dict.etappen : [];
+                plan.forEach(function(e) { sammel.push({ regel: nm, e: e, ein: erg.einschalten }); });
+            });
+            if (!sammel.length) return '';
+            return '<div class="rule-uebersicht" style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--border,#333)">' +
+                '<div style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:3px">' +
+                'CalcStart-Uebersicht: beide Etappen (Anzeige - die Regeln rechnen getrennt)</div>' +
+                sammel.map(function(x) {
+                    const p = Number(x.e.puffer_h);
+                    const pTxt = Number.isFinite(p)
+                        ? (p >= 0 ? 'Puffer ' + p.toFixed(1) + ' h' : 'ZU SP&Auml;T ' + Math.abs(p).toFixed(1) + ' h')
+                        : '';
+                    const f = !Number.isFinite(p) ? 'var(--text-secondary)'
+                        : (p < 0 ? '#e57373' : (p < 0.5 ? '#ffa726' : '#4caf50'));
+                    const status = x.ein === true ? ' <span style="color:#4caf50;font-weight:600">EIN</span>'
+                        : (x.ein === false ? ' <span style="color:#e57373">AUS</span>' : '');
+                    return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary)">' +
+                        '<span style="min-width:92px">' + escapeHtml(x.e.name) + status + '</span>' +
+                        '<span>Start ' + formatCalcHour(x.e.start_uhr) + ' &rarr; ' + formatCalcHour(x.e.ziel_uhr) + '</span>' +
+                        '<span>' + Number(x.e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(x.e.temperaturfuehler) + '</span>' +
+                        '<span style="color:' + f + '">' + pTxt + '</span>' +
+                        '</div>';
+                }).join('') + '</div>';
         }
 
         // Geschwister zu setText, gleiche Begruendung: ein null-Element
@@ -2487,14 +2540,6 @@
                                 ? statusData.regel_ergebnisse.find(e => e.name === r.name)
                                 : null;
                             const calc = calcErg && calcErg.regel_dict;
-                            const formatCalcHour = (value) => {
-                                if (value == null || !Number.isFinite(Number(value))) return NO_DATA;
-                                const h = Number(value);
-                                const hour = Math.floor(h);
-                                const minute = Math.round((h - hour) * 60);
-                                const carry = minute === 60;
-                                return String((hour + (carry ? 1 : 0)) % 24).padStart(2, '0') + ':' + String(carry ? 0 : minute).padStart(2, '0');
-                            };
                             const planned = calc ? ' | geplant: ' + formatCalcHour(calc.planned_start_hour) : '';
                             const latest = calc ? ' | spätestens: ' + formatCalcHour(calc.spaetester_start_hour) : '';
                             const needed = calc && Number.isFinite(Number(calc.hours_needed)) ? ' | Heizzeit: ' + Number(calc.hours_needed).toFixed(1) + ' h' : '';
@@ -2531,41 +2576,6 @@
                             } else {
                                 detail = 'Soll ' + r.soll_c + 'C um ' + r.ziel_uhr + ':00 | max ' + r.max_c + 'C' + planned + latest + needed;
                             }
-                            // Gemeinsame Etappen-Uebersicht ueber BEIDE
-                            // CalcStart-Regeln (Nutzerwunsch 09.11.2026).
-                            // Seit der Trennung bewertet jede Regel nur ihre
-                            // eigene Etappe - hier stehen Mittag UND Abend
-                            // nebeneinander, mit berechneter Startzeit und
-                            // momentaner Entscheidung. Einmal je Zyklus,
-                            // gerendert in der Mittag-Zeile.
-                            if (r.name === 'CalcStart-Mittag' && statusData && statusData.regel_ergebnisse) {
-                                const sammel = [];
-                                ['CalcStart-Mittag', 'CalcStart-Abend'].forEach(function(nm) {
-                                    const erg2 = statusData.regel_ergebnisse.find(e2 => e2 && e2.name === nm);
-                                    const plan2 = erg2 && erg2.regel_dict && Array.isArray(erg2.regel_dict.etappen) ? erg2.regel_dict.etappen : [];
-                                    plan2.forEach(function(e2) { sammel.push({ regel: nm, e: e2, ein: erg2.einschalten }); });
-                                });
-                                if (sammel.length) {
-                                    etappenHtml += '<div class="rule-etappen-sammel" style="margin-top:6px;padding-top:4px;border-top:1px dashed var(--border,#333)">' +
-                                        '<div style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:2px">Beide CalcStart-Etappen (Mittag + Abend)</div>' +
-                                        sammel.map(function(x) {
-                                            const p = Number(x.e.puffer_h);
-                                            const pTxt = Number.isFinite(p)
-                                                ? (p >= 0 ? 'Puffer ' + p.toFixed(1) + ' h' : 'ZU SP&Auml;T ' + Math.abs(p).toFixed(1) + ' h')
-                                                : '';
-                                            const f = !Number.isFinite(p) ? 'var(--text-secondary)'
-                                                : (p < 0 ? '#e57373' : (p < 0.5 ? '#ffa726' : '#4caf50'));
-                                            const status = x.ein === true ? ' <span style="color:#4caf50;font-weight:600">EIN</span>'
-                                                : (x.ein === false ? ' <span style="color:#e57373">AUS</span>' : '');
-                                            return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary)">' +
-                                                '<span style="min-width:92px">' + escapeHtml(x.e.name) + status + '</span>' +
-                                                '<span>Start ' + formatCalcHour(x.e.start_uhr) + ' &rarr; ' + formatCalcHour(x.e.ziel_uhr) + '</span>' +
-                                                '<span>' + Number(x.e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(x.e.temperaturfuehler) + '</span>' +
-                                                '<span style="color:' + f + '">' + pTxt + '</span>' +
-                                                '</div>';
-                                        }).join('') + '</div>';
-                                }
-                            }
                         }
                         else if (r.typ === 'mindesttemp') detail = 'Sensor: ' + r.sensor + ' | >= ' + r.min_c + ' C | ' + r.start + '-' + r.ende + ' Uhr' + (r.nachtsperre_ueberschreiben === false ? ' | respektiert Nachtsperre (kein Nacht-Heizen)' : '');
                         else if (r.typ === 'batterie') detail = 'SOC >= ' + r.min_soc + '% | Netzbezug-Grenze ' + r.max_netzbezug_w + ' W';
@@ -2597,7 +2607,7 @@
                             '<div class="rule-detail">' + detail + '</div>' +
                             etappenHtml +
                             decisionHtml + '</div>';
-                    }).join('');
+                    }).join('') + calcStartUebersichtHtml(statusData && statusData.regel_ergebnisse);
                 }
             }
 
