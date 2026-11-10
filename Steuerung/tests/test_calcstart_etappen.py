@@ -58,7 +58,22 @@ class TestEtappenplan:
         assert [e["name"] for e in plan] == ["Mittag", "Abend"]
         assert all("puffer_h" in e and "hours_needed" in e for e in plan)
 
-    def test_heizzeit_haengt_von_der_schichtung_ab(self):
+    def test_etappe_nennt_spaetesten_start(self):
+        """09.11.2026: Jede Etappe nennt auch den letzten moeglichen Start.
+
+        Befund: In der WebApp stand "geplant: 08:46" (globale Ein-Ziel-Rechnung
+        inkl. Mittagstief-Aufschlag) neben "Start 10:30" (Etappenrechnung) -
+        das las sich wie ein Widerspruch. Jetzt gibt es den spaetesten Start
+        je Etappe: Ziel - Heizzeit - Spaetstart-Puffer.
+        """
+        erg = _ruf(_config([MITTAG, ABEND]), {"unten": 30.0, "mittig": 38.0,
+                                              "oben": 45.0}, 9)
+        for e in erg.regel_dict["etappen"]:
+            assert "spaetester_start_uhr" in e, e
+            assert e["spaetester_start_uhr"] < e["ziel_uhr"], e
+            assert e["spaetester_start_uhr"] == round(
+                e["ziel_uhr"] - e["hours_needed"] - 0.5, 2), e
+
         """Gleiche Solltemperatur, unterschiedlicher Abstand -> andere Zeit."""
         cfg = _config([MITTAG])
         nah = _ruf(cfg, {"unten": 37.0, "mittig": 39.0, "oben": 45.0}, 9)

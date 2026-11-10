@@ -133,6 +133,19 @@ def test_webapp_zeigt_berechnete_startzeit_und_gemeinsame_etappen():
     assert ".join('') + calcStartUebersichtHtml(" in html, (
         "die Uebersicht muss am Ende der Regelliste stehen"
     )
+    # Jede Etappe nennt nur ihre eigenen Werte (Start/Ziel/Soll/Puffer). Die
+    # globalen "geplant"/"spaetestens" der Ein-Ziel-Rechnung duerfen NICHT im
+    # Etappen-Detail stehen: sie mischen den Mittagstief-Aufschlag hinein und
+    # lieferten im Betrieb 09.11.2026 "geplant 08:46" neben "Start 10:30".
+    assert "').join(' &middot; ') + planned + latest;" not in html, (
+        "globale geplant/spaetestens-Zeiten verwirren bei Etappen"
+    )
+    assert "Start = rechnerischer Einschaltzeitpunkt" in html, (
+        "die Legende fuer Start/Puffer fehlt"
+    )
+    assert "const zielHinweis = zielGelernt ? ' (gelernt)' : '';" in html, (
+        "die gelernte Zielzeit ist nicht gekennzeichnet"
+    )
     assert "etappenHtml += '<div class=\"rule-etappen-sammel\"" not in html, (
         "die Abend-Etappe darf nicht in der Mittag-Zeile erscheinen"
     )

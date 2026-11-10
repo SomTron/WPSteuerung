@@ -430,6 +430,7 @@ def _etappen_plan(
     Verhalten fuer Aufrufer ohne Etappen-Zuordnung).
     """
     plan: List[Dict] = []
+    spaetstart_puffer = float(getattr(calc_cfg, "spaetstart_puffer_h", 0.5))
     for etappe in getattr(calc_cfg, "etappen", None) or []:
         name = str(getattr(etappe, "name", "Etappe") or "Etappe").strip().lower()
         if etappen_filter is not None and name not in etappen_filter:
@@ -448,6 +449,12 @@ def _etappen_plan(
             # ist die Zahl, die der Betreiber in der WebApp sehen will
             # ("wann muss ich einschalten, um um 13:00 40 C zu haben?").
             "start_uhr": round(ziel - stunden, 2),
+            # Letzter moeglicher Start fuer DIESE Etappe (Ziel - Heizzeit -
+            # Spaetstart-Puffer). Bewusst je Etappe: die globale Regel-Rechnung
+            # mischt den Mittagstief-Aufschlag hinein und liefert dadurch eine
+            # andere (fruehere) Zeit als der Etappenplan - das war im Betrieb
+            # 09.11.2026 die Ursache fuer "geplant 08:46 / Start 10:30".
+            "spaetester_start_uhr": round(ziel - stunden - spaetstart_puffer, 2),
             "solltemperatur_c": float(getattr(etappe, "solltemperatur_c", 42.0)),
             "temperaturfuehler": getattr(etappe, "temperaturfuehler", "unten"),
             "hours_needed": round(stunden, 2),

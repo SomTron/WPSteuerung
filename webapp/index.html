@@ -1312,10 +1312,11 @@
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
         // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
-        // 1.10.32: CalcStart zeigt die berechnete Startzeit im Detailtext und
-        // eine gemeinsame Etappen-Uebersicht als eigenen Block am Ende der
-        // Regelliste (nicht mehr in der Mittag-Zeile).
-        const APP_VERSION = '1.10.32';
+        // 1.10.33: Jede Etappe nennt ihren spaetesten Start, die Zielzeit ist
+        // als "(gelernt)" markiert, wenn sie von der Konfiguration abweicht -
+        // damit "geplant 08:46" neben "Start 10:30" nicht mehr wie ein
+        // Widerspruch aussieht (globale vs. Etappen-Rechnung).
+        const APP_VERSION = '1.10.33';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -1428,7 +1429,11 @@
                         '<span>' + Number(x.e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(x.e.temperaturfuehler) + '</span>' +
                         '<span style="color:' + f + '">' + pTxt + '</span>' +
                         '</div>';
-                }).join('') + '</div>';
+                }).join('') +
+                '<div style="font-size:0.65rem;color:var(--text-secondary);margin-top:3px">' +
+                'Start = rechnerischer Einschaltzeitpunkt (Ziel minus Heizzeit) &middot; ' +
+                'Puffer = Reserve bis zum Ziel nach Abzug des 0,5-h-Sicherheitspuffers ' +
+                '(negativ = zu sp&auml;t)</div></div>';
         }
 
         // Geschwister zu setText, gleiche Begruendung: ein null-Element
@@ -2543,6 +2548,11 @@
                             const planned = calc ? ' | geplant: ' + formatCalcHour(calc.planned_start_hour) : '';
                             const latest = calc ? ' | spätestens: ' + formatCalcHour(calc.spaetester_start_hour) : '';
                             const needed = calc && Number.isFinite(Number(calc.hours_needed)) ? ' | Heizzeit: ' + Number(calc.hours_needed).toFixed(1) + ' h' : '';
+                            // Weicht die Zielzeit von der Konfiguration ab, ist es die
+                            // GELERNTE Zapfzeit (z. B. Abend 18:53 statt 17:00).
+                            const zielGelernt = calc && r.ziel_uhr != null
+                                && Math.abs(Number(calc.target_hour) - Number(r.ziel_uhr)) > 0.01;
+                            const zielHinweis = zielGelernt ? ' (gelernt)' : '';
                             const etappen = calc && Array.isArray(calc.etappen) ? calc.etappen : [];
                             if (etappen.length) {
                                 // Mehrere Bedarfszeitpunkte (Nutzerentscheidung
@@ -2553,9 +2563,15 @@
                                 // bestimmt die aktuelle Entscheidung.
                                 // Nutzerwunsch 09.11.2026: Die BERECHNETE
                                 // Startzeit steht jetzt auch im Detailtext
-                                // ("Mittag Start 09:15 -> 12:00").
+                                // ("Mittag Start 10:30 -> 12:00").
+                                // `planned`/`latest` gelten NUR fuer die
+                                // Ein-Ziel-Rechnung: sie mischen den
+                                // Mittagstief-Aufschlag hinein und zeigen
+                                // `max(jetzt, ...)` - bei Etappen sind die
+                                // Etappenwerte (Start/spaetestens/Puffer)
+                                // die massgebliche Auskunft.
                                 detail = 'Etappen: ' + etappen.map(e => escapeHtml(e.name) + ' Start ' + formatCalcHour(e.start_uhr) +
-                                    ' &rarr; ' + formatCalcHour(e.ziel_uhr) + ' (' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(e.temperaturfuehler) + ')').join(' &middot; ') + planned + latest;
+                                    ' &rarr; ' + formatCalcHour(e.ziel_uhr) + zielHinweis + ' (' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(e.temperaturfuehler) + ')').join(' &middot; ');
                                 etappenHtml = '<div class="rule-etappen" style="margin-top:4px">' +
                                     etappen.map(function(e) {
                                         const puffer = Number(e.puffer_h);
@@ -2567,7 +2583,7 @@
                                         return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary);' +
                                             (e.dringendste ? 'font-weight:600;color:var(--text-primary);' : '') + '">' +
                                             '<span style="min-width:64px">' + (e.dringendste ? '&rarr; ' : '') + escapeHtml(e.name) + '</span>' +
-                                            '<span>Start ' + formatCalcHour(e.start_uhr) + ' &rarr; ' + formatCalcHour(e.ziel_uhr) + '</span>' +
+                                            '<span>Start ' + formatCalcHour(e.start_uhr) + ' &rarr; ' + formatCalcHour(e.ziel_uhr) + zielHinweis + '</span>' +
                                             '<span>' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(e.temperaturfuehler) + '</span>' +
                                             '<span style="color:' + farbe + '">' + pufferTxt + '</span>' +
                                             (e.erreichbar === false ? '<span style="color:#e57373">Ziel kaum erreichbar</span>' : '') +
