@@ -485,6 +485,85 @@ class EinspeisungConfig(BaseModel):
         return self
 
 
+class PVUeberschussConfig(BaseModel):
+    """PV-Ueberschuss-Regel: heizt bei Einspeisung, unabhaengig vom Zeitplan.
+
+    Nutzerwunsch 10.11.2026: Der Speicher soll den PV-Ueberschuss verheizen,
+    auch wenn keine Zapf-Etappe (CalcStart) ansteht - ab einer einstellbaren
+    Einspeise-Grenze (Auslegung 500 W). Damit steigt der Eigenverbrauch,
+    statt spaeter am Abend mit Netzstrom auf Soll zu gehen.
+
+    Abgrenzung zu den bestehenden Regeln:
+      * ``Einspeisung`` (Prio 85) ist die Netzlimit-Begrenzung ab 7500 W.
+      * ``PV_mitte``/``PV_unten`` (Prio 78) messen die PV-ERZEUGUNG und sind
+        bei vorhandenem Forecast als Backup inaktiv.
+      * Diese Regel misst die EINSPEISUNG (feedinpower) - also den echten
+        Ueberschuss nach Hausverbrauch und Batterieladung.
+    """
+    aktiv: bool = Field(default=True, description="Regel aktiv")
+    prioritaet: int = Field(
+        default=77,
+        description=(
+            "Prioritaet. 77 = unter PV_mitte/PV_unten und AdaptivePV (78, die "
+            "Forecast-/Erzeugungsregeln behalten Vorrang), ueber Batterie (75), "
+            "MinTemp (65) und Abweichung (47). Hoeher setzen, wenn der "
+            "Ueberschuss Vorrang vor dem Zeitplan (CalcStart 82) haben soll."
+        ),
+    )
+    einspeisung_min_watt: float = Field(
+        default=500.0,
+        description="Einschalten ab dieser Netzeinspeisung (W) - echter Ueberschuss",
+    )
+    weiterlauf_ab_watt: float = Field(
+        default=0.0,
+        description=(
+            "Weiterlaufen, solange die Einspeisung >= Wert bleibt (W). 0 = "
+            "solange kein Netzbezug noetig ist (die WP zieht selbst ~600 W)."
+        ),
+    )
+    temperaturfuehler: str = Field(default="unten", description="Regelfuehler")
+    einschalten_bei_c: float = Field(
+        default=43.0,
+        description="Einschalten nur unterhalb dieser Temperatur (Regelfuehler, °C)",
+    )
+    ausschalten_bei_c: float = Field(default=48.0, description="Ausschalten bei (°C)")
+    oben_max_start_c: float = Field(
+        default=55.0,
+        description="Kein Start, wenn der obere Fuehler so heiss oder heisser ist (°C)",
+    )
+    nachtsperre_ueberschreiben: bool = Field(
+        default=False,
+        description=(
+            "True = Regel darf auch waehrend der Nachtsperre starten. Sinnvoll "
+            "nur, wenn nachts Einspeisung moeglich ist (z.B. Batterie)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _plausibel(self):
+        if self.temperaturfuehler not in ("oben", "mittig", "mitte", "unten"):
+            raise ValueError(
+                "pv_ueberschuss: temperaturfuehler muss oben/mittig/unter sein"
+            )
+        if not (0.0 <= self.einspeisung_min_watt <= 20000.0):
+            raise ValueError("pv_ueberschuss: einspeisung_min_watt ausserhalb 0-20000 W")
+        if self.weiterlauf_ab_watt > self.einspeisung_min_watt:
+            raise ValueError(
+                "pv_ueberschuss: weiterlauf_ab_watt > einspeisung_min_watt "
+                "(der Weiterlauf wuerde nie greifen)"
+            )
+        if not (30.0 <= self.ausschalten_bei_c <= 50.0):
+            raise ValueError("pv_ueberschuss: ausschalten_bei_c ausserhalb 30-50 C")
+        if not (0.0 < self.einschalten_bei_c < self.ausschalten_bei_c):
+            raise ValueError(
+                "pv_ueberschuss: einschalten_bei_c muss zwischen 0 und "
+                "ausschalten_bei_c liegen"
+            )
+        if self.prioritaet < 1:
+            raise ValueError("pv_ueberschuss: prioritaet muss >= 1 sein")
+        return self
+
+
 class ZeitfensterConfig(BaseModel):
     """Zeitfenster-Regel: Heizt zu bestimmten Uhrzeiten."""
     aktiv: bool = Field(default=True, description="Regel aktiv")
@@ -1256,6 +1335,11 @@ class WPSteuerungConfig(BaseModel):
     mindest_temp: MindestTempConfig = Field(default_factory=MindestTempConfig)
     batterie: BatterieConfig = Field(default_factory=BatterieConfig)
     einspeisung: EinspeisungConfig = Field(default_factory=EinspeisungConfig)
+    # Nutzerwunsch 10.11.2026: Eigenverbrauch - heizt ab 500 W Einspeisung,
+    # unabhaengig von den Zapf-Etappen (CalcStart).
+    pv_ueberschuss: PVUeberschussConfig = Field(
+        default_factory=PVUeberschussConfig
+    )
     legionellen: LegionellenConfig = Field(default_factory=LegionellenConfig)
 
 

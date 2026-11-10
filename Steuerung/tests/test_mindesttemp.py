@@ -161,6 +161,9 @@ def test_mittag_oben_mit_pv_kann_bis_48_weiterlaufen():
     config.forecast.aktiv = False
     config.adaptive_pv.aktiv = False
     config.notfallschutz.aktiv = False
+    # PV_Ueberschuss wuerde bei 900 W Einspeisung selbst heizen (Prio 77) -
+    # dieser Test prueft ausschliesslich die MinTemp-Weiterlauf-Grenze.
+    config.pv_ueberschuss.aktiv = False
     config.pv_regeln = [
         PVRegel(
             name="PV_mitte", prioritaet=78, temperaturfuehler="mitte",

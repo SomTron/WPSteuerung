@@ -204,6 +204,17 @@
     "einschalten_bis_c": 43.0,
     "oben_max_start_c": 55.0
   },
+  "pv_ueberschuss": {
+    "aktiv": true,
+    "prioritaet": 77,
+    "einspeisung_min_watt": 500.0,
+    "weiterlauf_ab_watt": 0.0,
+    "temperaturfuehler": "unten",
+    "einschalten_bei_c": 43.0,
+    "ausschalten_bei_c": 48.0,
+    "oben_max_start_c": 55.0,
+    "nachtsperre_ueberschreiben": false
+  },
   "legionellen": {
       "aktiv": true,
       "prioritaet": 90,

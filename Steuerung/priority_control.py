@@ -57,6 +57,9 @@ from regel_helpers import (  # noqa: E402, F401
 # evaluate_pv_regel ist in regel_pv.py ausgelagert.
 from regel_pv import evaluate_pv_regel  # noqa: E402, F401
 
+# evaluate_pv_ueberschuss ist in regel_pv_ueberschuss.py ausgelagert.
+from regel_pv_ueberschuss import evaluate_pv_ueberschuss  # noqa: E402, F401
+
 # evaluate_mindesttemp ist in regel_mindesttemp.py ausgelagert.
 from regel_mindesttemp import evaluate_mindesttemp  # noqa: E402, F401
 from regel_einspeisung import evaluate_einspeisung  # noqa: E402, F401
@@ -222,6 +225,26 @@ def bewerte_alle_regeln(
     #    grenze - sonst bricht der 48-C-Puffer die Prophylaxe vorzeitig ab.
     ergebnis = evaluate_einspeisung(
         config.einspeisung,
+        temp_dict,
+        pv_leistung,
+        kompressor_ein,
+        now_hour,
+        nachtsperre_start,
+        nachtsperre_ende,
+        legionellen_aktiv=bool(legionellen_aktiv),
+        legionellen_ziel_c=(
+            getattr(config.legionellen, "target_temp_c", None)
+            if legionellen_aktiv else None
+        ),
+    )
+    ergebnisse.append(ergebnis)
+
+    # 1b. PV-Ueberschuss (Eigenverbrauch, Nutzerwunsch 10.11.2026)
+    #     Heizt ab einer einstellbaren EINSPEISUNG (Auslegung 500 W), also
+    #     unabhaengig von Etappen/Zielzeiten. Misst `pv_leistung` =
+    #     feedinpower (Einspeisung), nicht die PV-Erzeugung.
+    ergebnis = evaluate_pv_ueberschuss(
+        config.pv_ueberschuss,
         temp_dict,
         pv_leistung,
         kompressor_ein,

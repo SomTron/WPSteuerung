@@ -18,9 +18,9 @@
 // v12 (09.11.2026): CalcStart-Uebersicht steht als eigener Block am Ende der
 // Regelliste (1.10.32) - die Huelle muss neu geladen werden, sonst laeuft die
 // alte Fassung weiter.
-// v13 (09.11.2026): Etappen nennen ihren spaetesten Start, Zielzeit als
-// "(gelernt)" markiert (1.10.33) - die Huelle muss neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v13';
+// v14 (10.11.2026): Neue Regel PV_Ueberschuss in der Regelliste (1.10.34) -
+// die Huelle muss neu geladen werden, sonst fehlt die Zeile.
+const CACHE_NAME = 'wp-webapp-shell-v14';
 const APP_SHELL = [
     './',
     './index.html',

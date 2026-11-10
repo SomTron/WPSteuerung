@@ -114,7 +114,7 @@ def test_forecast_vorhanden_pv_regeln_nur_backup():
         soc=95.0, battery_power=1500.0,
         solar_stale=False,
     )
-    pv = next(e for e in alle if e.name.startswith("PV_"))
+    pv = next(e for e in alle if e.name in ("PV_mitte", "PV_unten"))
     assert pv.aktiv is False
     assert pv.einschalten is None
     assert "PV-Exklusivitaet" in pv.grund

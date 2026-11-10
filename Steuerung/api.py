@@ -1804,6 +1804,19 @@ def _status_daten(rechne_auswertung: bool = False):
             "sensor": pc.adaptive_pv.temperaturfuehler,
             "max_c": pc.adaptive_pv.tmax_c,
         })
+        # PV-Ueberschuss-Regel (Eigenverbrauch ab einstellbarer Einspeisung,
+        # Nutzerwunsch 10.11.2026). Misst die Einspeisung, nicht die Erzeugung.
+        priority_info["regeln"].append({
+            "name": "PV_Ueberschuss", "typ": "ueberschuss",
+            "prio": pc.pv_ueberschuss.prioritaet,
+            "aktiv": pc.pv_ueberschuss.aktiv,
+            "schwelle_w": pc.pv_ueberschuss.einspeisung_min_watt,
+            "weiterlauf_w": pc.pv_ueberschuss.weiterlauf_ab_watt,
+            "sensor": pc.pv_ueberschuss.temperaturfuehler,
+            "ein": pc.pv_ueberschuss.einschalten_bei_c,
+            "aus": pc.pv_ueberschuss.ausschalten_bei_c,
+            "max_c": pc.pv_ueberschuss.oben_max_start_c,
+        })
         # CalcStart-Regel (Mittag und Abend)
         for _cs_name, _cs_uhr in (
             ("CalcStart-Mittag", pc.calculated_start.target_mittag_uhr),
