@@ -1312,9 +1312,9 @@
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
         // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
-        // 1.10.35: PV_Ueberschuss ist saisonal: 500 W im Winter, 5000 W im
-        // Sommer-Modus (erst heizen, wenn die Einspeisung ins Netzlimit laeuft).
-        const APP_VERSION = '1.10.35';
+        // 1.10.36: Sommer-Info zeigt die wirksame PV-Ueberschuss-Schwelle
+        // (500 W Winter / 5000 W Sommer-Modus); Log nennt sie beim Umschalten.
+        const APP_VERSION = '1.10.36';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -3184,7 +3184,9 @@
             setClass('switch-solar', 'switch' + (mode.solar_active ? ' active' : ''));
             setClass('switch-night', 'switch' + (mode.nightsperre_active ? ' active' : ''));
             setClass('switch-sommer', 'switch' + (mode.sommer_modus_aktiv ? ' active' : ''));
-            setText('sommer-info', mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv');
+            setText('sommer-info', mode.sommer_modus_aktiv
+                ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage) | PV-Überschuss erst ab ' + (mode.pv_ueberschuss_schwelle_w ?? '?') + ' W'
+                : 'Inaktiv (PV-Überschuss ab ' + (mode.pv_ueberschuss_schwelle_w ?? '?') + ' W)');
 
             // Legionellenprophylaxe (Planung / Status)
             const lgInfo = document.getElementById('legionellen-info');
@@ -3466,7 +3468,7 @@
                         <div class="toggle-switch">
                             <span class="toggle-label">Sommer-Modus</span>
                             <div class="switch ${mode.sommer_modus_aktiv ? 'active' : ''}" id="switch-sommer"></div>
-                        <div class="info-row" style="font-size:0.8rem;color:var(--text-secondary)" id="sommer-info">${mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage)' : 'Inaktiv'}</div>
+                        <div class="info-row" style="font-size:0.8rem;color:var(--text-secondary)" id="sommer-info">${mode.sommer_modus_aktiv ? 'Temp-Offset: ' + mode.sommer_modus_offset_c + '°C (' + mode.sommer_modus_tage_ueber + '/' + mode.sommer_modus_benoetigte + ' Tage) | PV-Überschuss erst ab ' + (mode.pv_ueberschuss_schwelle_w ?? '?') + ' W' : 'Inaktiv (PV-Überschuss ab ' + (mode.pv_ueberschuss_schwelle_w ?? '?') + ' W)'}</div>
                         </div>
                         <!-- Legionellenprophylaxe-Planung (aus state.legionellen_planned_*) -->
                         <div class="info-row"><span class="info-label">🦠 Legionellen</span><span class="info-value" id="legionellen-info">${(statusData.legionellen && statusData.legionellen.aktiv) ? '🔄 aktiv (Ziel ' + (statusData.legionellen.target_temp_c ?? '60') + '°C)' : (statusData.legionellen && statusData.legionellen.planned_day ? '⏰ geplant: ' + statusData.legionellen.planned_day + ' ' + (statusData.legionellen.planned_time || '') : (statusData.legionellen && statusData.legionellen.last_done ? '✓ KW ' + statusData.legionellen.last_done.split('-')[1] : '— keine Planung'))}</span></div>

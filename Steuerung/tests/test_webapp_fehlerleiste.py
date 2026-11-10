@@ -110,6 +110,19 @@ def test_servermeldung_schickt_den_api_key_mit():
     )
 
 
+def test_webapp_zeigt_die_wirksame_ueberschuss_schwelle():
+    """Nutzerwunsch 10.11.2026: Der Sommer-Modus muss die geltende Schwelle
+    zeigen - sonst ist nicht erkennbar, ob ab 500 W oder 5000 W geheizt wird.
+    """
+    html = _html()
+    # Wirksame Schwelle aus mode.pv_ueberschuss_schwelle_w im Sommer-Info-Text.
+    assert "pv_ueberschuss_schwelle_w" in html
+    assert "PV-Überschuss erst ab " in html
+    assert "Inaktiv (PV-Überschuss ab " in html
+    # Regelliste nennt beide Schwellen (Winter/Sommer).
+    assert "im Sommer >= " in html
+
+
 def test_webapp_zeigt_berechnete_startzeit_und_gemeinsame_etappen():
     """Nutzerwunsch 09.11.2026: CalcStart zeigt "Start 09:15 -> 12:00" im
     Detailtext und eine gemeinsame Etappen-Uebersicht beider Regeln.

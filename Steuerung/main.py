@@ -1036,14 +1036,36 @@ async def check_periodic_tasks(session, state, last_vpn_check):
                 state.sommer_letzter_bewertungstag = bewertungstag
 
                 if ereignis == SOMMER_AKTIVIERT:
+                    # Die wirksame PV-Ueberschuss-Schwelle mitloggen: im Sommer
+                    # wird nicht mehr ab 500 W geheizt, sondern erst kurz vor
+                    # dem Netzlimit (Auslegung 5000 W).
+                    _ueb = getattr(state.priority_config, "pv_ueberschuss", None)
+                    _winter_w = float(
+                        getattr(_ueb, "einspeisung_min_watt", 0.0) or 0.0
+                    )
+                    _sommer_w = float(
+                        getattr(_ueb, "einspeisung_min_watt_sommer", 0.0) or 0.0
+                    )
+                    _wirksam_w = _sommer_w if _sommer_w > 0.0 else _winter_w
                     logging.info(
                         f"Sommer-Modus AKTIV nach {neuer_zaehler} guten Prognosetag(en): "
                         f"Solltemperatur wird um {abs(sommer_cfg.temperatur_offset_c):.1f}C gesenkt "
                         f"(Offset {sommer_cfg.temperatur_offset_c:+.1f}C, "
-                        f"Schwelle >={sommer_cfg.mindest_prognose_wh:.0f} Wh/qm)"
+                        f"Schwelle >={sommer_cfg.mindest_prognose_wh:.0f} Wh/qm), "
+                        f"PV-Ueberschuss erst ab {_wirksam_w:.0f} W statt {_winter_w:.0f} W"
                     )
                 elif ereignis == SOMMER_DEAKTIVIERT_PROGNOSE:
-                    logging.info("Sommer-Modus INAKTIV: PV-Prognose nicht mehr durchgehend gut")
+                    _ueb = getattr(state.priority_config, "pv_ueberschuss", None)
+                    _winter_w = float(
+                        getattr(_ueb, "einspeisung_min_watt", 0.0) or 0.0
+                    )
+                    logging.info(
+                        "Sommer-Modus INAKTIV: PV-Prognose nicht mehr durchgehend gut"
+                        + (
+                            f" - PV-Ueberschuss wieder ab {_winter_w:.0f} W"
+                            if _winter_w > 0.0 else ""
+                        )
+                    )
                 elif ereignis == SOMMER_DEAKTIVIERT_DATEN:
                     logging.info("Sommer-Modus INAKTIV: Keine vollstaendigen Prognosedaten verfuegbar")
 

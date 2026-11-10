@@ -43,6 +43,34 @@ def baue_vollen_state():
     )
 
 
+class TestWirksameUeberschussSchwelle:
+    """Nutzerwunsch 10.11.2026: Die WebApp muss zeigen, welche Schwelle gilt."""
+
+    @staticmethod
+    def _state(sommer_aktiv, winter=500.0, sommer=5000.0):
+        state = baue_vollen_state()
+        state.sommer_modus_aktiv = sommer_aktiv
+        state.priority_config.pv_ueberschuss = SimpleNamespace(
+            einspeisung_min_watt=winter,
+            einspeisung_min_watt_sommer=sommer,
+        )
+        return state
+
+    def test_sommer_aktiv_nutzt_die_sommer_schwelle(self):
+        payload = build_mode_payload(self._state(True), priority_info_override={})
+        assert payload["pv_ueberschuss_schwelle_w"] == 5000.0
+
+    def test_sommer_inaktiv_nutzt_die_winter_schwelle(self):
+        payload = build_mode_payload(self._state(False), priority_info_override={})
+        assert payload["pv_ueberschuss_schwelle_w"] == 500.0
+
+    def test_sommer_schwelle_null_faellt_auf_winter_zurueck(self):
+        payload = build_mode_payload(
+            self._state(True, sommer=0.0), priority_info_override={}
+        )
+        assert payload["pv_ueberschuss_schwelle_w"] == 500.0
+
+
 class TestSommerModusImModePayload:
 
     def test_werte_kommen_aus_den_richtigen_quellen(self):
@@ -72,6 +100,8 @@ class TestSommerModusImModePayload:
         assert payload["sommer_modus_tage_ueber"] == 0
         assert payload["sommer_modus_benoetigte"] == 3
         assert payload["sommer_modus_offset_c"] == 0.0
+        # Ohne PV-Ueberschuss-Config gibt es keine wirksame Schwelle.
+        assert payload["pv_ueberschuss_schwelle_w"] == 0.0
         assert payload["current"] == ""
         assert payload["nightsperre_active"] is False
 

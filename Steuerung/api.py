@@ -118,6 +118,24 @@ def _redact_config(value, key: str = ""):
         return "***" if value not in (None, "") else ""
     return value
 
+def _wirksame_ueberschuss_schwelle(state) -> float:
+    """Einschaltschwelle der PV-Ueberschuss-Regel, die JETZT gilt.
+
+    Winter/Uebergang: ``einspeisung_min_watt`` (Auslegung 500 W).
+    Sommer-Modus: ``einspeisung_min_watt_sommer`` (Auslegung 5000 W), sofern
+    gesetzt (> 0) - im Sommer soll erst geheizt werden, wenn die Einspeisung
+    ins Netzlimit (7500 W) laeuft.
+    """
+    ueb = getattr(getattr(state, "priority_config", None), "pv_ueberschuss", None)
+    if ueb is None:
+        return 0.0
+    winter = float(getattr(ueb, "einspeisung_min_watt", 0.0) or 0.0)
+    sommer = float(getattr(ueb, "einspeisung_min_watt_sommer", 0.0) or 0.0)
+    if bool(getattr(state, "sommer_modus_aktiv", False)) and sommer > 0.0:
+        return sommer
+    return winter
+
+
 def build_mode_payload(state, priority_info_override=None):
     """Baut das 'mode'-Objekt des /status Endpoints.
 
@@ -184,6 +202,9 @@ def build_mode_payload(state, priority_info_override=None):
         "sommer_modus_offset_c": float(getattr(sommer_cfg, 'temperatur_offset_c', 0.0) or 0.0),
         "sommer_modus_tage_ueber": int(getattr(state, 'sommer_modus_zaehler', 0) or 0),
         "sommer_modus_benoetigte": int(getattr(sommer_cfg, 'benoetigte_tage', 3) or 3),
+        # Wirksame Einschaltschwelle der PV-Ueberschuss-Regel (500 W Winter,
+        # 5000 W im Sommer-Modus) - damit die WebApp zeigt, was gerade gilt.
+        "pv_ueberschuss_schwelle_w": _wirksame_ueberschuss_schwelle(state),
     }
 
 
