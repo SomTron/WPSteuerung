@@ -43,6 +43,7 @@ def evaluate_pv_ueberschuss(
     legionellen_aktiv: bool = False,
     legionellen_ziel_c: Optional[float] = None,
     battery_power: Optional[float] = None,
+    lauf_start_regel: Optional[str] = None,
 ) -> RegelErgebnis:
     """EIN ab ``einspeisung_min_watt`` Einspeisung, AUS bei ``ausschalten_bei_c``.
 
@@ -84,10 +85,12 @@ def evaluate_pv_ueberschuss(
     ladung_w = batterie_ladung_watt(battery_power) or 0.0
     einspeisung_ok = feedin_watt >= min_w
     ladung_ok = bat_min_w > 0.0 and ladung_w >= bat_min_w
-    # Ein LAUFENDER Zyklus bleibt an, solange die Einspeisung ueber der
-    # Weiterlauf-Schwelle liegt - die WP senkt sie durch ihren eigenen
-    # Verbrauch (~600 W) selbst, ein Start mit 500 W steht danach oft bei 0 W.
-    weiterlauf_ok = kompressor_ein and (
+    # Ein LAUFENDER Zyklus bleibt nur dann an, wenn DIESE Regel ihn gestartet
+    # hat - sonst uebernimmt sie fremde Laeufe (Netz-Notfallstart von
+    # CalcStart, Mindestlaufzeit) und meldet "Modus: PV_Ueberschuss", obwohl
+    # gar kein PV-Strom fliesst (Befund 10.11.2026, 17:59).
+    eigener_lauf = (lauf_start_regel or "") == "PV_Ueberschuss"
+    weiterlauf_ok = kompressor_ein and eigener_lauf and (
         feedin_watt >= float(ueb_cfg.weiterlauf_ab_watt) or ladung_ok
     )
 
@@ -104,11 +107,17 @@ def evaluate_pv_ueberschuss(
         )
     elif weiterlauf_ok:
         anlass = (
-            f"Weiterlauf (Einspeisung {feedin_watt:.0f}W >= "
+            f"Weiterlauf (eigener Lauf, Einspeisung {feedin_watt:.0f}W >= "
             f"{float(ueb_cfg.weiterlauf_ab_watt):.0f}W)"
         )
     else:
         result.set_reason_code("pv_unterbrechung")
+        fremd = ""
+        if kompressor_ein and not eigener_lauf:
+            fremd = (
+                f" (laufender Zyklus von "
+                f"'{lauf_start_regel or 'unbekannt'}' - kein Uebernehmen)"
+            )
         result.grund = (
             f"PV-Ueberschuss: Einspeisung {feedin_watt:.0f}W < {min_w:.0f}W"
             + (
@@ -116,6 +125,7 @@ def evaluate_pv_ueberschuss(
                 if bat_min_w > 0.0 else ""
             )
             + " -> keine Aktion"
+            + fremd
         )
         return result
 

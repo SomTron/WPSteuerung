@@ -25,10 +25,10 @@ def _cfg(**kw):
 
 
 def _eval(cfg=None, feedin=0.0, temps=None, kompressor=False, stunde=13,
-          battery=None):
+          battery=None, start_regel=None):
     return evaluate_pv_ueberschuss(
         cfg or _cfg(), temps or dict(TEMPS), feedin, kompressor, stunde, 19, 8,
-        battery_power=battery,
+        battery_power=battery, lauf_start_regel=start_regel,
     )
 
 
@@ -79,10 +79,30 @@ def test_oben_voll_beendet_einen_laufenden_zyklus():
 
 
 def test_weiterlauf_solange_kein_netzbezug():
-    """weiterlauf_ab_watt=0: Ein laufender Zyklus bleibt an (WP zieht ~600 W)."""
-    e = _eval(feedin=0.0, kompressor=True)
+    """weiterlauf_ab_watt=0: Ein EIGENER laufender Zyklus bleibt an."""
+    e = _eval(feedin=0.0, kompressor=True, start_regel="PV_Ueberschuss")
     assert e.einschalten is True, e.grund
     assert "Weiterlauf" in e.grund
+    assert "eigener Lauf" in e.grund
+
+
+def test_weiterlauf_nur_fuer_eigenen_lauf():
+    """BEFUND 10.11.2026, 17:59: Modus 'PV_Ueberschuss' ohne PV-Strom.
+
+    Die Regel hat einen fremden Netz-Notfallstart (CalcStart-Abend) als
+    'Weiterlauf' uebernommen, weil `weiterlauf_ab_watt = 0` jede Einspeisung
+    >= 0 W akzeptiert. Jetzt laeuft sie nur eigene Zyklen weiter.
+    """
+    e = _eval(feedin=0.0, kompressor=True, start_regel="CalcStart-Abend")
+    assert e.einschalten is None, e.grund
+    assert "kein Uebernehmen" in e.grund
+    assert "CalcStart-Abend" in e.grund
+
+
+def test_weiterlauf_ohne_startregel_nicht():
+    """Unbekannter Startgrund -> kein Uebernehmen."""
+    e = _eval(feedin=0.0, kompressor=True, start_regel=None)
+    assert e.einschalten is None, e.grund
 
 
 def test_einschaltgrenze_verhindert_kurzlauf():

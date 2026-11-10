@@ -1312,9 +1312,9 @@
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
         // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
-        // 1.10.38: PV_Ueberschuss startet auch bei Batterieladung (>= 500 W)
-        // - dann nur bis zum Minimum-Soll unten (42 C).
-        const APP_VERSION = '1.10.38';
+        // 1.10.39: PV_Ueberschuss laeuft nur noch EIGENE Zyklen weiter - kein
+        // Modus "PV_Ueberschuss" mehr bei fremden Netz-Laeufen ohne PV.
+        const APP_VERSION = '1.10.39';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');

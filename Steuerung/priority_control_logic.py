@@ -896,6 +896,9 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         # zaehlen. Ausserhalb zaehlt nur die Batterie.
         pv_quelle_erlaubt=pv_quelle_erlaubt,
         pv_fenster_reserve_h=pv_fenster_reserve_h,
+        # Nutzerwunsch 10.11.2026: PV_Ueberschuss laeuft nur eigene Zyklen
+        # weiter (Modus-Anzeige + kein Uebernehmen fremder Netz-Laeufe).
+        lauf_start_regel=getattr(state.control, "_lauf_start_regel", None),
         # BUGFIX (22.10.2026): Stundenprognose fuer den Rest-Ertrag-Check
         # im PV-Warten. Ohne sie wartet die Regel auch dann noch auf die
         # Sonne, wenn der Rest-Tagesertrag den Bedarf nicht mehr deckt.

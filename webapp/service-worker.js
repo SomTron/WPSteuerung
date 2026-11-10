@@ -18,9 +18,9 @@
 // v12 (09.11.2026): CalcStart-Uebersicht steht als eigener Block am Ende der
 // Regelliste (1.10.32) - die Huelle muss neu geladen werden, sonst laeuft die
 // alte Fassung weiter.
-// v18 (10.11.2026): PV_Ueberschuss startet auch bei Batterieladung, dann nur
-// bis 42 C (1.10.38) - die Huelle muss neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v18';
+// v19 (10.11.2026): PV_Ueberschuss laeuft nur eigene Zyklen weiter
+// (1.10.39) - die Huelle muss neu geladen werden.
+const CACHE_NAME = 'wp-webapp-shell-v19';
 const APP_SHELL = [
     './',
     './index.html',

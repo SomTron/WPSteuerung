@@ -156,6 +156,10 @@ def bewerte_alle_regeln(
     # Zapfungsmenge (l) fuer den CalcStart.
     zapf_vorhaltung_k: float = 0.0,
     zapfmenge_l: float = 0.0,
+    # Nutzerwunsch 10.11.2026: Regel, die den laufenden Zyklus gestartet hat.
+    # PV_Ueberschuss darf nur einen EIGENEN Lauf weiterlaufen (sonst meldet
+    # die Regel den Modus, obwohl ein Netz-Notfallstart von CalcStart laeuft).
+    lauf_start_regel: Optional[str] = None,
 ) -> Tuple[Optional[RegelErgebnis], List[RegelErgebnis]]:
     """
     Hauptfunktion: Bewertet alle Regeln und gibt die Gewinner-Regel zurueck.
@@ -259,6 +263,9 @@ def bewerte_alle_regeln(
         # Nutzerwunsch 10.11.2026: Batterieladung zaehlt als Ueberschuss
         # (dann nur bis zum Minimum-Soll unten).
         battery_power=battery_power,
+        # Nur ein von DIESER Regel gestarteter Zyklus darf weiterlaufen -
+        # sonst uebernimmt sie fremde (Netz-)Laeufe und setzt den Modus.
+        lauf_start_regel=lauf_start_regel,
     )
     ergebnisse.append(ergebnis)
 
