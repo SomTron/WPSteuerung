@@ -799,6 +799,17 @@ class ForecastConfig(BaseModel):
             "Schichtungs-Starts noch als PV-gedeckt gelten (min)"
         ),
     )
+    pv_fenster_messung_min_w: float = Field(
+        default=1000.0,
+        description=(
+            "BEFUND 10.11.2026: Liefert die Anlage mindestens so viel "
+            "PV-Erzeugung (W), gilt das Gate auch dann als offen, wenn die "
+            "PROGNOSE das Fenster schon geschlossen hat. Die Messung schlaegt "
+            "die Vorhersage - sonst warten alle Regler auf eine Quelle, die "
+            "es gibt (Log 10.11.2026 14:47: Prognose 'keine Stunde mehr "
+            ">= 300 W', real 5285 W, Speicher blieb kalt). 0 = aus."
+        ),
+    )
 
 
     @model_validator(mode="after")

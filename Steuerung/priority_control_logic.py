@@ -438,6 +438,24 @@ def _wartende_quellenregel(alle_ergebnisse):
     return None
 
 
+def pv_fenster_messung_oeffnet(pv_erzeugung_watt: object, min_w: float) -> bool:
+    """True, wenn die reale PV-Erzeugung ein geschlossenes Prognose-Fenster oeffnet.
+
+    BEFUND 10.11.2026 (Log 14:47): Die Stundenprognose meldete "keine Stunde
+    mehr >= 300 W", die Anlage lieferte aber 5.285 W. Weil zusaetzlich die
+    Batterie lud (Einspeisung 0 W), fand keine Regel eine erneuerbare Quelle
+    und der Speicher blieb kalt (oben 43 / unten 33 C).
+
+    Die Messung ist die Wahrheit: Ab ``min_w`` PV-Erzeugung gilt das Gate als
+    offen. ``min_w <= 0`` schaltet die Korrektur ab (reine Prognose-Logik).
+    """
+    if not isinstance(min_w, (int, float)) or isinstance(min_w, bool) or min_w <= 0.0:
+        return False
+    if not isinstance(pv_erzeugung_watt, (int, float)) or isinstance(pv_erzeugung_watt, bool):
+        return False
+    return float(pv_erzeugung_watt) >= float(min_w)
+
+
 async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
     """
     Bestimmt den Betriebsmodus basierend auf den Prioritaeten-Regeln.
@@ -799,6 +817,28 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
     pv_fenster_zu = bool(
         pv_fenster_aktiv and pv_fenster_bekannt and pv_fenster_stunde is None
     )
+    # BEFUND 10.11.2026 (Log 14:47): Die Prognose schloss das Fenster
+    # ("heute keine Stunde mehr >= 300 W"), waehrend die Anlage real 5.285 W
+    # lieferte. Weil zusaetzlich die Batterie lud (Einspeisung 0 W), fand
+    # KEINE Regel eine erneuerbare Quelle: Abweichung wartete wegen des
+    # Schichtungs-Starts (oben 43 C), AdaptivePV/CalcStart warteten auf PV -
+    # der Speicher blieb bei oben 43 / unten 33 C kalt.
+    # Die Messung ist die Wahrheit: liefert die Anlage deutlich PV-Leistung,
+    # gilt das Gate als offen. Die Schwelle ist bewusst hoeher als
+    # `pv_fenster_min_w` (300 W), damit der Eigenverbrauch des Hauses
+    # gedeckt ist und nicht die Nachtabschaltung ausgehebelt wird.
+    _mess_min_w = float(
+        getattr(fc_forecast_cfg, "pv_fenster_messung_min_w", 1000.0) or 0.0
+    )
+    _pv_ist = getattr(getattr(state, "solar", None), "pv_erzeugung", None)
+    if pv_fenster_zu and pv_fenster_messung_oeffnet(_pv_ist, _mess_min_w):
+        pv_fenster_zu = False
+        if check_log_throttle(state, "log_pv_fenster_messung", interval_minutes=15):
+            logging.info(
+                f"PV-Fenster: Prognose geschlossen, aber Anlage liefert "
+                f"{float(_pv_ist):.0f}W (>= {_mess_min_w:.0f}W) -> Gate offen "
+                f"(Messung schlaegt Prognose)"
+            )
     pv_quelle_erlaubt = not pv_fenster_zu
     try:
         state.control.pv_fenster_stunde = pv_fenster_stunde

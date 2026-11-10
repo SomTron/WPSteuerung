@@ -112,7 +112,8 @@
     "vorheiz_ende_uhr": 19,
     "sparen_start_uhr": 11,
     "sparen_ende_uhr": 15,
-    "temperaturfuehler": "unten"
+    "temperaturfuehler": "unten",
+    "pv_fenster_messung_min_w": 1000.0
   },
   "adaptive_pv": {
     "prioritaet": 78,

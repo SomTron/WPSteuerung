@@ -316,6 +316,43 @@ async def _fahre(state):
 
 
 @pytest.mark.asyncio
+async def test_messung_oeffnet_das_geschlossene_prognose_fenster():
+    """BEFUND 10.11.2026: Messung schlaegt Prognose.
+
+    Log 14:47: Die Stundenprognose meldete "keine Stunde mehr >= 300 W"
+    (Fenster zu), die Anlage lieferte real 5.285 W. Zusaetzlich lud die
+    Batterie (Einspeisung 0 W) - damit war keine erneuerbare Quelle da, die
+    Abweichung wartete wegen des Schichtungs-Starts (oben 43 C) und der
+    Speicher blieb kalt (unten 33 C).
+    """
+    state = _pcl_state({12: 900.0}, pv_erzeugung=5285.0)
+    await _fahre(state)
+
+    assert state.control.pv_fenster_ausserhalb is False
+    abw = _abweichung(state)
+    assert abw is not None
+    assert abw.einschalten is True, abw.grund
+
+
+@pytest.mark.asyncio
+async def test_zu_wenig_eigene_pv_oeffnet_das_gate_nicht():
+    """Gegenprobe: 800 W Erzeugung liegen unter der Mess-Schwelle (1000 W)."""
+    state = _pcl_state({12: 900.0}, pv_erzeugung=800.0)
+    await _fahre(state)
+    assert state.control.pv_fenster_ausserhalb is True
+
+
+def test_hilfsfunktion_messung_oeffnet():
+    import priority_control_logic as pcl
+
+    assert pcl.pv_fenster_messung_oeffnet(5285.0, 1000.0) is True
+    assert pcl.pv_fenster_messung_oeffnet(999.0, 1000.0) is False
+    assert pcl.pv_fenster_messung_oeffnet(None, 1000.0) is False
+    # 0 = Korrektur aus (reine Prognose-Logik)
+    assert pcl.pv_fenster_messung_oeffnet(9000.0, 0.0) is False
+
+
+@pytest.mark.asyncio
 async def test_produktion_zaehlt_pv_ausserhalb_des_fensters_nicht_als_quelle():
     """Kernfall: Fenster zu -> die PV-Messung traegt den Lauf NICHT.
 

@@ -1312,9 +1312,9 @@
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
         // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
-        // 1.10.36: Sommer-Info zeigt die wirksame PV-Ueberschuss-Schwelle
-        // (500 W Winter / 5000 W Sommer-Modus); Log nennt sie beim Umschalten.
-        const APP_VERSION = '1.10.36';
+        // 1.10.37: PV-Fenster-Gate oeffnet auch bei hoher REALER PV-Erzeugung
+        // (Messung schlaegt Prognose, z.B. 5285 W bei geschlossener Prognose).
+        const APP_VERSION = '1.10.37';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
