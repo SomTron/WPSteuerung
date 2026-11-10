@@ -1843,6 +1843,14 @@ def _status_daten(rechne_auswertung: bool = False):
             "ein": pc.pv_ueberschuss.einschalten_bei_c,
             "aus": pc.pv_ueberschuss.ausschalten_bei_c,
             "max_c": pc.pv_ueberschuss.oben_max_start_c,
+            # Nutzerwunsch 10.11.2026: Batterieladung zaehlt als Ueberschuss -
+            # dann nur bis zum Minimum-Soll unten (batterie_aus_c).
+            "batterie_w": getattr(
+                pc.pv_ueberschuss, "batterie_ladung_min_w", 0.0
+            ),
+            "batterie_aus_c": getattr(
+                pc.pv_ueberschuss, "batterie_ausschalten_bei_c", 0.0
+            ),
         })
         # CalcStart-Regel (Mittag und Abend)
         for _cs_name, _cs_uhr in (

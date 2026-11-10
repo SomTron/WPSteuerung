@@ -548,6 +548,23 @@ class PVUeberschussConfig(BaseModel):
             "nur, wenn nachts Einspeisung moeglich ist (z.B. Batterie)."
         ),
     )
+    batterie_ladung_min_w: float = Field(
+        default=500.0,
+        description=(
+            "Nutzerwunsch 10.11.2026: Laedt die Hausbatterie mit mindestens "
+            "so viel Leistung (W), gilt das ebenfalls als Ueberschuss - die "
+            "Regel startet dann auch bei 0 W Einspeisung. 0 = nur Einspeisung "
+            "zaehlt."
+        ),
+    )
+    batterie_ausschalten_bei_c: float = Field(
+        default=42.0,
+        description=(
+            "Ausschaltgrenze, wenn der Lauf NUR wegen der Batterieladung "
+            "laeuft (kein Einspeise-Ueberschuss): nur bis zum Minimum-Soll "
+            "unten heizen, damit die Batterie nicht leer gelutscht wird."
+        ),
+    )
 
     @model_validator(mode="after")
     def _plausibel(self):
@@ -580,6 +597,17 @@ class PVUeberschussConfig(BaseModel):
             raise ValueError(
                 "pv_ueberschuss: einschalten_bei_c muss zwischen 0 und "
                 "ausschalten_bei_c liegen"
+            )
+        if not (0.0 <= self.batterie_ladung_min_w <= 20000.0):
+            raise ValueError(
+                "pv_ueberschuss: batterie_ladung_min_w ausserhalb 0-20000 W"
+            )
+        if not (0.0 < self.batterie_ausschalten_bei_c <= self.ausschalten_bei_c):
+            raise ValueError(
+                "pv_ueberschuss: batterie_ausschalten_bei_c muss zwischen 0 "
+                "und ausschalten_bei_c liegen (nur bis zum Minimum-Soll heizen). "
+                "Die Einschalthysterese fuer den Batterie-Anlass wird intern "
+                "1 K unter diesem Wert gehalten."
             )
         if self.prioritaet < 1:
             raise ValueError("pv_ueberschuss: prioritaet muss >= 1 sein")

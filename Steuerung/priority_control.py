@@ -256,6 +256,9 @@ def bewerte_alle_regeln(
             getattr(config.legionellen, "target_temp_c", None)
             if legionellen_aktiv else None
         ),
+        # Nutzerwunsch 10.11.2026: Batterieladung zaehlt als Ueberschuss
+        # (dann nur bis zum Minimum-Soll unten).
+        battery_power=battery_power,
     )
     ergebnisse.append(ergebnis)
 

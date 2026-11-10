@@ -215,7 +215,9 @@
     "einschalten_bei_c": 43.0,
     "ausschalten_bei_c": 48.0,
     "oben_max_start_c": 55.0,
-    "nachtsperre_ueberschreiben": false
+    "nachtsperre_ueberschreiben": false,
+    "batterie_ladung_min_w": 500.0,
+    "batterie_ausschalten_bei_c": 42.0
   },
   "legionellen": {
       "aktiv": true,

@@ -24,9 +24,11 @@ def _cfg(**kw):
     return PVUeberschussConfig(**kw)
 
 
-def _eval(cfg=None, feedin=0.0, temps=None, kompressor=False, stunde=13):
+def _eval(cfg=None, feedin=0.0, temps=None, kompressor=False, stunde=13,
+          battery=None):
     return evaluate_pv_ueberschuss(
         cfg or _cfg(), temps or dict(TEMPS), feedin, kompressor, stunde, 19, 8,
+        battery_power=battery,
     )
 
 
@@ -179,3 +181,65 @@ def test_sommer_schwelle_kleiner_als_winter_wird_abgelehnt():
     with pytest.raises(Exception):
         PVUeberschussConfig(einspeisung_min_watt=1000.0,
                             einspeisung_min_watt_sommer=500.0)
+
+
+# --- Batterieladung zaehlt als Ueberschuss (Nutzerwunsch 10.11.2026) ------
+#
+# Fall 10.11.2026, 14:47: PV 5285 W, aber Einspeisung 0 W (die Batterie lud).
+# Die Regel sah "keinen Ueberschuss" und heizte nicht. Jetzt darf sie auch bei
+# Batterieladung starten - aber nur bis zum Minimum-Soll unten, damit die
+# Batterie nicht leergesaugt wird.
+
+def test_batterieladung_startet_ohne_einspeisung():
+    e = _eval(feedin=0.0, battery=800.0)      # batPower > 0 = Ladung
+    assert e.einschalten is True, e.grund
+    assert "Batterie laedt 800W" in e.grund
+    assert "bis 42.0C" in e.grund
+
+
+def test_batterieladung_unter_der_schwelle_startet_nicht():
+    e = _eval(feedin=0.0, battery=300.0)
+    assert e.einschalten is None, e.grund
+    assert "keine Aktion" in e.grund
+
+
+def test_batterie_anlass_heizt_nur_bis_minimum_soll():
+    """Bei 42.5 C ist das Minimum-Soll erreicht -> AUS (nicht erst bei 48 C)."""
+    e = _eval(feedin=0.0, battery=800.0,
+              temps={"unten": 42.5, "mittig": 44.0, "oben": 46.0})
+    assert e.einschalten is False, e.grund
+    assert "42.0C" in e.grund
+
+
+def test_einspeisung_hat_vorrang_und_heizt_bis_48():
+    """Echter Einspeise-Ueberschuss -> volles Ziel 48 C, nicht 42 C."""
+    e = _eval(feedin=900.0, battery=800.0,
+              temps={"unten": 42.0, "mittig": 43.0, "oben": 44.0})
+    assert e.einschalten is True, e.grund
+    assert "bis 48.0C" in e.grund
+
+
+def test_batterie_abschaltgrenze_wird_validiert():
+    with pytest.raises(Exception):
+        # Ueber der Ausschaltgrenze (48 C) -> unzulaessig
+        PVUeberschussConfig(batterie_ausschalten_bei_c=50.0)
+
+
+def test_batterie_ladung_null_bedeutet_nur_einspeisung():
+    """0 = alte Logik: Batterieladung allein startet nicht."""
+    e = _eval(_cfg(batterie_ladung_min_w=0.0), feedin=0.0, battery=5000.0)
+    assert e.einschalten is None, e.grund
+
+
+def test_projektkonfiguration_nutzt_batterieladung_bis_42():
+    import json
+
+    pfad = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "wp_steuerung_parameter.json",
+    )
+    with open(pfad, encoding="utf-8") as f:
+        daten = json.load(f)
+    sektion = daten["pv_ueberschuss"]
+    assert float(sektion["batterie_ladung_min_w"]) == 500.0
+    assert float(sektion["batterie_ausschalten_bei_c"]) == 42.0

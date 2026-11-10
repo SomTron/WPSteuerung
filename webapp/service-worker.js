@@ -18,9 +18,9 @@
 // v12 (09.11.2026): CalcStart-Uebersicht steht als eigener Block am Ende der
 // Regelliste (1.10.32) - die Huelle muss neu geladen werden, sonst laeuft die
 // alte Fassung weiter.
-// v17 (10.11.2026): PV-Fenster-Gate oeffnet bei hoher realer PV-Erzeugung
-// (1.10.37) - die Huelle muss neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v17';
+// v18 (10.11.2026): PV_Ueberschuss startet auch bei Batterieladung, dann nur
+// bis 42 C (1.10.38) - die Huelle muss neu geladen werden.
+const CACHE_NAME = 'wp-webapp-shell-v18';
 const APP_SHELL = [
     './',
     './index.html',

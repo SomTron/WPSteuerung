@@ -21,6 +21,7 @@ wie alle PV-Regeln.
 """
 from typing import Optional, Dict
 
+from energy_source import batterie_ladung_watt
 from rule_types import RegelErgebnis
 from json_config import PVUeberschussConfig
 from regel_helpers import (
@@ -41,6 +42,7 @@ def evaluate_pv_ueberschuss(
     nachtsperre_ende: int,
     legionellen_aktiv: bool = False,
     legionellen_ziel_c: Optional[float] = None,
+    battery_power: Optional[float] = None,
 ) -> RegelErgebnis:
     """EIN ab ``einspeisung_min_watt`` Einspeisung, AUS bei ``ausschalten_bei_c``.
 
@@ -73,11 +75,62 @@ def evaluate_pv_ueberschuss(
     if temp is None:
         return result
 
+    # --- Anlass bestimmen: Einspeisung ODER Batterieladung -----------------
+    # Nutzerwunsch 10.11.2026: Laedt die Hausbatterie mit Ueberschuss, soll die
+    # Regel ebenfalls starten - dann aber nur bis zum Minimum-Soll unten, damit
+    # die Batterie nicht leergesaugt wird.
+    min_w = float(ueb_cfg.einspeisung_min_watt)
+    bat_min_w = float(getattr(ueb_cfg, "batterie_ladung_min_w", 0.0) or 0.0)
+    ladung_w = batterie_ladung_watt(battery_power) or 0.0
+    einspeisung_ok = feedin_watt >= min_w
+    ladung_ok = bat_min_w > 0.0 and ladung_w >= bat_min_w
+    # Ein LAUFENDER Zyklus bleibt an, solange die Einspeisung ueber der
+    # Weiterlauf-Schwelle liegt - die WP senkt sie durch ihren eigenen
+    # Verbrauch (~600 W) selbst, ein Start mit 500 W steht danach oft bei 0 W.
+    weiterlauf_ok = kompressor_ein and (
+        feedin_watt >= float(ueb_cfg.weiterlauf_ab_watt) or ladung_ok
+    )
+
+    # Anlass hat Vorrang: echter Einspeise-Ueberschuss > Batterieladung >
+    # Weiterlauf. So bleibt ein wegen Batterieladung gestarteter Lauf auch
+    # beim Weiterlauf bei seinem niedrigeren Ziel (42 C) und laeuft nicht
+    # bis 48 C hoch.
+    if einspeisung_ok:
+        anlass = f"Einspeisung {feedin_watt:.0f}W >= {min_w:.0f}W"
+    elif ladung_ok:
+        anlass = (
+            f"Batterie laedt {ladung_w:.0f}W >= {bat_min_w:.0f}W "
+            f"(kein Einspeise-Ueberschuss)"
+        )
+    elif weiterlauf_ok:
+        anlass = (
+            f"Weiterlauf (Einspeisung {feedin_watt:.0f}W >= "
+            f"{float(ueb_cfg.weiterlauf_ab_watt):.0f}W)"
+        )
+    else:
+        result.set_reason_code("pv_unterbrechung")
+        result.grund = (
+            f"PV-Ueberschuss: Einspeisung {feedin_watt:.0f}W < {min_w:.0f}W"
+            + (
+                f" und Batterieladung {ladung_w:.0f}W < {bat_min_w:.0f}W"
+                if bat_min_w > 0.0 else ""
+            )
+            + " -> keine Aktion"
+        )
+        return result
+
+    # Zielgrenze: Bei reiner Batterieladung nur bis zum Minimum-Soll heizen.
     grenze_c = float(ueb_cfg.ausschalten_bei_c)
+    bat_anlass = ladung_ok and not einspeisung_ok
+    if bat_anlass:
+        bat_grenze = float(
+            getattr(ueb_cfg, "batterie_ausschalten_bei_c", grenze_c)
+        )
+        grenze_c = min(grenze_c, bat_grenze)
     legionellen_grenze = False
     if legionellen_aktiv and legionellen_ziel_c is not None:
         # Waehrend einer Legionellenfahrt gilt deren Ziel als Abschaltgrenze -
-        # sonst bricht der 48-C-Puffer die Prophylaxe vorzeitig ab.
+        # sonst bricht der Puffer die Prophylaxe vorzeitig ab.
         grenze_c = max(grenze_c, float(legionellen_ziel_c))
         legionellen_grenze = True
 
@@ -86,7 +139,7 @@ def evaluate_pv_ueberschuss(
         suffix = " (Legionellenfahrt: Ziel erreicht)" if legionellen_grenze else ""
         result.grund = (
             f"PV-Ueberschuss: {ueb_cfg.temperaturfuehler} {temp:.1f}C >= "
-            f"{grenze_c:.1f}C -> AUS (Einspeisung {feedin_watt:.0f}W){suffix}"
+            f"{grenze_c:.1f}C -> AUS ({anlass}){suffix}"
         )
         return result
 
@@ -115,40 +168,35 @@ def evaluate_pv_ueberschuss(
             )
         return result
 
-    if kompressor_ein and feedin_watt >= float(ueb_cfg.weiterlauf_ab_watt):
+    if kompressor_ein and (
+        feedin_watt >= float(ueb_cfg.weiterlauf_ab_watt) or ladung_ok
+    ):
         result.einschalten = True
         result.grund = (
-            f"PV-Ueberschuss Weiterlauf: Einspeisung {feedin_watt:.0f}W >= "
-            f"{ueb_cfg.weiterlauf_ab_watt:.0f}W -> EIN "
+            f"PV-Ueberschuss Weiterlauf: {anlass} -> EIN "
             f"({ueb_cfg.temperaturfuehler} {temp:.1f}C bis {grenze_c:.1f}C)"
         )
         return result
 
-    if feedin_watt >= float(ueb_cfg.einspeisung_min_watt):
-        ein_bis = float(getattr(ueb_cfg, "einschalten_bei_c", 43.0))
-        # Waehrend einer Legionellenfahrt darf die Einschaltgrenze den Lauf
-        # nicht blockieren - sonst bricht der 48-C-Puffer die Prophylaxe vor
-        #zeitigem Erreichen des 60-C-Ziels ab (Befund wie bei `Einspeisung`).
-        if temp >= ein_bis and not legionellen_aktiv:
-            result.einschalten = None
-            result.grund = (
-                f"PV-Ueberschuss: Einspeisung {feedin_watt:.0f}W >= "
-                f"{ueb_cfg.einspeisung_min_watt:.0f}W, aber "
-                f"{ueb_cfg.temperaturfuehler} {temp:.1f}C >= {ein_bis:.1f}C "
-                f"(Einschaltgrenze) -> warte"
-            )
-            return result
-        result.einschalten = True
+    ein_bis = float(getattr(ueb_cfg, "einschalten_bei_c", 43.0))
+    if bat_anlass:
+        # Batterie-Anlass: mindestens 1 K Hysterese unter dem (niedrigeren)
+        # Ziel, damit ein Start ueberhaupt Sinn ergibt (Ziel 42 -> Start < 41).
+        ein_bis = min(ein_bis, max(grenze_c - 1.0, 20.0))
+    # Waehrend einer Legionellenfahrt darf die Einschaltgrenze den Lauf
+    # nicht blockieren - sonst bricht der Puffer die Prophylaxe vor
+    #zeitigem Erreichen des 60-C-Ziels ab (Befund wie bei `Einspeisung`).
+    if temp >= ein_bis and not legionellen_aktiv:
+        result.einschalten = None
         result.grund = (
-            f"PV-Ueberschuss: Einspeisung {feedin_watt:.0f}W >= "
-            f"{ueb_cfg.einspeisung_min_watt:.0f}W -> EIN "
-            f"({ueb_cfg.temperaturfuehler} {temp:.1f}C, bis {grenze_c:.1f}C)"
+            f"PV-Ueberschuss: {anlass}, aber "
+            f"{ueb_cfg.temperaturfuehler} {temp:.1f}C >= {ein_bis:.1f}C "
+            f"(Einschaltgrenze) -> warte"
         )
         return result
-
-    result.set_reason_code("pv_unterbrechung")
+    result.einschalten = True
     result.grund = (
-        f"PV-Ueberschuss: Einspeisung {feedin_watt:.0f}W < "
-        f"{ueb_cfg.einspeisung_min_watt:.0f}W -> keine Aktion"
+        f"PV-Ueberschuss: {anlass} -> EIN "
+        f"({ueb_cfg.temperaturfuehler} {temp:.1f}C, bis {grenze_c:.1f}C)"
     )
     return result
