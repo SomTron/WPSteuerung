@@ -10,6 +10,8 @@ Batterieladung.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from json_config import PVUeberschussConfig  # noqa: E402
@@ -129,4 +131,51 @@ def test_projektkonfiguration_ist_aktiv_und_bei_500_w():
     sektion = daten.get("pv_ueberschuss", {})
     assert sektion.get("aktiv") is True, "PV-Ueberschuss-Regel muss aktiv sein"
     assert float(sektion.get("einspeisung_min_watt", 0)) == 500.0
+    assert float(sektion.get("einspeisung_min_watt_sommer", 0)) == 5000.0
     assert sektion.get("nachtsperre_ueberschreiben") is False
+
+
+# --- Saison: Winter 500 W, Sommer 5000 W (Nutzerwunsch 10.11.2026) ---------
+
+def test_sommer_modus_hebt_die_einschaltschwelle():
+    """Im Sommer-Modus startet PV_Ueberschuss erst bei 5000 W Einspeisung.
+
+    Hintergrund: Im Winter ist jeder Ueberschuss wertvoll. Im Sommer waere der
+    Speicher bei 500 W schon am Vormittag voll, kuehlte bis zum Abend aus und
+    die Einspeisung muesste gar nicht begrenzt werden (Netzlimit 7500 W).
+    """
+    import priority_control_logic as pcl
+    from json_config import WPSteuerungConfig
+
+    cfg = WPSteuerungConfig()
+    cfg.pv_ueberschuss = PVUeberschussConfig(
+        einspeisung_min_watt=500.0,
+        einspeisung_min_watt_sommer=5000.0,
+        einschalten_bei_c=43.0,
+        ausschalten_bei_c=48.0,
+    )
+    pcl.wende_sommer_offset_an(cfg)
+    assert cfg.pv_ueberschuss.einspeisung_min_watt == 5000.0
+    # Temperaturgrenzen wie bei den PV-Regeln abgesenkt (Offset -2 K).
+    assert cfg.pv_ueberschuss.ausschalten_bei_c == 46.0
+    assert cfg.pv_ueberschuss.einschalten_bei_c == 41.0
+
+
+def test_ohne_sommer_schwelle_bleibt_der_winterwert():
+    """0 = im Sommer gilt dieselbe Schwelle wie im Winter (altes Verhalten)."""
+    import priority_control_logic as pcl
+    from json_config import WPSteuerungConfig
+
+    cfg = WPSteuerungConfig()
+    cfg.pv_ueberschuss = PVUeberschussConfig(
+        einspeisung_min_watt=500.0,
+        einspeisung_min_watt_sommer=0.0,
+    )
+    pcl.wende_sommer_offset_an(cfg)
+    assert cfg.pv_ueberschuss.einspeisung_min_watt == 500.0
+
+
+def test_sommer_schwelle_kleiner_als_winter_wird_abgelehnt():
+    with pytest.raises(Exception):
+        PVUeberschussConfig(einspeisung_min_watt=1000.0,
+                            einspeisung_min_watt_sommer=500.0)

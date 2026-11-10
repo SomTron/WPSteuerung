@@ -1301,6 +1301,28 @@ def wende_sommer_offset_an(config) -> None:
     # Absoluter Boden 42C, damit die Regel nicht wirkungslos/kippelig wird
     apv.tmax_c = max(apv.tmax_c + pv_offset, 42.0)
 
+    # --- NEU (Nutzerwunsch 10.11.2026): PV-Ueberschuss im Sommer spaeter ---
+    # Im Winter ist jeder Ueberschuss wertvoll (ab 500 W heizen). Im Sommer
+    # scheint die Sonne fast taeglich: Wuerde die Regel schon bei 500 W
+    # heizen, waere der Speicher am Vormittag voll, kuehlte bis zum Abend aus
+    # und die Einspeisung muesste gar nicht begrenzt werden. Deshalb gilt im
+    # Sommer-Modus die hoehere Schwelle `einspeisung_min_watt_sommer`
+    # (Auslegung 5000 W, Netzlimit ist 7500 W). Die Temperaturgrenzen werden
+    # wie bei den PV-Regeln mit abgesenkt, damit die Hysterese erhalten bleibt.
+    ueb_cfg = getattr(config, "pv_ueberschuss", None)
+    if ueb_cfg is not None:
+        ueb_cfg.ausschalten_bei_c = max(
+            ueb_cfg.ausschalten_bei_c + pv_offset, 42.0
+        )
+        ueb_cfg.einschalten_bei_c = max(
+            ueb_cfg.einschalten_bei_c + einschalt_offset, 20.0
+        )
+        sommer_schwelle = float(
+            getattr(ueb_cfg, "einspeisung_min_watt_sommer", 0.0) or 0.0
+        )
+        if sommer_schwelle > 0.0:
+            ueb_cfg.einspeisung_min_watt = sommer_schwelle
+
 
 def _extract_einschaltpunkt(
     ergebnis: RegelErgebnis, config: WPSteuerungConfig

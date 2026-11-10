@@ -514,6 +514,16 @@ class PVUeberschussConfig(BaseModel):
         default=500.0,
         description="Einschalten ab dieser Netzeinspeisung (W) - echter Ueberschuss",
     )
+    einspeisung_min_watt_sommer: float = Field(
+        default=5000.0,
+        description=(
+            "Einschaltschwelle im SOMMER-MODUS (W). 0 = gleiche Schwelle wie "
+            "im Winter. Nutzerwunsch 10.11.2026: Im Sommer soll die "
+            "Einspeisung erst dann verheizt werden, wenn sie wirklich "
+            "begrenzt werden muesste - der Speicher bleibt sonst schon am "
+            "Vormittag voll und kuehlt bis zum Abend wieder aus."
+        ),
+    )
     weiterlauf_ab_watt: float = Field(
         default=0.0,
         description=(
@@ -547,6 +557,18 @@ class PVUeberschussConfig(BaseModel):
             )
         if not (0.0 <= self.einspeisung_min_watt <= 20000.0):
             raise ValueError("pv_ueberschuss: einspeisung_min_watt ausserhalb 0-20000 W")
+        if not (0.0 <= self.einspeisung_min_watt_sommer <= 20000.0):
+            raise ValueError(
+                "pv_ueberschuss: einspeisung_min_watt_sommer ausserhalb 0-20000 W"
+            )
+        if (
+            self.einspeisung_min_watt_sommer > 0.0
+            and self.einspeisung_min_watt_sommer < self.einspeisung_min_watt
+        ):
+            raise ValueError(
+                "pv_ueberschuss: einspeisung_min_watt_sommer darf nicht kleiner "
+                "als einspeisung_min_watt sein (Sommer soll spaeter starten)"
+            )
         if self.weiterlauf_ab_watt > self.einspeisung_min_watt:
             raise ValueError(
                 "pv_ueberschuss: weiterlauf_ab_watt > einspeisung_min_watt "

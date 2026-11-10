@@ -18,9 +18,9 @@
 // v12 (09.11.2026): CalcStart-Uebersicht steht als eigener Block am Ende der
 // Regelliste (1.10.32) - die Huelle muss neu geladen werden, sonst laeuft die
 // alte Fassung weiter.
-// v14 (10.11.2026): Neue Regel PV_Ueberschuss in der Regelliste (1.10.34) -
-// die Huelle muss neu geladen werden, sonst fehlt die Zeile.
-const CACHE_NAME = 'wp-webapp-shell-v14';
+// v15 (10.11.2026): PV_Ueberschuss zeigt die Sommer-Schwelle (1.10.35) - die
+// Huelle muss neu geladen werden.
+const CACHE_NAME = 'wp-webapp-shell-v15';
 const APP_SHELL = [
     './',
     './index.html',

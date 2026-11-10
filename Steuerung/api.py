@@ -1806,11 +1806,17 @@ def _status_daten(rechne_auswertung: bool = False):
         })
         # PV-Ueberschuss-Regel (Eigenverbrauch ab einstellbarer Einspeisung,
         # Nutzerwunsch 10.11.2026). Misst die Einspeisung, nicht die Erzeugung.
+        # Winter- und Sommer-Schwelle werden beide geliefert: im Sommer-Modus
+        # gilt die hoehere Schwelle (erst heizen, wenn die Einspeisung ins
+        # Netzlimit laeuft).
         priority_info["regeln"].append({
             "name": "PV_Ueberschuss", "typ": "ueberschuss",
             "prio": pc.pv_ueberschuss.prioritaet,
             "aktiv": pc.pv_ueberschuss.aktiv,
             "schwelle_w": pc.pv_ueberschuss.einspeisung_min_watt,
+            "schwelle_w_sommer": getattr(
+                pc.pv_ueberschuss, "einspeisung_min_watt_sommer", 0.0
+            ),
             "weiterlauf_w": pc.pv_ueberschuss.weiterlauf_ab_watt,
             "sensor": pc.pv_ueberschuss.temperaturfuehler,
             "ein": pc.pv_ueberschuss.einschalten_bei_c,

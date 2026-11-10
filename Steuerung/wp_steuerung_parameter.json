@@ -208,6 +208,7 @@
     "aktiv": true,
     "prioritaet": 77,
     "einspeisung_min_watt": 500.0,
+    "einspeisung_min_watt_sommer": 5000.0,
     "weiterlauf_ab_watt": 0.0,
     "temperaturfuehler": "unten",
     "einschalten_bei_c": 43.0,
