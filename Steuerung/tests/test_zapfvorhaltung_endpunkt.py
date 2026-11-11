@@ -112,3 +112,30 @@ class TestEndpunkt:
         src = inspect.getsource(api.debug_zapfvorhaltung)
         assert "_check_api_key" in src, (
             "Der Beobachtungs-Endpunkt muss durch einen API-Key geschuetzt sein")
+
+    def test_config_fallback_wird_gemeldet(self, mit_engine, monkeypatch, caplog):
+        """Faellt das Config-Lesen aus, darf der Default nicht still gelten.
+
+        Vorher war der Fallback `except Exception: pass`. Die Antwort
+        enthielt dann 48.0 C, als waere das die gemessene Obergrenze - ohne
+        jede Spur im Log. Jetzt: WARNUNG + Kennzeichnung in der Antwort.
+        """
+        def _platze(*_a, **_kw):
+            raise RuntimeError("Config nicht lesbar")
+
+        monkeypatch.setattr("json_config.WPSteuerungConfigManager", _platze)
+
+        with caplog.at_level("WARNING"):
+            r = api.debug_zapfvorhaltung(x_api_key="test-secret")
+
+        assert r["verfuegbar"] is True
+        assert r["boiler_max_c"] == 48.0
+        assert r["boiler_max_Quelle"] == "default", (
+            "Der Fallback muss in der Antwort erkennbar sein")
+        assert any("Boiler-Obergrenze" in m for m in caplog.messages), (
+            "Der Fallback muss im Log stehen")
+
+    def test_antwort_belegt_config_als_quelle(self, mit_engine):
+        """Im Normalfall ist die Config die Quelle - nicht der Default."""
+        r = api.debug_zapfvorhaltung(x_api_key="test-secret")
+        assert r["boiler_max_Quelle"] == "config"

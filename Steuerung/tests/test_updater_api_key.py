@@ -106,6 +106,24 @@ def test_erzeugen_schreibt_atomar():
     assert re.search(r'install -d -m 750', erzeugen), "Verzeichnisrechte fehlen"
 
 
+def test_erzeugen_erhaelt_wps_trust_proxy():
+    """Ein Schluessel-Wechsel darf die Proxy-Konfiguration nicht loeschen.
+
+    In api.env steht neben dem Key auch WPS_TRUST_PROXY (Rate-Limit, siehe
+    api.py). Option 24 schreibt die Datei komplett neu - ohne Uebernahme
+    faellt das Rate-Limit hinter Cloudflare/Tailscale still auf die
+    gemeinsame Tunnel-IP zurueck.
+    """
+    erzeugen = _funktion('api_key_erzeugen')
+    assert 'WPS_TRUST_PROXY' in erzeugen, (
+        "WPS_TRUST_PROXY wird beim Schreiben von api.env nicht beachtet")
+    assert re.search(r'grep -E .\^WPS_TRUST_PROXY=', erzeugen), (
+        "Die bestehende WPS_TRUST_PROXY-Zeile wird nicht ausgelesen")
+    # Die Uebernahme muss vor dem Schreiben passieren, nicht danach.
+    assert erzeugen.index('WPS_TRUST_PROXY=') < erzeugen.index("tee \"$tmp\""), (
+        "Die Proxy-Zeile wird erst nach dem Schreiben gelesen - zu spaet")
+
+
 def test_neustart_wird_besprochen():
     """api.py liest die Datei nur beim Start - ohne Neustart wirkt nichts."""
     for name in ('api_key_erzeugen', 'api_key_entfernen'):
@@ -222,6 +240,105 @@ def test_api_key_read_arbeitet(tmp_path):
 def test_menue_skript_ist_syntaxfehlerfrei():
     r = _run(_shell(), '-n', MENU)
     assert r.returncode == 0, f"Syntaxfehler im Menue-Skript:\n{r.stderr}"
+
+
+# ---------- Option 26: Entwicklungswerkzeuge entfernen ----------
+
+def test_menueintrag_und_dispatch_26():
+    """Die Option muss sichtbar und verdrahtet sein."""
+    q = _quelle()
+    assert re.search(r'^\s*26\)\s*$', q, re.MULTILINE), (
+        "Option 26 ist nicht im Dispatch"
+    )
+    assert 'dev_werkzeuge_entfernen' in q, "Die Funktion wird nicht aufgerufen"
+    assert re.search(r'printf "26\).*Entwicklungswerkzeuge', q), (
+        "Option 26 erscheint nicht in der Menueliste"
+    )
+
+
+def test_alle_werkzeug_funktionen_vorhanden():
+    for name in ('venv_python', 'dev_werkzeuge_status',
+                 'dev_werkzeuge_entfernen'):
+        assert re.search(rf'^{name}\(\) \{{$', _quelle(), re.MULTILINE), (
+            f"{name}() fehlt"
+        )
+
+
+def test_werkzeug_liste_ist_konsistent_mit_requirements_dev():
+    """Was entfernt wird, muss auch in requirements-dev.txt stehen.
+
+    Sonst bleibt ein Werkzeug auf dem Pi, das die Doku als entfernt betrachtet
+    (oder es wird etwas entfernt, das gar nicht zum Projekt gehoert).
+    """
+    dev = open(os.path.join(ROOT, 'requirements-dev.txt'),
+               encoding='utf-8').read()
+    namen = set(re.findall(r'^([A-Za-z0-9_.-]+)==', dev, re.MULTILINE))
+    namen |= set(re.findall(r'^([A-Za-z0-9_.-]+)\s*$', dev, re.MULTILINE))
+    # Das Include selbst ist kein Paket.
+    namen.discard('-r')
+
+    block = _funktion('dev_werkzeuge_entfernen') + _funktion('dev_werkzeuge_status')
+    m = re.search(r'DEV_WERKZEUGE="([^"]+)"', _quelle())
+    assert m, "DEV_WERKZEUGE ist nicht gesetzt"
+    im_menu = {p for p in m.group(1).split() if p}
+
+    # Nur die Werkzeuge, die auch wirklich Dev-Abhaengigkeiten sind.
+    werkzeuge = {'pytest', 'pytest-asyncio', 'ruff', 'mypy'}
+    assert im_menu == werkzeuge, (
+        f"DEV_WERKZEUGE weicht ab: {im_menu ^ werkzeuge}"
+    )
+    assert werkzeuge <= namen, (
+        f"requirements-dev.txt vermisst: {sorted(werkzeuge - namen)}"
+    )
+    # Laufzeit darf nicht in der Entfernen-Liste stehen.
+    laufzeit = open(os.path.join(ROOT, 'requirements.txt'),
+                    encoding='utf-8').read()
+    laufzeit_namen = set(re.findall(r'^([A-Za-z0-9_.-]+)==', laufzeit, re.MULTILINE))
+    assert not (im_menu & laufzeit_namen), (
+        f"Laufzeitpakete in der Entfernen-Liste: {sorted(im_menu & laufzeit_namen)}"
+    )
+
+
+def test_entfernen_fragt_nach_und_ist_nicht_auto_yes():
+    """Ein Versehen darf nicht still Pakete loeschen."""
+    entfernen = _funktion('dev_werkzeuge_entfernen')
+    assert re.search(r'\[j/N\]', entfernen), (
+        "Keine Rueckfrage vor dem Entfernen"
+    )
+    # Der Block der Rueckfrage muss vor dem uninstall stehen - sonst ist die
+    # Frage nur Dekoration.
+    assert entfernen.index('[j/N]') < entfernen.index('pip uninstall'), (
+        "Die Rueckfrage steht hinter dem Entfernen"
+    )
+    # Der tatsaechliche Aufruf darf kein --yes enthalten (der Kommentar
+    # erklaert es bewusst, das ist kein Verstoss).
+    m = re.search(r'.*"\$vpy" -m pip uninstall.*', entfernen)
+    assert m, "Kein pip-uninstall-Aufruf ueber den venv-Interpreter"
+    assert '--yes' not in m.group(0), (
+        "Der uninstall-Aufruf ist nicht interaktiv"
+    )
+
+
+def test_entfernen_benutzt_das_venv_nicht_system_pip():
+    """Ein `pip uninstall` im System-Python waere ein Fehlgriff."""
+    entfernen = _funktion('dev_werkzeuge_entfernen')
+    assert 'venv_python' in entfernen, (
+        "Der Interpreter wird nicht aus dem venv abgeleitet"
+    )
+    assert 'pip3 uninstall' not in entfernen
+    assert re.search(r'vpy.*-m pip uninstall', entfernen), (
+        "uninstall laeuft nicht ueber den venv-Interpreter"
+    )
+
+
+def test_status_zeigt_versionen_und_beruehrt_nichts():
+    """Die Statusanzeige darf nur lesen - kein pip install/uninstall."""
+    status = _funktion('dev_werkzeuge_status')
+    assert 'importlib.metadata' in status, (
+        "Die Versionen werden nicht ausgelesen"
+    )
+    assert 'pip install' not in status
+    assert 'pip uninstall' not in status
 
 
 # ---------- Option 25: die Unit selbst ----------

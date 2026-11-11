@@ -5,10 +5,29 @@
 # liegen separat in requirements-pi.txt, da sie ausserhalb des Pi nicht
 # installierbar sind und in Tests/Entwicklung gemockt werden (conftest.py).
 # Deployment auf dem Pi:  pip install -r requirements-pi.txt
+#
+# PINNING (Stand 11.11.2026): Die Versionen sind exakt angegeben, damit ein
+# Build reproduzierbar ist. Vorher standen die Pakete ohne Version - ein
+# `pip install` auf dem Pi konnte damit still eine andere Major-Version
+# holen (z. B. pandas 2 -> 3 mit geaendertem API) und die Steuerung erst
+# nach dem naechsten Neustart brechen.
+#
+# Die Pins entsprechen dem Stand, gegen den die Tests laufen (lokal
+# verifiziert). Beim Anheben bitte ALLE Pins pruefen - die Untergrenzen der
+# Pakete sind unterschiedlich:
+#   * matplotlib 3.11+, pandas 3.1+ verlangen Python >= 3.11
+#   * fastapi 0.162+, pydantic 2.14+, aiohttp 3.14+ verlangen Python >= 3.10
+#   * aiofiles 25.1+ verlangt Python >= 3.9
+# Der Pi (3.12) erfuellt das; aeltere Systeme nicht.
+#
+# Wichtig fuer den Pi: pandas und matplotlib haben KEINE armv7-Wheels (nur
+# x86_64 und aarch64). Auf 32-Bit-Pis bauen sie aus dem Quellcode - dafuer
+# sind die Build-Tools noetig (siehe RASPBERRY-PI-DEPLOYMENT.md). Auf dem
+# getesteten Pi (aarch64) sind Wheels vorhanden.
 
 # --- Laufzeit ---
-aiofiles
-aiohttp
+aiofiles==25.1.0
+aiohttp==3.14.5
 # Nicht-blockierender DNS-Resolver (empfohlen). Ohne aiodns nutzt aiohttp den
 # ThreadedResolver: jeder Lookup belegt einen Thread des Default-Executors und
 # verzoegert damit auch asyncio.to_thread-Aufrufe (Sensor-Lesung), wenn die
@@ -26,19 +45,33 @@ aiohttp
 # "aiodns.error.DNSError: (12, 'Timeout while contacting DNS servers')".
 #
 # Edge/armv7 (32-bit): ggf. vorher "sudo apt-get install -y libc-ares-dev".
-aiodns
-fastapi
-pydantic>=2.0        # api.py nutzt field_validator/model_validator (Pydantic v2)
-pytz
-uvicorn
-slowapi              # Rate-Limiting für schreibende API-Endpoints
+#
+# aiodns 3.6.1 ist die letzte 3.x: aiodns 4.0.0 aendert die API
+# (query_dns() statt query(), pycares 5.x) und wird von aiohttp 3.14 noch
+# nicht benoetigt. Der Code nutzt ausschliesslich aiohttp.AsyncResolver.
+aiodns==3.6.1
+fastapi==0.162.2
+# api.py nutzt field_validator/model_validator (Pydantic v2).
+pydantic==2.14.3
+pytz==2026.6
+uvicorn==0.54.0
+slowapi==0.1.10        # Rate-Limiting fuer schreibende API-Endpoints
 
 # --- Analyse/Diagnose ---
-matplotlib           # telegram_charts.py (Chart-Versand)
-pandas               # telegram_charts.py (CSV-Auswertung); zieht numpy/dateutil mit
+# telegram_charts.py (Chart-Versand); der Import ist bewusst träge (siehe
+# Modul-Kommentar: ~70 MB RSS, friert der 512-MB-Pi ein).
+matplotlib==3.11.2
+# telegram_charts.py (CSV-Auswertung); zieht numpy/dateutil mit.
+pandas==3.1.1
 
-# --- Tests / Werkzeuge ---
-pytest
-pytest-asyncio
-ruff                 # Linter, auch Bestandteil der CI
-mypy                 # Typpruefung, auch Bestandteil der CI (Steuerung/mypy.ini)
+# --- Werkzeuge: siehe requirements-dev.txt --------------------------------
+# pytest, pytest-asyncio, ruff und mypy sind absichtlich HIER ENTFERNT.
+# Sie gehoeren auf Entwicklungsrechner und CI, nicht auf den Pi: auf einem
+# 512-MB-Geraet sind sie Grundlast (ruff/mypy je zweistellig in MB), ohne im
+# Betrieb je verwendet zu werden. Der Pi bekommt sie mit
+#   pip install -r requirements-pi.txt   (nur Laufzeit)
+# nicht mehr. Entwicklung/CI installiert stattdessen
+#   pip install -r requirements-dev.txt  (Laufzeit + Werkzeuge)
+#
+# Vorher standen sie hier - und requirements-pi.txt zog sie ueber
+# "-r requirements.txt" mit auf den Pi.

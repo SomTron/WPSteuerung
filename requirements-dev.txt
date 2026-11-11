@@ -1,0 +1,30 @@
+# Entwicklungs- und CI-Abhaengigkeiten.
+#
+#   pip install -r requirements-dev.txt
+#
+# Enthaelt zunaechst die Laufzeit (requirements.txt) und legt dann die
+# Werkzeuge obendrauf. Der Pi braucht diese Datei NICHT - dort laeuft
+#   pip install -r requirements-pi.txt
+# (nur Laufzeit + Hardware).
+#
+# WARUM GETRENNT (aufgeraeumt 11.11.2026): pytest, pytest-asyncio, ruff und
+# mypy standen vorher in requirements.txt - und requirements-pi.txt zog sie
+# ueber "-r requirements.txt" damit auf den Pi. Auf einem 512-MB-Geraet ist
+# das Grundlast (ruff und mypy sind je zweistellig in MB), ohne im Betrieb je
+# verwendet zu werden. Die CI installierte sie mit, obwohl sie sie braucht -
+# dieser Weg bleibt, aber jetzt ohne den Pi zu belasten.
+#
+# PINNING (Stand 11.11.2026): gleiche Regel wie requirements.txt - exakte
+# Versionen, damit ein Build reproduzierbar ist. Die Pins entsprechen dem
+# Stand, gegen den die Tests laufen (lokal verifiziert).
+-r requirements.txt
+
+# --- Tests ---
+pytest==9.2.0
+# pytest.ini nutzt asyncio_mode = auto; ohne dieses Paket laufen die
+# async-Tests nicht (bzw. werden still uebersprungen).
+pytest-asyncio==1.4.1.post1
+
+# --- Statische Pruefung (auch in der CI) ---
+ruff==0.17.3           # Linter, Regelwerk in ruff.toml
+mypy==2.4.1            # Typpruefung, Konfiguration in Steuerung/mypy.ini

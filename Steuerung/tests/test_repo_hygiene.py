@@ -97,6 +97,62 @@ def test_keine_python_dateien_mit_bom():
     assert not mit_bom, "Dateien mit UTF-8-BOM:\n" + "\n".join(mit_bom)
 
 
+# --- Mojibake: mehrfach fehlkodierte Umlaute ------------------------------
+# Die beiden Zeichenfolgen, die Doppelkodierung anzeigen: "A mit Akzent"
+# gefolgt von einem beliebigen Folgebyte. Als Bausteine formuliert, damit
+# diese Testdatei sich nicht selbst als Treffer meldet.
+_MOJI_A = "\u00c3"        # A-Tilde, typisch fuer "A + Folgebyte"
+_MOJI_B = "\u00c2"        # A-Circumflex, ebenso typisch
+_MOJI_RE = re.compile(_MOJI_A + ".|" + _MOJI_B + ".")
+
+
+def test_lizenzdatei_vorhanden_und_mit_readme_konsistent():
+    """README bewirbt MIT und verlinkt LICENSE - die Datei muss existieren.
+
+    Eine fehlende Lizenzdatei ist bei einem oeffentlichen Repo kein Detail:
+    ohne sie ist die Nutzungsabsicht rechtlich nicht ausgedrueckt, und GitHub
+    erkennt die Lizenz nicht (Badge und Lizenz-Seite bleiben leer).
+    """
+    lizenz = os.path.join(REPO_ROOT, "LICENSE")
+    assert os.path.isfile(lizenz), (
+        "README verlinkt LICENSE, die Datei fehlt im Repo")
+    text = open(lizenz, encoding="utf-8").read()
+    assert "MIT License" in text, "die Datei ist keine MIT-Lizenz"
+    assert "Permission is hereby granted" in text
+    assert "WITHOUT WARRANTY OF ANY KIND" in text, (
+        "der Haftungsausschluss fehlt - er ist der Kern der MIT-Lizenz")
+    # Ein Copyright-Jahr muss drinstehen, sonst ist die Lizenz nicht zugeordnet.
+    assert re.search(r"Copyright \(c\) \d{4}", text), (
+        "kein Copyright-Vermerk (Jahr) in der Lizenz")
+
+
+def test_python_quellcode_hat_keine_mojibake_restlautkodierung():
+    """Umlaute muessen echtes UTF-8 sein, nicht die Folge einer Fehltranskodierung.
+
+    Ausloeser: in `main.py` (12 Zeilen) und `priority_control_logic.py`
+    (3 Zeilen) standen Kommentare mit falsch kodierten Umlauten statt der
+    echten Zeichen - die Dateien waren mehrfach cp1252/UTF-8-verkettet. Das
+    ist toter Text, den beim Lesen niemand versteht.
+
+    Ausgenommen ist `Analyse/log_analyse.py`: dort ist die Mojibake-Liste
+    _MOJIBAKE absichtlich (sie repariert fremde Logdateien).
+    """
+    treffer = []
+    for pfad in _python_dateien():
+        rel = os.path.relpath(pfad, REPO_ROOT).replace("\\", "/")
+        if rel == "Analyse/log_analyse.py":
+            continue        # enthaelt die Reparatur-Tabelle _MOJIBAKE
+        with open(pfad, encoding="utf-8") as f:
+            for nr, zeile in enumerate(f, start=1):
+                if _MOJI_RE.search(zeile):
+                    treffer.append(f"{rel}:{nr}: {zeile.strip()[:80]}")
+
+    assert not treffer, (
+        "Mojibake (mehrfach fehlkodierte Umlaute) im Quellcode:\n"
+        + "\n".join(treffer)
+    )
+
+
 # --- Shell-Skripte: CRLF waere auf dem Pi ein Syntaxfehler -------------
 def _git(*args):
     """Fuehrt ein git-Kommando im Repo aus. Gibt None bei Fehlern zurueck."""

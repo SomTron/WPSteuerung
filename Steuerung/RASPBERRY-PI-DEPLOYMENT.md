@@ -64,13 +64,29 @@ python3 -m venv .venv
 # Aktivieren
 source .venv/bin/activate
 
-# Abhängigkeiten installieren
-pip install -r requirements.txt
+# Abhängigkeiten installieren (Laufzeit + Pi-Hardware, ohne Entwicklungswerkzeuge)
+pip install -r requirements-pi.txt
 
 # (Deaktivieren mit: deactivate)
-``
+```
 
-`
+> **Nicht `requirements.txt` verwenden.** Diese Datei enthält die reine
+> Laufzeit. `requirements-pi.txt` nimmt sie per `-r` mit hinein und ergänzt
+> RPi.GPIO/RPLCD/smbus2. Die Entwicklungswerkzeuge (pytest, ruff, mypy) stehen
+> seit 11.11.2026 in `requirements-dev.txt` und gehören nicht auf den Pi.
+
+**Bestehende Installation aufräumen:** `pip install` entfernt nichts. Wer den
+Pi vor der Trennung eingerichtet hat, hat die Werkzeuge noch im venv. Das
+Updater-Menü (`wp-manager.sh`, Option **26**) zeigt, was installiert ist, und
+entfernt es nach Rückfrage gezielt aus dem venv:
+
+```bash
+./Updater/wp-manager.sh      # → 26) Entwicklungswerkzeuge entfernen
+```
+
+Die Laufzeit-Pakete bleiben dabei unberührt, ein Dienst-Neustart ist nicht
+nötig. Nach dem Entfernen belegt der Pi wieder nur das, was der Betrieb
+braucht.
 
 ### 5b. DNS-Resolver (`aiodns` + `[Netzwerk] DNS_SERVER`)
 

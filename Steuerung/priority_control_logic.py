@@ -500,10 +500,10 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             f"Urlaubsmodus aktiv: Solltemperatur -{absenkung}C auf {effektive_config.abweichung.solltemperatur_c}C",
         )
 
-    # Sommer-Modus: Solltemperatur senken bei mehrtÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¤gig guter PV-Prognose.
+    # Sommer-Modus: Solltemperatur senken bei mehrtägig guter PV-Prognose.
     # Im Sommer scheint fast jeden Tag die Sonne, daher braucht der Boiler nicht
-    # jeden Tag auf 44ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
-    # Der Offset (default -3ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚°C) reduziert die Zieltemperatur der Abweichungs-Regel.
+    # jeden Tag auf 44°C+ hochgeheizt zu werden - morgen kommt ja wieder PV-Strom.
+    # Der Offset (default -3°C) reduziert die Zieltemperatur der Abweichungs-Regel.
     if hasattr(state, "sommer_modus_aktiv") and state.sommer_modus_aktiv:
         # AUSNAHME Bademodus (Nutzeranforderung): Der Bademodus setzt den
         # Sommer-Offset temporaer aus, damit die Temp-Anhebung (+3K) nicht

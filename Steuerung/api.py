@@ -88,6 +88,59 @@ _raw_origins = (os.environ.get("WPS_CORS_ORIGINS") or "").strip()
 CORS_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 
+def _parse_proxy_netze(roh: str):
+    """Wandelt WPS_TRUST_PROXY in ip_network-Objekte (ungueltige Eintraege raus).
+
+    Hintergrund: X-Forwarded-For ist ein frei setzbarer Request-Header. Der
+    Rate-Limit-Schluessel stuetzte sich darauf (siehe RateLimitMiddleware),
+    bevor ein API-Key vorlag. Wer ohne Key eine Leseroute traf und einen
+    beliebigen X-Forwarded-For mitschickte, bekam pro Wert ein eigenes
+    Rate-Limit-Bucket und konnte das Limit beliebig umgehen.
+
+    Vertrauenswuerdig ist der Header nur, wenn er von einem vorgeschalteten
+    Proxy stammt, der ihn selbst setzt (nginx, Cloudflare Tunnel, Tailscale
+    Funnel). Die Netze dafuer stehen in WPS_TRUST_PROXY (kommaseparierte
+    CIDRs, z. B. "127.0.0.1/32, 100.64.0.0/10").
+
+    Default ist eine leere Liste - dann wird X-Forwarded-For nie verwendet und
+    der Rate-Limit-Schluessel faellt auf die Remote-IP zurueck. Das ist die
+    sichere Seite: ein zu strenges Limit ist harmlos, ein umgehbares keines.
+    """
+    import ipaddress
+
+    netze = []
+    for teil in roh.split(","):
+        teil = teil.strip()
+        if not teil:
+            continue
+        try:
+            netze.append(ipaddress.ip_network(teil, strict=False))
+        except ValueError:
+            logging.warning("WPS_TRUST_PROXY: '%s' ist kein gueltiges Netz - ignoriert", teil)
+    return netze
+
+
+# Einmal beim Import parsen: die Middleware fragt das pro Request ab.
+_TRUST_PROXY_NETZE = _parse_proxy_netze(os.environ.get("WPS_TRUST_PROXY") or "")
+
+
+def _ist_vertrauenswuerdiger_proxy(request) -> bool:
+    """True, wenn die Gegenstelle im konfigurierten Proxy-Netz liegt."""
+    if not _TRUST_PROXY_NETZE:
+        return False
+    client = getattr(request, "client", None)
+    ip = getattr(client, "host", None) if client is not None else None
+    if not ip:
+        return False
+    import ipaddress
+
+    try:
+        adresse = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(adresse in netz for netz in _TRUST_PROXY_NETZE)
+
+
 def _check_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
     """Prueft den optionalen Schluessel fuer schreibende/sensible Routen."""
     if not API_KEY:
@@ -342,10 +395,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             import hashlib
             key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
             return f"apikey:{key_hash}"
-        # 2. X-Forwarded-For (Tailscale Funnel)
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return f"forwarded:{forwarded.split(',')[0].strip()}"
+        # 2. X-Forwarded-For - aber NUR, wenn die Gegenstelle ein
+        #    vertrauenswuerdiger Proxy ist (WPS_TRUST_PROXY). Der Header ist
+        #    frei setzbar: ohne diese Pruefung haette sich ein Angreifer pro
+        #    selbst gewaehltem X-Forwarded-For ein eigenes Rate-Limit-Bucket
+        #    bauen koennen - das Limit waere wirkungslos gewesen.
+        if _ist_vertrauenswuerdiger_proxy(request):
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                # Die Kette kann mehrere Proxies enthalten; der erste Eintrag
+                # ist der vom Proxy gesehene Client.
+                return f"forwarded:{forwarded.split(',')[0].strip()}"
         # 3. Fallback: Remote-IP
         return get_remote_address(request)
 
@@ -1192,67 +1252,6 @@ def _read_csv_tail(csv_path: str, max_rows: int = 25000, spalten=None):
     rows = []
     quality = csv_tail.streame_tail(csv_path, max_rows, spalten, rows.append)
     return rows, quality
-
-
-def _read_csv_tail_rows(csv_path: str, max_rows: int, spalten: int):
-    """Liest die letzten max_rows Datenzeilen vom Ende der CSV-Datei.
-
-    Blockweises Rueckwaertslesen vom Dateiende: nur die hinteren Bloecke
-    werden angefasst. Das haelt den RAM-Bedarf klein und ist auf dem Pi
-    schneller als ein kompletter Durchlauf (Benchmark 17 MB: 0,2 s statt
-    0,4 s, Speicher 100 MB -> 6 MB).
-
-    Wichtig: Beim Rueckwaertslesen werden die Zeilen von hinten nach vorn
-    gefunden. Ein `deque(maxlen=N)` wuerde dabei die NEUESTEN Zeilen
-    verwerfen (sie werden zuerst angehaengt). Deshalb werden die
-    Zeilen hier in umgekehrter Reihenfolge gesammelt und am Ende
-    wieder in die urspruengliche (chronologische) Reihenfolge gedreht.
-    """
-    import csv as _csv
-    from collections import deque
-
-    with open(csv_path, "rb") as handle:
-        handle.seek(0, os.SEEK_END)
-        ende = handle.tell()
-        # Headerzeile ueberspringen (inkl. Zeilenumbruch). Im Binarmodus
-        # liefert readline() bereits bytes.
-        handle.seek(0)
-        header_rest = handle.readline()
-        daten_start = len(header_rest)
-
-        # Gesammelte Zeilen in umgekehrter Reihenfolge (neueste zuerst).
-        gesammelt = []
-        block = 64 * 1024
-        position = ende
-        puffer = b""
-        while position > daten_start and len(gesammelt) < max_rows:
-            lese = min(block, position - daten_start)
-            position -= lese
-            handle.seek(position)
-            puffer = handle.read(lese) + puffer
-            zeilen = puffer.split(b"\n")
-            # Der Rest des ersten Blocks ist unvollstaendig (Beginn einer
-            # Zeile) - er wird mit dem naechsten Block verbuendet.
-            puffer = zeilen.pop(0)
-            # Von hinten nach vorn: die letzte Zeile des Blocks ist die
-            # juengste, die erste die aelteste.
-            for zeile in reversed(zeilen):
-                if not zeile.strip():
-                    continue
-                gesammelt.append(zeile.decode("utf-8", errors="replace"))
-                if len(gesammelt) >= max_rows:
-                    break
-        if puffer.strip() and len(gesammelt) < max_rows:
-            gesammelt.append(puffer.decode("utf-8", errors="replace"))
-
-    # Rueckwaerts gesammelt -> in urspruenglicher Reihenfolge ausgeben.
-    raw = deque()
-    for zeile in reversed(gesammelt):
-        try:
-            raw.append(next(_csv.reader([zeile])))
-        except (StopIteration, _csv.Error):
-            continue
-    return raw
 
 
 def _sammle_history(csv_path: str, cutoff: datetime, max_rows: int):
@@ -2278,7 +2277,10 @@ def get_history_regeln(
     try:
         eintraege = entscheidungs_log.historie(stunden=hours, limit=limit)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Regel-Historie nicht lesbar: {e}")
+        # `from e` haelt die Ursache in der Kette: ohne das zeigt das
+        # Traceback nur den HTTPException und die eigentliche Lesestörung
+        # (z. B. JSON-Fehler, Platte voll) verschwindet.
+        raise HTTPException(status_code=500, detail=f"Regel-Historie nicht lesbar: {e}") from e
 
     def _sort_key(e):
         try:
@@ -2341,7 +2343,18 @@ def update_config(
              
         setattr(section_obj, config.key, new_value)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid value for {config.key}: {str(e)}")
+        # BUGFIX: `str(e)` aus der Cast-/Validierungs-Ausnahme enthaelt
+        # interne Details (Wertebereiche, Feldnamen, teils Teile der Config).
+        # Der Client bekommt eine klare Meldung, die Ursache geht ins Log -
+        # dort steht sie mit exc_info fuer die Fehlersuche.
+        logging.warning(
+            "Ungültiger Wert für %s.%s: %s",
+            config.section, config.key, e, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid value for {config.key}",
+        ) from e
 
     # Änderungen bleiben bewusst Runtime-only; ein Neustart lädt die Datei.
     return {
@@ -2482,6 +2495,7 @@ def debug_zapfvorhaltung(
 
         # Speichervolumen und Sollwert fuer die Vorhaltungs-Rechnung.
         vol_l = float(getattr(cfg, "speicher_volumen_l", 0.0) or 0.0)
+        soll_c = 42.0
         try:
             from priority_control import _speichervolumen_l
             from json_config import WPSteuerungConfigManager
@@ -2494,7 +2508,14 @@ def debug_zapfvorhaltung(
             if fach_vol:
                 vol_l = fach_vol
         except Exception:
-            soll_c = 42.0
+            # Gleicher Grundsatz wie bei der Boiler-Obergrenze: der Default ist
+            # ein geratener Wert, kein Messwert - das muss im Log stehen.
+            logging.warning(
+                "Zapfvorhaltung: Solltemperatur/Volumen konnten nicht aus der "
+                "Config gelesen werden - arbeite mit Defaults "
+                "(42.0 C, Volumen aus der Lernengine)",
+                exc_info=True,
+            )
 
         namen = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
         je_tag = {}
@@ -2521,15 +2542,27 @@ def debug_zapfvorhaltung(
         )
         # Sicherheitspruefung: der Sollwert darf die Boiler-Obergrenze
         # (48 C) nicht ueberschreiten.
+        #
+        # BUGFIX: Der Fallback war ein nacktes `except Exception: pass`. Die
+        # Antwort sah dann aus wie eine echte Messung, obwohl der Wert aus dem
+        # Default (48.0) stammte - bei abweichender Config also ein falscher
+        # Grenzwert ohne jede Spur im Log. Jetzt wird der Grund protokolliert
+        # und der Fallback in der Antwort gekennzeichnet.
         grenze = 48.0
+        grenze_Quelle = "default"
         try:
             from json_config import WPSteuerungConfigManager
             mgr = WPSteuerungConfigManager()
             mgr.load_config()
             grenze = float(
                 getattr(mgr.config.sicherheit, "max_temp_c", 48.0))
+            grenze_Quelle = "config"
         except Exception:
-            pass
+            logging.warning(
+                "Zapfvorhaltung: Boiler-Obergrenze konnte nicht aus der Config "
+                "gelesen werden - falle auf Default 48.0 C zurueck",
+                exc_info=True,
+            )
 
         wirksam = peak_vorhaltung > 0.0
         return {
@@ -2537,6 +2570,7 @@ def debug_zapfvorhaltung(
             "sollwert_c": soll_c,
             "speicher_volumen_l": vol_l,
             "boiler_max_c": grenze,
+            "boiler_max_Quelle": grenze_Quelle,
             "zapfmenge_global_l": info.get("zapfmenge_global_l"),
             "zapfmenge_peak_l": info.get("zapfmenge_peak_l"),
             "zapfmenge_samples": info.get("zapfmenge_samples"),
@@ -2703,7 +2737,7 @@ def get_history(hours: int = Query(default=24, ge=1, le=168)):
         return antwort
     except Exception as e:
         logging.error(f"Error reading history: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading history: {str(e)}") from e
 
 
 

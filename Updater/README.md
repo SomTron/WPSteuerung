@@ -77,10 +77,16 @@ https://login.tailscale.com/admin/network/funnel → Access control → **Only t
 Die API nutzt **slowapi** für Rate-Limiting auf schreibenden Endpoints.
 
 **Konfiguration:**
-- **Key**: API-Key > X-Forwarded-For > Remote-IP (pro Nutzer, nicht pro IP)
+- **Key**: API-Key > X-Forwarded-For (nur aus `WPS_TRUST_PROXY`) > Remote-IP
 - **Default**: 100 req/min
 - **Schreib-Endpoints**: 10/min (`/control`, `/command`, `/config`)
 - **Config Export**: 30/min (`/config/export`)
+
+**Sicherheitshinweis zu X-Forwarded-For:** Der Header ist frei setzbar und wird
+deshalb nur uebernommen, wenn die Anfrage aus einem unter `WPS_TRUST_PROXY`
+eingetragenen Netz kommt (komma-separierte CIDRs, z. B.
+`WPS_TRUST_PROXY=127.0.0.1/32, 100.64.0.0/10`). Ohne diese Variable wird er
+ignoriert und der Rate-Limit-Schluessel faellt auf die Remote-IP zurueck.
 
 **Endpoints mit Limit:**
 | Endpoint | Methode | Limit |

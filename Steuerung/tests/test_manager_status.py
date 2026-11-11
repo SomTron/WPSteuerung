@@ -498,12 +498,16 @@ def test_neue_optionen_health_und_qualitaet():
 
 
 def test_menueintrraege_22_23_stehen_im_hauptmenue_nicht_im_untermenue():
-    """Die Anzeigezeilen muessen neben der Exit-Zeile stehen.
+    """Die Anzeigezeilen muessen im Hauptmenue stehen.
 
     Regression: Beim Einfuegen wurde die erste passende `printf "0)`-Zeile
     getroffen - das ist die Exit-Zeile des Analyse-Untermenues. Die Optionen
     waren dadurch nur im Untermenue sichtbar, obwohl die Aufrufe korrekt
     im Hauptmenue case-Zweig lagen.
+
+    Der Block wird vom Menue-Anfang ("1)") bis zur Exit-Zeile gesucht, nicht
+    als starres Fenster von 4 Zeilen - sonst bricht der Test bei jeder neuen
+    Option (so geschehen bei Option 26).
     """
     manager, _ = _updater_scripts()
     zeilen = [z.strip() for z in manager.splitlines()]
@@ -512,12 +516,25 @@ def test_menueintrraege_22_23_stehen_im_hauptmenue_nicht_im_untermenue():
         i for i, z in enumerate(zeilen) if z.startswith('printf "0)') and "Exit" in z
     ]
     assert len(exit_idx) == 1, f"genau eine Exit-Zeile erwartet, gefunden: {exit_idx}"
-    fenster = zeilen[exit_idx[0] - 4: exit_idx[0] + 1]
-    assert any(z.startswith('printf "22)') for z in fenster), (
+    exit_i = exit_idx[0]
+
+    # Menue-Anfang: die erste Zeile des Hauptmenues (Option 1).
+    anfang = [
+        i for i, z in enumerate(zeilen[:exit_i])
+        if re.match(r'printf "1\)\s', z)
+    ]
+    assert anfang, "der Beginn des Hauptmenues (Option 1) ist nicht auffindbar"
+    hauptmenue = zeilen[anfang[-1]: exit_i + 1]
+
+    assert any(z.startswith('printf "22)') for z in hauptmenue), (
         "Option 22 wird im Hauptmenue nicht angezeigt"
     )
-    assert any(z.startswith('printf "23)') for z in fenster), (
+    assert any(z.startswith('printf "23)') for z in hauptmenue), (
         "Option 23 wird im Hauptmenue nicht angezeigt"
+    )
+    # Die neue Option muss ebenfalls im Hauptmenue stehen.
+    assert any(z.startswith('printf "26)') for z in hauptmenue), (
+        "Option 26 wird im Hauptmenue nicht angezeigt"
     )
 
     # In keinem Untermenue (endet mit "Zurueck zum Hauptmenue") darf 22/23

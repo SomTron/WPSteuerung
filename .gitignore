@@ -1,149 +1,136 @@
-# Ignoriere Konfigurationsdateien mit sensiblen Daten
+# ===========================================================================
+# WPSteuerung - was NICHT ins Repository gehoert.
+#
+# Die Kommentare unten nennen jeweils die konkrete Datei/das Ereignis, das
+# die Regel ausloeste. Neue Regeln bitte genauso begruenden, sonst weiss in
+# drei Monaten niemand mehr, warum sie existiert.
+# ===========================================================================
+
+# --- Konfiguration mit Zugangsdaten ---------------------------------------
+# Versioniert ist nur die Vorlage Steuerung/config.ini.example.
 richtige_config.ini
 config.ini
 
-# Ignoriere InfodatepÃ­
+# "Infos" (Mojibake von "Info") - eine Notizdatei aus dem Betrieb.
 Infos
 
-# Ignoriere Runtime-Dateien (Logs)
+# --- Laufzeit-Logs --------------------------------------------------------
 *.log
-# Tagesbasiert rotierte Log-Generationen: heizungssteuerung.log.2026-10-20,
+# Tagesbasierte Log-Generationen: heizungssteuerung.log.2026-10-20,
 # error.log.2026-10-20, ... Das Muster "*.log" trifft sie NICHT, weil sie
 # nicht auf ".log" enden. Ohne diesen Eintrag tauchen sie als untracked auf.
 *.log.[0-9]*
 *.log.[0-9]*.[0-9]*
 
-# Haltbarer Zustands-Schnappschuss (Laufzeit, nie committen)
+# Der komplette logs/-Ordner ist LAUFZEIT (Analyse-Berichte, importierte
+# Pi-Daten, Diagnose-Vollspeicher) und enthaelt personenbezogene
+# Anlagendaten. Vorher standen hier nur einzelne Dateimuster
+# (logs/import/, logs/wp_diag_*/, logs/[0-9]*.*/, logs/entscheidungs_log_*.txt,
+# logs/heizungssteuerung*.log, logs/*_upload*.txt, logs/sim_*.json,
+# logs/analyse_*/). Jedes neue Format musste einzeln nachgetragen werden -
+# daran sind Dateien wie logs/941fgu (17,7 MB tar-Archiv) und
+# logs/heizungssteuerung_log_18.10.26.txt vorbeigerutscht.
+# Ausnahmen fuer einzelne Dateien: mit "git add -f <datei>" (bewusst).
+logs/
+
+# --- Laufzeit-Zustand -----------------------------------------------------
+# Haltbarer Zustands-Schnappschuss (wird fortlaufend neu geschrieben - nervt
+# sonst bei jedem Deploy mit "lokale Aenderungen verwerfen?").
 last_state.txt
 # Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
 letzter_lauf.json
 absturz_historie.json
 
-# Modi-Persistenz (Bademodus/Urlaubsmodus, Laufzeit-Zustand, nie committen)
+# Modi-Persistenz (Bademodus/Urlaubsmodus, Laufzeit-Zustand)
 Steuerung/modi_zustand.json
 Steuerung/legionellen_plan.json
 legionellen_plan.json
-# Abschluss der Legionellenprophylaxe (Laufzeit-Zustand, nie committen)
+# Abschluss der Legionellenprophylaxe
 Steuerung/legionellen_zustand.json
 legionellen_zustand.json
 
-# Startup-Diagnose: Status des letzten Laufs (unsauber beendet? OOM-Kill?)
-letzter_lauf.json
-absturz_historie.json
+# Entscheidungs-Log (Laufzeit, rotierend)
+Steuerung/entscheidungs_log.jsonl
+Steuerung/entscheidungs_log.jsonl.old
 
-# Importierte Pi-Daten (Analyse-Export, enthaelt Logs/CSVs - nie committen)
-logs/import/
+# Lerndaten der LearningEngine (Laufzeit)
+Steuerung/learning_data.json
+learning_data.json
 
-# Diagnose-/Analyse-Artefakte (lokal ausgewertet, nie committen - teils >10 MB)
-logs/wp_diag_*/
-# Exportierte Betriebsdaten (CSV/Log aus dem realen Betrieb).
-# Sie gehoeren nicht ins Repository - sehr gross und personenbezogen.
-# Muster deckt alle Versionsordner (logs/24.9/, logs/1.10.26/, ...);
-# der Punkt im Muster verhindert Treffer auf lose Dateien wie logs/941fgu.
-logs/[0-9]*.*/
-logs/entscheidungs_log_*.txt
-logs/heizungssteuerung*.log
-logs/*_upload*.txt
-logs/sim_*.json
-
-logs/analyse_*/
-
-# Laufzeit-Datei des Services (wird fortlaufend neu geschrieben - nervt sonst
-# bei jedem Deploy mit "lokale Aenderungen verwerfen?")
+# Generierte Prognose-Daten
 Steuerung/sonnen_prognose.csv
 
-# Laufzeit-Historien im Hauptordner ignorieren, aber nicht im Analyse-Ordner
-Steuerung/csv\ log/heizungsdaten.csv
-Steuerung/csv\ log/heizungsdaten_*.csv
-Steuerung/csv\ log/zyklen.csv
-Steuerung/csv\ log/zyklen_*.csv
-!Analyse/
-!Analyse/*.csv
-Analyse/*.md
+# --- Analyse-Artefakte ----------------------------------------------------
+# Auswertungen aus dem realen Betrieb. Die Dateien sind mehrgigabytefaehig
+# (Stand 11.2026: merged_data.csv 31 MB, heizungsdaten_upload.csv 20 MB,
+# heizungsdaten2.csv 8 MB, heizungsdaten.csv 3,4 MB) und enthalten
+# personenbezogene Anlagendaten.
+#
+# Vorher hob "!Analyse/*.csv" genau diese Regel wieder auf - die naechste
+# Zeile machte die Ignore-Liste gegenstandslos. Zum Nachbau siehe
+# Analyse/README.md.
+Analyse/*.csv
 Analyse/*.html
+Analyse/*.md
 # Ausnahme: die HANDGESCHRIEBENE Uebersicht der Analyse-Werkzeuge (die
 # uebrigen Markdown-Dateien dort sind generierte Berichte).
 !Analyse/README.md
 
-# Ignoriere Test-Outputs
-*_out.txt
-sim_*.txt
-test_results.txt
-raw_sim.txt
+# --- Laufzeit-Artefakte im Hauptordner ------------------------------------
+# "Steuerung/csv log/" ist ein LAUFZEIT-Verzeichnis (cycle_logging.py
+# schreibt zyklen.csv hinein, cleanup_pi.sh legt es an). Bisher ignorierten
+# nur einzelne Dateinamen - alles andere landete im Repo (Beispiel:
+# heizungsdaten2.csv, 8 MB). Der Ordnername MIT LEERZEICHEN ist zusaetzlich
+# eine Linux-Falle: ein Shell-Skript mit unquotedem Pfad bricht daran.
+Steuerung/csv log/
+Steuerung/csv\ log/
+Steuerung/csv_log/
 
-# Ignoriere PyCharm-Projektdateien
-.idea/
+# "Steuerung/simulated_w1/" - simulierte Geraete aus dem Shelly-Test.
+Steuerung/simulated_w1/
 
-# Ignoriere virtuelle Environments
-.venv/
+# "Steuerung/backup/" - .bak-Dateien aus dem Betrieb.
+Steuerung/backup/
 
-# Python Cache
-__pycache__/
-*.pyc
-
-# Generierte Prognose-Daten
-Steuerung/sonnen_prognose.csv
-# Cursor AI / IDE
-.antigravity/
-*.pyc
-__pycache__/
-
-# Lokale CI-Testumgebung (versehentlich erzeugt)
-.ci_venv/
-
-# Entscheidungs-Log (Laufzeit, rotierend, nie committen)
-Steuerung/entscheidungs_log.jsonl
-Steuerung/entscheidungs_log.jsonl.old
-
-# Lokale Backups fremder Aenderungen
-_fremde_aenderungen_backup/
+# Sicherheitsbackups von utils.backup_csv()
+# (z.B. heizungsdaten.csv_20260214_114549.bak) und manuelle .bak-Kopien.
+*.csv_*.bak
+Updater/*.bak
 
 # Wegwerf-Debugskripte (Einmal-Analyse im Projektordner). Sie brechen den
 # CI-Lint (ruff prueft "Steuerung" komplett) und gehoeren nicht ins Repo.
 Steuerung/_demo*.py
 
-# Lerndaten der LearningEngine (Laufzeit, nie committen)
-Steuerung/learning_data.json
-learning_data.json
+# --- Test- und Analyse-Ausgaben -------------------------------------------
+*_out.txt
+sim_*.txt
+test_results.txt
+raw_sim.txt
 
-# ---------------------------------------------------------------------------
-# BUGFIX (22.10.2026): Laufzeit-Artefakte und tote Ordner.
-#
-# 1) "Steuerung/csv log/" ist ein LAUFZEIT-Verzeichnis (cycle_logging.py
-#    schreibt zyklen.csv hinein, cleanup_pi.sh legt es an). Bisher
-#    ignorierten nur einzelne Dateinamen - alles andere landete im Repo.
-#    Beispiel: heizungsdaten2.csv (8 MB!) lag versioniert im Baum.
-#    Der Ordnername MIT LEERZEICHEN ist zusaetzlich eine Linux-Falle:
-#    ein Shell-Skript mit unquotedem Pfad bricht daran.
-#    Deshalb: der komplette Ordner ist ausgenommen.
-Steuerung/csv log/
-Steuerung/csv\ log/
-Steuerung/csv_log/
+# --- Android --------------------------------------------------------------
+# Build-Caches und -Berichte. android/.gitignore kennt sie schon; die Wurzel
+# ignoriert sie zusaetzlich, weil Gradle sie schon vor dem ersten Build
+# anlegt und sie sonst in "git status" auftauchen.
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+android/.cxx/
 
-# 2) "Steuerung/simulated_w1/" - simulierte Geraete aus dem
-#    Shelly-Simulationstest. Reine Test-Artefakte, nie committen.
-Steuerung/simulated_w1/
+# --- Werkzeuge / IDE ------------------------------------------------------
+.idea/
+.antigravity/
 
-# 3) "Steuerung/backup/" - .bak-Dateien aus dem Betrieb. Nie committen.
-Steuerung/backup/
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.pyc
 
-# 4) Python-Cache in Unterordnern (lag bereits in archive/).
-Steuerung/archive/__pycache__/
-Steuerung/simulation/__pycache__/
+# --- Virtuelle Umgebungen -------------------------------------------------
+.venv/
+.ci_venv/
 
-# ---------------------------------------------------------------------------
-# BUGFIX (24.10.2026): Laufzeit-Artefakte aus dem Repo-ROOT.
-#
-# Das unfertige Skript test_header_fix.py prueft utils.check_and_fix_csv_header
-# im Root und legt dabei "backup/" und "csv log/" an - beides landete im
-# Commit. Im Betrieb laeuft der Dienst in Steuerung/ (dort sind die Ordner
-# bereits ignoriert); ein Test im Root darf dieselbe Falle nicht erneut
-# ausloesen.
-backup/
-csv log/
-csv\ log/
-
-# Sicherheitsbackups von utils.backup_csv() (z.B. heizungsdaten.csv_20260214_114549.bak)
-# und manuelle .bak-Kopien von Deploy-Skripten.
-*.csv_*.bak
-Updater/*.bak
+# --- Fremdes --------------------------------------------------------------
+# Lokale Backups fremder Aenderungen (kein Projekt-Code).
+_fremde_aenderungen_backup/

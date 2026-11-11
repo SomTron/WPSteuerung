@@ -7,6 +7,7 @@ Sicherheitskritisch. Geprueft wird:
 - das Aufheben passiert nur ueber einen ausdruecklichen Weg.
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -386,7 +387,7 @@ async def test_sperrbefehle_werden_vor_den_phasen_ausgefuehrt(monkeypatch, tmp_p
     rest = await m._fuehre_sperrbefehle_aus(
         None, _baue_state(), [("notaus", {"grund": "Telegram"})]
     )
-    assert os.path.exists(sperrdatei), "Sperre wurde nicht geschrieben"
+    assert await asyncio.to_thread(os.path.exists, sperrdatei), "Sperre wurde nicht geschrieben"
     # Nach einem Not-Aus darf nichts anderes mehr durchrutschen.
     assert rest == [], f"nach dem Not-Aus wurde weitergegeben: {rest}"
 

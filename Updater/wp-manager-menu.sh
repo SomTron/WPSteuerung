@@ -2,6 +2,13 @@
 # wp-manager.sh - Management script for WPSteuerung
 # Located in Updater repo, targets ../Steuerung (relative to script location)
 #
+# v1.19: Neue Option 26 (Entwicklungswerkzeuge entfernen). Seit der Trennung
+#       der Abhaengigkeiten (requirements.txt = Laufzeit, requirements-dev.txt
+#       = Werkzeuge) bleiben auf einem bereits eingerichteten Pi die alten
+#       Werkzeuge installiert: pip install entfernt nichts. ruff/mypy/pytest
+#       belegen auf einem 512-MB-Geraet zweistelligen RAM und werden im
+#       Betrieb nie benoetigt. Die Option zeigt, was installiert ist, und
+#       entfernt es nach Rueckfrage gezielt aus dem venv.
 # v1.18: Die Upload-Optionen (9/14/16/18/21) luden NICHTS hoch. Die Rueckfrage
 #       `read upload_reply` erbte das stdin der Schleife (`done < archivee.txt`)
 #       und las deshalb die naechste Zeile der Archivliste statt der Eingabe:
@@ -1030,9 +1037,24 @@ api_key_erzeugen() {
     # Atomar: erst in eine temporaere Datei im selben Verzeichnis, dann
     # umbenennen. Ein abgebrochener Schreibvorgang hinterlaesst so weder
     # eine leere noch eine halbe api.env.
+    #
+    # Vorhandene WPS_TRUST_PROXY-Zeile uebernehmen: die Datei enthaelt neben
+    # dem Key auch die Proxy-Netze (Rate-Limit, siehe api.py). Ein Schluessel-
+    # Wechsel darf sie nicht stillschweigend loeschen - sonst faellt das
+    # Rate-Limit hinter dem Tunnel auf die gemeinsame Tunnel-IP zurueck.
+    trust_zeile=""
+    if [ -f "$API_ENV_FILE" ] && sudo test -r "$API_ENV_FILE"; then
+        trust_zeile=$(sudo grep -E '^WPS_TRUST_PROXY=' "$API_ENV_FILE" 2>/dev/null | tail -n 1)
+    fi
     tmp=$(sudo mktemp "$API_ENV_DIR/.api.env.XXXXXX") || {
         printf "${RED}✗ Temporaere Datei nicht anlegbar.${NC}\n"; return 1; }
-    printf 'WPS_API_KEY=%s\n' "$key" | sudo tee "$tmp" >/dev/null 2>&1
+    {
+        printf 'WPS_API_KEY=%s\n' "$key"
+        if [ -n "$trust_zeile" ]; then
+            printf '%s\n' "$trust_zeile"
+            printf "Bestehende WPS_TRUST_PROXY-Zeile uebernommen.\n"
+        fi
+    } | sudo tee "$tmp" >/dev/null 2>&1
     sudo chmod 640 "$tmp" || true
     sudo chown "root:$API_GRUPPE" "$tmp" 2>/dev/null || true
     if ! sudo mv "$tmp" "$API_ENV_FILE"; then
@@ -1236,6 +1258,123 @@ stuerung_unit_installieren() {
     echo ""
     stuerung_unit_status
     api_key_probe "$(api_key_read)"
+}
+
+# ---------------------------------------------------------------------------
+# Entwicklungswerkzeuge aus dem venv entfernen (Option 26)
+#
+# Hintergrund: requirements.txt enthaelt seit 11.2026 nur noch die Laufzeit,
+# die Werkzeuge stehen in requirements-dev.txt. Ein `pip install -r
+# requirements-pi.txt` auf einem BESTEHENDEN Pi entfernt aber nichts - die
+# Werkzeuge aus der Zeit davor bleiben installiert. Auf einem 512-MB-Geraet
+# ist das Grundlast (ruff/mypy/pytest), ohne im Betrieb je verwendet zu
+# werden. Diese Option macht das gezielt und nach Rueckfrage rueckgaengig.
+#
+# Das venv wird aus der laufenden Installation abgeleitet:
+#   $WPS_VENV  ->  <repo>/.venv  ->  python3 -m venv
+# Der Dienst laeuft mit <venv>/bin/python (siehe wpsteuerung.service).
+venv_python() {
+    if [ -n "$WPS_VENV_PYTHON" ] && [ -x "$WPS_VENV_PYTHON" ]; then
+        printf '%s\n' "$WPS_VENV_PYTHON"
+        return 0
+    fi
+    for kandidat in "$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/venv/bin/python"; do
+        if [ -x "$kandidat" ]; then
+            printf '%s\n' "$kandidat"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Namen der Werkzeuge, die nicht auf den Pi gehoeren. Bewusst nur diese:
+# pytest-asyncio bringt pytest mit, wird aber separat gefuehrt, damit die
+# Ausgabe vollstaendig ist. "mock" ist nicht dabei - das Repo nutzt
+# unittest.mock aus der Standardbibliothek.
+DEV_WERKZEUGE="pytest pytest-asyncio ruff mypy"
+
+dev_werkzeuge_status() {
+    printf "${CYAN}=== Entwicklungswerkzeuge ===${NC}\n"
+    vpy=$(venv_python) || {
+        printf "${YELLOW}Kein venv gefunden.${NC}\n"
+        printf "  Erwartet: %s\n" "$REPO_ROOT/.venv/bin/python"
+        printf "  Oder WPS_VENV_PYTHON auf den Interpreter setzen.\n"
+        return 1
+    }
+    printf "Interpreter:  %s\n" "$vpy"
+    printf "Installiert:  %s\n\n" "$DEV_WERKZEUGE"
+
+    gefunden=0
+    for paket in $DEV_WERKZEUGE; do
+        version=$("$vpy" -c "import importlib.metadata as m
+try:
+    print(m.version('$paket'))
+except Exception:
+    pass" 2>/dev/null)
+        if [ -n "$version" ]; then
+            printf "  ${YELLOW}%-16s %s${NC}\n" "$paket" "$version"
+            gefunden=$((gefunden + 1))
+        fi
+    done
+
+    if [ "$gefunden" -eq 0 ]; then
+        printf "${GREEN}✓ Keine Entwicklungswerkzeuge installiert.${NC}\n"
+        return 0
+    fi
+    printf "\n${DIM}Sie werden im Betrieb nicht benoetigt (nur Entwicklung/CI).${NC}\n"
+    printf "${DIM}Laufzeit-Pakete bleiben unberuehrt.${NC}\n"
+    return 0
+}
+
+dev_werkzeuge_entfernen() {
+    vpy=$(venv_python) || {
+        printf "${RED}✗ Kein venv gefunden - Abbruch.${NC}\n"
+        printf "  Erwartet: %s\n" "$REPO_ROOT/.venv/bin/python"
+        return 1
+    }
+    printf "${CYAN}=== Entwicklungswerkzeuge entfernen ===${NC}\n"
+    printf "Interpreter: %s\n\n" "$vpy"
+    # Erst zeigen, was da ist - die Statusanzeige ist die gemeinsame Basis
+    # beider Wege (Status && Entfernen).
+    dev_werkzeuge_status
+    printf "\n"
+
+    # Was ist ueberhaupt da? Ohne Treffer ist die Option gegenstandslos.
+    installiert=""
+    for paket in $DEV_WERKZEUGE; do
+        if "$vpy" -c "import importlib.metadata as m
+try:
+    m.version('$paket')
+except Exception:
+    raise SystemExit(1)" 2>/dev/null; then
+            installiert="$installiert $paket"
+        fi
+    done
+    if [ -z "$installiert" ]; then
+        printf "${GREEN}✓ Nichts zu tun - keine der Werkzeuge ist installiert.${NC}\n"
+        return 0
+    fi
+
+    printf "Folgende Pakete werden entfernt:%s\n" "$installiert"
+    printf "${YELLOW} Laufzeit-Pakete (fastapi, aiohttp, pandas, ...) bleiben.${NC}\n"
+    printf "\nWirklich entfernen? [j/N] "
+    read antwort
+    case "$antwort" in
+        j|J|y|Y) ;;
+        *) printf "Abgebrochen.\n"; return 0 ;;
+    esac
+
+    # Kein --yes: pip soll bei Abhaengigkeitskonflikten lieber abbrechen,
+    # als still etwas mitzunehmen, das die Laufzeit braucht.
+    if ! "$vpy" -m pip uninstall -y $installiert; then
+        printf "${RED}✗ pip uninstall ist fehlgeschlagen.${NC}\n"
+        printf "  Nichts wurde veraendert, der Dienst laeuft weiter.\n"
+        return 1
+    fi
+    printf "${GREEN}✓ Entwicklungswerkzeuge entfernt.${NC}\n"
+    printf "\n${DIM}Ein Dienst-Neustart ist nicht noetig - die Laufzeit ist nicht${NC}\n"
+    printf "${DIM}betroffen. Pruefen: %s\n" "$REPO_ROOT/.venv/bin/python -c 'import fastapi'"
+    return 0
 }
 
 # Neuesten Qualitaetsbericht suchen (Analyse-Ordner, dann Projektwurzel).
@@ -1669,6 +1808,7 @@ WPMODI
     printf "23) 📈  Analyse-Qualitaet (quality_report.json)\n"
     printf "24) 🔑  API-Schluessel (erzeugen / anzeigen / entfernen)\n"
     printf "25) ⚙️   Steuerungs-Unit installieren / aktualisieren\n"
+    printf "26) 🧹  Entwicklungswerkzeuge entfernen (ruff/mypy/pytest)\n"
     printf "0) ❌   Exit\n"
     echo ""
     printf "Choice: "
@@ -1912,6 +2052,10 @@ WPMODI
         23) show_analysis_quality ;;
         24) api_key_menu ;;
         25) stuerung_unit_installieren ;;
+        26)
+            dev_werkzeuge_entfernen
+            wait_for_key
+            ;;
         0) exit 0 ;;
         *)
             printf "${RED}Ungültige Auswahl: '%s'${NC}\n" "$choice"

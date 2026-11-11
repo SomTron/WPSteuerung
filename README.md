@@ -1,6 +1,6 @@
 # 🌡️ WPSteuerung - Intelligente Wärmepumpensteuerung
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/SomTron/WPSteuerung/actions/workflows/ci.yml/badge.svg)](https://github.com/SomTron/WPSteuerung/actions/workflows/ci.yml)
 
@@ -53,6 +53,11 @@ python3 Analyse/log_analyse.py
 - **Status-Zeile** mit PV, Einspeisung, SOC und Datenalter; veraltete Daten werden als `| STALE` markiert.
 - **Eindeutige Abschalt-Codes**: `Kompressor AUS (cycle=7) reason=regel_aus …`
 - **Sensor-Degradation**: steigende Lesefehler-Rate warnt frühzeitig (Verkabelung/Sensor).
+
+> **Hinweis zu den Beispieldaten:** `logs/` und `Analyse/*.csv` sind bewusst
+> **nicht** versioniert – sie sind groß (zuletzt 65 MB im Repo) und enthalten
+> Anlagendaten. Ein frischer Clone hat sie nicht; wie man sie vom Pi holt oder
+> neu erzeugt, steht in [`Analyse/README.md`](Analyse/README.md).
 
 ---
 
@@ -276,12 +281,32 @@ git clone https://github.com/SomTron/WPSteuerung.git
 cd WPSteuerung
 ```
 
+> **Voraussetzung: Python 3.12.** Getestet wird ausschließlich gegen 3.12
+> (CI, `mypy.ini` und der Raspberry Pi), neuere Versionen sind unprobiert.
+> Ältere Versionen funktionieren nicht: `Analyse/log_analyse.py` nutzt die
+> PEP-604-Union `str | None` ohne `from __future__ import annotations`, die
+> erst ab 3.10 geparst wird.
+
 ### 2. Virtual Environment einrichten
 ```bash
 # In WPSteuerung/
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-pi.txt
+```
+
+**Zwei Abhängigkeits-Dateien, zwei Zwecke:**
+
+| Datei | Wofür | Inhalt |
+| :--- | :--- | :--- |
+| `requirements-pi.txt` | **Pi / Betrieb** | Laufzeit + `RPi.GPIO`, `RPLCD`, `smbus2` |
+| `requirements-dev.txt` | **Entwicklung / CI** | Laufzeit + `pytest`, `ruff`, `mypy` |
+
+Die reinen Laufzeit-Pakete stehen in `requirements.txt` und werden von beiden
+Dateien per `-r` eingebunden. Für die Entwicklung (Tests, Linter, Typprüfung):
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 ### 3. Konfiguration
@@ -302,6 +327,22 @@ Für einen produktiven API-Port sollte auf dem Raspberry Pi eine Datei mit einem
 WPS_API_KEY=ein_langer_zufaelliger_schluessel
 WPS_CORS_ORIGINS=https://deine-domain.example
 ```
+
+**Wichtig zum Rate-Limit** (seit 11.11.2026): Das Rate-Limit orientiert sich am
+API-Key, sonst an der Remote-IP. Der Header `X-Forwarded-For` wird **nur** dann
+verwendet, wenn die Gegenstelle in einem unter `WPS_TRUST_PROXY` erlaubten Netz
+liegt – sonst könnte jeder Client durch einen selbst gesetzten Header ein neues
+Kontingent bekommen. Wer Cloudflare Tunnel, Tailscale Funnel oder nginx
+vorschaltet, trägt das Proxy-Netz ein:
+
+```ini
+# /etc/wpssteuerung/api.env
+WPS_TRUST_PROXY=127.0.0.1/32, 100.64.0.0/10
+```
+
+Ohne diese Angabe gilt: `X-Forwarded-For` wird ignoriert und alle Anfragen
+hinter dem Tunnel teilen sich das Kontingent der Tunnel-IP. Das ist bewusst
+streng, aber sicher; das Limit ist dann zu grob, nicht umgehbar.
 
 Danach `systemctl daemon-reload && systemctl restart wpsteuerung` ausführen. Ohne `WPS_API_KEY` bleiben Status-/Historieabfragen sichtbar, Schreib- und Exportbefehle liefern aber bewusst HTTP 503. Die WebApp kann den Schlüssel einmalig im Browser hinterlegen:
 
@@ -364,6 +405,12 @@ Für eine einfache Wartung und Updates nutzen Sie die Skripte im `Updater/` Verz
 - `wp-manager.sh`: Interaktives Menü für Logs, verifizierte Serviceaktionen, Produktionsstatus, Zyklusdaten und Analyse-Timer.
 - `rpi-deploy.sh`: Deployment per Fast-Forward; lokale Änderungen werden gesichert und blockieren das Update, statt verworfen zu werden.
 - Catbox-Uploads sind wegen der öffentlich abrufbaren URLs immer bestätigungspflichtig.
+
+**Option 26 – Entwicklungswerkzeuge entfernen:** Auf einem Pi, der vor der
+Trennung der Abhängigkeiten eingerichtet wurde, liegen `ruff`, `mypy` und
+`pytest` noch im venv (rund zweistelliger RAM-Bedarf, im Betrieb ungenutzt).
+Die Option zeigt die installierten Versionen und entfernt sie nach Rückfrage –
+nur die Laufzeit bleibt.
 
 ---
 

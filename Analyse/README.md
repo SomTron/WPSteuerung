@@ -3,6 +3,28 @@
 Alle Skripte sind **lesend** und nutzen nur die Standardbibliothek (kein pandas
 noetig). Sie aendern weder Code noch Konfiguration.
 
+## Woher die Beispieldaten kommen
+
+Die CSV-Auswertungen im `logs/`-Ordner und die `Analyse/*.csv` sind **nicht**
+versioniert (`.gitignore`, Abschnitt "Analyse-Artefakte"). Sie sind mehrere
+Gigabyte gross und enthalten personenbezogene Anlagendaten - im Repository
+lagen zuletzt 65 MB davon, was das `.git` aufgeblaeht hat.
+
+Ein frischer Clone hat sie also nicht. Wer sie braucht, holt sie vom Pi
+(`logs/import/`) oder laesst sie neu entstehen:
+
+```bash
+# Heizdaten und Zyklen aus dem Betrieb holen (Pi -> Arbeitsverzeichnis)
+scp pi@<host>:~/WPSteuerung/WPSteuerung/'csv log'/heizungsdaten.csv Analyse/
+scp pi@<host>:~/WPSteuerung/WPSteuerung/'csv log'/zyklen.csv       Analyse/
+
+# merged_data.csv (Winterdaten fuer Analyse/sim/calibrate.py) neu erzeugen
+python3 Analyse/wp_analysis.py
+```
+
+Fehlt eine Datei, laufen die Skripte nicht kaputt - `calibrate.py` meldet
+"Keine Realdaten gefunden." und endet mit Exit-Code 1.
+
 | Skript | Eingabe | Zweck |
 | :--- | :--- | :--- |
 | `log_analyse.py` | `entscheidungs_log*.jsonl` | Strukturierte Auswertung des Entscheidungslogs (Regeln, Zyklen, Quellen, Tages-KPIs) |

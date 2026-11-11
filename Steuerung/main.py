@@ -12,6 +12,9 @@ import signal
 from queue import Empty, Full, Queue
 import uvicorn
 import aiofiles
+# aiofiles.os ist KEIN Unterpaket: ohne diesen Import waere `aiofiles.os`
+# erst beim Aufruf ein AttributeError (ASYNC240-Fix).
+import aiofiles.os
 import os
 import sys
 from datetime import datetime, timedelta, date
@@ -108,8 +111,8 @@ hardware_manager = None
 compressor_actuator = None
 stop_event = threading.Event()
 
-# Referenzen auf Hintergrund-Tasks halten (ohne Referenz kÃ¶nnen sie vom
-# Garbage Collector eingesammelt werden, wÃ¤hrend sie noch laufen!)
+# Referenzen auf Hintergrund-Tasks halten (ohne Referenz können sie vom
+# Garbage Collector eingesammelt werden, während sie noch laufen!)
 background_tasks = []
 control_command_queue: Queue = Queue(maxsize=16)
 
@@ -156,8 +159,8 @@ def _log_task_exception(task):
 
 def handle_exit(signum, frame):
     # Wichtig: Hier bewusst KEIN sys.exit()!
-    # SystemExit wÃ¼rde den finally-Block in main_loop Ã¼berspringen
-    # (GPIO-Cleanup und session.close() wÃ¼rden nie laufen).
+    # SystemExit würde den finally-Block in main_loop überspringen
+    # (GPIO-Cleanup und session.close() würden nie laufen).
     # Wir setzen nur das Stop-Event; der Loop beendet sich kontrolliert selbst.
     logging.info(f"Signal {signum} empfangen. Beende Programm...")
     stop_event.set()
@@ -361,7 +364,7 @@ async def set_kompressor_status(state, status, force=False, t_boiler_oben=None, 
         state.control.zyklus_id = getattr(state.control, 'zyklus_id', 0) + 1
         begin_cycle(state, now, state.control.zyklus_id)
         
-        # Startwerte fÃ¼r Verifizierung speichern
+        # Startwerte für Verifizierung speichern
         state.kompressor_verification_start_time = now
         state.kompressor_verification_start_t_verd = state.sensors.t_verd
         state.kompressor_verification_start_t_unten = state.sensors.t_unten
@@ -535,10 +538,13 @@ async def setup_application():
     try:
         csv_file = HEIZUNGSDATEN_CSV
         log_dir = os.path.dirname(csv_file)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-            
-        if not os.path.exists(csv_file):
+        # Pfadpruefungen ueber aiofiles.os: sie sind zwar billig, laufen aber
+        # im Event-Loop - und genau der soll bei einem einzigen `os.path.exists`
+        # auf einer gemounteten SD/Karte nicht anhaengen koennen (ASYNC240).
+        if log_dir and not await aiofiles.os.path.exists(log_dir):
+            await aiofiles.os.makedirs(log_dir)
+
+        if not await aiofiles.os.path.exists(csv_file):
             # Neue Datei beim Start direkt anlegen
             async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
                 await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
@@ -595,18 +601,18 @@ async def setup_application():
     return session
 
 def handle_day_transition(state, now):
-    """FÃ¼hrt Aktionen beim Tageswechsel durch."""
+    """Führt Aktionen beim Tageswechsel durch."""
     current_date = now.date()
     if state.stats.last_day is None:
         state.stats.last_day = current_date
     elif state.stats.last_day != current_date:
-        logging.info(f"Tageswechsel erkannt ({state.stats.last_day} -> {current_date}). Setze Statistiken zurÃ¼ck.")
+        logging.info(f"Tageswechsel erkannt ({state.stats.last_day} -> {current_date}). Setze Statistiken zurück.")
 
         # Endstand des alten Tages sichern (inkl. Anteil nach Mitternacht),
         # BEVOR der Tageszaehler zurueckgesetzt wird.
         alter_tag_gesamt = state.stats.total_runtime_today
 
-        # Falls der Kompressor Ã¼ber Mitternacht lÃ¤uft: Restzeit des alten Tages dazurechnen
+        # Falls der Kompressor über Mitternacht läuft: Restzeit des alten Tages dazurechnen
         if state.control.kompressor_ein and state.stats.last_compressor_on_time:
             # Ende des alten Tages (23:59:59.999...)
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -615,7 +621,7 @@ def handle_day_transition(state, now):
                 alter_tag_gesamt += elapsed_old_day
                 logging.info(f"Laufzeitanteil alter Tag: {elapsed_old_day}")
 
-            # Startzeit fÃ¼r neuen Tag auf Mitternacht setzen
+            # Startzeit für neuen Tag auf Mitternacht setzen
             state.stats.last_compressor_on_time = midnight
 
         # Vortags-Wert fuer Statistik/Anzeige erhalten (statt verwerfen),
@@ -937,7 +943,7 @@ def _as_local_datetime(value, local_tz, default=None):
 
 
 async def check_periodic_tasks(session, state, last_vpn_check):
-    """FÃ¼hrt zeitgesteuerte Hintergrundaufgaben aus."""
+    """Führt zeitgesteuerte Hintergrundaufgaben aus."""
     now_dt = _state_now(state)
     now_local = now_dt
     
@@ -1413,12 +1419,12 @@ ALARM_MINUTEN_MINIMUM = 15.0
 
 
 async def check_and_send_alerts(session, state):
-    """PrÃ¼ft auf Ã„nderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
+    """Prüft auf Änderungen im blocking_reason und sendet sofortige Telegram-Alarme (einmalig)."""
     current_blocking = state.control.blocking_reason
     
     # Normalisierung: Dynamische Teile (Zeiten, Temperaturen) entfernen
     # Beispiel: "Min. Pause (noch 1m 10s)" -> "Min. Pause"
-    # Beispiel: "Verdampfer zu kalt (5.0Â°C < 6Â°C)" -> "Verdampfer zu kalt"
+    # Beispiel: "Verdampfer zu kalt (5.0°C < 6°C)" -> "Verdampfer zu kalt"
     # Beispiel: "Sensorfehler: T_Oben invalid" -> "Sensorfehler"
     import re
     def normalize(text):
@@ -2050,10 +2056,12 @@ async def log_system_state(state):
     try:
         csv_file = HEIZUNGSDATEN_CSV
         log_dir = os.path.dirname(csv_file)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-            
-        if not os.path.exists(csv_file):
+        # Wie beim Startcheck: Pfadpruefung asynchron, damit der 10-s-Takt
+        # nicht von einem `exists()` auf der SD-Karte abhaengt (ASYNC240).
+        if log_dir and not await aiofiles.os.path.exists(log_dir):
+            await aiofiles.os.makedirs(log_dir)
+
+        if not await aiofiles.os.path.exists(csv_file):
             async with aiofiles.open(csv_file, mode="w", encoding="utf-8") as f:
                 await f.write(",".join(EXPECTED_CSV_HEADER) + "\n")
         # Optimization: Header check removed from loop (done at startup)
@@ -2170,7 +2178,9 @@ def _logge_speicher(state, letzter_log):
             f"{startup_diagnose.formatiere_spitze(spitze)}"
         )
     except Exception:
-        pass
+        # Diagnose darf den Loop nie anhalten - aber sie darf auch nicht
+        # still ausfallen: genau diese Werte fehlen bei einem OOM-Kill.
+        logging.debug("Speicher-Werte konnten nicht gelesen werden", exc_info=True)
     return jetzt
 
 
@@ -2217,16 +2227,25 @@ def _pruefe_ram_schwelle(state) -> None:
 
 
 def _markiere_sensor_update_fehler(state) -> None:
-    """Bei fehlgeschlagenem Datenupdate fail-safe ungültige Sensorwerte markieren."""
+    """Bei fehlgeschlagenem Datenupdate fail-safe ungültige Sensorwerte markieren.
+
+    Die beiden except-Zweige sind bewusst fail-safe: wenn das Setzen selbst
+    scheitert, ist der Sensorwert bereits ungültig - ein zweiter Versuch waere
+    sinnlos. Ohne Log wüsste man aber nicht, dass die Maskierung nicht griff.
+    """
     for name in ("t_oben", "t_unten", "t_mittig", "t_verd", "t_boiler"):
         try:
             setattr(state.sensors, name, None)
         except Exception:
-            pass
+            logging.debug(
+                "Sensor %s konnte nicht auf ungültig gesetzt werden", name,
+                exc_info=True,
+            )
     try:
         state.last_data_update_ok = False
     except Exception:
-        pass
+        logging.debug(
+            "last_data_update_ok konnte nicht gesetzt werden", exc_info=True)
 
 
 async def _run_data_phase(session, state) -> bool:
@@ -2489,13 +2508,19 @@ if __name__ == "__main__":
                 if hardware_manager is not None:
                     hardware_manager.cleanup()
             except Exception:
-                pass
+                # Der Dienst startet gleich neu - ein Fehler beim Freigeben
+                # darf den Neustart nicht verhindern, muss aber sichtbar sein.
+                logging.debug(
+                    "Hardware-Cleanup nach Startfehler fehlgeschlagen",
+                    exc_info=True,
+                )
             # Ein gesetztes stop_event (z. B. "Ausschalten scheitert")
             # wuerde den naechsten Versuch sofort beenden.
             try:
                 stop_event.clear()
             except Exception:
-                pass
+                logging.debug(
+                    "stop_event nach Startfehler nicht loeschbar", exc_info=True)
             try:
                 import start_daempfung
                 start_daempfung.warte_bei_fehlerschleife(logger=logging.getLogger())
@@ -2508,7 +2533,9 @@ if __name__ == "__main__":
         import start_daempfung
         start_daempfung.fehlstart_zuruecksetzen()
     except Exception:
-        pass
+        # Kein Abbruchgrund: der Dienst laeuft ja. Aber ohne Log bliebe ein
+        # dauerhaft falscher "Fehlstart"-Zaehler uner erklaert.
+        logging.debug("Fehlstart-Historie konnte nicht geloescht werden", exc_info=True)
     # Not-Aus beendet den Dienst mit einem eigenen Exitcode. In
     # wpsteuerung.service steht dafuer RestartPreventExitStatus=42, damit
     # systemd nach dem Not-Aus NICHT wieder anfaehrt. Die Sperrdatei

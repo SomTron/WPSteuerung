@@ -3,6 +3,9 @@ import logging
 import aiohttp
 import os
 import aiofiles
+# aiofiles.os ist KEIN Unterpaket von aiofiles: ohne diesen Import existiert
+# `aiofiles.os` nicht (AttributeError zur Laufzeit, nicht beim Modul-Import).
+import aiofiles.os
 from datetime import datetime, timedelta
 import pytz
 from atomic_io import atomic_write_text
@@ -28,7 +31,7 @@ async def _ensure_forecast_csv_header(csv_file):
     damit Spalten und Header wieder zusammenpassen."""
     erwartete_felder = len(EXPECTED_FORECAST_HEADER.split(","))
 
-    if not os.path.exists(csv_file):
+    if not await aiofiles.os.path.exists(csv_file):
         await asyncio.to_thread(
             atomic_write_text, csv_file, EXPECTED_FORECAST_HEADER + "\n"
         )
@@ -234,7 +237,9 @@ async def log_forecast_to_csv(rad_today, rad_tomorrow, rad_day2, sunrise_today, 
     Produktions-CSV im Skriptverzeichnis verwendet."""
     if csv_path is None:
         # Use path relative to this script's directory for consistency
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # (reine Zeichenketten-Berechnung, kein Dateizugriff - ASYNC240 trifft
+        # hier nur die Hilfsfunktion os.path.dirname, nicht ein Blocking-I/O).
+        script_dir = os.path.dirname(os.path.abspath(__file__))  # noqa: ASYNC240
         csv_path = os.path.join(script_dir, "sonnen_prognose.csv")
     csv_file = csv_path
     try:

@@ -13,42 +13,73 @@ class TelegramHandler(logging.Handler):
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.session = session
+        # Die Queue ist die eigentliche Bremse: sie ist auf 50 Eintraege
+        # begrenzt, danach verwirft emit() die aeltesten (siehe dort).
         self.queue = asyncio.Queue(maxsize=50)
         self.dropped_messages = 0
         self.task = None
         self.loop = None
-        self._loop_owner = False
 
     async def send_message(self, message):
+        """Sendet eine Nachricht an Telegram. Gibt True bei Erfolg zurueck.
+
+        Zwei Wege, ein Verhalten:
+          * eine uebergebene Session (der Normalfall in der WebApp/den Tasks)
+          * eine kurzlebige Session, wenn keine da ist
+
+        Der zweite Weg ist der **Produktivpfad**: `main.setup_application`
+        ruft `setup_logging` ohne `session=` auf, der Handler legt also pro
+        Nachricht eine eigene Session an.
+
+        BUGFIX: Der Fallback-Zweig war unvollstaendig ("# ... error handling
+        ...", `except Exception: return False`). Damit verschwand jeder
+        Zustellfehler ohne Spur - obwohl der Handler ab WARNING am Root
+        haengt und genau fuer Stoerungen da ist. Jetzt meldet er wie der
+        Session-Zweig: Statuscode + Telegram-Text bzw. die Ausnahme.
+        """
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {
             "chat_id": self.chat_id,
             "text": message
         }
-        
-        # Session Handling: If session is provided use it, otherwise create one-off
-        if self.session and not self.session.closed:
-             try:
-                async with self.session.post(url, json=payload, timeout=20) as response:
-                    if response.status == 200:
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logging.error(f"Fehler beim Senden an Telegram: {response.status} - {error_text}")
-                        return False
-             except Exception as e:
-                 logging.error(f"Telegram Senden Fehler: {e}")
-                 return False
-        else:
-            async with aiohttp.ClientSession() as session:
-                try:
-                    async with session.post(url, json=payload, timeout=20) as response:
-                        if response.status == 200:
-                            return True
-                        # ... error handling ...
-                        return False
-                except Exception:
-                    return False
+
+        if self.session is not None and not self.session.closed:
+            return await self._sende_mit_session(self.session, url, payload)
+        # Kurzlebige Session. Das ist der Normalfall im Produktivbetrieb -
+        # kein stiller Zweig, sondern der Hauptpfad.
+        async with aiohttp.ClientSession() as session:
+            return await self._sende_mit_session(session, url, payload)
+
+    async def _sende_mit_session(self, session, url: str, payload: dict) -> bool:
+        """Ein Versand ueber eine fertige Session - fuer beide Wege gemeinsam.
+
+        Die Fehlermeldungen tragen `kein_telegram=True`: der Handler haengt
+        selbst am Root-Logger, eine normale ERROR-Zeile wuerde also wieder in
+        der eigenen Queue landen und einen zweiten Zustellversuch ausloesen -
+        bei Dauerfehler eine Endlosschleife aus Log- und Sende-Versuchen.
+        """
+        try:
+            async with session.post(url, json=payload, timeout=20) as response:
+                if response.status == 200:
+                    return True
+                error_text = await response.text()
+                logging.error(
+                    "Fehler beim Senden an Telegram: %s - %s",
+                    response.status, error_text[:500],
+                    extra={"kein_telegram": True},
+                )
+                return False
+        except asyncio.CancelledError:
+            # Ein Abbruch (Dienstende, Task-Cancel) ist kein Zustellfehler.
+            raise
+        except Exception as e:
+            # Ohne exc_info ist der Ort im Code verloren - und genau der
+            # fehlt bei einem Timeout in der Queue.
+            logging.error(
+                "Telegram Senden Fehler: %s", e,
+                exc_info=True, extra={"kein_telegram": True},
+            )
+            return False
 
     def emit(self, record):
         try:

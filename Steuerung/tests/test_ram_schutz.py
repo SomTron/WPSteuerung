@@ -19,6 +19,65 @@ import api  # noqa: E402
 STEUERUNG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# --- Diagnose darf nicht still ausfallen ------------------------------------
+
+def test_speicherdiagnose_meldet_fehler_statt_still_zu_schweigen(caplog):
+    """Die Speicher-Diagnose ist die Grundlage der OOM-Analyse.
+
+    Vorher war der except-Zweig `except Exception: pass` - fiel
+    `startup_diagnose.speicher_werte()` aus (z. B. /proc nicht lesbar), blieb
+    die Ursache vollkommen unsichtbar. Genau diese Werte fehlen dann bei einem
+    OOM-Kill im Log, also dort, wo man sie am dringendsten braucht.
+
+    Der Loop darf dadurch nicht anhalten (das ist der Zweck des except), aber
+    der Fehler muss als DEBUG sichtbar sein.
+    """
+    import main
+
+    def _platze():
+        raise OSError("/proc/meminfo nicht lesbar")
+
+    original = main.startup_diagnose.speicher_werte
+    main.startup_diagnose.speicher_werte = _platze
+    try:
+        with caplog.at_level("DEBUG"):
+            # None als "letzter Log" -> die 60-s-Drossel greift nicht.
+            main._logge_speicher(object(), None)
+    finally:
+        main.startup_diagnose.speicher_werte = original
+
+    assert any("Speicher-Werte konnten nicht gelesen werden" in m
+               for m in caplog.messages), (
+        "die Diagnose schweigt den Fehler weiter an")
+    assert any(r.exc_info for r in caplog.records), (
+        "ohne exc_info ist der Ort im Code verloren")
+
+
+def test_sensor_maskierung_meldet_fehler_statt_still_zu_schweigen(caplog):
+    """Die Maskierung ist fail-safe - ihr Scheitern darf nicht unsichtbar sein."""
+    import main
+    from types import SimpleNamespace
+
+    class _Sensoren:
+        @property
+        def t_oben(self):
+            return 42.0
+
+        @t_oben.setter
+        def t_oben(self, wert):
+            raise OSError("Attribut nicht schreibbar")
+
+    state = SimpleNamespace(sensors=_Sensoren())
+
+    with caplog.at_level("DEBUG"):
+        main._markiere_sensor_update_fehler(state)
+
+    assert any("t_oben" in m and "ungültig" in m for m in caplog.messages), (
+        "das Scheitern der Maskierung bleibt unsichtbar")
+    assert any(r.exc_info for r in caplog.records), (
+        "ohne exc_info ist der Ort im Code verloren")
+
+
 def test_debug_csv_liest_nur_tail(monkeypatch, tmp_path):
     """Der geschuetzte Debug-Endpoint darf die CSV nur tail-basiert lesen."""
     monkeypatch.setattr(api, "API_KEY", "ram-test-secret")

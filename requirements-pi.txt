@@ -7,8 +7,18 @@
 # - RPi.GPIO / RPLCD werden in hardware.py importiert und in der Entwicklung
 #   ueber conftest.py gemockt.
 # - smbus2 ist das I2C-Backend von RPLCD (CharLCD).
+#
+# PINNING (Stand 11.11.2026): wie requirements.txt exakt angegeben, damit der
+# Build reproduzierbar ist. Zu den Untergrenzen:
+#   * RPLCD 1.4.0 verlangt Python >= 3.8 und ist die letzte Fassung (2025).
+#   * RPi.GPIO 0.7.1a2 ist eine Vorabversion - die letzte reguläre ist 0.7.1
+#     (2020). Sie enthaelt die Zero-2-W-Erkennung und den Fix fuer die
+#     PyEval_InitThreads-Warnung unter Python 3.9. Auf dem Pi ist meist schon
+#     ein RPi.GPIO aus den Distro-Paketen installiert; pip zieht dann nur die
+#     Hardware-Pakete nach.
+#   * smbus2 0.6.1 ist reines Python und plattformunabhaengig.
 -r requirements.txt
 
-RPi.GPIO
-RPLCD
-smbus2
+RPi.GPIO==0.7.1a2
+RPLCD==1.4.0
+smbus2==0.6.1

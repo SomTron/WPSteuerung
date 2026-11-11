@@ -129,6 +129,71 @@ def test_api_key_erzeugt_stabilen_client_key():
     assert mw._get_key(r1).startswith("apikey:")
 
 
+# --- X-Forwarded-For nur aus vertrauenswuerdigem Proxy ----------------------
+
+def _mit_proxy_netzen(monkeypatch, netze):
+    """Setzt die geparsten Proxy-Netze der Middleware (Weg ohne Env-Neustart)."""
+    import ipaddress
+    monkeypatch.setattr(
+        api, "_TRUST_PROXY_NETZE",
+        [ipaddress.ip_network(n, strict=False) for n in netze],
+    )
+
+
+def test_x_forwarded_for_ohne_konfigurierten_proxy_wird_ignoriert(monkeypatch):
+    """Sicherheitsfix: ein frei gesetzter Header darf kein eigenes Bucket geben.
+
+    Vorher war X-Forwarded-For die naechste Quelle fuer den Rate-Limit-Key -
+    ohne jede Pruefung, ob die Gegenstelle ueberhaupt ein Proxy ist. Ein
+    Angreifer konnte sich damit pro selbst gewaehltem Header ein frisches
+    Kontingent bauen und das Limit umgehen.
+    """
+    _mit_proxy_netzen(monkeypatch, [])        # Default: nichts vertrauen
+    mw = _mw()
+    r = _FakeRequest(headers={"X-Forwarded-For": "1.2.3.4"})
+    assert not mw._get_key(r).startswith("forwarded:"), (
+        "X-Forwarded-For darf ohne WPS_TRUST_PROXY nicht als Key dienen")
+    assert mw._get_key(r) == "127.0.0.1"      # stattdessen Remote-IP
+
+
+def test_x_forwarded_for_vom_vertrauten_proxy_wird_nominiert(monkeypatch):
+    """Hinter nginx/Tailscale Funnel muss die echte Client-IP weiterreichen."""
+    _mit_proxy_netzen(monkeypatch, ["127.0.0.0/8", "100.64.0.0/10"])
+    mw = _mw()
+    r = _FakeRequest(headers={"X-Forwarded-For": "203.0.113.7, 10.0.0.1"})
+    assert mw._get_key(r) == "forwarded:203.0.113.7", (
+        "vom vertrauten Proxy gesetztes X-Forwarded-For muss verwendet werden")
+
+
+def test_x_forwarded_for_von_fremder_ip_wird_nicht_vertraut(monkeypatch):
+    """Direkter Zugriff auf Port 8000 - auch mit gefaelschtem Header."""
+    _mit_proxy_netzen(monkeypatch, ["127.0.0.0/8"])
+    mw = _mw()
+    # _FakeRequest hat client.host = 127.0.0.1; eine fremde IP simulieren:
+    r = _FakeRequest(headers={"X-Forwarded-For": "203.0.113.99"})
+    r.client = type("C", (), {"host": "192.168.178.50"})()
+    assert not mw._get_key(r).startswith("forwarded:")
+    assert mw._get_key(r) == "192.168.178.50"
+
+
+def test_x_forwarded_for_ist_pro_wert_ein_eigenes_bucket_only_via_proxy(monkeypatch):
+    """Der eigentliche Schutz: wechselnde Header bringen kein neues Kontingent."""
+    _mit_proxy_netzen(monkeypatch, [])
+    mw = _mw()
+    # Zwei Anfragen mit unterschiedlichen X-Forwarded-For ohne Proxy:
+    a = _FakeRequest(headers={"X-Forwarded-For": "9.9.9.1"})
+    b = _FakeRequest(headers={"X-Forwarded-For": "9.9.9.2"})
+    assert mw._get_key(a) == mw._get_key(b) == "127.0.0.1", (
+        "ohne vertrauten Proxy muessen beide auf dieselbe Remote-IP fallen")
+
+
+def test_parse_proxy_netze_ignoriert_muell(monkeypatch):
+    """Ungueltige CIDRs duerfen den Dienst nicht beim Import beenden."""
+    netze = api._parse_proxy_netze("127.0.0.1/32, keinnetz, 100.64.0.0/10, ,")
+    assert len(netze) == 2
+    assert str(netze[0]) == "127.0.0.1/32"
+
+
 # --- Counter-Aufraeumen ------------------------------------------------------
 
 def test_zaehler_raeumt_alte_fenster_auf():

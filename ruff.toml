@@ -2,7 +2,19 @@
 # Bewusst konservativ gestartet, damit der Bestand nicht massenhaft umgebaut
 # werden muss; kann schrittweise verschärft werden.
 line-length = 120
-target-version = "py39"
+# Zielversion = die Version, die tatsaechlich getestet und deployt wird
+# (CI: actions/setup-python 3.12, Steuerung/mypy.ini: 3.12, Pi: 3.12).
+#
+# Vorher stand hier "py39" - zusammen mit dem README-Badge "Python 3.9+"
+# und mypy 3.12 waren drei widerspruechliche Angaben im Umlauf. Faktisch
+# ist 3.9 schon heute nicht mehr moeglich: Analyse/log_analyse.py:957
+# verwendet `str | None` in einer Signatur ohne
+# `from __future__ import annotations`, das erst ab 3.10 parst.
+#
+# Der Wert steuert, welche Regeln Ruff als "auf diesem Feature-Stand
+# verfuegbar" ansieht. Das ist bei der aktuellen Auswahl (E4/E7/E9/F/W605)
+# folgenlos, haelt die Angabe aber konsistent zur CI.
+target-version = "py312"
 extend-exclude = ["archive", "simulation"]
 
 [lint]

@@ -13,6 +13,7 @@ Abgedeckt:
 3. Header-Migration: alte 7-Spalten-Dateien werden einmalig auf 8 Spalten
    (inkl. Day2_kWh) migriert, damit Header und Datenzeilen zusammenpassen.
 """
+import asyncio
 import os
 import sys
 from datetime import datetime, timedelta
@@ -136,7 +137,7 @@ class TestGetSolarForecastReturnValueCount:
     """Vertrag: IMMER genau 9 Werte (Erfolg UND Fehlerpfade).
 
     BUGFIX (21.10.2026): Aus 8 wurden 9 Werte. Der 9. ist die
-    Tagesprognose fuer die kommenden Tage ({ISO-Datum: kWh/mÃ‚Â²}), aus der
+    Tagesprognose fuer die kommenden Tage ({ISO-Datum: kWh/m²}), aus der
     die Legionellenplanung den besten der drei Tage Fr/Sa/So waehlt. Mit
     nur 3 prognostizierten Tagen war diese Auswahl in der ersten halben
     Woche gar nicht moeglich.
@@ -152,7 +153,7 @@ class TestGetSolarForecastReturnValueCount:
         assert len(result) == 9
         (rad_today, rad_tomorrow, rad_day2, sr_today, ss_today, sr_tom,
          ss_tom, hourly, tage) = result
-        assert rad_today == pytest.approx(0.11)      # (100+10)/1000 kWh/mÃ‚Â²
+        assert rad_today == pytest.approx(0.11)      # (100+10)/1000 kWh/m²
         assert rad_tomorrow == pytest.approx(0.22)
         assert rad_day2 == pytest.approx(0.33)
         assert sr_today == "06:15" and ss_today == "20:15"
@@ -233,7 +234,7 @@ class TestCsvSchreibisolation:
         from weather_forecast import get_solar_forecast
 
         vorher = (open(PRODUKTION_CSV, 'rb').read()
-                  if os.path.exists(PRODUKTION_CSV) else None)
+                  if await asyncio.to_thread(os.path.exists, PRODUKTION_CSV) else None)
 
         ziel = tmp_path / "forecast.csv"
         await get_solar_forecast(baue_mock_session(baue_api_payload()), None,
@@ -978,7 +979,7 @@ class TestCheckPeriodicTasks:
             assert kwargs["rad_today"] == pytest.approx(2500.0)
             assert kwargs["rad_tomorrow"] == pytest.approx(3000.0)
             assert kwargs["rad_day2"] == pytest.approx(2000.0)
-            # Der State bleibt als kWh/mÃ‚Â²-Versorgung erhalten.
+            # Der State bleibt als kWh/m²-Versorgung erhalten.
             assert state.solar.forecast_today == 2.5
             assert state.solar.forecast_tomorrow == 3.0
 

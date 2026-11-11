@@ -5,6 +5,10 @@ import asyncio
 from datetime import timedelta
 from clock import now_for
 
+import aiofiles
+# aiofiles.os ist KEIN Unterpaket: ohne diesen Import waere `aiofiles.os`
+# erst beim Aufruf ein AttributeError (ASYNC240-Fix).
+import aiofiles.os
 import pytz
 from aiohttp import FormData
 
@@ -78,7 +82,7 @@ async def get_boiler_temperature_history(session, hours, state, config):
         time_ago = now - timedelta(hours=hours)
         logging.debug(f"⏳ Starte Temperaturverlauf für {hours} Stunden, Zeitfenster: {time_ago} bis {now}")
         file_path = HEIZUNGSDATEN_CSV
-        if not os.path.isfile(file_path):
+        if not await aiofiles.os.path.isfile(file_path):
             logging.error(f"❌ CSV-Datei nicht gefunden: {file_path}")
             from telegram_ui import get_keyboard
             keyboard = get_keyboard(state)
@@ -289,7 +293,7 @@ async def get_runtime_bar_chart(session, days=7, state=None):
     """Balkendiagramm der Laufzeiten."""
     try:
         file_path = HEIZUNGSDATEN_CSV
-        if not os.path.exists(file_path):
+        if not await aiofiles.os.path.exists(file_path):
              await send_telegram_message(session, state.chat_id, "Laufzeit-Daten nicht verfügbar (CSV fehlt).", state.bot_token)
              return
         # Nur Kopf + letzte ~3 MB je Datei lesen: ein Voll-Read ALLER Monats-

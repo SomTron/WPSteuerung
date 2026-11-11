@@ -314,6 +314,53 @@ def test_regelhistorie_wird_chronologisch_sortiert():
     assert [x["regel"] for x in data["data"]] == ["Alt", "Neu"]
 
 
+# --- /config: Fehlerdetails nicht an den Client -----------------------------
+
+def test_config_lehnt_falschen_wert_ohne_interne_details_ab(monkeypatch, caplog):
+    """`str(e)` aus dem Cast darf nicht in die HTTP-Antwort.
+
+    Vorher stand der Cast-Fehler im `detail` der 400-Antwort - damit waren
+    Wertebereiche und Felddetails fuer jeden mit API-Key sichtbar. Jetzt
+    bekommt der Client eine feste Meldung, die Ursache geht ins Log.
+    """
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
+
+    # "Urlaubsmodus" ist eine erlaubte Section; das Feld ist ein bool,
+    # damit der Cast "vielleicht" mit ValueError ablehnt.
+    class _Sektion:
+        urlaubsabsenkung = 6.0
+
+    monkeypatch.setattr(api, "_control_state", lambda: SimpleNamespace(
+        config=SimpleNamespace(Urlaubsmodus=_Sektion())))
+
+    req = api.ConfigUpdate(section="Urlaubsmodus", key="urlaubsabsenkung",
+                           value="vielleicht")
+    with caplog.at_level("WARNING"):
+        with pytest.raises(HTTPException) as exc:
+            api.update_config(req, x_api_key="test-secret")
+
+    assert exc.value.status_code == 400
+    # Kein interner Cast-/Wertebereichstext in der Antwort. Der Feldname darf
+    # genannt werden - den Key hat der Client selbst geschickt, er ist kein
+    # Geheimnis. Der frühere `str(e)` ("could not convert string to float:
+    # 'vielleicht'") ist genau das, was hier weg muss.
+    detail = str(exc.value.detail)
+    assert "could not convert" not in detail, (
+        "der Client bekommt den internen Cast-Fehlertext")
+    assert "vielleicht" not in detail, (
+        "der Client bekommt den abgelehnten Wert zurueckgespiegelt")
+    assert exc.value.detail == "Invalid value for urlaubsabsenkung", (
+        "die Antwort soll knapp bleiben, ohne Ausnahme-Details")
+    # ... aber im Log mit Stacktrace.
+    assert any("urlaubsabsenkung" in m for m in caplog.messages), (
+        "die Ursache fehlt im Log")
+    assert any(r.exc_info for r in caplog.records), (
+        "ohne exc_info ist der Ort im Code verloren")
+
+
 def test_config_export_redigiert_secrets(monkeypatch):
     from types import SimpleNamespace
 
