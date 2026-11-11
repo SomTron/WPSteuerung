@@ -18,9 +18,9 @@
 // v12 (09.11.2026): CalcStart-Uebersicht steht als eigener Block am Ende der
 // Regelliste (1.10.32) - die Huelle muss neu geladen werden, sonst laeuft die
 // alte Fassung weiter.
-// v20 (11.11.2026): Mittagstief nur bei echten Verbrauchsspitzen (1.10.40) -
+// v21 (11.11.2026): Abweichungs-Regel respektiert "aktiv": false (1.10.41) -
 // die Huelle muss neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v20';
+const CACHE_NAME = 'wp-webapp-shell-v21';
 const APP_SHELL = [
     './',
     './index.html',

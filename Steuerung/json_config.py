@@ -644,6 +644,13 @@ class ZeitfensterConfig(BaseModel):
 
 class AbweichungConfig(BaseModel):
     """Abweichungsregel: Hält Temperatur nahe am Sollwert."""
+    aktiv: bool = Field(
+        default=True,
+        description=(
+            "BEFUND 11.11.2026: Das Feld fehlte - ein 'aktiv: false' in der "
+            "JSON wurde still ignoriert (die Regel lief immer)."
+        ),
+    )
     prioritaet: int = Field(default=47, description="Priorität")
     solltemperatur_c: float = Field(default=42.0, description="Basis-/Komfortziel ohne Solarstrom (°C)")
     temperaturfuehler: str = Field(default="unten", description="Welcher Fühler: oben/mitte/unten")

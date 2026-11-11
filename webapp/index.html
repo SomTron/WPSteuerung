@@ -1312,10 +1312,9 @@
         // Steuerungs-Log (vorher nur Statusabruf/JS-Fehler).
         // 1.10.30: WebApp meldet Fehler mit API-Key (Endpunkt ist seit dem
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
-        // 1.10.40: Mittagstief nur noch bei echten Verbrauchsspitzen
-        // (> Median der Tagesstunden x 1.4) - keine Netz-Frühstarts durch
-        // konstante Grundlast im gelernten Profil.
-        const APP_VERSION = '1.10.40';
+        // 1.10.41: Abweichungs-Regel respektiert endlich "aktiv": false
+        // (das Feld fehlte in der Config und wurde ignoriert).
+        const APP_VERSION = '1.10.41';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');

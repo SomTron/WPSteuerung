@@ -174,6 +174,44 @@ class TestVerbrauchsprofilUndMittagstief:
         tief, label = _mittagstief_stunden(8.0, 17.0, profil, schwelle_w=800.0)
         assert tief == 2.0, f"{tief} statt 2 ({label})"
 
+def test_deaktivierte_abweichung_meldet_sich_nicht(caplog):
+    """BEFUND 11.11.2026: `aktiv` wurde ignoriert (hart True).
+
+    Ein "aktiv": false in der JSON lief still weiter - inklusive Tiefschutz
+    und Netz-Komfortstart. Jetzt ist die Regel wirklich inaktiv.
+    """
+    import priority_control as pc
+    from json_config import WPSteuerungConfig
+
+    cfg = WPSteuerungConfig()
+    cfg.abweichung.aktiv = False
+    r = pc.evaluate_abweichung(
+        cfg.abweichung, {"unten": 24.0, "mittig": 31.0, "oben": 38.0},
+        False, 15, cfg.sicherheit.nachtsperre_start,
+        cfg.sicherheit.nachtsperre_ende,
+        feedin_watt=0.0, soc=15.0, pv_acpower=86.0,
+    )
+    assert r.aktiv is False
+    assert r.einschalten is None
+    assert "deaktiviert" in r.grund
+    assert "Abweichungs-Regel" in r.grund
+
+
+def test_aktive_abweichung_bleibt_der_komfort_boden():
+    """Gegenprobe: aktiv (Default) heizt bei 18 K Defizit ohne PV."""
+    import priority_control as pc
+    from json_config import WPSteuerungConfig
+
+    cfg = WPSteuerungConfig()
+    r = pc.evaluate_abweichung(
+        cfg.abweichung, {"unten": 24.0, "mittig": 31.0, "oben": 38.0},
+        False, 15, cfg.sicherheit.nachtsperre_start,
+        cfg.sicherheit.nachtsperre_ende,
+        feedin_watt=0.0, soc=15.0, pv_acpower=86.0,
+    )
+    assert r.aktiv is True
+    assert r.einschalten is True, r.grund
+
 
 class TestPersistenz:
     """BUGFIX (21.10.2026): Die gelernten Daten muessen gespeichert werden.

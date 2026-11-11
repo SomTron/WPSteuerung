@@ -84,6 +84,7 @@
     "min_pv_watt": 410
   },
   "abweichung": {
+    "aktiv": true,
     "prioritaet": 47,
     "solltemperatur_c": 42,
     "temperaturfuehler": "unten",

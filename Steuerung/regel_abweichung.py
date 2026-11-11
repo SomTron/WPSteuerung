@@ -73,7 +73,16 @@ def evaluate_abweichung(
 
     AUS erfolgt ueber den Regelfuehler: `soll - temp <= ausschalten_bei_abweichung_k`
     """
-    result = RegelErgebnis(name="Abweichung", prioritaet=abw.prioritaet, aktiv=True)
+    result = RegelErgebnis(
+        name="Abweichung",
+        prioritaet=abw.prioritaet,
+        # BEFUND 11.11.2026: `aktiv` wurde ignoriert (hart True) - ein
+        # "aktiv": false in der JSON hatte keine Wirkung.
+        aktiv=bool(getattr(abw, "aktiv", True)),
+    )
+    if not result.aktiv:
+        result.grund = "Abweichungs-Regel deaktiviert (aktiv=false)"
+        return result
 
     temp = _sensor_oder_none(temp_dict, abw.temperaturfuehler, result)
     if temp is None:
