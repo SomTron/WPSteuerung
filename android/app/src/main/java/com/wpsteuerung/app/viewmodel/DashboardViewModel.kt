@@ -1,5 +1,6 @@
 package com.wpsteuerung.app.viewmodel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wpsteuerung.app.data.local.Einstellungen
@@ -15,6 +16,16 @@ import kotlinx.coroutines.launch
 class DashboardViewModel(
     private val repository: WPRepository = WPRepository()
 ) : ViewModel() {
+
+    companion object {
+        private const val TAG = "DashboardViewModel"
+
+        /** Poll-Takt im Hintergrund (wie bisher). */
+        private const val AUTO_REFRESH_INTERVALL_MS = 5000L
+
+        /** Mindestabstand zweier Fehlerzeilen im Logcat (5-s-Takt!). */
+        private const val LOG_DROSSEL_MS = 60_000L
+    }
 
     private val _uiState = MutableStateFlow<DashboardUiState>(DashboardUiState.Loading)
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
@@ -154,14 +165,59 @@ class DashboardViewModel(
         }
     }
 
+    /**
+     * Pollt im Hintergrund alle 5 s.
+     *
+     * Der Unterschied zum manuellen [loadStatus]: Fehler werden hier
+     * **protokolliert**, nicht nur in `_uiState` geschrieben. Vorher war ein
+     * Netzfehler im Dauerbetrieb unsichtbar - die Anzeige sprang auf "keine
+     * Daten", aber ob API, Netz oder Zugangsschlüssel das Problem war, stand
+     * nirgends.
+     *
+     * Gedrosselt auf eine Logzeile je Minute: bei 5-s-Takt wären das sonst
+     * 12 Zeilen pro Minute, die das Logcat fluten und die eigentliche Ursache
+     * verdecken.
+     */
     private fun startAutoRefresh() {
         viewModelScope.launch {
+            var letzteMeldung = 0L
             while (isActive) {
-                delay(5000) // Refresh every 5 seconds
+                delay(AUTO_REFRESH_INTERVALL_MS)
                 if (_dienstBeendet.value) break
-                loadStatus()
+                val fehler = ladeStatusFuerRefresh()
+                if (fehler != null) {
+                    val jetzt = System.currentTimeMillis()
+                    if (jetzt - letzteMeldung >= LOG_DROSSEL_MS) {
+                        letzteMeldung = jetzt
+                        Log.w(TAG, "Auto-Refresh fehlgeschlagen: $fehler")
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * Statusabruf fuer den Hintergrund-Poll. Gibt die Fehlermeldung zurueck
+     * oder null bei Erfolg.
+     *
+     * Der Unterschied zu [loadStatus]: dieser Zweig schreibt `_uiState` nur
+     * bei Erfolg. Ein Fehlschlag darf die Anzeige nicht von "gefüllt" auf
+     * "Fehler" umwerfen - sonst wuerde ein kurzer Netzaussetzer die
+     * zuletzt bekannten Werte loeschen.
+     */
+    private suspend fun ladeStatusFuerRefresh(): String? {
+        _isRefreshing.value = true
+        val ergebnis = repository.getStatus()
+        _isRefreshing.value = false
+        return ergebnis.fold(
+            onSuccess = { status ->
+                _uiState.value = DashboardUiState.Success(status)
+                null
+            },
+            onFailure = { error ->
+                error.message ?: "unbekannter Fehler"
+            }
+        )
     }
 }
 

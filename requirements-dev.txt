@@ -28,3 +28,15 @@ pytest-asyncio==1.4.1.post1
 # --- Statische Pruefung (auch in der CI) ---
 ruff==0.17.3           # Linter, Regelwerk in ruff.toml
 mypy==2.4.1            # Typpruefung, Konfiguration in Steuerung/mypy.ini
+
+# --- Test-Zusatz ---
+# test_ci_workflow.test_yaml_ist_wohlgeformt prueft die Workflow-Datei mit
+# yaml.safe_load. Ohne dieses Paket war der Test ein STILLER Skip: er meldete
+# "gruen", ohne je ein YAML geparst zu haben.
+#
+# Der Marker begrenzt das Paket auf Python < 3.14: PyYAML 6.0.3 hat dort
+# Wheels, ab 3.14/3.15 nicht (Bauen scheitert ohne C-Toolchain). Auf dem Pi
+# (3.12) und in der CI (3.12) wird das Paket installiert, der Test laeuft
+# dort also wirklich. Auf einem 3.15-Entwicklungsrechner entfaellt es
+# stattdessen per Skip mit Begruendung.
+PyYAML==6.0.3; python_version < "3.14"

@@ -21,6 +21,7 @@ neuesten Stand gesetzt, sondern gegen das eigene Workflow geprueft:
 
 import os
 import re
+import sys
 
 import pytest
 
@@ -81,7 +82,33 @@ def test_github_script_bleibt_unangetastet():
 
 
 def test_yaml_ist_wohlgeformt():
-    yaml = pytest.importorskip("yaml")
+    """Die CI-Datei muss gültiges YAML sein.
+
+    BUGFIX: Vorher stand hier `pytest.importorskip("yaml")`. PyYAML war
+    nirgends installiert (weder lokal noch in der CI), also war dieser Test
+    ein STILLER Skip - er meldete "gruen", ohne je ein YAML geparst zu haben.
+    Eine kaputte Workflow-Datei waere erst beim naechsten Push aufgefallen.
+
+    Jetzt: PyYAML steht in requirements-dev.txt (auf Python < 3.14, dort gibt
+    es Wheels). Fehlt es trotzdem, ist das ein Fehler - kein stiller Skip.
+    Nur wenn das Paket nachweislich nicht installierbar ist (Python 3.14+,
+    kein Wheel), wird mit Begruendung uebersprungen.
+    """
+    try:
+        import yaml
+    except ImportError:
+        # Nur mit Begruendung ueberspringen, wenn das Paket fuer diese
+        # Python-Version gar kein Wheel hat. Sonst ist es ein echter Fehler.
+        if sys.version_info >= (3, 14):
+            pytest.skip(
+                "PyYAML 6.0.3 hat kein Wheel fuer Python "
+                f"{sys.version_info.major}.{sys.version_info.minor} - "
+                "die YAML-Pruefung laeuft in der CI (3.12)")
+        raise AssertionError(
+            "PyYAML fehlt - es steht in requirements-dev.txt. Ohne das Paket "
+            "wird die Workflow-Datei nie geprueft (stiller Skip).")
+
     with open(WORKFLOW, encoding='utf-8') as fh:
         d = yaml.safe_load(fh)
+    assert isinstance(d, dict), "die Workflow-Datei ist kein YAML-Mapping"
     assert d.get("jobs"), "keine Jobs in der Workflow-Datei"

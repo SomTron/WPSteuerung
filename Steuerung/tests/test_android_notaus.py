@@ -150,6 +150,41 @@ def test_bademodus_fehlerpfad_ist_bedient():
     )
 
 
+def test_auto_refresh_meldet_fehler_ins_log():
+    """Im 5-s-Takt ist ein stiller Fehler unsichtbar.
+
+    Vorher schrieb der Auto-Refresh Fehler nur in `_uiState` - die Anzeige
+    sprang auf "keine Daten", ohne dass im Logcat stand, ob API, Netz oder
+    Schluessel das Problem war. Bei einem Handy, das dauerhaft in der
+    Dockingstation pollt, blieb das der einzige Hinweis.
+    """
+    viewmodel = _viewmodel()
+    assert "import android.util.Log" in viewmodel, (
+        "das ViewModel kann nicht loggen"
+    )
+    assert "Log.w(" in viewmodel, "der Auto-Refresh protokolliert Fehler nicht"
+    assert "Auto-Refresh fehlgeschlagen" in viewmodel, (
+        "die Logzeile nennt die Ursache nicht"
+    )
+    # Der Auto-Refresh muss den Fehlertext ueberhaupt erst ermitteln.
+    assert "ladeStatusFuerRefresh" in viewmodel, (
+        "der Hintergrund-Poll wertet das Ergebnis nicht aus"
+    )
+
+
+def test_auto_refresh_log_wird_gedrosselt():
+    """Ohne Drosselung sind es 12 Zeilen pro Minute - unbrauchbar."""
+    viewmodel = _viewmodel()
+    assert "LOG_DROSSEL_MS" in viewmodel, (
+        "die Log-Drosselung fehlt - das Logcat wird geflutet"
+    )
+    # 5-s-Takt und 60-s-Drossel: beides muss im Code stehen.
+    assert "AUTO_REFRESH_INTERVALL_MS" in viewmodel
+    assert "delay(AUTO_REFRESH_INTERVALL_MS)" in viewmodel, (
+        "der Poll-Takt ist weiter hart verdrahtet"
+    )
+
+
 # ---------- API-Schluessel ----------
 
 def test_api_schluessel_wird_mitgeschickt():

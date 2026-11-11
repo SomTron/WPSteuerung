@@ -238,22 +238,50 @@ async def test_compressor_actuator_serializes_and_reports_failure():
 
 @pytest.mark.asyncio
 async def test_solar_refresh_loop_applies_deadline_without_blocking_forever(monkeypatch):
+    """Der Refresh muss die Deadline erzwingen, nicht ewig laufen.
+
+    Der Fetch wird nie fertig - er signalisiert nur den Start und wartet dann
+    auf ein Event, das nie gesetzt wird. Der Loop soll ihn nach
+    SOLAR_REFRESH_DEADLINE_SEC abbrechen und mit dem naechsten Intervall
+    weitermachen.
+
+    BUGFIX: Vorher stand im Fetch `await asyncio.sleep(10)`. Der Test hat
+    den Task nach 0,03 s abgebrochen, der 10-s-Timer blieb aber als
+    Pending-Task im Event-Loop - ein echter sleep() in einem Test, genau das,
+    was das Laufzeit-Budget der CI (90 s) verhindern soll. Ein Event ohne
+    Setter blockiert ohne Timer.
+
+    Der Test belegt die Deadline, indem er den zweiten Durchlauf erzwingt:
+    bleibt der Loop haengen, laeuft das zweite wait_for in die 1-s-Timeout.
+    """
     import main
 
-    started = asyncio.Event()
+    gestartet = asyncio.Event()
+    darf_enden = asyncio.Event()
 
     async def slow_fetch(*args):
-        started.set()
-        await asyncio.sleep(10)
+        gestartet.set()
+        # Kein sleep: ein Event ohne Setter blockiert, ohne einen Timer zu
+        # hinterlassen. Der Loop muss die Deadline trotzdem durchsetzen.
+        await darf_enden.wait()
 
     monkeypatch.setattr(main, "get_solax_data", slow_fetch)
-    monkeypatch.setattr(main, "SOLAR_REFRESH_DEADLINE_SEC", 0.01)
+    monkeypatch.setattr(main, "SOLAR_REFRESH_DEADLINE_SEC", 0.05)
+    monkeypatch.setattr(main, "SOLAR_REFRESH_INTERVAL_SEC", 0.01)
+
     task = asyncio.create_task(main.solar_refresh_loop(object(), _minimal_state()))
-    await asyncio.wait_for(started.wait(), timeout=1)
-    await asyncio.sleep(0.03)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    try:
+        await asyncio.wait_for(gestartet.wait(), timeout=1)
+        # Zweiter Durchlauf: Event zuruecksetzen, dann erneut warten. Nur so
+        # ist belegt, dass der Loop nach der Deadline wirklich weiterlaeuft -
+        # ein gesetztes Event bleibt gesetzt und wuerde sofort durchlaufen.
+        gestartet.clear()
+        await asyncio.wait_for(gestartet.wait(), timeout=1)
+    finally:
+        darf_enden.set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 @pytest.mark.asyncio
