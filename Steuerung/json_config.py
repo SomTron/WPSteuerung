@@ -1451,6 +1451,38 @@ class WPSteuerungConfig(BaseModel):
                     f"Prioritaet {links_name}={links_prio} muss groesser als "
                     f"{rechts_name}={rechts_prio} sein"
                 )
+
+        # BUGFIX (11.11.2026): PV_Ueberschuss und die PV_*-Regeln standen
+        # NICHT in der Kaskade - ihre Prioritaet war damit ungeprueft.
+        # Nachgewiesen: PV_Ueberschuss=200 wurde akzeptiert, obwohl der
+        # Notfallschutz (110) dann nicht mehr gewinnen kann. Der Schutzleiter
+        # waere durch einen Tippfehler in der JSON-Config aushebbar gewesen.
+        #
+        # Bewusst KEINE feste Position in der Kaskade: laut Dokumentation darf
+        # PV_Ueberschuss ueber CalcStart (82) gesetzt werden, wenn der
+        # Ueberschuss Vorrang vor dem Zeitplan haben soll. Geprueft wird
+        # deshalb nur die Sicherheitsinvariante - keine Regel darf den
+        # Notfallschutz erreichen.
+        notfall_prio = self.notfallschutz.prioritaet
+        ausserhalb_der_kaskade = [
+            ("PV_Ueberschuss", self.pv_ueberschuss.prioritaet),
+        ]
+        for index, regel in enumerate(self.pv_regeln):
+            name = f"pv_regeln[{index}]"
+            if getattr(regel, "name", ""):
+                name += f" ({regel.name})"
+            ausserhalb_der_kaskade.append((name, regel.prioritaet))
+
+        for name, prio in ausserhalb_der_kaskade:
+            if prio < 1:
+                raise ValueError(f"Prioritaet {name}={prio} muss mindestens 1 sein")
+            if prio >= notfall_prio:
+                raise ValueError(
+                    f"Prioritaet {name}={prio} muss kleiner als der "
+                    f"Notfallschutz ({notfall_prio}) sein - sonst kann die "
+                    f"Regel den Schutzleiter ueberstimmen"
+                )
+
         if not self.zyklus.mindestpausenzeit_minuten >= 5:
             raise ValueError("Mindestpause muss mindestens 5 Minuten betragen")
         if self.sicherheit.nachtsperre_start == self.sicherheit.nachtsperre_ende:

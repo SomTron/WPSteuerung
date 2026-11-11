@@ -493,8 +493,15 @@ def bewerte_alle_regeln(
         return None, ergebnisse
 
     # Solar-Daten veraltet: PV-/Batterie-/Prognose-Regeln duerfen nicht
-    # auf eingefrorenen Werten entscheiden. Garantien (MinTemp, Komfort)
-    # und Abweichung (Netzstrom) bleiben bewusst aktiv.
+    # auf eingefrorenen Werten entscheiden. Garantien (MinTemp) und
+    # Abweichung (Netzstrom) bleiben bewusst aktiv.
+    #
+    # BUGFIX (11.11.2026): Zeitfenster stand fest in dieser Liste, obwohl die
+    # Regel PV nur als OPTIONALE Zusatzbedingung nutzt (min_pv_watt > 0).
+    # Bei veralteten Daten wurde sie komplett pausiert - damit fiel auch ihr
+    # AUS weg, und eine rangniedrigere Regel konnte heizen. Bei warmem
+    # Speicher war das das Gegenteil von fail-safe. Jetzt wird sie nur noch
+    # pausiert, wenn sie tatsaechlich eine PV-Schwelle auswertet.
     global _last_stale_warning
     if solar_stale:
         _stale_namen = {
@@ -503,11 +510,21 @@ def bewerte_alle_regeln(
             "CalcStart-Abend",
             "Batterie",
             "AdaptivePV",
-            "Zeitfenster",
             "Forecast",
         }
+        _zeitfenster_pv_abhaengig = (
+            float(getattr(config.zeitfenster, "min_pv_watt", 0.0) or 0.0) > 0.0
+        )
+
+        def _ist_stale_abhaengig(name: str) -> bool:
+            if name in _stale_namen or name.startswith("PV_"):
+                return True
+            if name == "Zeitfenster":
+                return _zeitfenster_pv_abhaengig
+            return False
+
         for e in ergebnisse:
-            if (e.name in _stale_namen or e.name.startswith("PV_")) and (
+            if _ist_stale_abhaengig(e.name) and (
                 e.aktiv or e.einschalten is not None
             ):
                 e.aktiv = False
@@ -521,10 +538,10 @@ def bewerte_alle_regeln(
             or (to_naive(jetzt) - to_naive(_last_stale_warning))
             >= timedelta(minutes=STALE_LOG_INTERVAL_MIN)
         ):
-            logging.warning(
-                "Solar-Daten veraltet: PV/Batterie/Einspeisung/"
-                "CalcStart/Forecast/Zeitfenster pausiert"
-            )
+            pausiert = "PV/Batterie/Einspeisung/CalcStart/Forecast"
+            if _zeitfenster_pv_abhaengig:
+                pausiert += "/Zeitfenster"
+            logging.warning("Solar-Daten veraltet: %s pausiert", pausiert)
             _last_stale_warning = jetzt
     else:
         # Nach Rueckkehr frischer Daten darf ein neues Stale-Ereignis sofort loggen.

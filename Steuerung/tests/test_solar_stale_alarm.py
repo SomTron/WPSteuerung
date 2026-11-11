@@ -1,11 +1,16 @@
 """Tests: Alarm beim Ausfall der Solax-Live-Daten.
 
-Der Verlust der Solardaten pausiert alle Quellenregeln (Einspeisung,
-CalcStart, AdaptivePV, Batterie, Zeitfenster, Forecast). Es heizen dann
-nur noch Abweichung, Mindesttemperatur, Notfallschutz und Legionellen -
+Der Verlust der Solardaten pausiert die Quellenregeln (Einspeisung,
+CalcStart, AdaptivePV, Batterie, Forecast und die PV_*-Regeln). Es heizen
+dann nur noch Abweichung, Mindesttemperatur, Notfallschutz und Legionellen -
 und die ohne Quellenpruefung, also aus dem Netz. Bisher stand dazu nur
 eine Logzeile im Journal; der Betreiber konnte stundenlang im Netzbetrieb
 heizen, ohne es zu merken.
+
+Zeitfenster ist Sonderfall (BUGFIX 11.11.2026): Die Regel nutzt PV nur als
+optionale Zusatzbedingung (`min_pv_watt > 0`). Ohne diese Schwelle ist sie
+rein zeit- und temperaturabhaengig und wird NICHT pausiert - sonst fiele ihr
+AUS weg und eine rangniedrigere Regel koennte bei warmem Speicher heizen.
 """
 
 import os
@@ -244,3 +249,68 @@ def test_status_payload_nennt_die_folge():
     assert ind["solar_stale"] is True
     assert ind["solar_stale_alarme"] == 4
     assert "Netz" in ind["solar_stale_hinweis"]
+
+
+# --- Zeitfenster: nur pausieren, wenn es wirklich PV braucht ---------------
+
+def _zeitfenster_ergebnis(min_pv_watt, solar_stale):
+    """Bewertet das Regelwerk und liefert das Zeitfenster-Ergebnis.
+
+    Zeitfenster auf 15-17 Uhr, "mitte" bei 40 C (unter der 44,5-C-Schwelle):
+    die Regel wuerde also EIN sagen, wenn sie nicht pausiert wird.
+    """
+    from datetime import datetime
+
+    from json_config import WPSteuerungConfig
+    from priority_control import bewerte_alle_regeln
+
+    cfg = WPSteuerungConfig()
+    cfg.zeitfenster.aktiv = True
+    cfg.zeitfenster.start_uhr = 15
+    cfg.zeitfenster.ende_uhr = 17
+    cfg.zeitfenster.temperaturfuehler = "mitte"
+    cfg.zeitfenster.max_temp_fuer_einschalten_c = 44.5
+    cfg.zeitfenster.min_pv_watt = min_pv_watt
+
+    _, ergebnisse = bewerte_alle_regeln(
+        cfg,
+        {"oben": 50.0, "mittig": 40.0, "unten": 38.0, "verd": 10.0},
+        pv_leistung=800.0,
+        kompressor_ein=False,
+        now=datetime(2026, 11, 11, 16, 30),
+        solar_stale=solar_stale,
+    )
+    return [e for e in ergebnisse if e.name == "Zeitfenster"][0]
+
+
+def test_zeitfenster_ohne_pv_schwelle_wird_nicht_pausiert():
+    """BUGFIX 11.11.2026: Zeitfenster stand fest in der Stale-Pause.
+
+    Mit `min_pv_watt = 0` ist die Regel PV-unabhaengig (die Schwelle ist
+    ausdruecklich abgeschaltet). Eine Pausierung nahm ihr das AUS weg - bei
+    warmem Speicher konnte dann eine rangniedrigere Regel heizen. Das ist das
+    Gegenteil von fail-safe.
+    """
+    frisch = _zeitfenster_ergebnis(min_pv_watt=0.0, solar_stale=False)
+    assert frisch.aktiv is True and frisch.einschalten is True
+
+    veraltet = _zeitfenster_ergebnis(min_pv_watt=0.0, solar_stale=True)
+    assert veraltet.aktiv is True, (
+        "Zeitfenster ohne PV-Schwelle darf bei Stale nicht pausiert werden")
+    assert veraltet.einschalten is True
+    assert veraltet.reason_code != "data_stale"
+
+
+def test_zeitfenster_mit_pv_schwelle_wird_pausiert():
+    """Nutzt die Regel eine PV-Schwelle, bleibt die Pausierung richtig.
+
+    Ohne frische PV-Werte ist `pv_leistung < min_pv_watt` nicht bewertbar -
+    die Regel muss schweigen, statt auf eingefrorenen Zahlen zu entscheiden.
+    """
+    frisch = _zeitfenster_ergebnis(min_pv_watt=410.0, solar_stale=False)
+    assert frisch.aktiv is True and frisch.einschalten is True
+
+    veraltet = _zeitfenster_ergebnis(min_pv_watt=410.0, solar_stale=True)
+    assert veraltet.aktiv is False
+    assert veraltet.einschalten is None
+    assert veraltet.reason_code == "data_stale"

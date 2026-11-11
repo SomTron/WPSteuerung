@@ -77,6 +77,67 @@ def test_blockierer_ueber_sparregeln():
             )
 
 
+def test_pv_ueberschuss_darf_notfallschutz_nicht_ueberstimmen():
+    """BUGFIX 11.11.2026: PV_Ueberschuss stand NICHT in der Kaskade.
+
+    Nachgewiesen: `pv_ueberschuss.prioritaet = 200` wurde akzeptiert, obwohl
+    der Notfallschutz (110) dann nicht mehr gewinnen kann. Ein Tippfehler in
+    der JSON-Config haette den Schutzleiter ausgehebelt.
+    """
+    import pytest
+
+    c = WPSteuerungConfig()
+    d = c.model_dump()
+    for prio in (200, 111, 110):
+        d2 = {**d, "pv_ueberschuss": {**d["pv_ueberschuss"], "prioritaet": prio}}
+        with pytest.raises(ValueError, match="kleiner als der Notfallschutz"):
+            WPSteuerungConfig.model_validate(d2)
+
+    # Knapp darunter bleibt erlaubt.
+    d3 = {**d, "pv_ueberschuss": {**d["pv_ueberschuss"], "prioritaet": 109}}
+    WPSteuerungConfig.model_validate(d3)
+
+
+def test_pv_ueberschuss_darf_ueber_calcstart_liegen():
+    """Die dokumentierte Freiheit bleibt: Ueberschuss vor Zeitplan.
+
+    Die Feldbeschreibung sagt ausdruecklich "Hoeher setzen, wenn der
+    Ueberschuss Vorrang vor dem Zeitplan (CalcStart 82) haben soll." Eine
+    feste Position in der Kaskade haette das verboten.
+    """
+    c = WPSteuerungConfig()
+    d = c.model_dump()
+    for prio in (83, 90, 100):
+        d2 = {**d, "pv_ueberschuss": {**d["pv_ueberschuss"], "prioritaet": prio}}
+        WPSteuerungConfig.model_validate(d2)
+
+
+def test_pv_regeln_duerfen_notfallschutz_nicht_ueberstimmen():
+    """Die Liste `pv_regeln` war ebenfalls ungeprueft."""
+    import pytest
+
+    c = WPSteuerungConfig()
+    d = c.model_dump()
+    for prio in (200, 110):
+        d2 = {**d, "pv_regeln": [{"name": "PV_Test", "prioritaet": prio}]}
+        with pytest.raises(ValueError, match="kleiner als der Notfallschutz"):
+            WPSteuerungConfig.model_validate(d2)
+
+    # 78 (AdaptivePV-Niveau, Default) bleibt erlaubt.
+    d3 = {**d, "pv_regeln": [{"name": "PV_Test", "prioritaet": 78}]}
+    WPSteuerungConfig.model_validate(d3)
+
+
+def test_pv_regeln_prioritaet_muss_mindestens_eins_sein():
+    import pytest
+
+    c = WPSteuerungConfig()
+    d = c.model_dump()
+    d2 = {**d, "pv_regeln": [{"name": "PV_Test", "prioritaet": 0}]}
+    with pytest.raises(ValueError, match="mindestens 1"):
+        WPSteuerungConfig.model_validate(d2)
+
+
 def test_notfallschutz_default_bereich():
     """Der Notfall startet bei 36 C (Default) und endet bei 38 C."""
     c = WPSteuerungConfig()

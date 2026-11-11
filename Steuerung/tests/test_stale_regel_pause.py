@@ -1,9 +1,13 @@
 """Tests: Stale-Daten pausieren Solar-abhaengige Regeln.
 
 Neuer Guard (Punkt ②): Wenn solar_stale=True uebergeben wird, duerfen
-Einspeisung, Batterie, AdaptivePV, Zeitfenster und Forecast nicht mehr
+Einspeisung, Batterie, AdaptivePV, Forecast und die PV_*-Regeln nicht mehr
 entscheiden. MinTemp, Komfort und Abweichung bleiben als Netz-betriebene
 Sicherheitsgarantien weiter aktiv.
+
+Sonderfall Zeitfenster (BUGFIX 11.11.2026): pausiert nur, wenn die Regel
+selbst eine PV-Schwelle auswertet (`min_pv_watt > 0`). Die Tests hier setzen
+diese Schwelle bewusst ueber `_zeitfenster_als_pv_regel()`.
 """
 import os
 import sys
@@ -28,6 +32,20 @@ def baue_config():
     return config
 
 
+def _zeitfenster_als_pv_regel(config):
+    """Macht Zeitfenster zu einer PV-Regel (fuer die Stale-Pause-Tests).
+
+    BUGFIX 11.11.2026: Zeitfenster wird NUR noch pausiert, wenn die Regel
+    selbst eine PV-Schwelle auswertet (`min_pv_watt > 0`). Mit dem Default 0
+    ist sie zeit-/temperaturabhaengig und laeuft bei Stale korrekt weiter -
+    dann gewinnt sie mit Prio 53 gegen Abweichung (47). Diese Tests pruefen
+    den Stale-Schutz fuer Solar-Regeln, deshalb wird die Schwelle hier
+    ausdruecklich gesetzt.
+    """
+    config.zeitfenster.min_pv_watt = 500.0
+    return config
+
+
 def test_stale_pausiert_pv_regeln():
     """solar_stale=True -> PV-Regeln (ohne Forecast als Backup aktiv) werden
     deaktiviert, trotz hoher PV-Leistung."""
@@ -49,7 +67,7 @@ def test_stale_pausiert_pv_regeln():
 
 def test_stale_hochpriorisierte_regel_wird_nicht_gewinner():
     """Eine pausierte Solarregel darf die Netz-Fallback-Regel nicht verdrängen."""
-    config = baue_config()
+    config = _zeitfenster_als_pv_regel(baue_config())
     config.batterie.aktiv = True
     config.komfort.komfort_einschalten_bei_c = 0.0
     # Tiefenschutz der Abweichungsregel bleibt auch bei stale Solar-Daten
@@ -208,8 +226,13 @@ def test_einspeisung_batterie_forecast_adaptive_pausiert():
 
 
 def test_zeitfenster_pausiert():
-    """Zeitfenster wird bei Stale ebenfalls pausiert."""
-    config = baue_config()
+    """Zeitfenster MIT PV-Schwelle wird bei Stale pausiert.
+
+    Ohne Schwelle (Default min_pv_watt=0) ist die Regel PV-unabhaengig und
+    laeuft weiter - siehe test_zeitfenster_ohne_pv_schwelle_wird_nicht_pausiert
+    in test_solar_stale_alarm.py.
+    """
+    config = _zeitfenster_als_pv_regel(baue_config())
     temp = {"oben": 43.0, "mittig": 42.0, "unten": 36.0}
     gewinner, alle = pc.bewerte_alle_regeln(
         config=config, temp_dict=temp, pv_leistung=8000.0, kompressor_ein=False,
