@@ -18,9 +18,9 @@
 // v12 (09.11.2026): CalcStart-Uebersicht steht als eigener Block am Ende der
 // Regelliste (1.10.32) - die Huelle muss neu geladen werden, sonst laeuft die
 // alte Fassung weiter.
-// v19 (10.11.2026): PV_Ueberschuss laeuft nur eigene Zyklen weiter
-// (1.10.39) - die Huelle muss neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v19';
+// v20 (11.11.2026): Mittagstief nur bei echten Verbrauchsspitzen (1.10.40) -
+// die Huelle muss neu geladen werden.
+const CACHE_NAME = 'wp-webapp-shell-v20';
 const APP_SHELL = [
     './',
     './index.html',

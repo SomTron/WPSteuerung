@@ -1075,6 +1075,17 @@ class CalculatedStartConfig(BaseModel):
             "einen Verbrauchswert angehoben werden."
         ),
     )
+    mittagstief_relativ_faktor: float = Field(
+        default=1.4,
+        description=(
+            "BEFUND 11.11.2026: Eine Stunde ist nur dann ein Tief, wenn ihr "
+            "Verbrauch auch ueber dem Median der Tagesstunden (6-22 Uhr) mal "
+            "diesem Faktor liegt. Sonst gilt eine konstante Grundlast (z.B. "
+            "1095 W) als Dauer-Tief, CalcStart rechnet den Aufschlag mehrfach "
+            "und startet Stunden zu frueh aus dem Netz. 0 = nur absolute "
+            "Schwelle (alte Logik)."
+        ),
+    )
     nutzung_fenster_h: float = Field(
         default=2.0,
         description=(

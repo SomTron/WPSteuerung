@@ -366,6 +366,12 @@ def evaluate_calculated_start(
             # gedacht - als Verbrauchsschwelle lag er unter dem
             # Grundverbrauch und jede Stunde galt als Spitze.
             schwelle_w=float(getattr(calc_cfg, "mittagstief_schwelle_w", 800.0)),
+            # BEFUND 11.11.2026: Zusaetzlich relativ zur Tages-Grundlast -
+            # sonst gilt eine konstante Grundlast (1095 W) als Dauer-Tief
+            # und CalcStart startet Stunden zu frueh aus dem Netz.
+            relativ_faktor=float(
+                getattr(calc_cfg, "mittagstief_relativ_faktor", 1.4)
+            ),
         )
         if surplus_profile
         else (0.0, "")

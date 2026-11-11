@@ -145,6 +145,35 @@ class TestVerbrauchsprofilUndMittagstief:
         assert h == 0.0
         assert label == ""
 
+    def test_konstante_grundlast_ist_kein_tief(self, tmp_path):
+        """BEFUND 11.11.2026: Grundlast 1095 W (7-17 Uhr) ist kein Mittagstief.
+
+        Log 08:00: Das gelernte Profil lag mit 1095 W konstant ueber der
+        absoluten Schwelle 800 W. Damit galten 3 Stunden bis 12:00 als Tief
+        (3 x 0,75 h = 2,25 h Aufschlag) und CalcStart startete um 08:00 aus
+        dem Netz, um das Mittagsziel 12:00 zu halten.
+        """
+        from priority_control import _mittagstief_stunden
+        profil = {h: 0.0 for h in range(24)}
+        for h in range(7, 18):
+            profil[h] = 1095.0
+        tief, label = _mittagstief_stunden(8.0, 12.0, profil, schwelle_w=800.0)
+        assert tief == 0.0, f"{tief} Tiefstunden bei konstanter Grundlast ({label})"
+        # Mit abgeschalteter relativer Pruefung waere es die alte (falsche) Zahl.
+        alt, _ = _mittagstief_stunden(
+            8.0, 12.0, profil, schwelle_w=800.0, relativ_faktor=0.0
+        )
+        assert alt == 3.0
+
+    def test_echte_verbrauchsspitze_bleibt_tief(self, tmp_path):
+        """Kochen (3000 W) bei 900 W Grundlast bleibt ein Tief."""
+        from priority_control import _mittagstief_stunden
+        profil = {h: 900.0 for h in range(24)}
+        profil[12] = 3000.0
+        profil[13] = 2800.0
+        tief, label = _mittagstief_stunden(8.0, 17.0, profil, schwelle_w=800.0)
+        assert tief == 2.0, f"{tief} statt 2 ({label})"
+
 
 class TestPersistenz:
     """BUGFIX (21.10.2026): Die gelernten Daten muessen gespeichert werden.

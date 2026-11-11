@@ -264,6 +264,7 @@ def _mittagstief_stunden(
     ziel_uhr: float,
     surplus_profile: Dict[str, float],
     schwelle_w: float = 800.0,
+    relativ_faktor: float = 1.4,
 ) -> tuple:
     """Gelernte Surplus-schwache Stunden zwischen jetzt und Zielzeit.
 
@@ -273,6 +274,35 @@ def _mittagstief_stunden(
     Heizzeit -> CalcStart beginnt frueher und kann im Tief pausieren.
     Returns: (anzahl_tiefstunden, lesbares_label)
     """
+    # BEFUND 11.11.2026 (Log 08:00, Start aus dem Netz): Das Profil ist der
+    # HAUSVERBRAUCH. Eine konstante Grundlast von 1095 W (7-17 Uhr) lag ueber
+    # der absoluten Schwelle 800 W - damit galten ALLE Tagesstunden als
+    # "Tief". CalcStart rechnete 3 x 0,75 h = 2,25 h extra (4,5 h statt 2,25 h)
+    # und startete um 08:00 fuer das Mittagsziel 12:00.
+    # Ein Tief ist eine Spitze UEBER der Tages-Grundlast (Kochen), nicht die
+    # Grundlast selbst. Deshalb gilt: Wert > max(schwelle_w, Median * Faktor).
+    # `relativ_faktor <= 0` schaltet die relative Pruefung ab (alte Logik).
+    basis_werte = []
+    if relativ_faktor > 0.0:
+        for stunde, wert in surplus_profile.items():
+            try:
+                h_tag = int(stunde) % 24
+                w = float(wert)
+            except (TypeError, ValueError):
+                continue
+            if 6 <= h_tag <= 22 and w > 0.0:
+                basis_werte.append(w)
+    # Mindestens 4 bekannte Tagesstunden, sonst ist der Median nicht
+    # aussagekraeftig (analog `get_surplus_profile`: Profil ab 4 Stunden).
+    if len(basis_werte) >= 4:
+        basis_werte.sort()
+        mitte = len(basis_werte) // 2
+        if len(basis_werte) % 2 == 1:
+            median = basis_werte[mitte]
+        else:
+            median = (basis_werte[mitte - 1] + basis_werte[mitte]) / 2.0
+        schwelle_w = max(schwelle_w, median * relativ_faktor)
+
     stunden = []
     h = int(current_time) + 1
     while h < ziel_uhr and (h - current_time) <= 10.0:
