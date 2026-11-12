@@ -3623,6 +3623,34 @@
                         <div class="info-row"><span class="info-label">Verdampfer</span><span class="info-value"><span id="temp-verdampfer">${temperatures.verdampfer?.toFixed(1) || NO_DATA}</span> °C</span></div>
                     </div>
 
+                    <!-- Energie & Solar -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon green">🔋</div>
+                            <div class="card-title">Energie & Solar</div>
+                        </div>
+                        <div class="temp-display">
+                            <span class="temp-value" id="energy-soc">${energy.soc ?? 0}</span>
+                            <span class="temp-unit">%</span>
+                        </div>
+                        <div class="temp-label">Batterie</div>
+                        <div class="temp-bar-row"><div class="temp-bar"><div class="temp-bar-fill" id="energy-soc-bar"></div></div></div>
+                        <div class="energy-flow" id="energy-flow">
+                            <div class="energy-flow-row"><span class="energy-flow-label">PV-Erzeugung</span><div class="temp-bar"><div class="temp-bar-fill is-pv" id="energy-flow-pv"></div></div><span class="energy-flow-value" id="energy-flow-pv-val">—</span></div>
+                            <div class="energy-flow-row"><span class="energy-flow-label">Hausverbrauch</span><div class="temp-bar"><div class="temp-bar-fill is-home" id="energy-flow-haus"></div></div><span class="energy-flow-value" id="energy-flow-haus-val">—</span></div>
+                            <div class="energy-flow-row"><span class="energy-flow-label">Netzbezug</span><div class="temp-bar"><div class="temp-bar-fill is-grid" id="energy-flow-grid"></div></div><span class="energy-flow-value" id="energy-flow-grid-val">—</span></div>
+                        </div>
+                        <div class="info-row"><span class="info-label">Batterie-Leistung</span><span class="info-value"><span id="energy-battery">${energy.battery_power ?? 0}</span> W</span></div>
+                        <div class="info-row"><span class="info-label">Einspeisung</span><span class="info-value"><span id="energy-feedin">${energy.feed_in ?? 0}</span> W</span></div>
+                        <div class="info-row"><span class="info-label" title="Tatsächliche Erzeugung der Strings (Gleichstromseite)">PV-Erzeugung</span><span class="info-value"><span id="energy-pv">${energy.pv_generation_w ?? NO_DATA}</span> W</span></div>
+                        <div class="info-row"><span class="info-label" title="Alter der Solax-Livedaten. Der Wechselrichter aktualisiert nur etwa alle 5 Minuten (API-Rate-Limit) - Regelentscheidungen nutzen daher bis zu ~5 min alte Werte. Der Stale-Schutz greift erst bei 15 min.">Datenalter (Solar)</span><span class="info-value" id="energy-age">${NO_DATA}</span></div>
+                        <div class="info-row"><span class="info-label" title="Was das Haus aktuell aufnimmt">Hausverbrauch</span><span class="info-value"><span id="energy-haus">${energy.hausverbrauch_w ?? NO_DATA}</span> W</span></div>
+                        <div class="info-row"><span class="info-label" title="Wechselrichter-Ausgang = Haus + Netz. Nachts rund 250 W, obwohl die Sonne nichts liefert - nicht mit der PV-Erzeugung verwechseln.">Wechselrichter-Ausgang (AC)</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? NO_DATA}</span> W</span></div>
+                        <div class="info-row" id="energy-stale-row" style="display:none;color:#ff6b6b"><span class="info-label">⚠ Solar-Daten</span><span class="info-value">veraltet -> PV-Regeln pausiert</span></div>
+                        <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : NO_DATA}</span></div>
+                        <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : NO_DATA}</span></div>
+                        <div class="info-row"><span class="info-label">Prognose Uebermorgen</span><span class="info-value" id="energy-forecast-day2">${energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : NO_DATA}</span></div>
+
                     <!-- Aktive Regel (Pareto) -->
                     <div class="card">
                         <div class="card-header">
@@ -3686,34 +3714,6 @@
                         <div class="info-row"><span class="info-label">🦠 Legionellen</span><span class="info-value" id="legionellen-info">${(statusData.legionellen && statusData.legionellen.aktiv) ? '🔄 aktiv (Ziel ' + (statusData.legionellen.target_temp_c ?? '60') + '°C)' : (statusData.legionellen && statusData.legionellen.planned_day ? '⏰ geplant: ' + statusData.legionellen.planned_day + ' ' + (statusData.legionellen.planned_time || '') : (statusData.legionellen && statusData.legionellen.last_done ? '✓ KW ' + statusData.legionellen.last_done.split('-')[1] : '— keine Planung'))}</span></div>
                         <div class="info-row" style="font-size:0.75rem;color:var(--text-secondary)" id="legionellen-detail">${(statusData.legionellen && statusData.legionellen.aktiv) ? '' : (statusData.legionellen && statusData.legionellen.planned_reason ? ('Start am besten Forecast-Tag · ' + statusData.legionellen.planned_reason) : '')}</div>
                     </div>
-
-                    <!-- Energie & Solar -->
-                    <div class="card">
-                        <div class="card-header">
-                            <div class="card-icon green">🔋</div>
-                            <div class="card-title">Energie & Solar</div>
-                        </div>
-                        <div class="temp-display">
-                            <span class="temp-value" id="energy-soc">${energy.soc ?? 0}</span>
-                            <span class="temp-unit">%</span>
-                        </div>
-                        <div class="temp-label">Batterie</div>
-                        <div class="temp-bar-row"><div class="temp-bar"><div class="temp-bar-fill" id="energy-soc-bar"></div></div></div>
-                        <div class="energy-flow" id="energy-flow">
-                            <div class="energy-flow-row"><span class="energy-flow-label">PV-Erzeugung</span><div class="temp-bar"><div class="temp-bar-fill is-pv" id="energy-flow-pv"></div></div><span class="energy-flow-value" id="energy-flow-pv-val">—</span></div>
-                            <div class="energy-flow-row"><span class="energy-flow-label">Hausverbrauch</span><div class="temp-bar"><div class="temp-bar-fill is-home" id="energy-flow-haus"></div></div><span class="energy-flow-value" id="energy-flow-haus-val">—</span></div>
-                            <div class="energy-flow-row"><span class="energy-flow-label">Netzbezug</span><div class="temp-bar"><div class="temp-bar-fill is-grid" id="energy-flow-grid"></div></div><span class="energy-flow-value" id="energy-flow-grid-val">—</span></div>
-                        </div>
-                        <div class="info-row"><span class="info-label">Batterie-Leistung</span><span class="info-value"><span id="energy-battery">${energy.battery_power ?? 0}</span> W</span></div>
-                        <div class="info-row"><span class="info-label">Einspeisung</span><span class="info-value"><span id="energy-feedin">${energy.feed_in ?? 0}</span> W</span></div>
-                        <div class="info-row"><span class="info-label" title="Tatsächliche Erzeugung der Strings (Gleichstromseite)">PV-Erzeugung</span><span class="info-value"><span id="energy-pv">${energy.pv_generation_w ?? NO_DATA}</span> W</span></div>
-                        <div class="info-row"><span class="info-label" title="Alter der Solax-Livedaten. Der Wechselrichter aktualisiert nur etwa alle 5 Minuten (API-Rate-Limit) - Regelentscheidungen nutzen daher bis zu ~5 min alte Werte. Der Stale-Schutz greift erst bei 15 min.">Datenalter (Solar)</span><span class="info-value" id="energy-age">${NO_DATA}</span></div>
-                        <div class="info-row"><span class="info-label" title="Was das Haus aktuell aufnimmt">Hausverbrauch</span><span class="info-value"><span id="energy-haus">${energy.hausverbrauch_w ?? NO_DATA}</span> W</span></div>
-                        <div class="info-row"><span class="info-label" title="Wechselrichter-Ausgang = Haus + Netz. Nachts rund 250 W, obwohl die Sonne nichts liefert - nicht mit der PV-Erzeugung verwechseln.">Wechselrichter-Ausgang (AC)</span><span class="info-value"><span id="energy-ac">${energy.ac_power ?? NO_DATA}</span> W</span></div>
-                        <div class="info-row" id="energy-stale-row" style="display:none;color:#ff6b6b"><span class="info-label">⚠ Solar-Daten</span><span class="info-value">veraltet -> PV-Regeln pausiert</span></div>
-                        <div class="info-row"><span class="info-label">Prognose Heute</span><span class="info-value" id="energy-forecast-today">${energy.forecast_today != null ? Math.round(energy.forecast_today) + ' Wh' : NO_DATA}</span></div>
-                        <div class="info-row"><span class="info-label">Prognose Morgen</span><span class="info-value" id="energy-forecast-tomorrow">${energy.forecast_tomorrow != null ? Math.round(energy.forecast_tomorrow) + ' Wh' : NO_DATA}</span></div>
-                        <div class="info-row"><span class="info-label">Prognose Uebermorgen</span><span class="info-value" id="energy-forecast-day2">${energy.forecast_day2 != null ? Math.round(energy.forecast_day2) + ' Wh' : NO_DATA}</span></div>
 <!-- Wochenendprognose (BUGFIX 21.10.2026): die Tagesprognose der kommenden
      Tage. Sie entscheidet, welcher der drei Tage Freitag/Samstag/Sonntag
      fuer die Legionellenprophylaxe gewaehlt wird - nach UEBERSCHUSS
