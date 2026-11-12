@@ -2424,7 +2424,9 @@
             set('quick-compressor', running ? 'EIN' : 'AUS', running ? 'is-on' : 'is-off');
             set('quick-rule', mode.active_rule || NO_DATA);
             set('quick-mode', mode.current || 'Normal');
-            set('quick-solar', energy.solar_stale ? 'Daten veraltet' : (isFiniteNumber(energy.feed_in) ? Math.round(energy.feed_in) + ' W' : NO_DATA), energy.solar_stale ? 'is-warning' : '');
+            set('quick-solar', energy.solar_stale ? 'Daten veraltet'
+                : (isFiniteNumber(energy.pv_generation_w) ? Math.round(Math.max(0, energy.pv_generation_w)) + ' W' : NO_DATA),
+                energy.solar_stale ? 'is-warning' : '');
             if (healthData && healthData.status !== 'ok') {
                 document.getElementById('connection-status')?.replaceChildren(document.createTextNode('API ok · Steuerung eingeschränkt'));
             }
