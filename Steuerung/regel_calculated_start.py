@@ -170,6 +170,11 @@ def evaluate_calculated_start(
             calc_cfg, temp_dict, current_time, ziel_uhr,
             boiler_max_c=float(calc_cfg.tmax_c),
             etappen_filter=etappen_filter,
+            # BUGFIX 11.11.2026: Das Verbrauchsprofil wird jetzt schon hier
+            # gebraucht - der Tief-Aufschlag gehoert in den angezeigten
+            # Restpuffer (`puffer_h`). Sonst zeigte die WebApp "Puffer 1.4 h",
+            # waehrend die Regel wegen desselben Aufschlags "ZU SPAET" meldete.
+            surplus_profile=surplus_profile,
         )
         if etappen_ziel is not None:
             ziel_uhr = etappen_ziel
@@ -357,25 +362,41 @@ def evaluate_calculated_start(
     # Verbrauchsbewusstsein: Gelernte Stunden mit wenig Netzeinschuss
     # (Mittags Kochen etc.) zaehlen nur zu 75% als Heizzeit -> frueherer
     # Start, damit waehrend des Tiefs pausiert werden kann.
-    dip_h, dip_label = (
-        _mittagstief_stunden(
-            current_time, ziel_uhr, surplus_profile,
-            # BUGFIX (21.10.2026): Die Schwelle ist konfigurierbar, weil
-            # das Profil jetzt den HAUSVERBRAUCH misst (vorher die
-            # Einspeisung). Der alte Wert 250 W war fuer Einspeisung
-            # gedacht - als Verbrauchsschwelle lag er unter dem
-            # Grundverbrauch und jede Stunde galt als Spitze.
-            schwelle_w=float(getattr(calc_cfg, "mittagstief_schwelle_w", 800.0)),
-            # BEFUND 11.11.2026: Zusaetzlich relativ zur Tages-Grundlast -
-            # sonst gilt eine konstante Grundlast (1095 W) als Dauer-Tief
-            # und CalcStart startet Stunden zu frueh aus dem Netz.
-            relativ_faktor=float(
-                getattr(calc_cfg, "mittagstief_relativ_faktor", 1.4)
-            ),
+    #
+    # BUGFIX 11.11.2026: Bei konfigurierten Etappen wird der Aufschlag NICHT
+    # mehr hier gerechnet, sondern aus dem Etappenplan uebernommen. Der Plan
+    # braucht ihn ohnehin fuer den angezeigten Restpuffer (`puffer_h`) -
+    # zwei getrennte Rechnungen liefen sonst auseinander (Anzeige "Puffer
+    # 1.4 h" vs. Entscheidung "ZU SPAET"). Die Formel ist identisch
+    # (gleiches Profil, gleiches Ziel, gleiche Schwellen).
+    _dringendste = None
+    if etappen_hours is not None:
+        _dringendste = next(
+            (e for e in etappen_plan if e.get("dringendste")), None
         )
-        if surplus_profile
-        else (0.0, "")
-    )
+    if _dringendste is not None:
+        dip_h = float(_dringendste.get("dip_h", 0.0) or 0.0)
+        dip_label = str(_dringendste.get("dip_label", "") or "")
+    else:
+        dip_h, dip_label = (
+            _mittagstief_stunden(
+                current_time, ziel_uhr, surplus_profile,
+                # BUGFIX (21.10.2026): Die Schwelle ist konfigurierbar, weil
+                # das Profil jetzt den HAUSVERBRAUCH misst (vorher die
+                # Einspeisung). Der alte Wert 250 W war fuer Einspeisung
+                # gedacht - als Verbrauchsschwelle lag er unter dem
+                # Grundverbrauch und jede Stunde galt als Spitze.
+                schwelle_w=float(getattr(calc_cfg, "mittagstief_schwelle_w", 800.0)),
+                # BEFUND 11.11.2026: Zusaetzlich relativ zur Tages-Grundlast -
+                # sonst gilt eine konstante Grundlast (1095 W) als Dauer-Tief
+                # und CalcStart startet Stunden zu frueh aus dem Netz.
+                relativ_faktor=float(
+                    getattr(calc_cfg, "mittagstief_relativ_faktor", 1.4)
+                ),
+            )
+            if surplus_profile
+            else (0.0, "")
+        )
     if dip_h:
         hours_needed = hours_needed + dip_h * 0.75
 

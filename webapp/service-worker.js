@@ -20,7 +20,10 @@
 // alte Fassung weiter.
 // v21 (11.11.2026): Abweichungs-Regel respektiert "aktiv": false (1.10.41) -
 // die Huelle muss neu geladen werden.
-const CACHE_NAME = 'wp-webapp-shell-v21';
+// v22 (11.11.2026): CalcStart-Etappen weisen den Mittagstief-Aufschlag im
+// Puffer aus (1.10.42) - sonst zeigt die alte Huelle weiter "Puffer 1.4 h",
+// waehrend die Regel schon "ZU SPAET" meldet.
+const CACHE_NAME = 'wp-webapp-shell-v22';
 const APP_SHELL = [
     './',
     './index.html',

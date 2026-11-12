@@ -42,12 +42,19 @@ ABEND = CalcEtappeConfig(name="Abend", ziel_uhr=18.0, solltemperatur_c=42.0,
                          temperaturfuehler="unten", puffer_h=0.5)
 
 
-def _ruf(cfg, temps, stunde, minute=0, feedin=0.0, soc=None):
+def _ruf(cfg, temps, stunde, minute=0, feedin=0.0, soc=None, profil=None):
     return evaluate_calculated_start(
         cfg, temps, stunde, minute,
         feedin_watt=feedin, soc=soc,
         learned_heating_rate_unten=3.0, learned_heating_rate_gesamt=2.0,
+        surplus_profile=profil,
     )
+
+
+# Hausverbrauch: Grundlast 500 W, Kochen 9-11 Uhr mit 2000 W.
+# Median der Tagesstunden liegt bei 500 W -> Schwelle max(800, 500*1.4) = 800 W.
+# Nur die Kochstunden gelten damit als Verbrauchs-Tief.
+KOCH_PROFIL = {str(h): (2000.0 if 9 <= h <= 11 else 500.0) for h in range(6, 23)}
 
 
 class TestEtappenplan:
@@ -127,6 +134,52 @@ class TestEtappenplan:
             assert abs(e["start_uhr"] - (e["ziel_uhr"] - e["hours_needed"])) <= 0.02
         assert sum(1 for e in plan if e.get("dringendste")) == 1
 
+    def test_puffer_enthaelt_den_mittagstief_aufschlag(self):
+        """BUGFIX 11.11.2026: Anzeige und Entscheidung muessen dasselbe sagen.
+
+        Produktionsfall (Log 12.11.2026, 08:00): Ziel Mittag 12:00/40 C am
+        Fuehler "mitte", Speicher 32.1 C, Kochen 9-11 Uhr. Die Anzeige zeigte
+        "Puffer 1.4 h", die Regel entschied "ZU SPAET" - weil der
+        Mittagstief-Aufschlag nur in der Entscheidung, nicht in der Anzeige
+        steckte.
+        """
+        mittag12 = CalcEtappeConfig(
+            name="Mittag", ziel_uhr=12.0, solltemperatur_c=40.0,
+            temperaturfuehler="mitte", puffer_h=0.5,
+        )
+        temps = {"unten": 16.9, "mittig": 32.1, "oben": 41.5}
+
+        ohne = _ruf(_config([mittag12]), temps, 8)
+        e_ohne = ohne.regel_dict["etappen"][0]
+        assert e_ohne["dip_h"] == 0.0
+        assert e_ohne["puffer_h"] > 0, e_ohne
+
+        mit = _ruf(_config([mittag12]), temps, 8, profil=KOCH_PROFIL)
+        e_mit = mit.regel_dict["etappen"][0]
+        # 3 Kochstunden (9,10,11) x 0,75 = 2,25 h Aufschlag.
+        assert e_mit["dip_h"] == 3.0
+        assert e_mit["dip_aufschlag_h"] == 2.25
+        assert e_mit["dip_label"], "das Tief muss benannt sein (WebApp)"
+        # Der Puffer sinkt um genau diesen Aufschlag ...
+        assert abs(
+            (e_ohne["puffer_h"] - e_mit["puffer_h"]) - 2.25
+        ) < 0.01, (e_ohne["puffer_h"], e_mit["puffer_h"])
+        # ... und ist jetzt negativ -> die WebApp zeigt "ZU SPAET".
+        assert e_mit["puffer_h"] < 0, e_mit
+
+    def test_puffer_und_entscheidung_stimmen_ueberein(self):
+        """Negativer Puffer <=> Regel meldet Zeitablauf (gleiche Rechnung)."""
+        mittag12 = CalcEtappeConfig(
+            name="Mittag", ziel_uhr=12.0, solltemperatur_c=40.0,
+            temperaturfuehler="mitte", puffer_h=0.5,
+        )
+        temps = {"unten": 16.9, "mittig": 32.1, "oben": 41.5}
+        erg = _ruf(_config([mittag12]), temps, 8, profil=KOCH_PROFIL)
+        etappe = erg.regel_dict["etappen"][0]
+        assert etappe["puffer_h"] < 0
+        assert erg.einschalten is True
+        assert "ZU SPAET" in erg.grund, erg.grund
+
     def test_webapp_zeigt_den_etappenplan(self):
         """Quelltext-Guard: die WebApp rendert Startzeit, Soll und Puffer."""
         pfad = os.path.join(
@@ -138,6 +191,22 @@ class TestEtappenplan:
         assert "formatCalcHour(e.start_uhr)" in quelle
         assert "etappenHtml" in quelle
         assert "dringendste" in quelle
+
+    def test_webapp_weist_den_tief_aufschlag_aus(self):
+        """BUGFIX 11.11.2026: Die Anzeige muss den Aufschlag erklaeren.
+
+        Ohne diesen Hinweis steht in der App "ZU SPAET 1.0 h", ohne dass
+        erkennbar ist, dass 2,25 h davon der gelernte Mittagstief sind.
+        """
+        pfad = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "webapp", "index.html")
+        with open(pfad, encoding="utf-8") as fh:
+            quelle = fh.read()
+        assert "dip_aufschlag_h" in quelle, (
+            "die WebApp liest den Tief-Aufschlag nicht")
+        assert "dip_label" in quelle, (
+            "das Tief wird nicht benannt (z. B. '9-12 Uhr')")
 
     def test_etappe_mit_falschem_ziel_wird_abgelehnt(self):
         with pytest.raises(ValueError):

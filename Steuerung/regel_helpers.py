@@ -442,6 +442,7 @@ def _etappen_plan(
     boiler_max_c: float = 48.0,
     parameter: object = None,
     etappen_filter: Optional[List[str]] = None,
+    surplus_profile: Optional[Dict[str, float]] = None,
 ) -> Tuple[Optional[float], Optional[float], Optional[float], List[Dict[str, object]]]:
     """Dringendste Etappe bestimmen.
 
@@ -452,6 +453,13 @@ def _etappen_plan(
     zuletzt faellige Etappe zurueck - der Aufrufer meldet dann "Ziel
     bereits erreicht".
 
+    ``surplus_profile`` (BUGFIX 11.11.2026): Das gelernte Verbrauchsprofil
+    der LearningEngine. Damit laesst sich der Mittagstief-Aufschlag je
+    Etappe VORHER rechnen - er gehoert in den angezeigten Restpuffer.
+    Vorher zeigte die WebApp "Puffer 1.4 h", waehrend die Regel wegen
+    desselben Aufschlags schon "ZU SPAET" entschied (-0.5 h). Zwei Zahlen
+    fuer dieselbe Frage.
+
     ``etappen_filter`` (BEFUND 09.11.2026): Liste von Etappennamen
     (kleingeschrieben). CalcStart-Mittag und CalcStart-Abend sind eigene
     Regeln und duerfen NICHT dieselbe Etappe bewerten - sonst trugen beide
@@ -461,6 +469,9 @@ def _etappen_plan(
     """
     plan: List[Dict] = []
     spaetstart_puffer = float(getattr(calc_cfg, "spaetstart_puffer_h", 0.5))
+    # Schwellen fuer das Verbrauchs-Tief - dieselben Werte wie in der Regel.
+    tief_schwelle = float(getattr(calc_cfg, "mittagstief_schwelle_w", 800.0))
+    tief_faktor = float(getattr(calc_cfg, "mittagstief_relativ_faktor", 1.4))
     for etappe in getattr(calc_cfg, "etappen", None) or []:
         name = str(getattr(etappe, "name", "Etappe") or "Etappe").strip().lower()
         if etappen_filter is not None and name not in etappen_filter:
@@ -472,6 +483,20 @@ def _etappen_plan(
         if erg is None:
             continue
         stunden, erreichbar = erg
+        # BUGFIX 11.11.2026: Verbrauchs-Tief je Etappe. Stunden, in denen die
+        # WP wegen Kochen/Zapfen pausieren muss, zaehlen nur zu 75% als
+        # Heizzeit - die Regel rechnet den Aufschlag auf `hours_needed`.
+        # Genau dieser Aufschlag fehlte im angezeigten `puffer_h`: die WebApp
+        # zeigte "Puffer 1.4 h", waehrend die Regel schon "ZU SPAET" meldete.
+        dip_h, dip_label = (
+            _mittagstief_stunden(
+                current_time, ziel, surplus_profile,
+                schwelle_w=tief_schwelle, relativ_faktor=tief_faktor,
+            )
+            if surplus_profile
+            else (0.0, "")
+        )
+        dip_aufschlag = dip_h * 0.75
         plan.append({
             "name": getattr(etappe, "name", "Etappe"),
             "ziel_uhr": round(ziel, 2),
@@ -488,8 +513,16 @@ def _etappen_plan(
             "solltemperatur_c": float(getattr(etappe, "solltemperatur_c", 42.0)),
             "temperaturfuehler": getattr(etappe, "temperaturfuehler", "unten"),
             "hours_needed": round(stunden, 2),
-            "puffer_h": round((ziel - current_time) - stunden
+            # Restpuffer WIE DIE REGEL IHN RECHNET: Heizzeit + Tief-Aufschlag
+            # + Etappen-Puffer. Negativ = "jetzt starten, sonst wird das Ziel
+            # nicht mehr erreicht".
+            "puffer_h": round((ziel - current_time) - stunden - dip_aufschlag
                               - float(getattr(etappe, "puffer_h", 0.5)), 2),
+            # Aufschlag offen ausweisen, damit die Anzeige erklaeren kann,
+            # warum der Puffer kleiner ist als "Ziel - jetzt - Heizzeit".
+            "dip_h": round(dip_h, 2),
+            "dip_aufschlag_h": round(dip_aufschlag, 2),
+            "dip_label": dip_label,
             "erreichbar": erreichbar,
         })
     if not plan:

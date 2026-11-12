@@ -1314,7 +1314,9 @@
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
         // 1.10.41: Abweichungs-Regel respektiert endlich "aktiv": false
         // (das Feld fehlte in der Config und wurde ignoriert).
-        const APP_VERSION = '1.10.41';
+        // 1.10.42: CalcStart-Etappen zeigen den Mittagstief-Aufschlag im
+        // Puffer (vorher stand "Puffer 1.4 h" neben "ZU SPAET" der Regel).
+        const APP_VERSION = '1.10.42';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -1421,17 +1423,26 @@
                         : (p < 0 ? '#e57373' : (p < 0.5 ? '#ffa726' : '#4caf50'));
                     const status = x.ein === true ? ' <span style="color:#4caf50;font-weight:600">EIN</span>'
                         : (x.ein === false ? ' <span style="color:#e57373">AUS</span>' : '');
+                    // BUGFIX 11.11.2026: Der Puffer enthaelt jetzt den
+                    // Mittagstief-Aufschlag (wie die Regel ihn rechnet).
+                    // Ohne diese Zeile war nicht erklaerbar, warum "Puffer
+                    // 1.4 h" neben einem "ZU SPAET" der Regel stand.
+                    const dip = Number(x.e.dip_aufschlag_h);
+                    const dipTxt = (Number.isFinite(dip) && dip > 0)
+                        ? ' <span style="color:#ffa726">(Mittagstief -' + dip.toFixed(1) + ' h' +
+                          (x.e.dip_label ? ': ' + escapeHtml(x.e.dip_label) : '') + ')</span>'
+                        : '';
                     return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary)">' +
                         '<span style="min-width:92px">' + escapeHtml(x.e.name) + status + '</span>' +
                         '<span>Start ' + formatCalcHour(x.e.start_uhr) + ' &rarr; ' + formatCalcHour(x.e.ziel_uhr) + '</span>' +
                         '<span>' + Number(x.e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(x.e.temperaturfuehler) + '</span>' +
-                        '<span style="color:' + f + '">' + pTxt + '</span>' +
+                        '<span style="color:' + f + '">' + pTxt + dipTxt + '</span>' +
                         '</div>';
                 }).join('') +
                 '<div style="font-size:0.65rem;color:var(--text-secondary);margin-top:3px">' +
                 'Start = rechnerischer Einschaltzeitpunkt (Ziel minus Heizzeit) &middot; ' +
                 'Puffer = Reserve bis zum Ziel nach Abzug des 0,5-h-Sicherheitspuffers ' +
-                '(negativ = zu sp&auml;t)</div></div>';
+                'und des gelernten Mittagstiefs (negativ = zu sp&auml;t)</div></div>';
         }
 
         // Geschwister zu setText, gleiche Begruendung: ein null-Element
@@ -2563,11 +2574,15 @@
                                 // Startzeit steht jetzt auch im Detailtext
                                 // ("Mittag Start 10:30 -> 12:00").
                                 // `planned`/`latest` gelten NUR fuer die
-                                // Ein-Ziel-Rechnung: sie mischen den
-                                // Mittagstief-Aufschlag hinein und zeigen
+                                // Ein-Ziel-Rechnung und zeigen
                                 // `max(jetzt, ...)` - bei Etappen sind die
                                 // Etappenwerte (Start/spaetestens/Puffer)
                                 // die massgebliche Auskunft.
+                                // BUGFIX 11.11.2026: Der Etappen-Puffer
+                                // enthaelt seit dieser Fassung denselben
+                                // Mittagstief-Aufschlag wie die Entscheidung
+                                // (vorher zeigte er "Puffer 1.4 h", waehrend
+                                // die Regel "ZU SPAET" meldete).
                                 detail = 'Etappen: ' + etappen.map(e => escapeHtml(e.name) + ' Start ' + formatCalcHour(e.start_uhr) +
                                     ' &rarr; ' + formatCalcHour(e.ziel_uhr) + zielHinweis + ' (' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(e.temperaturfuehler) + ')').join(' &middot; ');
                                 etappenHtml = '<div class="rule-etappen" style="margin-top:4px">' +
@@ -2578,12 +2593,19 @@
                                             : '';
                                         const farbe = !Number.isFinite(puffer) ? 'var(--text-secondary)'
                                             : (puffer < 0 ? '#e57373' : (puffer < 0.5 ? '#ffa726' : '#4caf50'));
+                                        // Mittagstief-Aufschlag offen ausweisen - er
+                                        // steckt im Puffer und erklaert ein "ZU SPAET".
+                                        const dip = Number(e.dip_aufschlag_h);
+                                        const dipTxt = (Number.isFinite(dip) && dip > 0)
+                                            ? ' <span style="color:#ffa726">(Mittagstief -' + dip.toFixed(1) + ' h' +
+                                              (e.dip_label ? ': ' + escapeHtml(e.dip_label) : '') + ')</span>'
+                                            : '';
                                         return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary);' +
                                             (e.dringendste ? 'font-weight:600;color:var(--text-primary);' : '') + '">' +
                                             '<span style="min-width:64px">' + (e.dringendste ? '&rarr; ' : '') + escapeHtml(e.name) + '</span>' +
                                             '<span>Start ' + formatCalcHour(e.start_uhr) + ' &rarr; ' + formatCalcHour(e.ziel_uhr) + zielHinweis + '</span>' +
                                             '<span>' + Number(e.solltemperatur_c).toFixed(0) + '&deg;C ' + escapeHtml(e.temperaturfuehler) + '</span>' +
-                                            '<span style="color:' + farbe + '">' + pufferTxt + '</span>' +
+                                            '<span style="color:' + farbe + '">' + pufferTxt + dipTxt + '</span>' +
                                             (e.erreichbar === false ? '<span style="color:#e57373">Ziel kaum erreichbar</span>' : '') +
                                             '</div>';
                                     }).join('') + '</div>';
