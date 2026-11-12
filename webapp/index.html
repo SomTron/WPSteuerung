@@ -2511,10 +2511,11 @@
 
         // Visualisiert SOC und Energiefluss (PV / Hausverbrauch / Netzbezug)
         // als Balkendiagramm. Rein informativ - die Regel-Engine rechnet
-        // unabhaengig hiervon. Balken-Skala: 0..max(Wert, 5000 W).
+        // unabhaengig hiervon. Die Balken-Skala ist DYNAMISCH: mindestens
+        // 5000 W Grundskala, wird aber automatisch auf den groessten der
+        // drei Werte hochgezogen (z. B. 13.000 W bei einer 13-kW-PV-Anlage).
         function updateEnergieBalken(energy) {
             if (!energy) return;
-            const maxW = 5000;  // Obergrenze der Balken-Skala (W)
 
             // SOC-Balken (0..100 %).
             const socBalken = document.getElementById('energy-soc-bar');
@@ -2523,6 +2524,16 @@
                 socBalken.style.width = soc.toFixed(1) + '%';
                 socBalken.className = 'temp-bar-fill' + (soc < 20 ? ' is-danger' : (soc < 40 ? ' is-warning' : ''));
             }
+
+            // Energiefluss-Werte (PV, Hausverbrauch, Netzbezug) zuerst lesen,
+            // damit die Skala aus dem groessten Wert gebildet werden kann.
+            const feed = isFiniteNumber(energy.feed_in) ? Number(energy.feed_in) : 0;
+            const netzbezug = feed < 0 ? Math.abs(feed) : 0;
+            const pvW = isFiniteNumber(energy.pv_generation_w) ? Math.max(0, Number(energy.pv_generation_w)) : 0;
+            const hausW = isFiniteNumber(energy.hausverbrauch_w) ? Math.max(0, Number(energy.hausverbrauch_w)) : 0;
+
+            // Dynamische Skala: mindestens 5000 W, sonst der groesste Wert.
+            const maxW = Math.max(5000, pvW, hausW, netzbezug);
 
             // Energiefluss-Balken (PV, Hausverbrauch, Netzbezug).
             const setzeFluss = (id, wert) => {
@@ -2536,9 +2547,7 @@
             };
             setzeFluss('pv', energy.pv_generation_w);
             setzeFluss('haus', energy.hausverbrauch_w);
-            // Netzbezug: Einspeisung negativ = Bezug, positiv = Einspeisung.
-            const feed = isFiniteNumber(energy.feed_in) ? Number(energy.feed_in) : 0;
-            setzeFluss('grid', feed < 0 ? Math.abs(feed) : 0);
+            setzeFluss('grid', netzbezug);
         }
 
         // Visualisiert den Abstand der Ist-Temperatur zum Einschaltpunkt
