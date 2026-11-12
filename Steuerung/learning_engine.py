@@ -1757,9 +1757,16 @@ class LearningEngine:
         }
 
         # Prüfen ob alle benötigten Sensoren Werte liefern
-        if any(current[s] is None for s in ["unten", "mittig"]):
+        # BUGFIX (11.2026): Der Guard muss ALLE Sensoren in current UND previous
+        # abdecken. Vorher fuehrte ein einzelnes fehlendes ``None`` (z.B.
+        # ``current['oben']`` oder ``previous['unten']``) in der
+        # ``drops``-/Flanken-Berechnung zu
+        # ``TypeError: unsupported operand type(s) for -: 'NoneType' and 'float'``
+        # (mypy: ``learning_engine.py:1769 operator``). Ein unvollständiger
+        # Sample ist kein Zapf-Ereignis.
+        if any(current[s] is None for s in ["unten", "mittig", "oben"]):
             return
-        if all(previous[s] is None for s in ["unten", "mittig", "oben"]):
+        if any(previous[s] is None for s in ["unten", "mittig", "oben"]):
             return
 
         # Temperaturabfall je Fühler berechnen

@@ -100,3 +100,26 @@ def test_readme_erklaert_die_voraussetzung():
     """Ohne Hinweis installiert man 3.9 und wundert sich ueber Syntaxfehler."""
     readme = _text(os.path.join(REPO_ROOT, "README.md"))
     assert "Voraussetzung: Python 3.12" in readme
+
+
+def test_annotation_unchecked_bleibt_sichtbar():
+    """`annotation-unchecked` darf NICHT in disable_error_code stehen.
+
+    Die Klasse ist gueltig und erscheint als NOTE (nicht als Fehler), wenn
+    check_untyped_defs=False ist. Mypy startet damit; die Notes bleiben als
+    Diagnose sichtbar (Exit 0). Ein stilles Deaktivieren wuerde genau diese
+    Hinweise verschlucken - der Kommentar in mypy.ini warnt davor.
+
+    Geprueft wird die aktive Konfiguration, nicht der erklaerende Kommentar:
+    der Name darf in einer Kommentarzeile stehen, aber nicht in einer
+    Konfigurationszeile.
+    """
+    mypy = _text(os.path.join(REPO_ROOT, "Steuerung", "mypy.ini"))
+    aktiv = [
+        z.strip() for z in mypy.splitlines()
+        if z.strip() and not z.lstrip().startswith(("#", ";"))
+    ]
+    for zeile in aktiv:
+        assert "annotation-unchecked" not in zeile, (
+            "annotation-unchecked darf nicht aktiv deaktiviert sein - es ist "
+            "eine gueltige NOTE-Klasse, die die Diagnose sichtbar haelt")

@@ -380,6 +380,77 @@
             margin-top: 5px;
         }
 
+        .temp-target {
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            margin: 2px 0 10px;
+            min-height: 1.1em;
+        }
+
+        .temp-bar-row {
+            margin: 2px 0 10px;
+        }
+
+        .temp-bar {
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        .temp-bar-fill {
+            height: 100%;
+            width: 0%;
+            border-radius: 3px;
+            background: linear-gradient(90deg, var(--accent-primary), #00b4d8);
+            transition: width 0.5s ease;
+        }
+
+        .temp-bar-fill.is-warning {
+            background: linear-gradient(90deg, var(--accent-warning), #ff9f43);
+        }
+
+        .temp-bar-fill.is-danger {
+            background: linear-gradient(90deg, var(--accent-secondary), #ee5253);
+        }
+
+        .temp-bar-fill.is-pv {
+            background: linear-gradient(90deg, #51cf66, #ffd43b);
+        }
+
+        .temp-bar-fill.is-home {
+            background: linear-gradient(90deg, #00d4ff, #0099ff);
+        }
+
+        .temp-bar-fill.is-grid {
+            background: linear-gradient(90deg, #ff6b6b, #ee5253);
+        }
+
+        .energy-flow {
+            margin: 6px 0 12px;
+        }
+
+        .energy-flow-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 6px 0;
+        }
+
+        .energy-flow-label {
+            flex: 0 0 110px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .energy-flow-value {
+            flex: 0 0 64px;
+            text-align: right;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
         .button-group {
             display: flex;
             gap: 10px;
@@ -1133,6 +1204,8 @@
                 <div class="quick-status-item"><span class="quick-status-label">Modus</span><span class="quick-status-value" id="quick-mode">—</span></div>
                 <div class="quick-status-item"><span class="quick-status-label">Solar</span><span class="quick-status-value" id="quick-solar">—</span></div>
                 <div class="quick-status-item"><span class="quick-status-label">Boiler</span><span class="quick-status-value" id="quick-boiler">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">SOC</span><span class="quick-status-value" id="quick-soc">—</span></div>
+                <div class="quick-status-item"><span class="quick-status-label">Einspeisung</span><span class="quick-status-value" id="quick-feedin">—</span></div>
                 <div class="quick-status-item"><span class="quick-status-label">Aktualisiert</span><span class="quick-status-value" id="quick-updated">—</span></div>
             </div>
             <!--
@@ -2356,6 +2429,10 @@
                 document.getElementById('connection-status')?.replaceChildren(document.createTextNode('API ok · Steuerung eingeschränkt'));
             }
             set('quick-boiler', isFiniteNumber(temperatures.boiler) ? temperatures.boiler.toFixed(1) + ' °C' : NO_DATA);
+            set('quick-soc', isFiniteNumber(energy.soc) ? Math.round(energy.soc) + ' %' : NO_DATA,
+                isFiniteNumber(energy.soc) && energy.soc < 20 ? 'is-warning' : '');
+            set('quick-feedin', isFiniteNumber(energy.feed_in) ? Math.round(energy.feed_in) + ' W' : NO_DATA,
+                isFiniteNumber(energy.feed_in) && energy.feed_in > 0 ? 'is-on' : '');
             const ageText = Number.isFinite(system.last_update_age_s)
                 ? formatAge(system.last_update_age_s)
                 : (system.last_update || NO_DATA);
@@ -2428,6 +2505,87 @@
                 if (errorPanel && errorMsg) {
                     errorMsg.textContent = error.message || 'Unbekannter API-Fehler';
                     errorPanel.style.display = 'block';
+                }
+            }
+        }
+
+        // Visualisiert SOC und Energiefluss (PV / Hausverbrauch / Netzbezug)
+        // als Balkendiagramm. Rein informativ - die Regel-Engine rechnet
+        // unabhaengig hiervon. Balken-Skala: 0..max(Wert, 5000 W).
+        function updateEnergieBalken(energy) {
+            if (!energy) return;
+            const maxW = 5000;  // Obergrenze der Balken-Skala (W)
+
+            // SOC-Balken (0..100 %).
+            const socBalken = document.getElementById('energy-soc-bar');
+            if (socBalken) {
+                const soc = isFiniteNumber(energy.soc) ? Math.max(0, Math.min(100, Number(energy.soc))) : 0;
+                socBalken.style.width = soc.toFixed(1) + '%';
+                socBalken.className = 'temp-bar-fill' + (soc < 20 ? ' is-danger' : (soc < 40 ? ' is-warning' : ''));
+            }
+
+            // Energiefluss-Balken (PV, Hausverbrauch, Netzbezug).
+            const setzeFluss = (id, wert) => {
+                const balken = document.getElementById('energy-flow-' + id);
+                const wertEl = document.getElementById('energy-flow-' + id + '-val');
+                if (!balken) return;
+                const w = isFiniteNumber(wert) ? Math.max(0, Number(wert)) : 0;
+                const pct = Math.max(0, Math.min(100, (w / maxW) * 100));
+                balken.style.width = pct.toFixed(1) + '%';
+                if (wertEl) wertEl.textContent = isFiniteNumber(wert) ? Math.round(wert) + ' W' : NO_DATA;
+            };
+            setzeFluss('pv', energy.pv_generation_w);
+            setzeFluss('haus', energy.hausverbrauch_w);
+            // Netzbezug: Einspeisung negativ = Bezug, positiv = Einspeisung.
+            const feed = isFiniteNumber(energy.feed_in) ? Number(energy.feed_in) : 0;
+            setzeFluss('grid', feed < 0 ? Math.abs(feed) : 0);
+        }
+
+        // Visualisiert den Abstand der Ist-Temperatur zum Einschaltpunkt
+        // als Fortschrittsbalken (0 % = weit weg, 100 % = erreicht) und
+        // zeigt einen kompakten Sollwert-Hinweis ("noch X K bis Einschalten").
+        // Rein informativ - die Regel-Engine rechnet unabhaengig hiervon.
+        function updateTemperaturBalken(temperatures, setpoints) {
+            if (!temperatures) return;
+            const ziel = isFiniteNumber(setpoints?.einschaltpunkt) ? Number(setpoints.einschaltpunkt) : null;
+            const minC = 20.0;   // linke Skala (kalt)
+            const maxC = 65.0;   // rechte Skala (heiss, Legionellen)
+
+            const setzeBalken = (sensorId, istId, wert) => {
+                const balken = document.getElementById('temp-bar-' + sensorId);
+                if (!balken) return;
+                if (!isFiniteNumber(wert)) { balken.style.width = '0%'; return; }
+                // Prozentuale Position auf der Skala (20..65 C).
+                const pct = Math.max(0, Math.min(100, ((wert - minC) / (maxC - minC)) * 100));
+                balken.style.width = pct.toFixed(1) + '%';
+                // Farbe: nah am Ziel -> gruen, darueber -> orange, weit weg -> blau.
+                balken.className = 'temp-bar-fill';
+                if (ziel !== null) {
+                    if (wert >= ziel) balken.classList.add('is-warning');
+                    else if (wert >= ziel - 3.0) balken.classList.add('is-warning');
+                }
+            };
+
+            setzeBalken('oben', 'temp-oben', temperatures.oben);
+            setzeBalken('mittig', 'temp-mittig', temperatures.mittig);
+            setzeBalken('unten', 'temp-unten', temperatures.unten);
+
+            // Sollwert-Hinweis: Abstand des unteren Fuehlers (Regelfuehler)
+            // zum Einschaltpunkt. Nur, wenn beide Werte bekannt sind.
+            const hinweis = document.getElementById('temp-target-hint');
+            if (hinweis) {
+                const unten = temperatures.unten;
+                if (isFiniteNumber(unten) && ziel !== null) {
+                    const delta = ziel - unten;
+                    if (delta <= 0) {
+                        hinweis.textContent = '✓ Einschaltpunkt erreicht (' + ziel.toFixed(1) + ' °C)';
+                        hinweis.style.color = 'var(--accent-success)';
+                    } else {
+                        hinweis.textContent = 'noch ' + delta.toFixed(1) + ' K bis Einschalten (' + ziel.toFixed(1) + ' °C)';
+                        hinweis.style.color = 'var(--text-secondary)';
+                    }
+                } else {
+                    hinweis.textContent = '';
                 }
             }
         }
@@ -2510,6 +2668,7 @@
             setText('temp-mittig', temperatures.mittig?.toFixed(1) || NO_DATA);
             setText('temp-unten', temperatures.unten?.toFixed(1) || NO_DATA);
             setText('temp-verdampfer', temperatures.verdampfer?.toFixed(1) || NO_DATA);
+            updateTemperaturBalken(temperatures, setpoints);
 
             // Sollwerte
             setText('setpoint-ein', setpoints?.einschaltpunkt ?? NO_DATA);
@@ -3257,6 +3416,7 @@
             // dem ersten Rendern stehen.
             setText('energy-pv', energy.pv_generation_w ?? NO_DATA);
             setText('energy-haus', energy.hausverbrauch_w ?? NO_DATA);
+            updateEnergieBalken(energy);
             // Datenalter der Solax-Livedaten (B4b): zeigt die ~5-min-Granularitaet
             // des Wechselrichters, auch wenn solar_stale noch False ist.
             setText('energy-age', formatAge(energy.solar_age_s));
@@ -3435,9 +3595,13 @@
                             <span class="temp-unit">°C</span>
                         </div>
                         <div class="temp-label">Boiler oben</div>
+                        <div class="temp-target" id="temp-target-hint"></div>
                         <div class="info-row"><span class="info-label">Oben</span><span class="info-value"><span id="temp-oben">${temperatures.oben?.toFixed(1) || NO_DATA}</span> °C</span></div>
+                        <div class="temp-bar-row"><div class="temp-bar"><div class="temp-bar-fill" id="temp-bar-oben"></div></div></div>
                         <div class="info-row"><span class="info-label">Mitte</span><span class="info-value"><span id="temp-mittig">${temperatures.mittig?.toFixed(1) || NO_DATA}</span> °C</span></div>
+                        <div class="temp-bar-row"><div class="temp-bar"><div class="temp-bar-fill" id="temp-bar-mittig"></div></div></div>
                         <div class="info-row"><span class="info-label">Unten</span><span class="info-value"><span id="temp-unten">${temperatures.unten?.toFixed(1) || NO_DATA}</span> °C</span></div>
+                        <div class="temp-bar-row"><div class="temp-bar"><div class="temp-bar-fill" id="temp-bar-unten"></div></div></div>
                         <div class="info-row"><span class="info-label">Verdampfer</span><span class="info-value"><span id="temp-verdampfer">${temperatures.verdampfer?.toFixed(1) || NO_DATA}</span> °C</span></div>
                     </div>
 
@@ -3516,6 +3680,12 @@
                             <span class="temp-unit">%</span>
                         </div>
                         <div class="temp-label">Batterie</div>
+                        <div class="temp-bar-row"><div class="temp-bar"><div class="temp-bar-fill" id="energy-soc-bar"></div></div></div>
+                        <div class="energy-flow" id="energy-flow">
+                            <div class="energy-flow-row"><span class="energy-flow-label">PV-Erzeugung</span><div class="temp-bar"><div class="temp-bar-fill is-pv" id="energy-flow-pv"></div></div><span class="energy-flow-value" id="energy-flow-pv-val">—</span></div>
+                            <div class="energy-flow-row"><span class="energy-flow-label">Hausverbrauch</span><div class="temp-bar"><div class="temp-bar-fill is-home" id="energy-flow-haus"></div></div><span class="energy-flow-value" id="energy-flow-haus-val">—</span></div>
+                            <div class="energy-flow-row"><span class="energy-flow-label">Netzbezug</span><div class="temp-bar"><div class="temp-bar-fill is-grid" id="energy-flow-grid"></div></div><span class="energy-flow-value" id="energy-flow-grid-val">—</span></div>
+                        </div>
                         <div class="info-row"><span class="info-label">Batterie-Leistung</span><span class="info-value"><span id="energy-battery">${energy.battery_power ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label">Einspeisung</span><span class="info-value"><span id="energy-feedin">${energy.feed_in ?? 0}</span> W</span></div>
                         <div class="info-row"><span class="info-label" title="Tatsächliche Erzeugung der Strings (Gleichstromseite)">PV-Erzeugung</span><span class="info-value"><span id="energy-pv">${energy.pv_generation_w ?? NO_DATA}</span> W</span></div>

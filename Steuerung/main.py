@@ -52,10 +52,9 @@ from runtime_validation import (
     validate_startup_dependencies,
 )
 import startup_diagnose
-from telegram_handler import telegram_task
+from telegram_handler import TelegramContext, telegram_task
 from telegram_ui import send_welcome_message, escape_markdown
 from telegram_api import start_healthcheck_task, create_robust_aiohttp_session
-from telegram_charts import get_boiler_temperature_history, get_runtime_bar_chart
 from vpn_manager import check_vpn_status
 from api import app, erwaerme_auswertungen, init_api, update_status_snapshot
 from blocking_codes import (  # noqa: F401  (Re-Export fuer Aufrufer/Tests)
@@ -561,19 +560,23 @@ async def setup_application():
     ensure_cycle_csv(CYCLE_CSV, jetzt=_state_now(state))
 
     # 8. Start Telegram Task
+    # Context buendelt Session, Chat, Token, Config und State; die Session
+    # wird von telegram_task selbst gesetzt (create_robust_aiohttp_session).
+    tg_context = TelegramContext(
+        session=None,
+        chat_id=state.chat_id,
+        bot_token=state.bot_token,
+        config=state.config,
+        state=state,
+        get_solax_data_func=get_solax_data,
+    )
     tg_task = asyncio.create_task(telegram_task(
+        ctx=tg_context,
         read_temperature_func=sensor_manager.read_temperature,
         sensor_ids=sensor_manager.sensor_ids,
         kompressor_status_func=lambda: state.control.kompressor_ein,
         current_runtime_func=lambda: state.stats.current_runtime,
         total_runtime_func=lambda: state.stats.total_runtime_today + state.stats.current_runtime,
-        config=state.config,
-        get_solax_data_func=get_solax_data,
-        state=state,
-        get_temperature_history_func=get_boiler_temperature_history,
-        get_runtime_bar_chart_func=get_runtime_bar_chart,
-        is_nighttime_func=lambda config: pcl._is_nachtsperre_aktiv(state.priority_config, _state_now(state)),
-        is_solar_window_func=control_logic.is_solar_window
     ))
 
     # Start Healthcheck Task

@@ -346,7 +346,11 @@ async def test_alarmtest_loest_den_alarm_aus(monkeypatch):
     gesendet = _haenge_senden(monkeypatch, uhr)
     state = _state()
 
-    await th._api_alarm_testen(None, state.chat_id, state.bot_token, state)
+    ctx = th.TelegramContext(
+        session=None, chat_id=state.chat_id, bot_token=state.bot_token,
+        config=None, state=state, get_solax_data_func=None,
+    )
+    await th._api_alarm_testen(ctx)
 
     # Testeintraege muessen drin sein...
     fehlerarten = {t for _, t in state.api_errors["solax"]["errors"]}

@@ -334,7 +334,8 @@ def _pv_weiterlauf_block(state, gewinner, should_on: bool) -> bool:
     def _reset():
         try:
             state.control._pv_abschaltwunsch_seit = None
-        except Exception:
+        except (AttributeError, TypeError):
+            # Mock-/Alt-States ohne control-Attribut: defensiv ignorieren.
             pass
 
     if not (getattr(state.control, "kompressor_ein", False) and not should_on):
@@ -366,7 +367,9 @@ def _pv_weiterlauf_block(state, gewinner, should_on: bool) -> bool:
         return True
     try:
         vergangen = safe_timedelta(jetzt, seit, state.local_tz)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
+        # Ungültiger Zeitstempel (z.B. Mock-State): Zustand zurücksetzen und
+        # den Weiterlauf (fail-safe) beibehalten.
         state.control._pv_abschaltwunsch_seit = jetzt
         return True
     if vergangen < timedelta(minutes=delay_min):
@@ -456,24 +459,18 @@ def pv_fenster_messung_oeffnet(pv_erzeugung_watt: object, min_w: float) -> bool:
     return float(pv_erzeugung_watt) >= float(min_w)
 
 
-async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
+def _baue_effektive_config(state):
+    """Erzeugt die effektive Config mit Bademodus-/Urlaubs-/Sommer-Offsets.
+
+    Ausgelagert aus `determine_mode_and_setpoints` (Refactoring 11/2026): der
+    Block war der Anfang des 850-Zeilen-Monolithen und haengt nur an `state`
+    und der Config - ideal zum Auslagern. Die Original-Config wird nie
+    veraendert (deepcopy), die Kopie erhaelt die Offset-Logik.
+
+    Reihenfolge ist absichtlich: Bademodus (+), Urlaub (-), Sommer (-).
+    Der Bademodus setzt den Sommer-Offset aus, damit die Temp-Anhebung nicht
+    neutralisiert wird.
     """
-    Bestimmt den Betriebsmodus basierend auf den Prioritaeten-Regeln.
-
-    Statt fester Modus-Logik wird die Prioritaeten-Engine befragt.
-    """
-    temp_dict = {
-        "oben": state.sensors.t_oben,
-        "unten": t_unten,
-        "mittig": t_mittig,
-        "verd": state.sensors.t_verd,
-    }
-
-    pv_leistung = state.solar.feedinpower if state.solar.feedinpower else 0.0
-
-    # --- Bademodus/Urlaubsmodus-Kopplung ---
-    # Wir arbeiten mit einer Kopie der Config, um die original-Config nicht zu aendern.
-    # Falls Bademodus/Urlaub aktiv, passen wir die Solltemperatur der Abweichungs-Regel an.
     import copy
 
     effektive_config = copy.deepcopy(state.priority_config)
@@ -519,252 +516,200 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
             f"{', '.join(f'{r.name}:{r.ausschalten_bei_c:.0f}C' for r in effektive_config.pv_regeln)}",
         )
 
-    # Forecast-Daten aus State holen
-    forecast_stale = _forecast_daten_veraltet(state)
-    if forecast_stale:
-        _set_stale_forecast(state)
-        # Nach der Invalidierung bleiben die PV-/Batterie-Livewerte nutzbar;
-        # nur die Prognose ist nicht mehr vertrauenswürdig.
+    return effektive_config
+
+
+def _hole_gelernte_werte(
+    state,
+    learning_engine,
+    temp_dict,
+    effektive_config,
+    pv_leistung,
+    forecast_today_wh,
+    hourly_forecast_watt,
+    pv_flaeche,
+    now_local,
+    planned_date,
+):
+    """Aktualisiert die Lernengine und liest alle gelernten Werte (Refactoring 11/2026).
+
+    Ausgelagert aus `determine_mode_and_setpoints`. Der Block war ein
+    klar abgrenzbarer Teil des Monolithen: `learning_engine.update(...)` plus
+    alle `get_learned_*`-Abfragen.
+
+    Rueckgabe (9 Werte):
+    (gelernte_rate_unten, gelernte_rate_gesamt, gelernte_zielzeit,
+     gelerntes_abendfenster, gelernte_zapfmenge_l, zapf_vorhaltung_k,
+     fc_ratio, surplus_profil, recent_usage_events)
+    """
+    if learning_engine is None:
+        # BUGFIX (22.10.2026): Auch ohne Lernengine belegt definieren -
+        # sonst bricht der Aufrufer mit UnboundLocalError ab.
+        return (None, None, None, None, 0.0, 0.0, 1.0, None, [])
+
+    learning_engine.update(
+        now=_now_for_state(state),
+        temp_dict=temp_dict,
+        compressor_is_on=state.control.kompressor_ein,
+        feedin_watt=pv_leistung,
+        # Die Kalibrierung braucht die ERZEUGTE Energie, nicht den Export
+        # und nicht den Wechselstromausgang. `pv_acpower` ist Haus + Netz
+        # (nachts ~250 W trotz fehlender Sonne); die Erzeugung steht in
+        # `state.solar.pv_erzeugung` (powerdc1 + powerdc2).
+        #
+        # Befund 20.10.2026: `pv_erzeugung_watt` wurde hier NIE
+        # uebergeben. Die Lernengine fiel deshalb auf `pv_acpower`
+        # zurueck und zaehlte den Hausverbrauch als Erzeugung. Der
+        # Quotient blieb dauerhaft zu klein (im Winter 0,3 - also am
+        # unteren Klemmwert) und die Prognose wurde systematisch
+        # pessimistisch bewertet: das PV-Fenster endete zu frueh und
+        # die Regel wartete vergeblich auf PV.
+        pv_acpower_watt=getattr(state.solar, "acpower", None),
+        pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
+        soc=getattr(state.solar, "soc", None),
+        forecast_today_wh_qm=forecast_today_wh,
+        forecast_hourly_wh=hourly_forecast_watt,
+        pv_array_size_qm=pv_flaeche,
+        # BUGFIX (21.10.2026): Der echte Hausverbrauch fuer die
+        # Tagesbilanz. Ohne ihn berechnete die Lernengine den
+        # Tagesverbrauch als "Erzeugung minus Einspeisung" - das
+        # erfasst nur den Sonnentag; die naechtlichen ~4400 Wh
+        # fehlten (gemessen: 5200 statt 9600 Wh/Tag).
+        hausverbrauch_watt=getattr(state.solar, "hausverbrauch", None),
+        # BUGFIX (21.10.2026): Das Stundenprofil misst den
+        # HAUSVERBRAUCH (nicht die Einspeisung). Ohne dieses
+        # Flag wuerde weiterhin die Einspeisung gesampelt -
+        # die ist nachts 0 und beschreibt den PV-Ueberschuss,
+        # nicht das Haushaltsmuster.
+        hausverbrauch_stunden_profil=True,
+    )
+    gelernte_rate_unten = learning_engine.get_learned_heating_rate(
+        now_local.month, "unten"
+    )
+    gelernte_rate_gesamt = learning_engine.get_learned_heating_rate(
+        now_local.month, "gesamt"
+    )
+    gelernte_zielzeit = learning_engine.get_learned_target_hour()
+    # BUGFIX (22.10.2026): Zapfungsmenge und daraus berechnete
+    # Vorhaltung. Nach einer grossen Zapfung bleibt "unten" sonst
+    # kalt (Live-Fall 15.10.2026: 16 K Abfall, "unten" 24 C am
+    # Abend bei 48 C in der Mitte). Die Vorhaltung hebt die Zielzeit
+    # an, damit die Reserve VOR der Zapfung im Speicher liegt.
+    gelernte_zapfmenge_l = 0.0
+    zapf_vorhaltung_k = 0.0
+    # BUGFIX (24.10.2026): Fuer die taegliche Zapfungs-Vorhaltung zaehlt
+    # IMMER der heutige Wochentag. Frueher wurde hier der Wochentag des
+    # geplanten Legionellen-Termins eingesetzt. Stand der Plan z. B. auf
+    # Sonntag, rechnete die Regel die GANZE Woche mit dem hohen
+    # Sonntagsverbrauch (Baden) statt mit dem Werktagswert (Duschen) -
+    # das Wochentags-Lernen war damit unter der Woche ausgehebelt.
+    _zapf_wochentag = now_local.weekday()
+    _get_menge = getattr(
+        learning_engine, "get_learned_zapfmenge_je_wochentag", None)
+    if callable(_get_menge):
+        try:
+            gelernte_zapfmenge_l = float(
+                _get_menge(_zapf_wochentag) or 0.0
+            )
+        except (TypeError, ValueError):
+            gelernte_zapfmenge_l = 0.0
     else:
-        state.forecast_stale = False
-    # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
-    forecast_wh_qm = getattr(state.solar, "forecast_tomorrow", None)
-    forecast_wh_qm = normalize_forecast_wh_qm(forecast_wh_qm)
-    # CalcStart braucht die HEUTE-Prognose (PV-Erwartung zum Warten/Heizen)
-    forecast_today_wh = getattr(state.solar, "forecast_today", None)
-    forecast_today_wh = normalize_forecast_wh_qm(forecast_today_wh)
-    # PV-Arrayflaeche: EINE Quelle der Wahrheit fuer alle Umrechnungen
-    # (Stundensprognose Wh/m2 -> W und die Forecast-Kalibrierung der
-    # Lernengine). Bewusst VOR dem hourly-Block gelesen, damit die Flaeche
-    # auch dann verfuegbar ist, wenn keine Stundensprognose vorliegt.
-    try:
-        pv_flaeche = float(getattr(effektive_config.wp, "pv_array_size_qm", 10.0))
-    except (TypeError, ValueError):
-        pv_flaeche = 10.0
-    if not (pv_flaeche > 0):
-        pv_flaeche = 10.0
-    # Stundenscharfe Forecast-Daten in Watt (W/m² -> W)
-    hourly_forecast_watt = None
-    hourly_mw2 = getattr(state.solar, "forecast_hourly_wm2", None)
-    if hourly_mw2 is not None:
-        hourly_forecast_watt = {h: w * pv_flaeche for h, w in hourly_mw2.items()}
-
-    planned_date = getattr(state, "legionellen_planned_date", None)
-    planned_tag = getattr(state, "legionellen_planned_tag", None)
-    if not isinstance(planned_date, date):
-        planned_date = None
-    now_local = _now_for_state(state)
-    if planned_date is not None and planned_date < now_local.date():
-        _invalidate_legionellen_plan(state, "Geplanter Legionellen-Termin ist verstrichen")
-        planned_date = None
-
-    # Alle Regeln bewerten (mit effektiver Config)
-    # Learning Engine aktualisieren (Heizzyklen + Zapfprofil + Solar-Tracking)
-    if learning_engine is not None:
-        learning_engine.update(
-            now=_now_for_state(state),
-            temp_dict=temp_dict,
-            compressor_is_on=state.control.kompressor_ein,
-            feedin_watt=pv_leistung,
-            # Die Kalibrierung braucht die ERZEUGTE Energie, nicht den Export
-            # und nicht den Wechselstromausgang. `pv_acpower` ist Haus + Netz
-            # (nachts ~250 W trotz fehlender Sonne); die Erzeugung steht in
-            # `state.solar.pv_erzeugung` (powerdc1 + powerdc2).
-            #
-            # Befund 20.10.2026: `pv_erzeugung_watt` wurde hier NIE
-            # uebergeben. Die Lernengine fiel deshalb auf `pv_acpower`
-            # zurueck und zaehlte den Hausverbrauch als Erzeugung. Der
-            # Quotient blieb dauerhaft zu klein (im Winter 0,3 - also am
-            # unteren Klemmwert) und die Prognose wurde systematisch
-            # pessimistisch bewertet: das PV-Fenster endete zu frueh und
-            # die Regel wartete vergeblich auf PV.
-            pv_acpower_watt=getattr(state.solar, "acpower", None),
-            pv_erzeugung_watt=getattr(state.solar, "pv_erzeugung", None),
-            soc=getattr(state.solar, "soc", None),
-            forecast_today_wh_qm=forecast_today_wh,
-            forecast_hourly_wh=hourly_forecast_watt,
-            pv_array_size_qm=pv_flaeche,
-            # BUGFIX (21.10.2026): Der echte Hausverbrauch fuer die
-            # Tagesbilanz. Ohne ihn berechnete die Lernengine den
-            # Tagesverbrauch als "Erzeugung minus Einspeisung" - das
-            # erfasst nur den Sonnentag; die naechtlichen ~4400 Wh
-            # fehlten (gemessen: 5200 statt 9600 Wh/Tag).
-            hausverbrauch_watt=getattr(state.solar, "hausverbrauch", None),
-            # BUGFIX (21.10.2026): Das Stundenprofil misst den
-            # HAUSVERBRAUCH (nicht die Einspeisung). Ohne dieses
-            # Flag wuerde weiterhin die Einspeisung gesampelt -
-            # die ist nachts 0 und beschreibt den PV-Ueberschuss,
-            # nicht das Haushaltsmuster.
-            hausverbrauch_stunden_profil=True,
-        )
-        gelernte_rate_unten = learning_engine.get_learned_heating_rate(
-            now_local.month, "unten"
-        )
-        gelernte_rate_gesamt = learning_engine.get_learned_heating_rate(
-            now_local.month, "gesamt"
-        )
-        gelernte_zielzeit = learning_engine.get_learned_target_hour()
-        # BUGFIX (22.10.2026): Zapfungsmenge und daraus berechnete
-        # Vorhaltung. Nach einer grossen Zapfung bleibt "unten" sonst
-        # kalt (Live-Fall 15.10.2026: 16 K Abfall, "unten" 24 C am
-        # Abend bei 48 C in der Mitte). Die Vorhaltung hebt die Zielzeit
-        # an, damit die Reserve VOR der Zapfung im Speicher liegt.
-        gelernte_zapfmenge_l = 0.0
-        zapf_vorhaltung_k = 0.0
-        # BUGFIX (24.10.2026): Fuer die taegliche Zapfungs-Vorhaltung zaehlt
-        # IMMER der heutige Wochentag. Frueher wurde hier der Wochentag des
-        # geplanten Legionellen-Termins eingesetzt. Stand der Plan z. B. auf
-        # Sonntag, rechnete die Regel die GANZE Woche mit dem hohen
-        # Sonntagsverbrauch (Baden) statt mit dem Werktagswert (Duschen) -
-        # das Wochentags-Lernen war damit unter der Woche ausgehebelt.
-        _zapf_wochentag = now_local.weekday()
         _get_menge = getattr(
-            learning_engine, "get_learned_zapfmenge_je_wochentag", None)
+            learning_engine, "get_learned_zapfmenge_l", None)
         if callable(_get_menge):
             try:
-                gelernte_zapfmenge_l = float(
-                    _get_menge(_zapf_wochentag) or 0.0
-                )
+                gelernte_zapfmenge_l = float(_get_menge(peak=True) or 0.0)
             except (TypeError, ValueError):
                 gelernte_zapfmenge_l = 0.0
-        else:
-            _get_menge = getattr(
-                learning_engine, "get_learned_zapfmenge_l", None)
-            if callable(_get_menge):
-                try:
-                    gelernte_zapfmenge_l = float(_get_menge(peak=True) or 0.0)
-                except (TypeError, ValueError):
-                    gelernte_zapfmenge_l = 0.0
-        _cfg_menge = getattr(getattr(learning_engine, "data", None),
-                             "config", None)
-        _vol_l = float(getattr(_cfg_menge, "speicher_volumen_l", 0.0) or 0.0)
-        if gelernte_zapfmenge_l > 0 and _vol_l > 0:
-            # Waermebilanz: Q * (T_speicher - T_kalt) / (rho * c_p * V)
-            # 1,163 Wh/(l*K) ist die Waermekapazitaet von Wasser.
-            _soll_c = float(
-                getattr(effektive_config.abweichung, "solltemperatur_c", 42.0)
-            )
-            zapf_vorhaltung_k = (
-                gelernte_zapfmenge_l * (_soll_c - 10.0)
-                / (1.163 * _vol_l)
-            )
-        # Defensiv: aeltere Lern-Engines/Fakes kennen die Methoden evtl.
-        # nicht -> dann neutral bleiben (Ratio 1.0 / kein Profil).
-        _get_fenster = getattr(learning_engine, "get_learned_evening_window", None)
-        gelerntes_abendfenster = _get_fenster() if callable(_get_fenster) else None
-        _ratio_getter = getattr(learning_engine, "get_forecast_ratio", None)
-        fc_ratio = _ratio_getter() if callable(_ratio_getter) else 1.0
-        _profil_getter = getattr(learning_engine, "get_surplus_profile_with_forecast", None)
-        # BUGFIX (21.10.2026): Das Profil wird fuer den Wochentag und die
-        # Jahreszeit des ZIELTAGES geholt, nicht als Mittel ueber alle
-        # Tage. Der Hausverbrauch unterscheidet sich stark (gemessen:
-        # Werktag 1800 W gegen Wochenende 400 W in derselben Stunde).
-        # Ohne Trennung rechnete der CalcStart 6,7 h Heizzeit statt
-        # 2,9 h (Werktag) bzw. 0,7 h (Wochenende).
-        _profil_kw = {}
-        _ziel_datum = planned_date if isinstance(planned_date, date) else now_local.date()
-        _wd_getter = getattr(learning_engine, "get_surplus_profile", None)
-        if callable(_wd_getter):
-            try:
-                _profil_kw = {
-                    "wochentag": _ziel_datum.weekday(),
-                    "saison": saison_von_datum(_ziel_datum),
-                }
-            except (TypeError, ValueError):
-                _profil_kw = {}
-        if callable(_profil_getter):
-            try:
-                surplus_profil = _profil_getter(
-                    forecast_today_wh_qm=forecast_today_wh,
-                    forecast_hourly_wh=hourly_forecast_watt,
-                    **_profil_kw,
-                )
-            except TypeError:
-                # Aeltere Lernengine ohne die neuen Parameter
-                surplus_profil = _profil_getter(
-                    forecast_today_wh_qm=forecast_today_wh,
-                    forecast_hourly_wh=hourly_forecast_watt,
-                )
-        else:
-            surplus_profil = None
-        _usage_getter = getattr(learning_engine, "get_recent_usage_events", None)
-        # Fenster aus der Config statt Magic Number 2. Zusaetzlich filtert
-        # get_recent_usage_events() bereits kompensierte Zapfungen heraus
-        # (Ereignis vor dem letzten Heizzyklus) - der Abzug verfrueht den
-        # Start also nicht mehr ueber Stunden.
-        _nutzungsfenster = float(
-            getattr(effektive_config.calculated_start, "nutzung_fenster_h", 2.0)
+    _cfg_menge = getattr(getattr(learning_engine, "data", None),
+                         "config", None)
+    _vol_l = float(getattr(_cfg_menge, "speicher_volumen_l", 0.0) or 0.0)
+    if gelernte_zapfmenge_l > 0 and _vol_l > 0:
+        # Waermebilanz: Q * (T_speicher - T_kalt) / (rho * c_p * V)
+        # 1,163 Wh/(l*K) ist die Waermekapazitaet von Wasser.
+        _soll_c = float(
+            getattr(effektive_config.abweichung, "solltemperatur_c", 42.0)
         )
-        recent_usage_events = (
-            _usage_getter(hours=_nutzungsfenster) if callable(_usage_getter) else []
+        zapf_vorhaltung_k = (
+            gelernte_zapfmenge_l * (_soll_c - 10.0)
+            / (1.163 * _vol_l)
         )
+    # Defensiv: aeltere Lern-Engines/Fakes kennen die Methoden evtl.
+    # nicht -> dann neutral bleiben (Ratio 1.0 / kein Profil).
+    _get_fenster = getattr(learning_engine, "get_learned_evening_window", None)
+    gelerntes_abendfenster = _get_fenster() if callable(_get_fenster) else None
+    _ratio_getter = getattr(learning_engine, "get_forecast_ratio", None)
+    fc_ratio = _ratio_getter() if callable(_ratio_getter) else 1.0
+    _profil_getter = getattr(learning_engine, "get_surplus_profile_with_forecast", None)
+    # BUGFIX (21.10.2026): Das Profil wird fuer den Wochentag und die
+    # Jahreszeit des ZIELTAGES geholt, nicht als Mittel ueber alle
+    # Tage. Der Hausverbrauch unterscheidet sich stark (gemessen:
+    # Werktag 1800 W gegen Wochenende 400 W in derselben Stunde).
+    # Ohne Trennung rechnete der CalcStart 6,7 h Heizzeit statt
+    # 2,9 h (Werktag) bzw. 0,7 h (Wochenende).
+    _profil_kw = {}
+    _ziel_datum = planned_date if isinstance(planned_date, date) else now_local.date()
+    _wd_getter = getattr(learning_engine, "get_surplus_profile", None)
+    if callable(_wd_getter):
+        try:
+            _profil_kw = {
+                "wochentag": _ziel_datum.weekday(),
+                "saison": saison_von_datum(_ziel_datum),
+            }
+        except (TypeError, ValueError):
+            _profil_kw = {}
+    if callable(_profil_getter):
+        try:
+            surplus_profil = _profil_getter(
+                forecast_today_wh_qm=forecast_today_wh,
+                forecast_hourly_wh=hourly_forecast_watt,
+                **_profil_kw,
+            )
+        except TypeError:
+            # Aeltere Lernengine ohne die neuen Parameter
+            surplus_profil = _profil_getter(
+                forecast_today_wh_qm=forecast_today_wh,
+                forecast_hourly_wh=hourly_forecast_watt,
+            )
     else:
-        gelernte_rate_unten = None
-        gelernte_rate_gesamt = None
-        gelernte_zielzeit = None
-        gelerntes_abendfenster = None
-        # BUGFIX (22.10.2026): Auch ohne Lernengine belegt definieren -
-        # sonst bricht der Aufruf mit UnboundLocalError ab.
-        gelernte_zapfmenge_l = 0.0
-        zapf_vorhaltung_k = 0.0
-        fc_ratio = 1.0
         surplus_profil = None
-        recent_usage_events = []
+    _usage_getter = getattr(learning_engine, "get_recent_usage_events", None)
+    # Fenster aus der Config statt Magic Number 2. Zusaetzlich filtert
+    # get_recent_usage_events() bereits kompensierte Zapfungen heraus
+    # (Ereignis vor dem letzten Heizzyklus) - der Abzug verfrueht den
+    # Start also nicht mehr ueber Stunden.
+    _nutzungsfenster = float(
+        getattr(effektive_config.calculated_start, "nutzung_fenster_h", 2.0)
+    )
+    recent_usage_events = (
+        _usage_getter(hours=_nutzungsfenster) if callable(_usage_getter) else []
+    )
+    return (
+        gelernte_rate_unten, gelernte_rate_gesamt, gelernte_zielzeit,
+        gelerntes_abendfenster, gelernte_zapfmenge_l, zapf_vorhaltung_k,
+        fc_ratio, surplus_profil, recent_usage_events,
+    )
 
-    # Konfigurations-Guard: CalcStart-Zielzeit vs. Nachtsperre.
-    # Eine Zielzeit innerhalb/hinter der Sperre macht die Regel stumm -
-    # einmal pro Konfigurations-/Lernstand-Aenderung warnen, damit der
-    # Betreiber den Konflikt sieht statt sich ueber kaltes Wasser zu wundern.
-    try:
-        ziel_pruefung = (
-            gelernte_zielzeit
-            if gelernte_zielzeit is not None
-            else float(state.priority_config.calculated_start.target_uhr)
-        )
-        calc_tot, _, calc_hinweis = calcstart_nachtsperre_konflikt(
-            float(ziel_pruefung),
-            state.priority_config.sicherheit.nachtsperre_start,
-            state.priority_config.sicherheit.nachtsperre_ende,
-        )
-        signatur = (calc_tot, round(float(ziel_pruefung), 2))
-        if (calc_tot or calc_hinweis) and getattr(
-            state, "_calcstart_warn_signatur", None
-        ) != signatur:
-            state._calcstart_warn_signatur = signatur
-            if calc_tot:
-                logging.error(f"CalcStart-Konflikt: {calc_hinweis}")
-            else:
-                logging.warning(f"CalcStart-Hinweis: {calc_hinweis}")
-    except (TypeError, ValueError):
-        pass  # ungueltige Lernwerte: Regel-Engine faengt das selbst ab
 
-    # PV-Fenster (Nutzerfrage 18.10.2026): "Sollte nicht nach dem
-    # Sonnenuntergang geregelt werden, sondern nach dem PV-Forecast?" - Ja,
-    # und die stuendliche Prognose liegt hier bereits vor. Darin steckt der
-    # Sonnenuntergang automatisch, zusaetzlich die Bewoelkung. Das Fenster
-    # steuert zwei Dinge: (a) die Journal-Messzeile/Zaehler und (b) das
-    # Quellen-Gate - ausserhalb zaehlt die PV-Momentanmessung nicht mehr,
-    # dort traegt nur die Batterie (Befund 18.10.2026: 93-100 % der Laeufe
-    # nach Sonnenuntergang kamen aus dem Netz).
+def _berechne_pv_fenster(
+    state,
+    effektive_config,
+    learning_engine,
+    surplus_profil,
+    fc_ratio,
+    now_local,
+    hourly_forecast_watt,
+):
+    """Berechnet das PV-Fenster und das Quellen-Gate (Refactoring 11/2026).
+
+    Ausgelagert aus `determine_mode_and_setpoints`. Rueckgabe:
+    (pv_fenster_stunde, pv_fenster_aktiv, pv_quelle_erlaubt,
+    pv_fenster_reserve_h)
+    """
     fc_forecast_cfg = getattr(effektive_config, "forecast", None)
     # `pv_fenster_aktiv` ist der MASTER-SCHALTER aus der Config: er sagt nur,
     # OB das PV-Fenster-Gate ueberhaupt benutzt wird. Er sagt NICHT, ob wir
     # gerade IM Fenster sind.
-    #
-    # BUGFIX: Beide wurden bisher verwechselt. Der Schalter (Default True)
-    # wurde als `pv_erlaubt` an die Quellen-Pruefung gereicht - damit war
-    # das Gate permanent offen, und genau die dokumentierte Fehlwirkung
-    # trat ein: "93-100 % der Laeufe nach Sonnenuntergang kamen aus dem
-    # Netz" (Befund 18.10.2026).
-    #
-    # Die echte Fensterlage ist `pv_fenster_stunde is None` (heute keine
-    # Stunde mehr ueber der Schwelle). Nur dann darf die PV-Messung nicht
-    # mehr als Quelle zaehlen.
-    #
-    # OHNE Stundenprognose ist das Gate bewusst INAKTIV (fail-open): dann
-    # weiss die Steuerung nichts ueber das Fenster, und ein Blockieren
-    # waere geraten. Nur eine belastbare Aussage "keine PV-Stunde mehr"
-    # schliesst das Fenster.
     pv_fenster_aktiv = bool(getattr(fc_forecast_cfg, "pv_fenster_aktiv", True))
     pv_fenster_min_w = float(
         getattr(fc_forecast_cfg, "pv_fenster_min_w", 300.0) or 300.0
@@ -866,6 +811,134 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
                 f"({fenster[1]:.0f}W kalibriert, jetzt {jetzt_stunde:.2f}h) "
                 f"-> Start bis {int(start_bis):02d}:{int((start_bis % 1) * 60):02d}"
             )
+    return pv_fenster_stunde, pv_fenster_aktiv, pv_quelle_erlaubt, pv_fenster_reserve_h
+
+
+async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine=None):
+    """
+    Bestimmt den Betriebsmodus basierend auf den Prioritaeten-Regeln.
+
+    Statt fester Modus-Logik wird die Prioritaeten-Engine befragt.
+    """
+    temp_dict = {
+        "oben": state.sensors.t_oben,
+        "unten": t_unten,
+        "mittig": t_mittig,
+        "verd": state.sensors.t_verd,
+    }
+
+    pv_leistung = state.solar.feedinpower if state.solar.feedinpower else 0.0
+
+    # --- Bademodus/Urlaubsmodus/Sommer-Kopplung ---
+    # Wir arbeiten mit einer Kopie der Config, um die original-Config nicht zu
+    # aendern. Die Offset-Logik ist in `_baue_effektive_config` ausgelagert.
+    effektive_config = _baue_effektive_config(state)
+
+    # Forecast-Daten aus State holen
+    forecast_stale = _forecast_daten_veraltet(state)
+    if forecast_stale:
+        _set_stale_forecast(state)
+        # Nach der Invalidierung bleiben die PV-/Batterie-Livewerte nutzbar;
+        # nur die Prognose ist nicht mehr vertrauenswürdig.
+    else:
+        state.forecast_stale = False
+    # Forecast + AdaptivePV brauchen die MORGEN-Prognose (Vorheizen/Sparen)
+    forecast_wh_qm = getattr(state.solar, "forecast_tomorrow", None)
+    forecast_wh_qm = normalize_forecast_wh_qm(forecast_wh_qm)
+    # CalcStart braucht die HEUTE-Prognose (PV-Erwartung zum Warten/Heizen)
+    forecast_today_wh = getattr(state.solar, "forecast_today", None)
+    forecast_today_wh = normalize_forecast_wh_qm(forecast_today_wh)
+    # PV-Arrayflaeche: EINE Quelle der Wahrheit fuer alle Umrechnungen
+    # (Stundensprognose Wh/m2 -> W und die Forecast-Kalibrierung der
+    # Lernengine). Bewusst VOR dem hourly-Block gelesen, damit die Flaeche
+    # auch dann verfuegbar ist, wenn keine Stundensprognose vorliegt.
+    try:
+        pv_flaeche = float(getattr(effektive_config.wp, "pv_array_size_qm", 10.0))
+    except (TypeError, ValueError):
+        pv_flaeche = 10.0
+    if not (pv_flaeche > 0):
+        pv_flaeche = 10.0
+    # Stundenscharfe Forecast-Daten in Watt (W/m² -> W)
+    hourly_forecast_watt = None
+    hourly_mw2 = getattr(state.solar, "forecast_hourly_wm2", None)
+    if hourly_mw2 is not None:
+        hourly_forecast_watt = {h: w * pv_flaeche for h, w in hourly_mw2.items()}
+
+    planned_date = getattr(state, "legionellen_planned_date", None)
+    planned_tag = getattr(state, "legionellen_planned_tag", None)
+    if not isinstance(planned_date, date):
+        planned_date = None
+    now_local = _now_for_state(state)
+    if planned_date is not None and planned_date < now_local.date():
+        _invalidate_legionellen_plan(state, "Geplanter Legionellen-Termin ist verstrichen")
+        planned_date = None
+
+    # Learning Engine aktualisieren (Heizzyklen + Zapfprofil + Solar-Tracking)
+    # Die Abfrage ist in `_hole_gelernte_werte` ausgelagert.
+    (
+        gelernte_rate_unten,
+        gelernte_rate_gesamt,
+        gelernte_zielzeit,
+        gelerntes_abendfenster,
+        gelernte_zapfmenge_l,
+        zapf_vorhaltung_k,
+        fc_ratio,
+        surplus_profil,
+        recent_usage_events,
+    ) = _hole_gelernte_werte(
+        state, learning_engine, temp_dict, effektive_config, pv_leistung,
+        forecast_today_wh, hourly_forecast_watt, pv_flaeche, now_local,
+        planned_date,
+    )
+    # ENDE LERNWERTE-AUSLAGERUNG
+
+
+    # Konfigurations-Guard: CalcStart-Zielzeit vs. Nachtsperre.
+    # Eine Zielzeit innerhalb/hinter der Sperre macht die Regel stumm -
+    # einmal pro Konfigurations-/Lernstand-Aenderung warnen, damit der
+    # Betreiber den Konflikt sieht statt sich ueber kaltes Wasser zu wundern.
+    try:
+        ziel_pruefung = (
+            gelernte_zielzeit
+            if gelernte_zielzeit is not None
+            else float(state.priority_config.calculated_start.target_uhr)
+        )
+        calc_tot, _, calc_hinweis = calcstart_nachtsperre_konflikt(
+            float(ziel_pruefung),
+            state.priority_config.sicherheit.nachtsperre_start,
+            state.priority_config.sicherheit.nachtsperre_ende,
+        )
+        signatur = (calc_tot, round(float(ziel_pruefung), 2))
+        if (calc_tot or calc_hinweis) and getattr(
+            state, "_calcstart_warn_signatur", None
+        ) != signatur:
+            state._calcstart_warn_signatur = signatur
+            if calc_tot:
+                logging.error(f"CalcStart-Konflikt: {calc_hinweis}")
+            else:
+                logging.warning(f"CalcStart-Hinweis: {calc_hinweis}")
+    except (TypeError, ValueError):
+        pass  # ungueltige Lernwerte: Regel-Engine faengt das selbst ab
+
+    # PV-Fenster (Nutzerfrage 18.10.2026): "Sollte nicht nach dem
+    # Sonnenuntergang geregelt werden, sondern nach dem PV-Forecast?" - Ja,
+    # und die stuendliche Prognose liegt hier bereits vor. Darin steckt der
+    # Sonnenuntergang automatisch, zusaetzlich die Bewoelkung. Das Fenster
+    # steuert zwei Dinge: (a) die Journal-Messzeile/Zaehler und (b) das
+    # Quellen-Gate - ausserhalb zaehlt die PV-Momentanmessung nicht mehr,
+    # dort traegt nur die Batterie (Befund 18.10.2026: 93-100 % der Laeufe
+    # nach Sonnenuntergang kamen aus dem Netz).
+    # Die Berechnung ist in `_berechne_pv_fenster` ausgelagert.
+    (
+        pv_fenster_stunde,
+        pv_fenster_aktiv,
+        pv_quelle_erlaubt,
+        pv_fenster_reserve_h,
+    ) = _berechne_pv_fenster(
+        state, effektive_config, learning_engine, surplus_profil,
+        fc_ratio, now_local, hourly_forecast_watt,
+    )
+    # ENDE PV-FENSTER-AUSLAGERUNG
 
     gewinner, alle_ergebnisse = bewerte_alle_regeln(
         config=effektive_config,
@@ -1161,7 +1234,8 @@ async def determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine
         ist_bestaetigt = True
         try:
             state.control._pending_modus = None
-        except Exception:
+        except (AttributeError, TypeError):
+            # Mock-/Alt-States ohne control-Attribut: defensiv ignorieren.
             pass
 
     # Mindesthaltezeit des Gewinners (D(c)): Ein bestaetigter Wechsel wird
@@ -1540,7 +1614,8 @@ def _track_wechsel(state, gewinner_name):
         hist = deque()
         try:
             state.control._wechsel_historie = hist
-        except Exception:
+        except (AttributeError, TypeError):
+            # Mock-/Alt-States ohne control-Attribut: defensiv ignorieren.
             pass
     # Alte Eintraege immer entfernen - auch ohne neuen Wechsel
     grenze = now - timedelta(hours=1)
@@ -1634,7 +1709,8 @@ def _taktschutz_blockiert(state, cfg) -> float:
         if kontrolle is not None:
             try:
                 kontrolle._taktschutz_aktiv_merker = wert
-            except Exception:
+            except (AttributeError, TypeError):
+                # Mock-/Alt-States ohne control-Attribut: defensiv ignorieren.
                 pass
 
     def _episode_beenden():
@@ -1783,7 +1859,8 @@ def _beobachte_schichtung_netz(state, gewinner) -> bool:
     vorher = bool(getattr(control, "_schichtung_netz_aktiv", False))
     try:
         control._schichtung_netz_aktiv = aktiv
-    except Exception:
+    except (AttributeError, TypeError):
+        # Mock-/Alt-States ohne control-Attribut: defensiv ignorieren.
         pass
     if aktiv and not vorher:
         try:

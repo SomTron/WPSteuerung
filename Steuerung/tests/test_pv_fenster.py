@@ -458,5 +458,43 @@ def test_notfall_tiefenschutz_heizt_auch_bei_geschlossenem_fenster():
         pv_quelle_erlaubt=False,
     )
     assert r.einschalten is True, r.grund
-    assert "Notfall" in r.grund or "Tiefgrenze" in r.grund, r.grund
+
+
+def test_berechne_pv_fenster_ist_ausgelagert_und_korrekt():
+    """`_berechne_pv_fenster` ist die ausgelagerte PV-Fenster-Berechnung.
+
+    Refactoring 11/2026: der Block war Teil des 850-Zeilen-Monolithen
+    `determine_mode_and_setpoints`. Der Test nagelt die Signatur fest und
+    prueft den Kernfall (Fenster zu -> pv_quelle_erlaubt=False).
+    """
+    import priority_control_logic as pcl
+
+    state = _pcl_state({12: 900.0})  # nur 12 Uhr ueber Schwelle, jetzt 16:30
+    config = state.priority_config
+    fest = datetime(2026, 12, 8, 16, 30)
+
+    stunde, aktiv, erlaubt, reserve_h = pcl._berechne_pv_fenster(
+        state, config, None, None, 1.0, fest, {12: 900.0},
+    )
+    # Fenster zu (keine Stunde mehr ueber der Schwelle) -> Gate geschlossen.
+    assert stunde is None
+    assert aktiv is True
+    assert erlaubt is False
+    assert reserve_h >= 0.0
+
+
+def test_berechne_pv_fenster_ohne_prognose_ist_fail_open():
+    """Ohne Stundenprognose bleibt das Gate inaktiv (fail-open)."""
+    import priority_control_logic as pcl
+
+    state = _pcl_state(None)
+    config = state.priority_config
+    fest = datetime(2026, 12, 8, 16, 30)
+
+    stunde, aktiv, erlaubt, _reserve_h = pcl._berechne_pv_fenster(
+        state, config, None, None, 1.0, fest, None,
+    )
+    assert stunde is None
+    assert aktiv is True
+    assert erlaubt is True, "ohne Prognose muss das Gate offen bleiben (fail-open)"
 

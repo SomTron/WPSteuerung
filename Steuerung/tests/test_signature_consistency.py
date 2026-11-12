@@ -76,3 +76,41 @@ def test_determine_mode_and_setpoints_signature():
         f"Expected: {expected}\n"
         f"Got: {params}"
     )
+
+
+def test_telegram_context_ersetzt_lange_parameterlisten():
+    """Contract: Telegram nutzt Context-/Runtime-Objekte statt 17-Parameter.
+
+    Vorher hatte `process_telegram_messages_async` 17 und
+    `send_status_telegram` 15 Parameter (Befund Task 3). Die Umstellung auf
+    `TelegramContext` + `TelegramRuntime` soll verhindern, dass die
+    Parameterlisten wieder wachsen.
+    """
+    from telegram_handler import (
+        TelegramContext, TelegramRuntime,
+        process_telegram_messages_async, send_status_telegram, telegram_task,
+    )
+
+    # Context: genau die Basis-Kopplung (Session, Chat, Token, Config, State,
+    # Solar-Daten-Callback).
+    ctx_params = list(inspect.signature(TelegramContext).parameters.keys())
+    assert ctx_params == [
+        'session', 'chat_id', 'bot_token', 'config', 'state',
+        'get_solax_data_func',
+    ], f"TelegramContext-Felder: {ctx_params}"
+
+    # Runtime: die flüchtigen Messwerte.
+    rt_params = list(inspect.signature(TelegramRuntime).parameters.keys())
+    assert rt_params == [
+        't_oben', 't_unten', 't_mittig', 't_verd',
+        'kompressor_status', 'current_runtime', 'total_runtime',
+    ], f"TelegramRuntime-Felder: {rt_params}"
+
+    # Die Handler nehmen nur noch (ctx, rt) bzw. (ctx, ...).
+    assert list(inspect.signature(send_status_telegram).parameters.keys()) == ['ctx', 'rt']
+    assert list(inspect.signature(process_telegram_messages_async).parameters.keys()) == [
+        'ctx', 'rt', 'updates', 'last_update_id']
+    # telegram_task: ctx + die vier Funktions-Argumente (keine 12 Einzelwerte).
+    assert list(inspect.signature(telegram_task).parameters.keys()) == [
+        'ctx', 'read_temperature_func', 'sensor_ids',
+        'kompressor_status_func', 'current_runtime_func', 'total_runtime_func']

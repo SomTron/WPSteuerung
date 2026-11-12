@@ -55,3 +55,24 @@ def test_defekter_einzelfuehler_laehmt_nicht_dauerhaft():
     erg = pc.evaluate_notfallschutz(cfg, {"unten": -127.0}, kompressor_ein=False)
     assert erg.aktiv is False
     assert "nicht verfuegbar" in erg.grund
+
+
+def test_memo_cache_verdraengt_aelteste_eintraege():
+    """MemoCache ist groessenbegrenzt (FIFO-Verdraengung), kein RAM-Leck.
+
+    Vorher waren `_debug_memo`/`_sensor_warn_memo` unbegrenzte Modul-Dicts:
+    Keys (Regel-/Sensor-Namen) konnten unbeschraenkt wachsen und auf dem
+    512-MB-Pi ein schleichendes RAM-Leck verursachen.
+    """
+    from regel_helpers import MemoCache
+
+    cache = MemoCache(max_size=3)
+    for i in range(10):
+        cache[f"key-{i}"] = i
+    # Nur die letzten 3 Keys bleiben erhalten (FIFO-Verdraengung).
+    assert len(cache) == 3
+    assert cache.get("key-9") == 9
+    assert cache.get("key-0") is None, "aelteste Eintraege muessen verdrängt sein"
+    # .clear() bleibt erhalten (Tests rufen _debug_memo.clear()).
+    cache.clear()
+    assert len(cache) == 0

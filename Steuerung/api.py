@@ -743,7 +743,8 @@ def _versions_kennung() -> str:
     try:
         import code_revision
         return code_revision.kennung()
-    except Exception:
+    except (ImportError, AttributeError, OSError) as exc:
+        logging.debug("Versions-Kennung nicht ermittelbar: %s", exc)
         return "unbekannt"
 
 
@@ -1118,7 +1119,9 @@ def _ram_knapp(
     try:
         import startup_diagnose
         verfuegbar = startup_diagnose.speicher_werte().get("verfuegbar_kb")
-    except Exception:
+    except (ImportError, AttributeError, OSError) as exc:
+        # Ohne /proc (Windows, Tests) oder bei Lesefehlern: Schutz aus.
+        logging.debug("RAM-Schutz: Speicherwerte nicht ermittelbar: %s", exc)
         return False
     if not isinstance(verfuegbar, (int, float)):
         return False

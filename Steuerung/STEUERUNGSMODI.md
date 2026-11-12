@@ -30,14 +30,28 @@ Bedeutungsebenen** des Wortes „Modus":
 ```
 main.run_logic_step()
   └─ pcl.determine_mode_and_setpoints(state, t_unten, t_mittig, learning_engine)
-      ├─ effektive Config bauen (Bad-/Urlaubs-/Sommer-Offsets, tiefe Kopie)
-      ├─ LearningEngine.update(...)                     (Lernen, s. Kap. 3.4)
+      ├─ _baue_effektive_config(state)                  (Bad-/Urlaubs-/Sommer-Offsets, tiefe Kopie)
+      ├─ _hole_gelernte_werte(...)                      (Lernen: update + get_learned_*, s. Kap. 3.4)
+      ├─ _berechne_pv_fenster(...)                      (PV-Fenster + Quellen-Gate)
       ├─ pcl.bewerte_alle_regeln(...)                  (alle 12+ Regeln)
       └─ Gewinner → Setpoints extrahieren (_extract_*)
       └─ Rückgabe { modus, soll_einschalten, gewinner_ergebnis, ... }
   ├─ handle_compressor_off(...) / handle_compressor_on(...)   (Mindestlauf-/pausen, Boiler-Max)
   └─ Legionellen-Lifecycle-Tracking
 ```
+
+> **Refactoring 11/2026:** `determine_mode_and_setpoints` war ein 850-Zeilen-Monolith.
+> Drei klar abgrenzbare Blöcke sind ausgelagert und einzeln testbar:
+>
+> | Funktion | Zweck | Tests |
+> |---|---|---|
+> | `_baue_effektive_config(state)` | Config-Kopie mit Bademodus- (+), Urlaubs- (−), Sommer-Offset (−) | `test_sommer_pv_cap.py` |
+> | `_hole_gelernte_werte(...)` | `learning_engine.update(...)` + alle `get_learned_*`-Abfragen (9 Rückgabewerte) | indirekt via `test_learning_engine.py` |
+> | `_berechne_pv_fenster(...)` | PV-Fenster-Berechnung + Quellen-Gate (fail-open ohne Prognose) | `test_pv_fenster.py` |
+>
+> Die verbleibenden Blöcke (Gewinner-Logik, Setpoints, Entscheidungslog) sind
+> intern stark verwoben bzw. extern abgesichert (`inspect.getsource`-Vertrag in
+> `test_entscheidungs_log.py`) und bleiben bewusst in der Funktion.
 
 ---
 

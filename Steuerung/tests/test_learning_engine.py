@@ -317,6 +317,58 @@ class TestZapfung:
         self._zapfe(engine, t + timedelta(minutes=17))
         assert len(engine.data.usage_events) == 2
 
+    def test_unvollstaendige_sensordaten_zaehlen_nicht_als_zapfung(self, engine):
+        """Regression: Ein einzelner fehlender Sensorwert darf keinen Abbruch
+        ausloesen und nicht als Zapfung zaehlen.
+
+        Bisher fuehrte ein einzelnes ``None`` (z.B. ``current['oben']`` oder
+        ``previous['unten']``) in ``_detect_usage`` zu
+        ``TypeError: unsupported operand type(s) for -: 'NoneType' and 'float'``
+        (mypy: ``learning_engine.py:1769 operator``). Der Guard pruefte nur
+        ``unten``/``mittig`` in ``current`` und ``previous`` nur dann, wenn ALLE
+        drei Werte fehlten. Ein einzelnes ``None`` rutschte durch.
+        """
+        t = datetime(2026, 1, 15, 18, 0)
+        # Vollstaendiger Ausgangs-Sample etablieren (sonst ist previous leer).
+        engine.update(t, {"unten": 43.0, "mittig": 44.0, "oben": 46.0}, False)
+
+        # --- current['oben'] fehlt -> darf nicht als Zapfung zaehlen ---
+        engine.update(
+            t + timedelta(minutes=1),
+            {"unten": 40.0, "mittig": 43.0, "oben": None},
+            False,
+        )
+        # Ruhe-Sample (Vorgang wuerde sonst als EIN nicht-plausibles Event enden).
+        engine.update(
+            t + timedelta(minutes=7),
+            {"unten": 40.0, "mittig": 43.0, "oben": None},
+            False,
+        )
+        assert engine.data.usage_events == [], (
+            "Ein fehlender Sensorwert darf keine Zapfung ausloesen"
+        )
+
+    def test_unvollstaendiger_previous_sample_zaehlt_nicht_als_zapfung(self, engine):
+        """Regression: Fehlt im VORHER-Sample ein Wert, darf der aktuelle Sample
+        nicht als Zapfung zaehlen (die Flanke laesst sich nicht bilden)."""
+        t = datetime(2026, 1, 15, 18, 0)
+        # Vollstaendiger previous-Sample, aber unten fehlt -> current darf nicht
+        # als Zapfung zaehlen.
+        engine.update(t, {"unten": None, "mittig": 44.0, "oben": 46.0}, False)
+        engine.update(
+            t + timedelta(minutes=1),
+            {"unten": 40.0, "mittig": 43.0, "oben": 44.0},
+            False,
+        )
+        engine.update(
+            t + timedelta(minutes=7),
+            {"unten": 40.0, "mittig": 43.0, "oben": 44.0},
+            False,
+        )
+        assert engine.data.usage_events == [], (
+            "Ein fehlender previous-Sensorwert darf keine Zapfung ausloesen"
+        )
+
     def test_komfort_verletzung_wird_entprellt(self, engine, caplog):
         """Regression Nutzer-Log 28.09.2026, 18:43:
 

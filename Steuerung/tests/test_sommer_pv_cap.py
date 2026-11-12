@@ -82,3 +82,45 @@ def test_mindestgarantien_bleiben_von_sommer_cap_unberuehrt():
     pcl.wende_sommer_offset_an(config)
     nach = [(e.name, e.min_temp_c) for e in config.mindest_temp.eintraege]
     assert vor == nach
+
+
+class _State:
+    """Minimaler State-Mock fuer `_baue_effektive_config`."""
+
+    def __init__(self, config, bademodus=False, urlaub=False, sommer=False):
+        self.priority_config = config
+        self.config = config
+        self.bademodus_aktiv = bademodus
+        self.urlaubsmodus_aktiv = urlaub
+        self.sommer_modus_aktiv = sommer
+
+
+def test_baue_effektive_config_bademodus_erhoeht_solltemperatur():
+    """Bademodus hebt die Solltemperatur (aus der Config) an."""
+    config = WPSteuerungConfig()
+    soll = config.abweichung.solltemperatur_c
+    erhoehung = config.bademodus.solltemperatur_erhoehung_c
+
+    effektiv = pcl._baue_effektive_config(_State(config, bademodus=True))
+
+    assert effektiv.abweichung.solltemperatur_c == soll + erhoehung
+    # Original-Config bleibt unveraendert.
+    assert config.abweichung.solltemperatur_c == soll
+
+
+def test_baue_effektive_config_sommer_cap_und_bademodus_ausnahme():
+    """Sommer-Offset wird angewandt - aber NICHT bei gleichzeitigem Bademodus."""
+    config = WPSteuerungConfig()
+    soll = config.abweichung.solltemperatur_c
+
+    # Nur Sommer: Solltemperatur sinkt (Default -3C).
+    effektiv_sommer = pcl._baue_effektive_config(_State(config, sommer=True))
+    assert effektiv_sommer.abweichung.solltemperatur_c == soll - 3.0
+
+    # Sommer + Bademodus: Sommer-Offset ausgesetzt, nur Bademodus-Erhoehung.
+    config2 = WPSteuerungConfig()
+    soll2 = config2.abweichung.solltemperatur_c
+    erhoehung2 = config2.bademodus.solltemperatur_erhoehung_c
+    effektiv_beide = pcl._baue_effektive_config(
+        _State(config2, bademodus=True, sommer=True))
+    assert effektiv_beide.abweichung.solltemperatur_c == soll2 + erhoehung2

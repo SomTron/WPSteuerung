@@ -286,6 +286,13 @@ cd WPSteuerung
 > Ältere Versionen funktionieren nicht: `Analyse/log_analyse.py` nutzt die
 > PEP-604-Union `str | None` ohne `from __future__ import annotations`, die
 > erst ab 3.10 geparst wird.
+>
+> **Auch lokal bitte 3.12 verwenden (nicht 3.13/3.15).** `mypy` prüft gegen
+> `python_version = 3.12` (siehe `Steuerung/mypy.ini`), läuft aber unter der
+> Python-Version, mit der er aufgerufen wird. Wer die Suite lokal unter 3.15
+> startet, bekommt ein anderes Prüfergebnis als die CI - die „grün"-Garantie
+> gilt nur für 3.12. Ein `pyenv local 3.12` (oder ein venv mit 3.12) hält
+> lokal und CI konsistent.
 
 ### 2. Virtual Environment einrichten
 ```bash

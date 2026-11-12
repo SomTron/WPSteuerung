@@ -1,7 +1,10 @@
 import asyncio
 import logging
 import pytz
+from dataclasses import dataclass
 from datetime import timedelta
+from typing import Optional
+
 from clock import now_for
 from constants import DEFAULT_TIMEZONE, TELEGRAM_RATE_LIMIT_SECONDS
 
@@ -32,6 +35,45 @@ _NOTAUS_AUSLOESER = frozenset({
 })
 #: Woerter, die eine bestehende Sperre aufheben.
 _NOTAUS_AUFHEBEN_WOERTER = ("aus", "aufheben", "aufheb", "reset", "quittier")
+
+
+@dataclass
+class TelegramRuntime:
+    """Laufzeitwerte eines Telegram-Aufrufs (Temperaturen, Kompressor, Zeiten).
+
+    Die reinen Statuswerte, die pro Zyklus neu gemessen werden. Sie werden
+    bewusst getrennt vom `TelegramContext` gehalten, damit die
+    Session-/State-Kopplung nicht mit den flüchtigen Messwerten vermischt wird.
+    """
+
+    t_oben: Optional[float] = None
+    t_unten: Optional[float] = None
+    t_mittig: Optional[float] = None
+    t_verd: Optional[float] = None
+    kompressor_status: bool = False
+    current_runtime: Optional[object] = None
+    total_runtime: Optional[object] = None
+
+
+@dataclass
+class TelegramContext:
+    """Bündelt Session, Chat, Token, Config und State für Telegram-Aufrufe.
+
+    Ersetzt die 17-Parameter-Signatur von `process_telegram_messages_async`
+    und die 15-Parameter-Signatur von `send_status_telegram` (Befund: die
+    Parameterlisten waren unwartbar und fehleranfällig beim Aufrufer).
+
+    Die Callbacks `get_temperature_history_func` und `get_runtime_bar_chart_func`
+    werden aus den Modul-Imports aufgelöst, sind also immer die echten
+    Funktionen (die Aufrufer in `telegram_task` reichen genau diese).
+    """
+
+    session: object
+    chat_id: Optional[str]
+    bot_token: Optional[str]
+    config: object
+    state: object
+    get_solax_data_func: object
 
 
 def _ist_notaus_ausloeser(text: str) -> bool:
@@ -74,7 +116,7 @@ def _laufendes_main():
     return main
 
 
-async def _api_alarm_testen(session, chat_id, bot_token, state):
+async def _api_alarm_testen(ctx: TelegramContext):
     """Loest den API-Fehlerdichte-Alarm bewusst aus - ohne Netzausfall.
 
     Der Alarm liest `state.api_errors`, und bis eben wurde diese Sammlung
@@ -88,6 +130,8 @@ async def _api_alarm_testen(session, chat_id, bot_token, state):
     bewusst ueber denselben Aufrufer wie der echte Betrieb - sonst
     wuerde genau die Kopplung geprueft, die man eigentlich sehen will.
     """
+    session, chat_id, bot_token, state = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.state)
     # Kein "import main": main.py laeuft als __main__, ein blasser Import
     # liefert eine zweite Modulkopie. Es gibt dafuer _laufendes_main().
     _main = _laufendes_main()
@@ -128,8 +172,9 @@ async def _api_alarm_testen(session, chat_id, bot_token, state):
     )
 
 
-async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
+async def _notaus_ausloesen_cmd(ctx: TelegramContext):
     """Not-Aus ueber Telegram. Der eigentliche Ausloeser laeuft im Main-Loop."""
+    session, chat_id, bot_token = ctx.session, ctx.chat_id, ctx.bot_token
     logging.critical("NOT-AUS per Telegram angefordert")
     # Der Befehl geht durch dieselbe Queue wie die API-Befehle, damit die
     # Abschaltung im Main-Loop erfolgt und nicht neben ihm im Telegram-Task.
@@ -156,8 +201,9 @@ async def _notaus_ausloesen_cmd(session, chat_id, bot_token, state):
     )
 
 
-async def _notaus_aufheben(session, chat_id, bot_token, state):
+async def _notaus_aufheben(ctx: TelegramContext):
     """Not-Aus-Sperre aufheben."""
+    session, chat_id, bot_token = ctx.session, ctx.chat_id, ctx.bot_token
     import notaus as _notaus
     if _notaus.notaus_loeschen():
         _laufendes_main().enqueue_control_command("notaus_aus")
@@ -176,8 +222,10 @@ async def _notaus_aufheben(session, chat_id, bot_token, state):
     )
 
 
-async def aktivere_bademodus(session, chat_id, bot_token, state):
+async def aktivere_bademodus(ctx: TelegramContext):
     """Aktiviert den Bademodus."""
+    session, chat_id, bot_token, state = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.state)
     state.bademodus_aktiv = True
     import modi_persistenz
     modi_persistenz.speichere_modi(state)
@@ -186,8 +234,10 @@ async def aktivere_bademodus(session, chat_id, bot_token, state):
     logging.info("Bademodus aktiviert")
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
-async def deaktivere_bademodus(session, chat_id, bot_token, state):
+async def deaktivere_bademodus(ctx: TelegramContext):
     """Deaktiviert den Bademodus."""
+    session, chat_id, bot_token, state = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.state)
     state.bademodus_aktiv = False
     import modi_persistenz
     modi_persistenz.speichere_modi(state)
@@ -196,8 +246,10 @@ async def deaktivere_bademodus(session, chat_id, bot_token, state):
     logging.info("Bademodus deaktiviert")
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
 
-async def aktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
+async def aktivere_urlaubsmodus(ctx: TelegramContext):
     """Aktiviert den Urlaubsmodus mit Zeitauswahl."""
+    session, chat_id, bot_token, state = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.state)
     time_keyboard = {
         "keyboard": [
             ["🌴 1 Tag", "🌴 3 Tage", "🌴 7 Tage"],
@@ -209,8 +261,10 @@ async def aktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
     await send_telegram_message(session, chat_id, "🌴 Wähle die Dauer des Urlaubsmodus:", bot_token, reply_markup=time_keyboard)
     state.awaiting_urlaub_duration = True
 
-async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, duration_text):
+async def set_urlaubsmodus_duration(ctx: TelegramContext, duration_text):
     """Setzt die Urlaubsmodus-Dauer basierend auf der Auswahl."""
+    session, chat_id, bot_token, config, state = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.config, ctx.state)
     try:
         # text is already lowercased in process_telegram_messages_async
         if duration_text == "❌ abbrechen":
@@ -260,8 +314,10 @@ async def set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, 
     except Exception as e:
         logging.error(f"Fehler bei Urlaubsdauer: {e}")
 
-async def handle_custom_duration(session, chat_id, bot_token, config, state, message_text):
+async def handle_custom_duration(ctx: TelegramContext, message_text):
     """Behandelt benutzerdefinierte Dauer-Eingabe."""
+    session, chat_id, bot_token, state = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.state)
     try:
         # Check against lowercased button texts to prevent re-triggering logic if user clicks buttons unexpectedly
         if message_text in ["🌴 benutzerdefiniert", "❌ abbrechen", "🌴 1 tag", "🌴 3 tage", "🌴 7 tage", "🌴 14 tage"]:
@@ -281,22 +337,36 @@ async def handle_custom_duration(session, chat_id, bot_token, config, state, mes
     except Exception as e:
         logging.error(f"Fehler bei benutzerdefinierter Dauer: {e}")
 
-async def deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state):
+async def deaktivere_urlaubsmodus(ctx: TelegramContext):
     """Deaktiviert den Urlaubsmodus."""
+    session, chat_id, bot_token, state = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.state)
     state.urlaubsmodus_aktiv = False
     import modi_persistenz
     modi_persistenz.speichere_modi(state)
     keyboard = get_keyboard(state)
     await send_telegram_message(session, chat_id, "🏠 Urlaubsmodus deaktiviert.", bot_token, reply_markup=keyboard)
 
-async def send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state):
+async def send_temperature_telegram(ctx: TelegramContext, rt: TelegramRuntime):
     """Sendet die aktuellen Temperaturen über Telegram."""
-    message = f"🌡️ Aktuelle Temperaturen:\nBoiler oben: {fmt_temp(t_boiler_oben)}\nBoiler mittig: {fmt_temp(t_boiler_mittig)}\nBoiler unten: {fmt_temp(t_boiler_unten)}\nVerdampfer: {fmt_temp(t_verd)}"
-    keyboard = get_keyboard(state)
-    return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard)
+    message = (
+        f"🌡️ Aktuelle Temperaturen:\n"
+        f"Boiler oben: {fmt_temp(rt.t_oben)}\n"
+        f"Boiler mittig: {fmt_temp(rt.t_mittig)}\n"
+        f"Boiler unten: {fmt_temp(rt.t_unten)}\n"
+        f"Verdampfer: {fmt_temp(rt.t_verd)}"
+    )
+    keyboard = get_keyboard(ctx.state)
+    return await send_telegram_message(ctx.session, ctx.chat_id, message, ctx.bot_token, reply_markup=keyboard)
 
-async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompressor_status, current_runtime, total_runtime, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func=None, is_solar_window_func=None):
+async def send_status_telegram(ctx: TelegramContext, rt: TelegramRuntime):
     """Sendet den aktuellen Systemstatus über Telegram."""
+    session, state = ctx.session, ctx.state
+    chat_id, bot_token = ctx.chat_id, ctx.bot_token
+    t_oben, t_unten, t_mittig, t_verd = rt.t_oben, rt.t_unten, rt.t_mittig, rt.t_verd
+    kompressor_status, current_runtime, total_runtime = (
+        rt.kompressor_status, rt.current_runtime, rt.total_runtime)
+    get_solax_data_func = ctx.get_solax_data_func
     solax_data = await get_solax_data_func(session, state) or {"feedinpower": 0, "batPower": 0, "soc": 0}
     feedinpower = solax_data.get("feedinpower", 0)
     bat_power = solax_data.get("batPower", 0)
@@ -410,10 +480,14 @@ async def send_status_telegram(session, t_oben, t_unten, t_mittig, t_verd, kompr
     keyboard = get_keyboard(state)
     return await send_telegram_message(session, chat_id, message, bot_token, reply_markup=keyboard, parse_mode="Markdown")
 
-async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, chat_id, bot_token, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
+async def process_telegram_messages_async(ctx: TelegramContext, rt: TelegramRuntime, updates, last_update_id):
     """Verarbeitet eingehende Telegram-Nachrichten asynchron."""
     if not updates:
         return last_update_id
+
+    state = ctx.state
+    session, chat_id, bot_token, config = (
+        ctx.session, ctx.chat_id, ctx.bot_token, ctx.config)
 
     # Rate-Limiting: Prüfe ob letzte Nachricht zu schnell aufeinander folgt
     now = now_for(state)
@@ -432,23 +506,23 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         
         try:
             if state.awaiting_custom_duration:
-                await handle_custom_duration(session, chat_id, bot_token, config, state, text)
+                await handle_custom_duration(ctx, text)
             elif state.awaiting_urlaub_duration:
-                await set_urlaubsmodus_duration(session, chat_id, bot_token, config, state, text)
+                await set_urlaubsmodus_duration(ctx, text)
             elif "temperaturen" in text:
-                await send_temperature_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, chat_id, bot_token, state)
+                await send_temperature_telegram(ctx, rt)
             elif "status" in text:
-                await send_status_telegram(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, kompressor_status, aktuelle_laufzeit, gesamtlaufzeit, config, get_solax_data_func, chat_id, bot_token, state, is_nighttime_func, is_solar_window_func)
+                await send_status_telegram(ctx, rt)
             elif "urlaub" in text:
                 if "ende" in text:
-                    await deaktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
+                    await deaktivere_urlaubsmodus(ctx)
                 else:
-                    await aktivere_urlaubsmodus(session, chat_id, bot_token, config, state)
+                    await aktivere_urlaubsmodus(ctx)
             elif "bademodus" in text:
                 if "aus" in text:
-                    await deaktivere_bademodus(session, chat_id, bot_token, state)
+                    await deaktivere_bademodus(ctx)
                 else:
-                    await aktivere_bademodus(session, chat_id, bot_token, state)
+                    await aktivere_bademodus(ctx)
             elif "verlauf 6h" in text:
                 await get_boiler_temperature_history(session, 6, state, config)
             elif "verlauf 24h" in text:
@@ -461,7 +535,7 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                 # Muss VOR dem Not-Aus-Zweig stehen: der Aufheb-Zweig
                 # prueft auf Substrings wie "aus". Die Reihenfolge ist hier
                 # sicherheitsrelevant, nicht nur bequem.
-                await _api_alarm_testen(session, chat_id, bot_token, state)
+                await _api_alarm_testen(ctx)
             elif "notaus" in text or "not aus" in text or "not-aus" in text:
                 # Reihenfolge und Absicht sind hier entscheidend:
                 # "notaus" ENTHAELT selbst "aus" - eine blosse Pruefung auf
@@ -471,9 +545,9 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
                 # die Heizung abschaltete - inklusive Legionelle - bis zu
                 # einem von Hand gesetzten Reset.
                 if _ist_notaus_ausloeser(text):
-                    await _notaus_ausloesen_cmd(session, chat_id, bot_token, state)
+                    await _notaus_ausloesen_cmd(ctx)
                 elif any(w in text for w in _NOTAUS_AUFHEBEN_WOERTER):
-                    await _notaus_aufheben(session, chat_id, bot_token, state)
+                    await _notaus_aufheben(ctx)
                 else:
                     # Wort erwaehnt, aber keine Absicht -> nichts tun.
                     await send_unknown_command_message(
@@ -487,10 +561,13 @@ async def process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten
         last_update_id = update['update_id'] + 1
     return last_update_id
 
-async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func, config, get_solax_data_func, state, get_temperature_history_func, get_runtime_bar_chart_func, is_nighttime_func, is_solar_window_func):
+async def telegram_task(ctx: TelegramContext, read_temperature_func, sensor_ids, kompressor_status_func, current_runtime_func, total_runtime_func):
     """Telegram-Task zur Verarbeitung von Nachrichten."""
     last_update_id = None
+    state = ctx.state
     async with create_robust_aiohttp_session(state.config) as session:
+        # Session in den Kontext schreiben, damit alle Handler sie nutzen.
+        ctx.session = session
         while True:
             try:
                 if not state.bot_token or not state.chat_id:
@@ -502,8 +579,15 @@ async def telegram_task(read_temperature_func, sensor_ids, kompressor_status_fun
                     t_boiler_unten = await read_temperature_func("unten")
                     t_boiler_mittig = await read_temperature_func("mittig")
                     t_verd = await read_temperature_func("verd")
-                    
-                    last_update_id = await process_telegram_messages_async(session, t_boiler_oben, t_boiler_unten, t_boiler_mittig, t_verd, updates, last_update_id, kompressor_status_func(), current_runtime_func(), total_runtime_func(), state.chat_id, state.bot_token, config, get_solax_data_func, state, get_boiler_temperature_history, get_runtime_bar_chart, is_nighttime_func, is_solar_window_func)
+
+                    rt = TelegramRuntime(
+                        t_oben=t_boiler_oben, t_unten=t_boiler_unten,
+                        t_mittig=t_boiler_mittig, t_verd=t_verd,
+                        kompressor_status=kompressor_status_func(),
+                        current_runtime=current_runtime_func(),
+                        total_runtime=total_runtime_func(),
+                    )
+                    last_update_id = await process_telegram_messages_async(ctx, rt, updates, last_update_id)
             except Exception as e:
                 logging.error(f"Error in telegram_task: {e}")
             await asyncio.sleep(5)

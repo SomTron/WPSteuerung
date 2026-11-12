@@ -5,11 +5,49 @@ die Hilfsfunktionen testbar zu machen. Re-Export in priority_control.py
 erhaelt die Abwaertskompatibilitaet.
 """
 import logging
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
 
 from json_config import ForecastConfig
 from rule_types import RegelErgebnis
+
+
+class MemoCache:
+    """Kleiner, groessenbegrenzter Merkspeicher (FIFO-Verdraengung).
+
+    Ersetzt die unbegrenzten Modul-Dicts `_debug_memo`/`_sensor_warn_memo`:
+    deren Keys (Regel-/Sensor-Namen) wuchsen unbeschraenkt und koennen auf
+    dem 512-MB-Pi ein schleichendes RAM-Leck verursachen. Die Keys sind
+    heute zwar nur eine Handvoll, aber ein grosser/minutenlanger Lauf soll
+    den Speicher nicht unbegrenzt füllen.
+
+    Bewusst EIGENE Klasse statt `functools.lru_cache`: `_debug_once` will
+    nur den letzten Wert pro Key (1 Wert) - `lru_cache` wuerde bei
+    wechselnden Messages unbeschraenkt cachen. Ausserdem muss `.clear()`
+    erhalten bleiben (Tests rufen `_debug_memo.clear()`).
+    """
+
+    def __init__(self, max_size: int = 512) -> None:
+        self._max_size = max_size
+        self._daten: "OrderedDict[str, object]" = OrderedDict()
+
+    def get(self, key: str, default: object = None) -> object:
+        return self._daten.get(key, default)
+
+    def __setitem__(self, key: str, value: object) -> None:
+        if key in self._daten:
+            # Move-to-end, damit die FIFO-Reihenfolge = letzte Nutzung bleibt.
+            self._daten.move_to_end(key)
+        self._daten[key] = value
+        while len(self._daten) > self._max_size:
+            self._daten.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._daten)
+
+    def clear(self) -> None:
+        self._daten.clear()
 
 def _fmt_stunde(dezimalstunde: float) -> str:
     """Formatiert eine Dezimalstunde als HH:MM (z.B. 16.333 -> '16:20')."""
@@ -22,7 +60,7 @@ def _fmt_stunde(dezimalstunde: float) -> str:
     return f"{gesamt_min // 60:02d}:{gesamt_min % 60:02d}"
 
 
-_debug_memo: Dict[str, str] = {}
+_debug_memo: MemoCache = MemoCache()
 
 
 def _debug_once(key: str, message: str, identity: Optional[str] = None) -> None:
@@ -47,7 +85,7 @@ def _fmt_pv(value: object) -> str:
 SENSOR_PLAUSIBEL_MIN_C = -30.0
 SENSOR_PLAUSIBEL_MAX_C = 99.0
 
-_sensor_warn_memo: Dict[str, datetime] = {}
+_sensor_warn_memo: MemoCache = MemoCache()
 SENSOR_WARN_INTERVAL_MIN = 10
 
 
