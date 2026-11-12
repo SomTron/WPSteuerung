@@ -340,9 +340,11 @@ Regel-Logs („PV 1234W >= 50W", „Batterie SOC 92% >= 90%", „SOC 41% < 90%")
 **`_forecast_quelle_ok(...)`** – fürs Vorheizen (Forecast-Regel): erlaubt Netz nur,
 wenn `vorheiz_netz_erlaubt=True` gesetzt ist; sonst `_energiequelle_mit_grund`.
 
-**`_mittagstief_stunden(...)`** – Surplus-schwache Stunden (< 250 W) zwischen jetzt
-und Zielzeit aus dem gelernten Profil; liefert Anzahl + Label
-(z. B. „Mittagstief 12-13 Uhr").
+**`_mittagstief_stunden(...)`** – **Mittagsstromtief**: Stunden mit hohem
+Haushaltsstrom-Verbrauch (Kochen) zwischen jetzt und Zielzeit aus dem gelernten
+Profil; liefert Anzahl + Label (z. B. „Mittagsstromtief 12-13 Uhr").
+Abgrenzung: Das sind **nicht** die Zapfungen (Warmwasser) – die laufen als
+eigener Lerntrack. Der Funktionsname ist historisch gewachsen.
 
 ---
 
@@ -627,12 +629,13 @@ Konfigurationsschlüsseln.
   7. **Heizrate:** gelernte Rate (`learning_engine.get_learned_heating_rate`)
      oder Config-Default `heizrate_unten_c_h` (3.0 °C/h) /
      `heizrate_gesamt_c_h` (2.0 °C/h).
-  8. `hours_needed = diff_unten / max(heizrate_unten, 0.1)` (+ Mittagstief).
+  8. `hours_needed = diff_unten / max(heizrate_unten, 0.1)` (+ Mittagsstromtief).
   9. **PV-Faktor** multipliziert den Puffer (Prognose heute × `fc_ratio`):
      ≥ 3000 Wh/m² → ×2.0; ≥ 1500 → ×1.5; ≤ 500 → ×0.5; sonst ×1.0.
-  10. **Mittagstief** (`_mittagstief_stunden`): gelernte Surplus-schwache
-      Stunden (< 250 W) zwischen jetzt und Zielzeit zählen nur **75 %** als
-      Heizzeit → `hours_needed` vergrößert sich, Start verfrüht sich.
+  10. **Mittagsstromtief** (`_mittagstief_stunden`): gelernte Stunden mit hohem
+      **Haushaltsstrom**-Verbrauch (Kochen; nicht Zapfungen!) zwischen jetzt und
+      Zielzeit zählen nur **75 %** als Heizzeit → `hours_needed` vergrößert
+      sich, Start verfrüht sich.
   11. `buffer_hours = time_left - hours_needed`;
       `effektiver_puffer = buffer_hours * pv_faktor`.
   12. **Entscheidung:**
@@ -1016,7 +1019,7 @@ die Prioritäten-Engine.
 | 100 | Wochenende | blockiert vor 9 Uhr am Sa/So |
 | 90 | Legionellen | 60 °C 1×/Woche (einmalig) + 10 min Halteprobe ≥ 55 °C, ohne Weiterheizen; Wochenend-Nachholung |
 | 85 | Einspeisung | Heizen ab 7500 W Einspeisung |
-| 82 | CalcStart | Startrechnung zur Zielzeit (PV-Faktor, Mittagstief) |
+| 82 | CalcStart | Startrechnung zur Zielzeit (PV-Faktor, Mittagsstromtief) |
 | 78 | AdaptivePV | Exklusive PV-Schwelle (300 W Basis), sobald Forecast da |
 | 78 | PV_unten/PV_mitte | PV-Backup bei fehlendem Forecast (500/700 W) |
 | 75 | Batterie | Heizen aus Batterie (SOC ≥ 90, kein Netzbezug) |

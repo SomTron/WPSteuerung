@@ -20,10 +20,13 @@
 // alte Fassung weiter.
 // v21 (11.11.2026): Abweichungs-Regel respektiert "aktiv": false (1.10.41) -
 // die Huelle muss neu geladen werden.
-// v22 (11.11.2026): CalcStart-Etappen weisen den Mittagstief-Aufschlag im
+// v23 (12.11.2026): "Start" je Etappe enthaelt den Tief-Aufschlag (geplante
+// statt nur rechnerischer Heizzeit-Start, 1.10.43) - sonst zeigt die alte
+// Huelle weiter "Start 10:15", obwohl um 08:00 gestartet wird.
+// v22 (11.11.2026): CalcStart-Etappen weisen den Mittagsstromtief-Aufschlag im
 // Puffer aus (1.10.42) - sonst zeigt die alte Huelle weiter "Puffer 1.4 h",
 // waehrend die Regel schon "ZU SPAET" meldet.
-const CACHE_NAME = 'wp-webapp-shell-v22';
+const CACHE_NAME = 'wp-webapp-shell-v23';
 const APP_SHELL = [
     './',
     './index.html',

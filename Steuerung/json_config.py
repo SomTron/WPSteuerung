@@ -1071,11 +1071,15 @@ class CalculatedStartConfig(BaseModel):
         default=0.5,
         description="Sicherheitszuschlag (h) auf die berechnete Heizzeit fuer den Spaetest-Start ohne Quelle",
     )
+    # Der Schluesselname `mittagstief_*` ist historisch: gemeint ist das
+    # MITTAGSSTROMTIEF, also die gelernten Stunden mit hohem HAUSVERBRAUCH
+    # (Kochen) - nicht die Zapfungen. Umbenannt wurde nur die Anzeige; ein
+    # neuer JSON-Schluessel wuerde die ausgelieferte Config brechen.
     mittagstief_schwelle_w: float = Field(
         default=800.0,
         description=(
-            "Ab diesem HAUSVERBRAUCH (W) gilt eine Stunde als "
-            "Verbrauchsspitze (z.B. Kochen) und zaehlt nur teilweise "
+            "Mittagsstromtief: Ab diesem HAUSVERBRAUCH (W) gilt eine Stunde "
+            "als Verbrauchsspitze (z.B. Kochen) und zaehlt nur teilweise "
             "als Heizzeit. BUGFIX 21.10.2026: Das gelernte Profil "
             "misst jetzt den Hausverbrauch statt der Einspeisung - "
             "die Schwelle musste daher von 250 W (Einspeisung) auf "
@@ -1085,7 +1089,7 @@ class CalculatedStartConfig(BaseModel):
     mittagstief_relativ_faktor: float = Field(
         default=1.4,
         description=(
-            "BEFUND 11.11.2026: Eine Stunde ist nur dann ein Tief, wenn ihr "
+            "Mittagsstromtief: Eine Stunde ist nur dann ein Tief, wenn ihr "
             "Verbrauch auch ueber dem Median der Tagesstunden (6-22 Uhr) mal "
             "diesem Faktor liegt. Sonst gilt eine konstante Grundlast (z.B. "
             "1095 W) als Dauer-Tief, CalcStart rechnet den Aufschlag mehrfach "

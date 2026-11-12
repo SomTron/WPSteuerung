@@ -799,16 +799,27 @@ Engine zaehlte deshalb den Hausverbrauch als Erzeugung, der Quotient
 blieb dauerhaft zu klein (im Winter am unteren Klemmwert 0,3) und die
 Prognose wurde systematisch zu pessimistisch bewertet.
 
-### 5.6 Surplus-Stundenprofil (Verbrauchsbewusstsein / Mittagstief)
+### 5.6 Surplus-Stundenprofil (Verbrauchsbewusstsein / Mittagsstromtief)
 
-Die Engine sampelt stuendlich die Netzeinspeisung - aber nur bei
-AUSgeschaltetem Kompressor, also das reine Haushaltsmuster (Kochen um 12 Uhr,
-Waschen am Abend). Ab 5 Samples je Stunde und 4 brauchbaren Stunden steht das
-Profil zur Verfuegung. CalcStart zaehlt gelernte Tiefstunden (<250 W) zwischen
-jetzt und Zielzeit nur zu 75% als Heizzeit: Der Spaetest-Start verfrueht sich,
-die WP erreicht Soll VOR dem Mittagstief, pausiert waehrenddessen natuerlich
-(Komfort-AUS) und bedient die Zapfzeit trotzdem. Im Log als
-`| Mittagstief 12-13 Uhr`.
+Die Engine sampelt stuendlich den **Hausverbrauch** (`acpower − feedin`) - aber
+nur bei AUSgeschaltetem Kompressor, also das reine Haushaltsmuster (Kochen um
+12 Uhr, Waschen am Abend). Ab 5 Samples je Stunde und 4 brauchbaren Stunden
+steht das Profil zur Verfuegung.
+
+**Begriff:** „Mittagsstromtief" = Stunden mit hohem **Haushaltsstrom**-Verbrauch.
+Es sind **nicht** die gelernten Zapfungen (Warmwasser); die laufen als eigener
+Lerntrack (`usage_events`, `zapfmenge`). Der interne Schluesselname
+`mittagstief_*` ist historisch gewachsen.
+
+Erkannt wird ein Tief, wenn der Verbrauch einer Stunde sowohl die absolute
+Schwelle (`mittagstief_schwelle_w`, Default 800 W) als auch `Median der
+Tagesstunden × mittagstief_relativ_faktor` (Default 1,4) ueberschreitet -
+sonst gaelte eine konstante Grundlast als Dauer-Tief.
+
+CalcStart zaehlt diese Stunden zwischen jetzt und Zielzeit nur zu 75% als
+Heizzeit: Der Start verfrueht sich, die WP erreicht Soll VOR dem Tief,
+pausiert waehrenddessen natuerlich (Komfort-AUS) und bedient die Zapfzeit
+trotzdem. Im Log als `| Mittagsstromtief 12-13 Uhr`.
 
 ---
 

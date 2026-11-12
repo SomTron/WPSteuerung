@@ -454,8 +454,9 @@ def _etappen_plan(
     bereits erreicht".
 
     ``surplus_profile`` (BUGFIX 11.11.2026): Das gelernte Verbrauchsprofil
-    der LearningEngine. Damit laesst sich der Mittagstief-Aufschlag je
-    Etappe VORHER rechnen - er gehoert in den angezeigten Restpuffer.
+    der LearningEngine (Haushaltsstrom je Stunde, nicht Zapfungen). Damit
+    laesst sich der Mittagsstromtief-Aufschlag je Etappe VORHER rechnen - er
+    gehoert in den angezeigten Restpuffer.
     Vorher zeigte die WebApp "Puffer 1.4 h", waehrend die Regel wegen
     desselben Aufschlags schon "ZU SPAET" entschied (-0.5 h). Zwei Zahlen
     fuer dieselbe Frage.
@@ -483,9 +484,12 @@ def _etappen_plan(
         if erg is None:
             continue
         stunden, erreichbar = erg
-        # BUGFIX 11.11.2026: Verbrauchs-Tief je Etappe. Stunden, in denen die
-        # WP wegen Kochen/Zapfen pausieren muss, zaehlen nur zu 75% als
-        # Heizzeit - die Regel rechnet den Aufschlag auf `hours_needed`.
+        # BUGFIX 11.11.2026: MITTAGSSTROMTIEF je Etappe. Stunden, in denen der
+        # HAUSHALT viel Strom zieht (Kochen), zaehlen nur zu 75% als Heizzeit -
+        # die Regel rechnet den Aufschlag auf `hours_needed`. Die Zapfungen
+        # (Warmwasser) sind hier NICHT gemeint: sie laufen als eigener
+        # Lerntrack (`usage_events`) und sind fuer den Tief-Aufschlag
+        # irrelevant.
         # Genau dieser Aufschlag fehlte im angezeigten `puffer_h`: die WebApp
         # zeigte "Puffer 1.4 h", waehrend die Regel schon "ZU SPAET" meldete.
         dip_h, dip_label = (
@@ -500,16 +504,22 @@ def _etappen_plan(
         plan.append({
             "name": getattr(etappe, "name", "Etappe"),
             "ziel_uhr": round(ziel, 2),
-            # Berechnete Startzeit: Zielzeit minus benoetigte Heizzeit. Das
-            # ist die Zahl, die der Betreiber in der WebApp sehen will
-            # ("wann muss ich einschalten, um um 13:00 40 C zu haben?").
-            "start_uhr": round(ziel - stunden, 2),
+            # GEPLANTE Startzeit: Zielzeit minus benoetigte Heizzeit UND
+            # minus Mittagsstromtief-Aufschlag. Das ist die Zahl, die der
+            # Betreiber in der WebApp sehen will ("wann muss ich einschalten,
+            # um um 13:00 40 C zu haben?").
+            #
+            # BUGFIX 12.11.2026: Der Aufschlag fehlte hier. Die App zeigte
+            # "Start 10:15", gestartet wurde aber um 08:00 - weil die Regel
+            # mit Aufschlag rechnet. Die angezeigte Startzeit war damit nicht
+            # die geplante.
+            "start_uhr": round(ziel - stunden - dip_aufschlag, 2),
             # Letzter moeglicher Start fuer DIESE Etappe (Ziel - Heizzeit -
-            # Spaetstart-Puffer). Bewusst je Etappe: die globale Regel-Rechnung
-            # mischt den Mittagstief-Aufschlag hinein und liefert dadurch eine
-            # andere (fruehere) Zeit als der Etappenplan - das war im Betrieb
-            # 09.11.2026 die Ursache fuer "geplant 08:46 / Start 10:30".
-            "spaetester_start_uhr": round(ziel - stunden - spaetstart_puffer, 2),
+            # Aufschlag - Spaetstart-Puffer). Bewusst je Etappe und mit
+            # demselben Aufschlag wie oben, damit "geplant" und "spaetestens"
+            # zueinander passen.
+            "spaetester_start_uhr": round(
+                ziel - stunden - dip_aufschlag - spaetstart_puffer, 2),
             "solltemperatur_c": float(getattr(etappe, "solltemperatur_c", 42.0)),
             "temperaturfuehler": getattr(etappe, "temperaturfuehler", "unten"),
             "hours_needed": round(stunden, 2),

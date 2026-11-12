@@ -78,8 +78,10 @@ class TestEtappenplan:
         for e in erg.regel_dict["etappen"]:
             assert "spaetester_start_uhr" in e, e
             assert e["spaetester_start_uhr"] < e["ziel_uhr"], e
+            # Mit Mittagsstromtief-Aufschlag (hier 0, weil kein Profil).
             assert e["spaetester_start_uhr"] == round(
-                e["ziel_uhr"] - e["hours_needed"] - 0.5, 2), e
+                e["ziel_uhr"] - e["hours_needed"]
+                - e.get("dip_aufschlag_h", 0.0) - 0.5, 2), e
 
         """Gleiche Solltemperatur, unterschiedlicher Abstand -> andere Zeit."""
         cfg = _config([MITTAG])
@@ -131,7 +133,12 @@ class TestEtappenplan:
         plan = erg.regel_dict["etappen"]
         for e in plan:
             assert "start_uhr" in e, "Startzeit je Etappe fehlt (WebApp)"
-            assert abs(e["start_uhr"] - (e["ziel_uhr"] - e["hours_needed"])) <= 0.02
+            # Die geplante Startzeit enthaelt den Mittagsstromtief-Aufschlag
+            # (hier 0, weil kein Profil uebergeben wird).
+            assert abs(
+                e["start_uhr"]
+                - (e["ziel_uhr"] - e["hours_needed"] - e.get("dip_aufschlag_h", 0.0))
+            ) <= 0.02, e
         assert sum(1 for e in plan if e.get("dringendste")) == 1
 
     def test_puffer_enthaelt_den_mittagstief_aufschlag(self):
@@ -166,6 +173,36 @@ class TestEtappenplan:
         ) < 0.01, (e_ohne["puffer_h"], e_mit["puffer_h"])
         # ... und ist jetzt negativ -> die WebApp zeigt "ZU SPAET".
         assert e_mit["puffer_h"] < 0, e_mit
+
+    def test_geplante_startzeit_enthaelt_den_tief_aufschlag(self):
+        """Die angezeigte Startzeit muss die GEPLANTE sein.
+
+        Befund 12.11.2026: In der App stand "Start 10:15", gestartet wurde aber
+        um 08:00 - weil `start_uhr` nur "Ziel minus Heizzeit" war, die Regel
+        aber mit Aufschlag rechnet. Die angezeigte Zeit war damit nicht die
+        geplante.
+        """
+        mittag12 = CalcEtappeConfig(
+            name="Mittag", ziel_uhr=12.0, solltemperatur_c=40.0,
+            temperaturfuehler="mitte", puffer_h=0.5,
+        )
+        temps = {"unten": 16.9, "mittig": 32.1, "oben": 41.5}
+
+        ohne = _ruf(_config([mittag12]), temps, 8).regel_dict["etappen"][0]
+        mit = _ruf(_config([mittag12]), temps, 8,
+                   profil=KOCH_PROFIL).regel_dict["etappen"][0]
+
+        # Ohne Tief: Start = 12:00 - 2.25 h = 09:45
+        assert ohne["start_uhr"] == 9.75, ohne
+        # Mit Tief: 2.25 h frueher -> 07:30
+        assert mit["start_uhr"] == 7.5, mit
+        assert abs(ohne["start_uhr"] - mit["start_uhr"] - 2.25) < 0.01
+        # "spaetestens" wandert mit (gleicher Aufschlag).
+        assert abs(ohne["spaetester_start_uhr"]
+                   - mit["spaetester_start_uhr"] - 2.25) < 0.01
+        # Und die Startzeit passt zur Puffer-Anzeige: jetzt (08:00) ist spaeter
+        # als der geplante Start -> negativer Puffer.
+        assert mit["puffer_h"] < 0, mit
 
     def test_puffer_und_entscheidung_stimmen_ueberein(self):
         """Negativer Puffer <=> Regel meldet Zeitablauf (gleiche Rechnung)."""

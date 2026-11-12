@@ -153,8 +153,22 @@ def test_webapp_zeigt_berechnete_startzeit_und_gemeinsame_etappen():
     assert "').join(' &middot; ') + planned + latest;" not in html, (
         "globale geplant/spaetestens-Zeiten verwirren bei Etappen"
     )
-    assert "Start = rechnerischer Einschaltzeitpunkt" in html, (
+    assert "Start = geplanter Einschaltzeitpunkt" in html, (
         "die Legende fuer Start/Puffer fehlt"
+    )
+    # BEFUND 12.11.2026: "Start" muss die GEPLANTE Zeit sein (inkl. Tief-
+    # Aufschlag) - vorher stand dort nur "Ziel minus Heizzeit" (10:15),
+    # waehrend die Regel mit Aufschlag rechnete und um 08:00 startete.
+    assert "Ziel minus Heizzeit und Mittagsstromtief" in html, (
+        "die Legende muss den Tief-Aufschlag in der Startzeit nennen"
+    )
+    # Und das Tief heisst durchgaengig Mittagsstromtief (Haushaltsstrom),
+    # nicht mehr "Mittagstief" - das wurde mit den Zapfungen verwechselt.
+    assert "hohem Haushaltsstrom (Kochen)" in html, (
+        "die Legende muss das Tief als Haushaltsstrom erklaeren"
+    )
+    assert "gelernten Mittagstiefs" not in html, (
+        "alte Bezeichnung 'Mittagstief' in der Legende"
     )
     assert "const zielHinweis = zielGelernt ? ' (gelernt)' : '';" in html, (
         "die gelernte Zielzeit ist nicht gekennzeichnet"

@@ -1314,9 +1314,14 @@
         // Security-Audit geschuetzt); escapeHtml gegen HTML/JS-Injection.
         // 1.10.41: Abweichungs-Regel respektiert endlich "aktiv": false
         // (das Feld fehlte in der Config und wurde ignoriert).
-        // 1.10.42: CalcStart-Etappen zeigen den Mittagstief-Aufschlag im
+        // 1.10.43: "Start" ist jetzt die GEPLANTE Einschaltzeit (Ziel minus
+        // Heizzeit UND Mittagsstromtief-Aufschlag). Vorher stand dort nur
+        // "Ziel minus Heizzeit" (10:15), waehrend die Regel mit Aufschlag
+        // rechnete und um 08:00 startete. Ausserdem heisst das Tief jetzt
+        // durchgaengig "Mittagsstromtief" (Haushaltsstrom, nicht Zapfungen).
+        // 1.10.42: CalcStart-Etappen zeigen den Mittagsstromtief-Aufschlag im
         // Puffer (vorher stand "Puffer 1.4 h" neben "ZU SPAET" der Regel).
-        const APP_VERSION = '1.10.42';
+        const APP_VERSION = '1.10.43';
         document.title = `WP Steuerung v${APP_VERSION}`;
         document.addEventListener('DOMContentLoaded', () => {
             const versionBadge = document.getElementById('app-version');
@@ -1424,13 +1429,14 @@
                     const status = x.ein === true ? ' <span style="color:#4caf50;font-weight:600">EIN</span>'
                         : (x.ein === false ? ' <span style="color:#e57373">AUS</span>' : '');
                     // BUGFIX 11.11.2026: Der Puffer enthaelt jetzt den
-                    // Mittagstief-Aufschlag (wie die Regel ihn rechnet).
+                    // Mittagsstromtief-Aufschlag (wie die Regel ihn rechnet).
                     // Ohne diese Zeile war nicht erklaerbar, warum "Puffer
                     // 1.4 h" neben einem "ZU SPAET" der Regel stand.
                     const dip = Number(x.e.dip_aufschlag_h);
                     const dipTxt = (Number.isFinite(dip) && dip > 0)
-                        ? ' <span style="color:#ffa726">(Mittagstief -' + dip.toFixed(1) + ' h' +
-                          (x.e.dip_label ? ': ' + escapeHtml(x.e.dip_label) : '') + ')</span>'
+                        ? ' <span style="color:#ffa726">(Mittagsstromtief' +
+                          (x.e.dip_label ? ' ' + escapeHtml(x.e.dip_label) : '') +
+                          ': Start ' + dip.toFixed(1) + ' h fr&uuml;her)</span>'
                         : '';
                     return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary)">' +
                         '<span style="min-width:92px">' + escapeHtml(x.e.name) + status + '</span>' +
@@ -1440,9 +1446,10 @@
                         '</div>';
                 }).join('') +
                 '<div style="font-size:0.65rem;color:var(--text-secondary);margin-top:3px">' +
-                'Start = rechnerischer Einschaltzeitpunkt (Ziel minus Heizzeit) &middot; ' +
-                'Puffer = Reserve bis zum Ziel nach Abzug des 0,5-h-Sicherheitspuffers ' +
-                'und des gelernten Mittagstiefs (negativ = zu sp&auml;t)</div></div>';
+                'Start = geplanter Einschaltzeitpunkt (Ziel minus Heizzeit und Mittagsstromtief) &middot; ' +
+                'Mittagsstromtief = gelernte Stunden mit hohem Haushaltsstrom (Kochen), ' +
+                'die nicht als Heizzeit z&auml;hlen &middot; ' +
+                'Puffer = Reserve bis zum Ziel nach Abzug des 0,5-h-Sicherheitspuffers (negativ = zu sp&auml;t)</div></div>';
         }
 
         // Geschwister zu setText, gleiche Begruendung: ein null-Element
@@ -2580,7 +2587,7 @@
                                 // die massgebliche Auskunft.
                                 // BUGFIX 11.11.2026: Der Etappen-Puffer
                                 // enthaelt seit dieser Fassung denselben
-                                // Mittagstief-Aufschlag wie die Entscheidung
+                                // Mittagsstromtief-Aufschlag wie die Entscheidung
                                 // (vorher zeigte er "Puffer 1.4 h", waehrend
                                 // die Regel "ZU SPAET" meldete).
                                 detail = 'Etappen: ' + etappen.map(e => escapeHtml(e.name) + ' Start ' + formatCalcHour(e.start_uhr) +
@@ -2593,12 +2600,13 @@
                                             : '';
                                         const farbe = !Number.isFinite(puffer) ? 'var(--text-secondary)'
                                             : (puffer < 0 ? '#e57373' : (puffer < 0.5 ? '#ffa726' : '#4caf50'));
-                                        // Mittagstief-Aufschlag offen ausweisen - er
+                                        // Mittagsstromtief-Aufschlag offen ausweisen - er
                                         // steckt im Puffer und erklaert ein "ZU SPAET".
                                         const dip = Number(e.dip_aufschlag_h);
                                         const dipTxt = (Number.isFinite(dip) && dip > 0)
-                                            ? ' <span style="color:#ffa726">(Mittagstief -' + dip.toFixed(1) + ' h' +
-                                              (e.dip_label ? ': ' + escapeHtml(e.dip_label) : '') + ')</span>'
+                                            ? ' <span style="color:#ffa726">(Mittagsstromtief' +
+                                              (e.dip_label ? ' ' + escapeHtml(e.dip_label) : '') +
+                                              ': Start ' + dip.toFixed(1) + ' h fr&uuml;her)</span>'
                                             : '';
                                         return '<div class="rule-etappe" style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-secondary);' +
                                             (e.dringendste ? 'font-weight:600;color:var(--text-primary);' : '') + '">' +

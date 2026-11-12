@@ -579,7 +579,7 @@ def evaluate_calculated_start(
             )
             return result
         result.einschalten = True
-        dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
+        dip_txt = f" | Mittagsstromtief {dip_label}" if dip_h else ""
         result.grund = (
             f"CalcStart: SPAETEST-START ({buffer_hours:.1f}h Restpuffer, "
             f"brauche {hours_needed:.1f}h bis {_uhr_text(ziel_uhr)}{dip_txt}) -> EIN "
@@ -589,7 +589,7 @@ def evaluate_calculated_start(
 
     # Genug Puffer -> warten; ohne Quelle explizit benennen, worauf gewartet wird
     if not quelle_ok:
-        dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
+        dip_txt = f" | Mittagsstromtief {dip_label}" if dip_h else ""
         result.einschalten = None
         result.grund = (
             f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht, warte auf "
@@ -598,7 +598,7 @@ def evaluate_calculated_start(
         )
         return result
     result.einschalten = None
-    dip_txt = f" | Mittagstief {dip_label}" if dip_h else ""
+    dip_txt = f" | Mittagsstromtief {dip_label}" if dip_h else ""
     result.grund = (
         f"CalcStart: {effektiver_puffer:.1f}h Puffer reicht (PV={pv_label}, "
         f"brauche {hours_needed:.1f}h bis {_uhr_text(ziel_uhr)}{dip_txt}) -> warte auf PV"

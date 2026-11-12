@@ -288,8 +288,8 @@ class TestAutoLearningWirkt:
             )
         mit = _calc(profil)
         ohne = _calc(None)
-        assert "Mittagstief" in mit.grund, "Das Profil wirkt nicht auf den CalcStart"
-        assert "Mittagstief" not in ohne.grund
+        assert "Mittagsstromtief" in mit.grund, "Das Profil wirkt nicht auf den CalcStart"
+        assert "Mittagsstromtief" not in ohne.grund
         # Mehr Verbrauchsspitzen -> mehr Heizzeit noetig
         assert "2.9h" in mit.grund, mit.grund
         assert "0.7h" in ohne.grund, ohne.grund
@@ -375,8 +375,8 @@ class TestWochentagsUndSaisonTrennung:
             )
         montag = _calc(0)
         samstag = _calc(5)
-        assert "Mittagstief" in montag.grund, montag.grund
-        assert "Mittagstief" not in samstag.grund, samstag.grund
+        assert "Mittagsstromtief" in montag.grund, montag.grund
+        assert "Mittagsstromtief" not in samstag.grund, samstag.grund
         assert "2.9h" in montag.grund, montag.grund
         assert "0.7h" in samstag.grund, samstag.grund
 

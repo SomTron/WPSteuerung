@@ -528,7 +528,7 @@ class TestCalcstartMittagstief:
         )
         assert erg.einschalten is True
         assert "SPAETEST" in erg.grund
-        assert "Mittagstief 15-16" in erg.grund
+        assert "Mittagsstromtief 15-16" in erg.grund
 
     def test_kalibrierung_faerbt_die_kategorie(self):
         # Mit PV-Quelle laeuft die Regel in den "warte auf PV"-Zweig, der
@@ -620,4 +620,4 @@ class TestVerdrahtungBewerteAlleRegeln:
         )
         cs = [e for e in alle if e.name == "CalcStart-Abend"][0]
         assert "x0.40" in cs.grund
-        assert "Mittagstief" in cs.grund
+        assert "Mittagsstromtief" in cs.grund
