@@ -3423,7 +3423,14 @@
             // PV-Erzeugung und Hausverbrauch kommen aus der Gleichstromseite
             // bzw. aus der Bilanz. Ohne diese Zeilen bleiben die Felder nach
             // dem ersten Rendern stehen.
-            setText('energy-pv', energy.pv_generation_w ?? NO_DATA);
+            // BUGFIX: Ein negativer pv_generation_w ist keine echte PV-Erzeugung
+            // (Messfehler / Netzbezug). Die Anzeige zeigt dann 0 W + Hinweis.
+            const pvWert = isFiniteNumber(energy.pv_generation_w) ? Number(energy.pv_generation_w) : null;
+            if (pvWert !== null && pvWert < 0) {
+                setText('energy-pv', '0 (Messfehler: ' + Math.round(pvWert) + ' W)');
+            } else {
+                setText('energy-pv', pvWert !== null ? Math.round(pvWert) : NO_DATA);
+            }
             setText('energy-haus', energy.hausverbrauch_w ?? NO_DATA);
             updateEnergieBalken(energy);
             // Datenalter der Solax-Livedaten (B4b): zeigt die ~5-min-Granularitaet
